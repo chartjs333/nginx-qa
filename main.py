@@ -1768,6 +1768,14 @@ def local_repo_remote_urls(repo_path: Path) -> list[str]:
 def local_repo_for_remote(git_address: str) -> Path | None:
     target = normalize_git_remote_address(git_address)
     candidates: list[Path] = [base_dir]
+    workspace_root = base_dir.parent
+    try:
+        for child in workspace_root.iterdir():
+            if child.is_dir() and (child / ".git").exists():
+                candidates.append(child)
+    except OSError:
+        pass
+
     try:
         config = read_git_config_file()
     except Exception:
@@ -8337,8 +8345,7 @@ ${message}`;
       const full = String(meta.git_commit || meta.git_commit_short || "").trim();
       return {
         full,
-        short: String(meta.git_commit_short || (full ? full.slice(0, 12) : "")).trim(),
-        gitAddress: String(meta.git_address || "").trim()
+        short: String(meta.git_commit_short || (full ? full.slice(0, 12) : "")).trim()
       };
     }
 
@@ -8353,8 +8360,7 @@ ${message}`;
       return left.full.toLowerCase() === right.full.toLowerCase();
     }
 
-    function patchRequestKey(previousCommit, currentCommit) {
-      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress || "";
+    function patchRequestKey(previousCommit, currentCommit, gitAddress) {
       return [
         gitAddress,
         previousCommit.full.toLowerCase(),
@@ -8362,13 +8368,12 @@ ${message}`;
       ].join("|");
     }
 
-    function patchBlockHeader(previousCommit, currentCommit, patchData = null) {
+    function patchBlockHeader(previousCommit, currentCommit, gitAddress, patchData = null) {
       const lines = [
         "[PATCH BETWEEN COMMITS]",
         `From: ${commitLabel(previousCommit)}`,
         `To: ${commitLabel(currentCommit)}`
       ];
-      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress;
       if (gitAddress) {
         lines.push(`Repository: ${gitAddress}`);
       }
@@ -8381,17 +8386,16 @@ ${message}`;
       return lines.join("\\n");
     }
 
-    function patchUnavailableBlock(previousCommit, currentCommit, reason) {
-      return `${patchBlockHeader(previousCommit, currentCommit)}
+    function patchUnavailableBlock(previousCommit, currentCommit, gitAddress, reason) {
+      return `${patchBlockHeader(previousCommit, currentCommit, gitAddress)}
 Status: unavailable
 Reason: ${reason || "Patch could not be loaded"}
 [END PATCH]`;
     }
 
-    async function fetchPatchBetweenCommits(previousCommit, currentCommit) {
-      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress || "";
+    async function fetchPatchBetweenCommits(previousCommit, currentCommit, gitAddress) {
       if (!gitAddress) {
-        return patchUnavailableBlock(previousCommit, currentCommit, "Git address is missing in history metadata.");
+        return patchUnavailableBlock(previousCommit, currentCommit, gitAddress, "Git address is missing in Git context.");
       }
       const params = new URLSearchParams();
       params.set("git_address", gitAddress);
@@ -8400,15 +8404,15 @@ Reason: ${reason || "Patch could not be loaded"}
       const response = await fetch(`/git-patch?${params.toString()}`);
       const data = await response.json();
       if (!response.ok) {
-        return patchUnavailableBlock(previousCommit, currentCommit, data.detail || `HTTP ${response.status}`);
+        return patchUnavailableBlock(previousCommit, currentCommit, gitAddress, data.detail || `HTTP ${response.status}`);
       }
-      return `${patchBlockHeader(previousCommit, currentCommit, data)}
+      return `${patchBlockHeader(previousCommit, currentCommit, gitAddress, data)}
 
 ${data.patch || ""}
 [END PATCH]`;
     }
 
-    async function historyWithPatchesText(records) {
+    async function historyWithPatchesText(records, gitAddress) {
       const sections = [];
       const usedPatchKeys = new Set();
       let previousCommit = null;
@@ -8418,10 +8422,10 @@ ${data.patch || ""}
       for (const record of records) {
         const currentCommit = recordCommitInfo(record);
         if (previousCommit && currentCommit.full && !sameCommit(previousCommit, currentCommit)) {
-          const key = patchRequestKey(previousCommit, currentCommit);
+          const key = patchRequestKey(previousCommit, currentCommit, gitAddress);
           if (!usedPatchKeys.has(key)) {
             usedPatchKeys.add(key);
-            const patchBlock = await fetchPatchBetweenCommits(previousCommit, currentCommit);
+            const patchBlock = await fetchPatchBetweenCommits(previousCommit, currentCommit, gitAddress);
             if (patchBlock.includes("Status: unavailable")) {
               patchErrorCount += 1;
             } else {
@@ -8446,12 +8450,17 @@ ${data.patch || ""}
 
     async function copyHistoryWithPatchesToClipboard() {
       setHistoryStatus("Готовлю историю и патчи между commit...");
+      const gitAddress = gitAddressEl.value.trim();
+      if (!gitAddress) {
+        setHistoryStatus("Введите Git address в блоке Git context. Он нужен, чтобы получить patch между commit.", "error");
+        return;
+      }
       const records = await fetchHistoryRecords(10000);
       if (!records.length) {
         setHistoryStatus("За выбранный период сообщений нет.", "error");
         return;
       }
-      const result = await historyWithPatchesText(records);
+      const result = await historyWithPatchesText(records, gitAddress);
       await copyTextToClipboard(result.text);
       const patchText = result.patchErrorCount
         ? `Патчей: ${result.patchCount}, не удалось получить: ${result.patchErrorCount}.`
