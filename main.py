@@ -140,6 +140,7 @@ SCREENSHOT_EXTENSIONS = {
 }
 MAX_SCREENSHOT_SIZE = 25 * 1024 * 1024
 MAX_EVIDENCE_SIZE = 100 * 1024 * 1024
+MAX_PATCH_SIZE = 5 * 1024 * 1024
 DEFAULT_AGENT_PHONES: dict[str, str] = {
     "Owner": "1000",
     "Analyst": "1001",
@@ -1574,6 +1575,8 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
             command,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             check=False,
         )
@@ -1592,6 +1595,252 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
         "git_commit": commit,
         "git_commit_short": commit[:12],
     }
+
+
+def normalize_commit_ref(value: str | None) -> str:
+    commit = str(value or "").strip()
+    if not re.fullmatch(r"[0-9a-fA-F]{4,64}", commit):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Commit hash must be a hexadecimal Git object id",
+        )
+    return commit
+
+
+def github_commit_base_url(git_address: str) -> str | None:
+    address = git_address.strip()
+    if not address:
+        return None
+
+    ssh_match = re.fullmatch(r"git@github\.com:([^/]+)/(.+?)(?:\.git)?", address)
+    if ssh_match:
+      owner, repo = ssh_match.groups()
+      return f"https://github.com/{owner}/{repo}"
+
+    parsed = urllib.parse.urlparse(address)
+    if parsed.netloc.lower() != "github.com":
+        return None
+
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    owner = parts[0]
+    repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+    if not owner or not repo:
+        return None
+
+    return f"https://github.com/{owner}/{repo}"
+
+
+def read_url_limited(url: str, max_bytes: int = MAX_PATCH_SIZE) -> str:
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            payload = response.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"GitHub patch request failed: HTTP {exc.code}",
+        ) from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"GitHub patch request failed: {exc}",
+        ) from exc
+
+    if len(payload) > max_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Patch is too large to copy safely",
+        )
+
+    return payload.decode("utf-8", errors="replace")
+
+
+def git_patch_from_local_repo(
+    repo_path: Path,
+    to_commit: str,
+    from_commit: str | None = None,
+) -> str:
+    if from_commit:
+        command = [
+            "git",
+            "-C",
+            str(repo_path),
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--stat",
+            "--patch",
+            from_commit,
+            to_commit,
+        ]
+    else:
+        command = [
+            "git",
+            "-C",
+            str(repo_path),
+            "show",
+            "--format=fuller",
+            "--patch",
+            "--stat",
+            "--no-color",
+            "--no-ext-diff",
+            to_commit,
+        ]
+
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Local git patch failed: {exc}",
+        ) from exc
+
+    if result.returncode != 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(result.stderr or result.stdout or "Local git patch failed").strip(),
+        )
+
+    if len(result.stdout.encode("utf-8", errors="replace")) > MAX_PATCH_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="Patch is too large to copy safely",
+        )
+
+    return result.stdout
+
+
+def normalize_git_remote_address(value: str) -> str:
+    address = value.strip().lower()
+    ssh_match = re.fullmatch(r"git@github\.com:([^/]+)/(.+?)(?:\.git)?", address)
+    if ssh_match:
+        owner, repo = ssh_match.groups()
+        return f"github.com/{owner}/{repo}"
+
+    parsed = urllib.parse.urlparse(address)
+    if parsed.netloc:
+        path = parsed.path.strip("/")
+        if path.endswith(".git"):
+            path = path[:-4]
+        return f"{parsed.netloc.lower()}/{path.lower()}"
+
+    if address.endswith(".git"):
+        address = address[:-4]
+    return address
+
+
+def local_repo_remote_urls(repo_path: Path) -> list[str]:
+    command = ["git", "-C", str(repo_path), "remote", "-v"]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+    if result.returncode != 0:
+        return []
+
+    urls: list[str] = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2:
+            urls.append(parts[1])
+    return urls
+
+
+def local_repo_for_remote(git_address: str) -> Path | None:
+    target = normalize_git_remote_address(git_address)
+    candidates: list[Path] = [base_dir]
+    try:
+        config = read_git_config_file()
+    except Exception:
+        config = {}
+
+    for entry in config.values():
+        if not isinstance(entry, dict):
+            continue
+        address = entry.get("git_address")
+        if not isinstance(address, str):
+            continue
+        path = Path(address)
+        if path.exists():
+            candidates.append(path)
+
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if resolved in seen or not (resolved / ".git").exists():
+            continue
+        seen.add(resolved)
+        remotes = [normalize_git_remote_address(url) for url in local_repo_remote_urls(resolved)]
+        if target in remotes:
+            return resolved
+
+    return None
+
+
+def resolve_git_patch(
+    git_address: str,
+    to_commit: str,
+    from_commit: str | None = None,
+) -> dict[str, Any]:
+    address = git_address.strip()
+    if not address:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Git address is required for patch lookup",
+        )
+
+    local_path = Path(address)
+    if local_path.exists():
+        patch = git_patch_from_local_repo(local_path, to_commit, from_commit)
+        return {"source": "local_git", "patch": patch}
+
+    matching_local_repo = local_repo_for_remote(address)
+    if matching_local_repo is not None:
+        patch = git_patch_from_local_repo(matching_local_repo, to_commit, from_commit)
+        return {
+            "source": "local_git_remote_match",
+            "local_repo": str(matching_local_repo),
+            "patch": patch,
+        }
+
+    github_base = github_commit_base_url(address)
+    if github_base:
+        if from_commit:
+            url = f"{github_base}/compare/{from_commit}...{to_commit}.patch"
+        else:
+            url = f"{github_base}/commit/{to_commit}.patch"
+        return {
+            "source": "github_patch_url",
+            "patch_url": url,
+            "patch": read_url_limited(url),
+        }
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Only local Git repositories and GitHub repository URLs are supported",
+    )
 
 
 async def git_context_for_port(port: int | None) -> dict[str, Any]:
@@ -4130,6 +4379,7 @@ def render_index_v2() -> str:
         <div class="history-filter-actions">
           <button class="primary" id="applyHistoryFilterButton" type="button">Показать</button>
           <button class="secondary" id="copyHistoryButton" type="button">Скопировать все сообщения</button>
+          <button class="secondary" id="copyHistoryWithPatchesButton" type="button">Скопировать сообщения + патчи</button>
         </div>
         <div class="status" id="historyStatus"></div>
       </div>
@@ -4953,6 +5203,11 @@ def render_index_v2() -> str:
         title: "Скопировать все сообщения",
         purpose: "Копирует видимую историю в буфер обмена.",
         logic: "Это удобно для передачи полного контекста в отчет или другому участнику."
+      },
+      "button:copyHistoryWithPatchesButton": {
+        title: "Скопировать сообщения + патчи",
+        purpose: "Копирует историю и вставляет между сообщениями patch-блоки, когда commit изменился.",
+        logic: "Если несколько сообщений относятся к одному и тому же commit, patch не повторяется. Когда следующий commit отличается, система получает diff между предыдущим и новым commit и вставляет его перед сообщением нового commit."
       },
       "button:createScreenshotFolderButton": {
         title: "Создать папку",
@@ -8077,6 +8332,133 @@ ${message}`;
       setHistoryStatus(`Скопировано сообщений: ${records.length}.`, "ok");
     }
 
+    function recordCommitInfo(record) {
+      const meta = record.metadata || {};
+      const full = String(meta.git_commit || meta.git_commit_short || "").trim();
+      return {
+        full,
+        short: String(meta.git_commit_short || (full ? full.slice(0, 12) : "")).trim(),
+        gitAddress: String(meta.git_address || "").trim()
+      };
+    }
+
+    function commitLabel(commitInfo) {
+      return commitInfo.short || (commitInfo.full ? commitInfo.full.slice(0, 12) : "no-commit");
+    }
+
+    function sameCommit(left, right) {
+      if (!left || !right || !left.full || !right.full) {
+        return false;
+      }
+      return left.full.toLowerCase() === right.full.toLowerCase();
+    }
+
+    function patchRequestKey(previousCommit, currentCommit) {
+      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress || "";
+      return [
+        gitAddress,
+        previousCommit.full.toLowerCase(),
+        currentCommit.full.toLowerCase()
+      ].join("|");
+    }
+
+    function patchBlockHeader(previousCommit, currentCommit, patchData = null) {
+      const lines = [
+        "[PATCH BETWEEN COMMITS]",
+        `From: ${commitLabel(previousCommit)}`,
+        `To: ${commitLabel(currentCommit)}`
+      ];
+      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress;
+      if (gitAddress) {
+        lines.push(`Repository: ${gitAddress}`);
+      }
+      if (patchData && patchData.source) {
+        lines.push(`Source: ${patchData.source}`);
+      }
+      if (patchData && patchData.patch_url) {
+        lines.push(`Patch URL: ${patchData.patch_url}`);
+      }
+      return lines.join("\\n");
+    }
+
+    function patchUnavailableBlock(previousCommit, currentCommit, reason) {
+      return `${patchBlockHeader(previousCommit, currentCommit)}
+Status: unavailable
+Reason: ${reason || "Patch could not be loaded"}
+[END PATCH]`;
+    }
+
+    async function fetchPatchBetweenCommits(previousCommit, currentCommit) {
+      const gitAddress = currentCommit.gitAddress || previousCommit.gitAddress || "";
+      if (!gitAddress) {
+        return patchUnavailableBlock(previousCommit, currentCommit, "Git address is missing in history metadata.");
+      }
+      const params = new URLSearchParams();
+      params.set("git_address", gitAddress);
+      params.set("from_commit", previousCommit.full);
+      params.set("to_commit", currentCommit.full);
+      const response = await fetch(`/git-patch?${params.toString()}`);
+      const data = await response.json();
+      if (!response.ok) {
+        return patchUnavailableBlock(previousCommit, currentCommit, data.detail || `HTTP ${response.status}`);
+      }
+      return `${patchBlockHeader(previousCommit, currentCommit, data)}
+
+${data.patch || ""}
+[END PATCH]`;
+    }
+
+    async function historyWithPatchesText(records) {
+      const sections = [];
+      const usedPatchKeys = new Set();
+      let previousCommit = null;
+      let patchCount = 0;
+      let patchErrorCount = 0;
+
+      for (const record of records) {
+        const currentCommit = recordCommitInfo(record);
+        if (previousCommit && currentCommit.full && !sameCommit(previousCommit, currentCommit)) {
+          const key = patchRequestKey(previousCommit, currentCommit);
+          if (!usedPatchKeys.has(key)) {
+            usedPatchKeys.add(key);
+            const patchBlock = await fetchPatchBetweenCommits(previousCommit, currentCommit);
+            if (patchBlock.includes("Status: unavailable")) {
+              patchErrorCount += 1;
+            } else {
+              patchCount += 1;
+            }
+            sections.push(patchBlock);
+          }
+        }
+
+        sections.push(formatRecordForClipboard(record));
+        if (currentCommit.full) {
+          previousCommit = currentCommit;
+        }
+      }
+
+      return {
+        text: sections.join("\\n\\n---\\n\\n"),
+        patchCount,
+        patchErrorCount
+      };
+    }
+
+    async function copyHistoryWithPatchesToClipboard() {
+      setHistoryStatus("Готовлю историю и патчи между commit...");
+      const records = await fetchHistoryRecords(10000);
+      if (!records.length) {
+        setHistoryStatus("За выбранный период сообщений нет.", "error");
+        return;
+      }
+      const result = await historyWithPatchesText(records);
+      await copyTextToClipboard(result.text);
+      const patchText = result.patchErrorCount
+        ? `Патчей: ${result.patchCount}, не удалось получить: ${result.patchErrorCount}.`
+        : `Патчей: ${result.patchCount}.`;
+      setHistoryStatus(`Скопировано сообщений: ${records.length}. ${patchText}`, result.patchErrorCount ? "error" : "ok");
+    }
+
     async function copySingleHistoryRecord(recordId) {
       const record = currentHistoryRecords.find((item) => item.id === recordId);
       if (!record) {
@@ -8648,6 +9030,9 @@ ${message}`;
     });
     document.getElementById("copyHistoryButton").addEventListener("click", () => {
       copyHistoryToClipboard().catch((error) => setHistoryStatus(error.message, "error"));
+    });
+    document.getElementById("copyHistoryWithPatchesButton").addEventListener("click", () => {
+      copyHistoryWithPatchesToClipboard().catch((error) => setHistoryStatus(error.message, "error"));
     });
     queueStatsEl.addEventListener("click", (event) => {
       const target = event.target;
@@ -9279,6 +9664,28 @@ async def post_git_config(request: Request) -> dict[str, Any]:
         "config_path": str(git_config_path),
         **entry,
         **git_context,
+    }
+
+
+@app.get("/git-patch")
+async def get_git_patch(
+    git_address: str,
+    to_commit: str,
+    from_commit: str | None = None,
+) -> dict[str, Any]:
+    safe_to_commit = normalize_commit_ref(to_commit)
+    safe_from_commit = normalize_commit_ref(from_commit) if from_commit else None
+    patch_data = await asyncio.to_thread(
+        resolve_git_patch,
+        git_address,
+        safe_to_commit,
+        safe_from_commit,
+    )
+    return {
+        "git_address": git_address,
+        "from_commit": safe_from_commit,
+        "to_commit": safe_to_commit,
+        **patch_data,
     }
 
 
