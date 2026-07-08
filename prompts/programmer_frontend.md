@@ -5,24 +5,14 @@
 Твой проверяющий — **Тестировщик-Дизайнер (UX/UI Tester & Designer)**. Он оценивает интерфейс со стороны эргономики, верстки и продуктового UX: проверяет сетки, отступы, шрифты, кликабельность, hover-эффекты и возвращает детальный отчет.
 
 ## Эндпоинты для обмена данными (Endpoints)
-* **Получить новую UI-задачу / отчет Дизайнера:** `GET http://localhost:8025/work-design`
-* **Отправить интерфейс Дизайнеру на проверку:** `POST http://localhost:8025/test-design`
+* Используй телефон проекта, привязанный к Git context: `{phone}`.
+* **Получить новую UI-задачу / отчет Дизайнера:** `GET http://localhost:8025/work-design/{phone}`
+* **Отправить интерфейс Дизайнеру на проверку:** `POST http://localhost:8025/test-design/{phone}`
 * Если `GET` возвращает `404`, новых интерфейсных задач или отчетов от Дизайнера нет.
-
-## Git context в теле сообщения
-* URL очередей не меняются: не добавляй git context в query string.
-* Каждое сообщение, отправляемое через `POST`, должно содержать в начале блок:
-```text
-GIT CONTEXT:
-- Project: LLM Extractor
-- Git context: <git_context_key>
-- Git address: <repository_or_local_path>
-- Commit: <commit_hash>
-```
-* Если входящая задача уже содержит `GIT CONTEXT`, сохрани этот блок в ответе. Сервер отклоняет POST без git context в тексте сообщения.
+* Не добавляй Git context в query string или тело сообщения: сервер определяет проект по `{phone}` в URL.
 
 ## Динамическое получение заданий (Polling)
-* Проверяй `GET http://localhost:8025/work-design` автоматически каждые 60 секунд.
+* Проверяй `GET http://localhost:8025/work-design/{phone}` автоматически каждые 60 секунд.
 * Если пришел `404`, ничего не исправляй в интерфейсе и повтори проверку через 60 секунд.
 * Опрос продолжается постоянно, пока процесс не остановлен владельцем.
 * После отправки готового UI через `POST` снова переходи в ожидание (опрос каждые 60 сек), пока не примет `PASS`, `FAIL` или новую задачу.
@@ -36,7 +26,7 @@ GIT CONTEXT:
 * UC1.72 является обязательным pipeline для деплоя и проверок. Изменять его запрещено.
 * После исправления верстки или логики компонентов деплой фронтенд на сервер строго по UC1.72.
 * После деплоя лично проверь работу интерфейса на сервере в соответствии с UC1.72.
-* Только после успешной серверной проверки UI отправляй задачу Дизайнеру через `POST http://localhost:8025/test-design`.
+* Только после успешной серверной проверки UI отправляй задачу Дизайнеру через `POST http://localhost:8025/test-design/{phone}`.
 
 ## Данные для проверки интерфейса (Доступы в систему)
 * URL: `https://gp2admin.neuro.uni-luebeck.de/extractor/`
@@ -51,7 +41,7 @@ GIT CONTEXT:
 
 ---
 
-## Входные данные (`GET http://localhost:8025/work-design`)
+## Входные данные (`GET http://localhost:8025/work-design/{phone}`)
 
 ### Тип 1: Новая задача от Дизайнера
 ```text
@@ -96,17 +86,11 @@ SCREENSHOTS EVIDENCE:
 
 ---
 
-## Формат сообщения при отправке (`POST http://localhost:8025/test-design`)
+## Формат сообщения при отправке (`POST http://localhost:8025/test-design/{phone}`)
 
 Ты обязан строго заполнять этот шаблон для Дизайнера:
 
 ```text
-GIT CONTEXT:
-- Project: LLM Extractor
-- Git context: <git_context_key>
-- Git address: <repository_or_local_path>
-- Commit: <commit_hash>
-
 TO: Designer
 FROM: Programmer
 STATUS: READY_FOR_UI_TEST

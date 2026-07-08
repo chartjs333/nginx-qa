@@ -115,6 +115,7 @@ scheduled_timer_tasks: dict[str, asyncio.Task[Any]] = {}
 base_dir = Path(__file__).resolve().parent
 history_path = base_dir / "conversation_log.jsonl"
 git_config_path = base_dir / "port_git_map.json"
+PHONE_GIT_CONTEXTS_KEY = "phone_git_contexts"
 email_routes_path = base_dir / "email_routes.json"
 agents_path = base_dir / "agents.json"
 specializations_path = base_dir / "specializations.json"
@@ -123,15 +124,12 @@ screenshot_folders_path = base_dir / "screenshot_folders"
 evidence_folders_path = base_dir / "evidence_folders"
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
+FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
 DEFAULT_PROJECT_NAME = "LLM Extractor"
 PROJECT_NAMES_BY_GIT_CONTEXT = {
     "github.com/chartjs333/nginx-qc-qc_symptoms-mdsgene-validator": DEFAULT_PROJECT_NAME,
 }
 GIT_CONTEXT_HEADER_PATTERN = re.compile(r"^\s*(?:\[)?GIT CONTEXT(?:\])?\s*:?\s*$", re.IGNORECASE)
-GIT_CONTEXT_LINE_PATTERN = re.compile(
-    r"^\s*(?:[-*]\s*)?(project|project name|git context|git context key|git address|repository|commit|git commit)\s*:\s*(.+?)\s*$",
-    re.IGNORECASE,
-)
 PASS_STATUS_PATTERN = re.compile(r"STATUS:\s*PASS\b", re.IGNORECASE)
 SCHEDULE_DELAY_STEP_MINUTES = 5
 SCHEDULE_DELAY_MINUTES_MIN = 5
@@ -529,6 +527,59 @@ def ensure_screenshot_folders_root() -> Path:
     return screenshot_folders_path.resolve()
 
 
+def folder_git_context_path(folder_path: Path) -> Path:
+    return folder_path / FOLDER_GIT_CONTEXT_FILENAME
+
+
+def read_folder_git_context(folder_path: Path) -> dict[str, Any]:
+    metadata_path = folder_git_context_path(folder_path)
+    if not metadata_path.exists():
+        return {}
+
+    try:
+        data = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    return data if isinstance(data, dict) else {}
+
+
+def write_folder_git_context(folder_path: Path, git_context: dict[str, Any] | None) -> None:
+    if not git_context:
+        return
+
+    metadata = {
+        key: git_context.get(key)
+        for key in (
+            "queue_phone",
+            "git_context_phone",
+            "project_name",
+            "git_context_key",
+            "git_address",
+            "git_commit",
+            "git_commit_short",
+            "git_error",
+        )
+        if git_context.get(key) is not None
+    }
+    if not metadata:
+        return
+
+    metadata["updated_at"] = utc_now()
+    folder_git_context_path(folder_path).write_text(
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def folder_matches_git_context(folder_path: Path, git_context_key: str | None) -> bool:
+    if not git_context_key:
+        return True
+
+    metadata = read_folder_git_context(folder_path)
+    return str(metadata.get("git_context_key") or "").strip() == git_context_key
+
+
 def screenshot_file_snapshot(file_path: Path) -> dict[str, Any]:
     stat = file_path.stat()
     return {
@@ -545,8 +596,9 @@ def screenshot_folder_snapshot(folder_path: Path) -> dict[str, Any]:
     files = [
         screenshot_file_snapshot(file_path)
         for file_path in sorted(folder_path.iterdir(), key=lambda item: item.name.lower())
-        if file_path.is_file()
+        if file_path.is_file() and file_path.name != FOLDER_GIT_CONTEXT_FILENAME
     ]
+    git_context = read_folder_git_context(folder_path)
     return {
         "id": folder_path.name,
         "number": folder_number,
@@ -554,6 +606,7 @@ def screenshot_folder_snapshot(folder_path: Path) -> dict[str, Any]:
         "created_at": datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat(),
         "file_count": len(files),
         "files": files,
+        "metadata": git_context,
     }
 
 
@@ -577,6 +630,7 @@ def screenshot_folder_in_date_range(
 def list_screenshot_folders_file(
     date_from: str | None = None,
     date_to: str | None = None,
+    git_context_key: str | None = None,
 ) -> dict[str, Any]:
     root = ensure_screenshot_folders_root()
     folders = [
@@ -586,6 +640,7 @@ def list_screenshot_folders_file(
             path.is_dir()
             and screenshot_folder_number(path.name) is not None
             and screenshot_folder_in_date_range(path, date_from, date_to)
+            and folder_matches_git_context(path, git_context_key)
         )
     ]
     folders.sort(key=lambda path: screenshot_folder_number(path.name) or 0)
@@ -593,11 +648,12 @@ def list_screenshot_folders_file(
         "root_path": str(root),
         "date_from": date_from,
         "date_to": date_to,
+        "git_context_key": git_context_key,
         "folders": [screenshot_folder_snapshot(path) for path in folders],
     }
 
 
-def create_screenshot_folder_file() -> dict[str, Any]:
+def create_screenshot_folder_file(git_context: dict[str, Any] | None = None) -> dict[str, Any]:
     root = ensure_screenshot_folders_root()
     used_numbers = [
         screenshot_folder_number(path.name)
@@ -609,13 +665,16 @@ def create_screenshot_folder_file() -> dict[str, Any]:
         folder_path = root / f"{SCREENSHOT_FOLDER_PREFIX}{next_number}"
         if not folder_path.exists():
             folder_path.mkdir(parents=False, exist_ok=False)
+            write_folder_git_context(folder_path, git_context)
             break
         next_number += 1
 
     return {
         "root_path": str(root),
         "folder": screenshot_folder_snapshot(folder_path),
-        "folders": list_screenshot_folders_file()["folders"],
+        "folders": list_screenshot_folders_file(
+            git_context_key=str((git_context or {}).get("git_context_key") or "").strip() or None,
+        )["folders"],
     }
 
 
@@ -797,8 +856,9 @@ def evidence_folder_snapshot(folder_path: Path) -> dict[str, Any]:
     files = [
         evidence_file_snapshot(file_path)
         for file_path in sorted(folder_path.iterdir(), key=lambda item: item.name.lower())
-        if file_path.is_file()
+        if file_path.is_file() and file_path.name != FOLDER_GIT_CONTEXT_FILENAME
     ]
+    git_context = read_folder_git_context(folder_path)
     return {
         "id": folder_path.name,
         "number": folder_number,
@@ -806,6 +866,7 @@ def evidence_folder_snapshot(folder_path: Path) -> dict[str, Any]:
         "created_at": datetime.fromtimestamp(stat.st_ctime, timezone.utc).isoformat(),
         "file_count": len(files),
         "files": files,
+        "metadata": git_context,
     }
 
 
@@ -829,6 +890,7 @@ def evidence_folder_in_date_range(
 def list_evidence_folders_file(
     date_from: str | None = None,
     date_to: str | None = None,
+    git_context_key: str | None = None,
 ) -> dict[str, Any]:
     root = ensure_evidence_folders_root()
     folders = [
@@ -838,6 +900,7 @@ def list_evidence_folders_file(
             path.is_dir()
             and evidence_folder_number(path.name) is not None
             and evidence_folder_in_date_range(path, date_from, date_to)
+            and folder_matches_git_context(path, git_context_key)
         )
     ]
     folders.sort(key=lambda path: evidence_folder_number(path.name) or 0)
@@ -845,11 +908,12 @@ def list_evidence_folders_file(
         "root_path": str(root),
         "date_from": date_from,
         "date_to": date_to,
+        "git_context_key": git_context_key,
         "folders": [evidence_folder_snapshot(path) for path in folders],
     }
 
 
-def create_evidence_folder_file() -> dict[str, Any]:
+def create_evidence_folder_file(git_context: dict[str, Any] | None = None) -> dict[str, Any]:
     root = ensure_evidence_folders_root()
     used_numbers = [
         evidence_folder_number(path.name)
@@ -861,13 +925,16 @@ def create_evidence_folder_file() -> dict[str, Any]:
         folder_path = root / f"{EVIDENCE_FOLDER_PREFIX}{next_number}"
         if not folder_path.exists():
             folder_path.mkdir(parents=False, exist_ok=False)
+            write_folder_git_context(folder_path, git_context)
             break
         next_number += 1
 
     return {
         "root_path": str(root),
         "folder": evidence_folder_snapshot(folder_path),
-        "folders": list_evidence_folders_file()["folders"],
+        "folders": list_evidence_folders_file(
+            git_context_key=str((git_context or {}).get("git_context_key") or "").strip() or None,
+        )["folders"],
     }
 
 
@@ -1546,18 +1613,60 @@ async def save_git_address(
     port: int,
     git_address: str,
     project_name: str | None = None,
+    phone: str | None = None,
 ) -> dict[str, Any]:
     async with git_config_lock:
         config = await asyncio.to_thread(read_git_config_file)
         clean_git_address = git_address.strip()
-        config[str(port)] = {
+        entry = {
             "git_address": clean_git_address,
             "project_name": normalize_project_name(project_name, clean_git_address),
             "git_context_key": normalize_git_context_key(clean_git_address),
             "updated_at": utc_now(),
         }
+        config[str(port)] = entry
+        phone_key = normalize_phone_key(phone)
+        if phone_key:
+            raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+            phone_map = raw_phone_map if isinstance(raw_phone_map, dict) else {}
+            phone_map[phone_key] = {
+                **entry,
+                "phone": phone_key,
+                "fastapi_port": port,
+            }
+            config[PHONE_GIT_CONTEXTS_KEY] = phone_map
         await asyncio.to_thread(write_git_config_file, config)
-        return config[str(port)]
+        return {
+            **entry,
+            **({"phone": phone_key} if phone_key else {}),
+        }
+
+
+async def delete_git_context_phone(phone: str) -> dict[str, Any]:
+    phone_key = normalize_phone_key(phone)
+    if not phone_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone is required",
+        )
+
+    async with git_config_lock:
+        config = await asyncio.to_thread(read_git_config_file)
+        raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+        if not isinstance(raw_phone_map, dict) or phone_key not in raw_phone_map:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Git context for phone {phone_key} was not found",
+            )
+
+        removed = raw_phone_map.pop(phone_key)
+        if raw_phone_map:
+            config[PHONE_GIT_CONTEXTS_KEY] = raw_phone_map
+        else:
+            config.pop(PHONE_GIT_CONTEXTS_KEY, None)
+        await asyncio.to_thread(write_git_config_file, config)
+
+    return removed if isinstance(removed, dict) else {"phone": phone_key}
 
 
 def request_port(request: Request) -> int | None:
@@ -1791,45 +1900,108 @@ def normalize_project_name(value: Any, git_address: str = "") -> str:
     return name or project_name_from_git_address(git_address) or DEFAULT_PROJECT_NAME
 
 
+def normalize_phone_key(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def normalize_git_context_config_entry(raw_entry: Any) -> dict[str, Any] | None:
+    if not isinstance(raw_entry, dict):
+        return None
+
+    git_address = raw_entry.get("git_address")
+    if not isinstance(git_address, str) or not git_address.strip():
+        return None
+
+    clean_git_address = git_address.strip()
+    context_key = str(raw_entry.get("git_context_key") or "").strip()
+    if not context_key:
+        context_key = normalize_git_context_key(clean_git_address)
+    if not context_key:
+        return None
+
+    entry: dict[str, Any] = {
+        "git_address": clean_git_address,
+        "project_name": normalize_project_name(raw_entry.get("project_name"), clean_git_address),
+        "git_context_key": context_key,
+    }
+    for key in ("updated_at", "fastapi_port", "phone"):
+        value = raw_entry.get(key)
+        if value is not None:
+            entry[key] = value
+    return entry
+
+
+def phone_git_contexts_from_config(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+    if not isinstance(raw_phone_map, dict):
+        return {}
+
+    phone_map: dict[str, dict[str, Any]] = {}
+    for raw_phone, raw_entry in raw_phone_map.items():
+        phone = normalize_phone_key(raw_phone)
+        entry = normalize_git_context_config_entry(raw_entry)
+        if not phone or entry is None:
+            continue
+        phone_map[phone] = {
+            **entry,
+            "phone": phone,
+        }
+    return phone_map
+
+
+def phone_git_context_entry_from_config(
+    config: dict[str, Any],
+    phone: str,
+) -> dict[str, Any] | None:
+    return phone_git_contexts_from_config(config).get(normalize_phone_key(phone))
+
+
 def configured_git_contexts_from_config(
     config: dict[str, Any],
     current_port: int | None = None,
 ) -> list[dict[str, Any]]:
     contexts_by_key: dict[str, dict[str, Any]] = {}
-    for raw_port, entry in config.items():
-        if not isinstance(entry, dict):
-            continue
 
-        git_address = entry.get("git_address")
-        if not isinstance(git_address, str) or not git_address.strip():
-            continue
+    def add_context(raw_entry: Any, *, port_text: str = "", phone: str = "") -> None:
+        entry = normalize_git_context_config_entry(raw_entry)
+        if entry is None:
+            return
 
-        port_text = str(raw_port)
-        context_key = str(entry.get("git_context_key") or "").strip()
-        if not context_key:
-            context_key = normalize_git_context_key(git_address)
-        if not context_key:
-            continue
-
-        project_name = normalize_project_name(entry.get("project_name"), git_address)
+        context_key = entry["git_context_key"]
         context = contexts_by_key.setdefault(
             context_key,
             {
                 "git_context_key": context_key,
-                "project_name": project_name,
-                "git_address": git_address.strip(),
+                "project_name": entry["project_name"],
+                "git_address": entry["git_address"],
                 "ports": [],
+                "phones": [],
                 "updated_at": entry.get("updated_at"),
                 "is_current_port": False,
             },
         )
-        if port_text not in context["ports"]:
+        if port_text and port_text not in context["ports"]:
             context["ports"].append(port_text)
+        if phone and phone not in context["phones"]:
+            context["phones"].append(phone)
         if current_port is not None and port_text == str(current_port):
             context["is_current_port"] = True
-            context["project_name"] = project_name
-            context["git_address"] = git_address.strip()
+            context["project_name"] = entry["project_name"]
+            context["git_address"] = entry["git_address"]
             context["updated_at"] = entry.get("updated_at")
+
+    for raw_port, entry in config.items():
+        if raw_port == PHONE_GIT_CONTEXTS_KEY:
+            continue
+        if not isinstance(entry, dict):
+            continue
+
+        port_text = str(raw_port)
+        add_context(entry, port_text=port_text)
+
+    for phone, entry in phone_git_contexts_from_config(config).items():
+        port_text = str(entry.get("fastapi_port") or "")
+        add_context(entry, port_text=port_text, phone=phone)
 
     return sorted(
         contexts_by_key.values(),
@@ -1882,59 +2054,6 @@ def project_name_from_metadata(metadata: dict[str, Any]) -> str:
     return ""
 
 
-def extract_git_context_from_message(message: Any) -> dict[str, Any]:
-    text = message_text_for_search(message)
-    lines = text.splitlines()
-    context_lines: list[str] = []
-    in_context_block = False
-
-    for line in lines:
-        if not in_context_block:
-            if GIT_CONTEXT_HEADER_PATTERN.match(line):
-                in_context_block = True
-            continue
-
-        if not line.strip():
-            break
-
-        context_lines.append(line)
-
-    if not context_lines:
-        return {}
-
-    parsed: dict[str, str] = {}
-    for line in context_lines:
-        match = GIT_CONTEXT_LINE_PATTERN.match(line)
-        if not match:
-            continue
-        field = match.group(1).strip().lower()
-        value = match.group(2).strip()
-        if not value:
-            continue
-        if field in {"project", "project name"}:
-            parsed["project_name"] = value
-        elif field in {"git context", "git context key"}:
-            parsed["git_context_key"] = normalize_git_context_key(value)
-        elif field in {"git address", "repository"}:
-            parsed["git_address"] = value
-        elif field in {"commit", "git commit"}:
-            parsed["git_commit"] = value
-            parsed["git_commit_short"] = value[:12]
-
-    git_address = parsed.get("git_address", "")
-    if not parsed.get("git_context_key") and git_address:
-        parsed["git_context_key"] = normalize_git_context_key(git_address)
-    if not parsed.get("project_name"):
-        parsed["project_name"] = normalize_project_name("", git_address)
-
-    return {key: value for key, value in parsed.items() if value}
-
-
-def message_has_git_context(message: Any) -> bool:
-    context = extract_git_context_from_message(message)
-    return bool(context.get("git_context_key") or context.get("git_address"))
-
-
 def strip_git_context_block_from_text(text: str) -> str:
     lines = text.splitlines()
     stripped_lines: list[str] = []
@@ -1953,50 +2072,6 @@ def strip_git_context_block_from_text(text: str) -> str:
         stripped_lines.append(line)
 
     return "\n".join(stripped_lines).strip()
-
-
-def require_message_git_context(message: Any) -> None:
-    if message_has_git_context(message):
-        return
-    raise HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail="Message body must include a GIT CONTEXT block with Git context or Git address",
-    )
-
-
-def format_git_context_block(git_context: dict[str, Any]) -> str:
-    project_name = normalize_project_name(
-        git_context.get("project_name"),
-        str(git_context.get("git_address") or ""),
-    )
-    git_context_key = str(git_context.get("git_context_key") or "").strip()
-    git_address = str(git_context.get("git_address") or "").strip()
-    commit = str(git_context.get("git_commit") or git_context.get("git_commit_short") or "").strip()
-    lines = [
-        "GIT CONTEXT:",
-        f"- Project: {project_name}",
-    ]
-    if git_context_key:
-        lines.append(f"- Git context: {git_context_key}")
-    if git_address:
-        lines.append(f"- Git address: {git_address}")
-    if commit:
-        lines.append(f"- Commit: {commit}")
-    return "\n".join(lines)
-
-
-async def ensure_message_git_context_from_port(message: str, port: int | None) -> str:
-    if message_has_git_context(message):
-        return message
-
-    git_context = await git_context_for_port(port)
-    if not git_context.get("git_context_key") and not git_context.get("git_address"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Git context is required before sending a message",
-        )
-
-    return f"{format_git_context_block(git_context)}\n\n{message}"
 
 
 def local_repo_remote_urls(repo_path: Path) -> list[str]:
@@ -2138,6 +2213,58 @@ async def git_context_for_port(port: int | None) -> dict[str, Any]:
     }
 
 
+async def git_context_for_phone(phone: str) -> dict[str, Any]:
+    phone_key = normalize_phone_key(phone)
+    if not phone_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Phone is required for queue Git context",
+        )
+
+    config = await read_git_config()
+    entry = phone_git_context_entry_from_config(config, phone_key)
+    if entry is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Phone {phone_key} is not mapped to a Git context",
+        )
+
+    git_address = entry["git_address"]
+    git_context = await asyncio.to_thread(resolve_git_reference, git_address)
+    return {
+        "fastapi_port": entry.get("fastapi_port"),
+        "queue_phone": phone_key,
+        "git_context_phone": phone_key,
+        "project_name": entry["project_name"],
+        "git_context_key": entry["git_context_key"],
+        "git_address": git_address,
+        **git_context,
+    }
+
+
+async def git_context_for_phone_if_mapped(phone: str) -> dict[str, Any] | None:
+    phone_key = normalize_phone_key(phone)
+    if not phone_key:
+        return None
+
+    config = await read_git_config()
+    entry = phone_git_context_entry_from_config(config, phone_key)
+    if entry is None:
+        return None
+
+    git_address = entry["git_address"]
+    git_context = await asyncio.to_thread(resolve_git_reference, git_address)
+    return {
+        "fastapi_port": entry.get("fastapi_port"),
+        "queue_phone": phone_key,
+        "git_context_phone": phone_key,
+        "project_name": entry["project_name"],
+        "git_context_key": entry["git_context_key"],
+        "git_address": git_address,
+        **git_context,
+    }
+
+
 def queue_definition(queue_name: str) -> dict[str, str]:
     try:
         return QUEUE_DEFINITIONS[queue_name]
@@ -2165,7 +2292,6 @@ async def append_history(
         if git_context is not None
         else await git_context_for_port(port)
     )
-    message_git_context = extract_git_context_from_message(message)
     enriched_metadata = {
         "route": queue_meta["route"],
         "context": queue_meta["context"],
@@ -2175,7 +2301,6 @@ async def append_history(
         "direction": queue_meta["label"],
         **submitted_metadata,
         **history_git_context,
-        **message_git_context,
     }
     record = {
         "id": str(uuid4()),
@@ -2443,7 +2568,6 @@ async def schedule_message(
             detail="Unknown schedule mode.",
         )
 
-    message_git_context = extract_git_context_from_message(message)
     task_id = str(uuid4())
     created_at = datetime.now(timezone.utc)
     task: dict[str, Any] = {
@@ -2455,7 +2579,6 @@ async def schedule_message(
             for key, value in {
                 **(metadata or {}),
                 **(git_context or {}),
-                **message_git_context,
             }.items()
             if value is not None
         },
@@ -3110,6 +3233,7 @@ def render_index() -> str:
     const receiverEl = document.getElementById("receiver");
     const messageEl = document.getElementById("message");
     const sendStatusEl = document.getElementById("sendStatus");
+    const activeGitContextSummaryEl = document.getElementById("activeGitContextSummary");
     const attachmentFolderSelectEl = document.getElementById("attachmentFolderSelect");
     const attachmentDescriptionEl = document.getElementById("attachmentDescription");
     const attachmentStatusEl = document.getElementById("attachmentStatus");
@@ -4593,6 +4717,8 @@ def render_index_v2() -> str:
     <nav class="page-tabs" aria-label="Разделы UI">
       <button class="page-tab active" data-view="messages" type="button">Сообщения</button>
       <button class="help-button" data-help-topic="page:messages" type="button" title="Что это?" aria-label="Подсказка: Сообщения">?</button>
+      <button class="page-tab" data-view="git-context" type="button">Git context</button>
+      <button class="help-button" data-help-topic="page:git-context" type="button" title="Что это?" aria-label="Подсказка: Git context">?</button>
       <button class="page-tab" data-view="screenshots" type="button">Скриншоты</button>
       <button class="help-button" data-help-topic="page:screenshots" type="button" title="Что это?" aria-label="Подсказка: Скриншоты">?</button>
       <button class="page-tab" data-view="evidence" type="button">Доказательства</button>
@@ -4648,6 +4774,7 @@ def render_index_v2() -> str:
           </div>
         </div>
         <label for="message">Текст сообщения</label>
+        <div class="commit-banner" id="activeGitContextSummary">Git context не выбран</div>
         <div class="commit-banner">Текущий Git-коммит репозитория: <code id="commitValue">не задан</code></div>
         <div class="attachment-panel">
           <div class="attachment-grid">
@@ -4724,16 +4851,6 @@ def render_index_v2() -> str:
         <div class="status" id="phoneStatus"></div>
       </div>
       <div class="panel">
-        <h2>Git context</h2>
-        <label for="gitAddress">Git address для текущего порта</label>
-        <input id="gitAddress" placeholder="D:\\nginx или https://github.com/org/repo.git">
-        <div class="actions">
-          <button class="primary" id="saveGitButton" type="button">Сохранить Git address</button>
-          <button class="secondary" id="checkGitButton" type="button">Проверить commit</button>
-        </div>
-        <div class="status" id="gitStatus">Файл привязки: __GIT_CONFIG_PATH__</div>
-      </div>
-      <div class="panel">
         <h2>Email routes</h2>
         <div class="subtle">Email может повторяться; каждая строка сохраняется отдельно.</div>
         <datalist id="emailSenderOptions"></datalist>
@@ -4762,8 +4879,8 @@ def render_index_v2() -> str:
       </div>
       <div class="panel history-filters">
         <div>
-          <label for="historyGitContext">Git context</label>
-          <select id="historyGitContext"></select>
+          <label for="historyGitContext">Активный Git context</label>
+          <select id="historyGitContext" disabled></select>
         </div>
         <div>
           <label for="historyFrom">От</label>
@@ -4781,6 +4898,55 @@ def render_index_v2() -> str:
         <div class="status" id="historyStatus"></div>
       </div>
       <div class="history-list" id="history"></div>
+    </section>
+  </main>
+  <main class="view git-context-view" data-view="git-context">
+    <section>
+      <div class="panel">
+        <h2>Git context</h2>
+        <div class="grid">
+          <div>
+            <label for="gitPhone">Активный проект / телефон</label>
+            <select id="gitPhone"></select>
+          </div>
+          <div>
+            <label for="gitNewPhone">Новый номер Git context</label>
+            <input id="gitNewPhone" placeholder="9002">
+          </div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="addGitContextButton" type="button">Добавить Git context</button>
+          <button class="secondary" id="deleteGitContextButton" type="button">Удалить выбранный Git context</button>
+        </div>
+        <label for="gitAddress">Git address для выбранного телефона</label>
+        <input id="gitAddress" placeholder="D:\\nginx или https://github.com/org/repo.git">
+        <label for="gitProjectName">Project name</label>
+        <input id="gitProjectName" placeholder="LLM Extractor">
+        <div class="actions">
+          <button class="primary" id="saveGitButton" type="button">Сохранить привязку телефона</button>
+          <button class="secondary" id="checkGitButton" type="button">Проверить commit</button>
+        </div>
+        <div class="status" id="gitStatus">Файл привязки: __GIT_CONFIG_PATH__</div>
+      </div>
+    </section>
+    <section>
+      <div class="panel">
+        <h2>Активный контекст</h2>
+        <div class="agent-status-metrics">
+          <div class="agent-status-metric">
+            <span class="subtle">Телефон</span>
+            <strong id="activeGitContextPhone">не выбран</strong>
+          </div>
+          <div class="agent-status-metric">
+            <span class="subtle">Проект</span>
+            <strong id="activeGitContextProject">не задан</strong>
+          </div>
+          <div class="agent-status-metric">
+            <span class="subtle">Commit</span>
+            <strong id="activeGitContextCommit">не задан</strong>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
   <main class="view screenshots-view" data-view="screenshots">
@@ -5150,6 +5316,11 @@ def render_index_v2() -> str:
         purpose: "Здесь создают задачи, отправляют отчеты и смотрят, что уже произошло в рабочем процессе.",
         logic: "Вы выбираете направление, отправителя, получателя и статус. После отправки сообщение попадает в нужную очередь, а запись сохраняется в истории."
       },
+      "page:git-context": {
+        title: "Git context",
+        purpose: "Здесь выбирают активный проект/телефон и управляют связями phone -> Git repository.",
+        logic: "После выбора активного номера остальные вкладки показывают очереди, историю и файлы только этого Git context."
+      },
       "page:screenshots": {
         title: "Скриншоты",
         purpose: "Раздел нужен, чтобы хранить изображения с доказательствами: ошибки интерфейса, состояние страницы, результат проверки.",
@@ -5197,8 +5368,8 @@ def render_index_v2() -> str:
       },
       "heading:Git context": {
         title: "Git context",
-        purpose: "Связывает текущий порт приложения с репозиторием, где лежит код проекта.",
-        logic: "После сохранения система может показывать текущий commit, чтобы участники понимали, какую версию проверяют."
+        purpose: "Управляет связями номер телефона -> репозиторий проекта.",
+        logic: "Очереди используют URL вида /work/{phone}; система берет Git context по этому номеру и пишет его в историю."
       },
       "heading:Email routes": {
         title: "Email routes",
@@ -5380,10 +5551,20 @@ def render_index_v2() -> str:
         purpose: "Содержание адресного сообщения.",
         logic: "Пишите конкретно: что нужно сделать, что проверить или на что ответить."
       },
+      "field:gitPhone": {
+        title: "Номер проекта / Git context",
+        purpose: "Номер, через который очереди определяют проект и Git context.",
+        logic: "Сообщения агентов используют URL вида /work/{phone}; этот номер должен быть привязан к одному Git context."
+      },
+      "field:gitNewPhone": {
+        title: "Новый номер Git context",
+        purpose: "Номер для новой связи phone -> Git context.",
+        logic: "Введите свободный номер, нажмите «Добавить Git context», затем заполните Git address и сохраните привязку."
+      },
       "field:gitAddress": {
         title: "Git address",
-        purpose: "Адрес папки или репозитория, где лежит код проекта.",
-        logic: "По этому адресу система пытается определить текущий commit, чтобы связать проверку с версией кода."
+        purpose: "Адрес папки или репозитория для выбранного телефона.",
+        logic: "При сохранении система связывает телефон с этим репозиторием и определяет текущий commit."
       },
       "field:historyFrom": {
         title: "От",
@@ -5596,9 +5777,19 @@ def render_index_v2() -> str:
         logic: "Сообщение увидит агент с телефоном получателя в рамках указанного номера разговора."
       },
       "button:saveGitButton": {
-        title: "Сохранить Git address",
-        purpose: "Сохраняет адрес репозитория или папки проекта.",
-        logic: "После сохранения система сможет определять commit для текущего порта."
+        title: "Сохранить привязку телефона",
+        purpose: "Сохраняет связь выбранного телефона с репозиторием проекта.",
+        logic: "После сохранения queue URL с этим телефоном получает project/git metadata автоматически."
+      },
+      "button:addGitContextButton": {
+        title: "Добавить Git context",
+        purpose: "Добавляет новый номер в список Git contexts на экране.",
+        logic: "Номер появится в выборе сразу, но постоянной связь станет после сохранения Git address."
+      },
+      "button:deleteGitContextButton": {
+        title: "Удалить выбранный Git context",
+        purpose: "Удаляет сохраненную связь выбранного номера с репозиторием.",
+        logic: "История не стирается, но новые очереди больше не смогут использовать этот номер, пока вы не сохраните его снова."
       },
       "button:checkGitButton": {
         title: "Проверить commit",
@@ -5975,9 +6166,14 @@ def render_index_v2() -> str:
     const scheduledTasksEl = document.getElementById("scheduledTasks");
     const scheduledTasksCountEl = document.getElementById("scheduledTasksCount");
     const scheduledTasksStatusEl = document.getElementById("scheduledTasksStatus");
+    const gitPhoneEl = document.getElementById("gitPhone");
+    const gitNewPhoneEl = document.getElementById("gitNewPhone");
     const gitAddressEl = document.getElementById("gitAddress");
     const gitProjectNameEl = document.getElementById("gitProjectName");
     const gitStatusEl = document.getElementById("gitStatus");
+    const activeGitContextPhoneEl = document.getElementById("activeGitContextPhone");
+    const activeGitContextProjectEl = document.getElementById("activeGitContextProject");
+    const activeGitContextCommitEl = document.getElementById("activeGitContextCommit");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -6028,6 +6224,7 @@ def render_index_v2() -> str:
     const closeHelpModalButtonEl = document.getElementById("closeHelpModalButton");
     let currentHistoryRecords = [];
     let gitContexts = [];
+    let phoneGitContexts = [];
     let currentGitContext = null;
     let activeQueueItemIds = new Set();
     let emailRoutes = [];
@@ -6399,6 +6596,100 @@ def render_index_v2() -> str:
 
     function agentById(agentIdValue) {
       return agents.find((agent) => agent.id === agentIdValue) || null;
+    }
+
+    function activeQueuePhone() {
+      return String(gitPhoneEl.value || "").trim();
+    }
+
+    function activeMappedQueuePhone() {
+      const phone = activeQueuePhone();
+      return phone && phoneContextByPhone(phone) ? phone : "";
+    }
+
+    function activeGitContextRequiredMessage() {
+      const phone = activeQueuePhone();
+      return phone
+        ? `Номер ${phone} не привязан к Git context. Сохраните привязку во вкладке Git context.`
+        : "Выберите активный Git context во вкладке Git context.";
+    }
+
+    function phoneContextByPhone(phone) {
+      const phoneValue = String(phone || "").trim();
+      return phoneGitContexts.find((context) => String(context.phone || "").trim() === phoneValue) || null;
+    }
+
+    function updateActiveGitContextDisplay() {
+      const phone = activeQueuePhone();
+      const context = phoneContextByPhone(phone);
+      if (!phone) {
+        activeGitContextSummaryEl.textContent = "Git context не выбран";
+        activeGitContextPhoneEl.textContent = "не выбран";
+        activeGitContextProjectEl.textContent = "не задан";
+        activeGitContextCommitEl.textContent = "не задан";
+        return;
+      }
+      if (!context) {
+        activeGitContextSummaryEl.textContent = `Активный номер: ${phone}. Git context еще не сохранен.`;
+        activeGitContextPhoneEl.textContent = phone;
+        activeGitContextProjectEl.textContent = "не сохранен";
+        activeGitContextCommitEl.textContent = "не задан";
+        return;
+      }
+      const project = context.project_name || "Project";
+      const commit = context.git_commit_short || context.git_commit || "commit не получен";
+      activeGitContextSummaryEl.textContent = `Активный Git context: ${project} · phone ${phone} · ${context.git_context_key || context.git_address || ""}`;
+      activeGitContextPhoneEl.textContent = phone;
+      activeGitContextProjectEl.textContent = project;
+      activeGitContextCommitEl.textContent = commit;
+    }
+
+    function renderGitPhoneOptions(preferredPhone = activeQueuePhone()) {
+      const seen = new Set();
+      const options = [];
+      const preferred = String(preferredPhone || "").trim();
+      agents.forEach((agent) => {
+        const phone = String(agent.phone || "").trim();
+        if (!phone || seen.has(phone)) {
+          return;
+        }
+        seen.add(phone);
+        options.push({
+          phone,
+          label: `${agent.name || "Agent"} · ${phone}`
+        });
+      });
+      phoneGitContexts.forEach((context) => {
+        const phone = String(context.phone || "").trim();
+        if (!phone || seen.has(phone)) {
+          return;
+        }
+        seen.add(phone);
+        options.push({
+          phone,
+          label: `${context.project_name || "Project"} · ${phone}`
+        });
+      });
+      if (preferred && !seen.has(preferred)) {
+        seen.add(preferred);
+        options.unshift({
+          phone: preferred,
+          label: `Новый Git context · ${preferred}`
+        });
+      }
+      const selectedPhone = options.some((option) => option.phone === preferred)
+        ? preferred
+        : (options[0] && options[0].phone) || "";
+      gitPhoneEl.innerHTML = options.length
+        ? options.map((option) => {
+          const selected = option.phone === selectedPhone ? " selected" : "";
+          const mapped = phoneContextByPhone(option.phone);
+          const suffix = mapped ? ` · ${mapped.project_name || mapped.git_context_key}` : " · не привязан";
+          return `<option value="${escapeHtml(option.phone)}"${selected}>${escapeHtml(option.label + suffix)}</option>`;
+        }).join("")
+        : `<option value="">Нет телефонов агентов</option>`;
+      gitPhoneEl.value = selectedPhone;
+      updateActiveGitContextDisplay();
     }
 
     function renderPhoneAgentOptions(selectEl, preferredName = "") {
@@ -7045,6 +7336,17 @@ def render_index_v2() -> str:
           label: `${agent.name || "Agent"} · ${phone}`
         });
       });
+      phoneGitContexts.forEach((context) => {
+        const phone = String(context.phone || "").trim();
+        if (!phone || seen.has(phone)) {
+          return;
+        }
+        seen.add(phone);
+        options.push({
+          phone,
+          label: `${context.project_name || "Project"} · ${phone}`
+        });
+      });
       return options;
     }
 
@@ -7297,6 +7599,7 @@ def render_index_v2() -> str:
       pendingSpecializations = data.pending_specializations || {};
       renderAgents(data.agents || [], selectedAgentId);
       syncActorsFromAgents(data.agents || []);
+      renderGitPhoneOptions();
       setAgentsStatus(`Загружено агентов: ${(data.agents || []).length}. Файл: ${data.config_path}`);
     }
 
@@ -7316,6 +7619,7 @@ def render_index_v2() -> str:
       pendingSpecializations = data.pending_specializations || pendingSpecializations;
       renderAgents(data.agents || [], selectedAgentId);
       syncActorsFromAgents(data.agents || []);
+      renderGitPhoneOptions();
       setAgentsStatus(`Сохранено агентов: ${(data.agents || []).length}.`, "ok");
     }
 
@@ -7547,41 +7851,10 @@ UI TEST TASK FOR DESIGNER:
     function selectedGitContext() {
       const selectedKey = historyGitContextEl.value || "";
       return gitContexts.find((context) => context.git_context_key === selectedKey)
+        || phoneContextByPhone(activeQueuePhone())
         || currentGitContext
         || gitContexts[0]
         || null;
-    }
-
-    function messageAlreadyHasGitContext(message) {
-      return /^\\s*\\[?GIT CONTEXT\\]?\\s*:?\\s*$/im.test(message);
-    }
-
-    function gitContextBlock(context) {
-      if (!context || (!context.git_context_key && !context.git_address)) {
-        throw new Error("Выберите Git context перед отправкой сообщения.");
-      }
-      const lines = [
-        "GIT CONTEXT:",
-        `- Project: ${context.project_name || "LLM Extractor"}`
-      ];
-      if (context.git_context_key) {
-        lines.push(`- Git context: ${context.git_context_key}`);
-      }
-      if (context.git_address) {
-        lines.push(`- Git address: ${context.git_address}`);
-      }
-      if (context.git_commit || context.git_commit_short) {
-        lines.push(`- Commit: ${context.git_commit || context.git_commit_short}`);
-      }
-      return lines.join("\\n");
-    }
-
-    function withGitContextBlock(message) {
-      const cleanMessage = String(message || "").trim();
-      if (messageAlreadyHasGitContext(cleanMessage)) {
-        return cleanMessage;
-      }
-      return `${gitContextBlock(selectedGitContext())}\\n\\n${cleanMessage}`;
     }
 
     async function sendMessage() {
@@ -7590,7 +7863,11 @@ UI TEST TASK FOR DESIGNER:
         setStatus("Введите текст сообщения.", "error");
         return;
       }
-      message = withGitContextBlock(message);
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        setStatus(activeGitContextRequiredMessage(), "error");
+        return;
+      }
       const config = queueConfig[queueEl.value];
       const schedule = buildSchedulePayload();
       setStatus("Отправляю...");
@@ -7603,6 +7880,7 @@ UI TEST TASK FOR DESIGNER:
           sender: senderEl.value,
           receiver: receiverEl.value,
           status: statusEl.value,
+          phone,
           message,
           schedule
         })
@@ -7686,6 +7964,10 @@ UI TEST TASK FOR DESIGNER:
       params.set("date_from", screenshotFoldersFromEl.value || todayInputValue());
       if (screenshotFoldersToEl.value) {
         params.set("date_to", screenshotFoldersToEl.value);
+      }
+      const phone = activeMappedQueuePhone();
+      if (phone) {
+        params.set("phone", phone);
       }
       return params;
     }
@@ -7776,6 +8058,13 @@ UI TEST TASK FOR DESIGNER:
     }
 
     async function refreshScreenshotFolders(preferredId = selectedScreenshotFolderId) {
+      if (!activeMappedQueuePhone()) {
+        screenshotFolders = [];
+        selectedScreenshotFolderId = "";
+        renderScreenshotFolders();
+        setScreenshotFoldersFilterStatus(activeGitContextRequiredMessage());
+        return;
+      }
       const response = await fetch(`/screenshot-folders?${screenshotFolderParams().toString()}`);
       const data = await response.json();
       if (!response.ok) {
@@ -7790,7 +8079,14 @@ UI TEST TASK FOR DESIGNER:
 
     async function createScreenshotFolder() {
       setScreenshotFoldersStatus("Создаю папку...");
-      const response = await fetch("/screenshot-folders", {method: "POST"});
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        setScreenshotFoldersStatus(activeGitContextRequiredMessage(), "error");
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("phone", phone);
+      const response = await fetch(`/screenshot-folders${params.toString() ? "?" + params.toString() : ""}`, {method: "POST"});
       const data = await response.json();
       if (!response.ok) {
         setScreenshotFoldersStatus(data.detail || "Не удалось создать папку.", "error");
@@ -8120,6 +8416,10 @@ UI TEST TASK FOR DESIGNER:
       if (evidenceFoldersToEl.value) {
         params.set("date_to", evidenceFoldersToEl.value);
       }
+      const phone = activeMappedQueuePhone();
+      if (phone) {
+        params.set("phone", phone);
+      }
       return params;
     }
 
@@ -8213,6 +8513,13 @@ UI TEST TASK FOR DESIGNER:
     }
 
     async function refreshEvidenceFolders(preferredId = selectedEvidenceFolderId) {
+      if (!activeMappedQueuePhone()) {
+        evidenceFolders = [];
+        selectedEvidenceFolderId = "";
+        renderEvidenceFolders();
+        setEvidenceFoldersFilterStatus(activeGitContextRequiredMessage());
+        return;
+      }
       const response = await fetch(`/evidence-folders?${evidenceFolderParams().toString()}`);
       const data = await response.json();
       if (!response.ok) {
@@ -8227,7 +8534,14 @@ UI TEST TASK FOR DESIGNER:
 
     async function createEvidenceFolder() {
       setEvidenceFoldersStatus("Создаю папку...");
-      const response = await fetch("/evidence-folders", {method: "POST"});
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        setEvidenceFoldersStatus(activeGitContextRequiredMessage(), "error");
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("phone", phone);
+      const response = await fetch(`/evidence-folders${params.toString() ? "?" + params.toString() : ""}`, {method: "POST"});
       const data = await response.json();
       if (!response.ok) {
         setEvidenceFoldersStatus(data.detail || "Не удалось создать папку.", "error");
@@ -8522,7 +8836,13 @@ UI TEST TASK FOR DESIGNER:
     }
 
     async function fetchFolderChoices(endpoint, type, label) {
-      const response = await fetch(endpoint);
+      const params = new URLSearchParams();
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        return [];
+      }
+      params.set("phone", phone);
+      const response = await fetch(`${endpoint}${params.toString() ? "?" + params.toString() : ""}`);
       const data = await response.json();
       if (!response.ok) {
         throw new Error(data.detail || `Не удалось загрузить папки: ${label}.`);
@@ -8538,6 +8858,12 @@ UI TEST TASK FOR DESIGNER:
 
     async function refreshAttachmentFolderChoices(preferredValue = attachmentFolderSelectEl.value) {
       setAttachmentStatus("Загружаю папки...");
+      if (!activeMappedQueuePhone()) {
+        attachmentFolderChoices = [];
+        renderAttachmentFolderOptions("");
+        setAttachmentStatus(activeGitContextRequiredMessage());
+        return;
+      }
       const [screenshotChoices, evidenceChoices] = await Promise.all([
         fetchFolderChoices("/screenshot-folders", "screenshots", "скриншоты"),
         fetchFolderChoices("/evidence-folders", "evidence", "доказательства")
@@ -8597,7 +8923,6 @@ UI TEST TASK FOR DESIGNER:
         setPhoneStatus("Введите текст сообщения.", "error");
         return;
       }
-      message = withGitContextBlock(message);
 
       const channelPathByQueue = {
         "worker-all": "worker/all",
@@ -8628,12 +8953,12 @@ UI TEST TASK FOR DESIGNER:
     }
 
     function consultantQuestionMessage(sender, expert, question) {
-      return withGitContextBlock(`TO: ${expert.name}
+      return `TO: ${expert.name}
 FROM: ${sender.name}
 STATUS: QUESTION
 
 QUESTION:
-${question}`);
+${question}`;
     }
 
     async function askConsultant() {
@@ -8706,8 +9031,26 @@ ${question}`);
     }
 
     async function refreshQueues() {
-      const response = await fetch("/queues");
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        activeQueueItemIds = new Set();
+        queueStatsEl.innerHTML = Object.entries(queueConfig).map(([name, config]) => {
+          return `<div class="queue-stat ${escapeHtml(config.context)}">
+            <span class="subtle">${escapeHtml(config.route)} · ${escapeHtml(config.label)}</span>
+            <strong>0</strong>
+          </div>`;
+        }).join("");
+        setStatus(activeGitContextRequiredMessage());
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("phone", phone);
+      const response = await fetch(`/queues${params.toString() ? "?" + params.toString() : ""}`);
       const data = await response.json();
+      if (!response.ok) {
+        setStatus(data.detail || "Не удалось загрузить очереди.", "error");
+        return;
+      }
       activeQueueItemIds = new Set();
       Object.entries(data.items || {}).forEach(([queueName, items]) => {
         (items || []).forEach((item) => {
@@ -8749,7 +9092,16 @@ ${question}`);
     }
 
     async function refreshScheduledTasks() {
-      const response = await fetch("/scheduled-tasks");
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        scheduledTasksCountEl.textContent = "Git context не выбран";
+        scheduledTasksEl.innerHTML = `<div class="subtle">${escapeHtml(activeGitContextRequiredMessage())}</div>`;
+        setScheduledTasksStatus("");
+        return;
+      }
+      const params = new URLSearchParams();
+      params.set("phone", phone);
+      const response = await fetch(`/scheduled-tasks${params.toString() ? "?" + params.toString() : ""}`);
       const data = await response.json();
       if (!response.ok) {
         setScheduledTasksStatus(data.detail || "Не удалось загрузить ожидающие задания.", "error");
@@ -8804,7 +9156,11 @@ ${question}`);
 
     async function deleteQueuedMessage(queueName, itemId) {
       setStatus("Удаляю сообщение из очереди...");
-      const response = await fetch(`/queues/${encodeURIComponent(queueName)}/${encodeURIComponent(itemId)}`, {
+      const phone = activeMappedQueuePhone();
+      const url = phone
+        ? `/queues/${encodeURIComponent(queueName)}/${encodeURIComponent(phone)}/${encodeURIComponent(itemId)}`
+        : `/queues/${encodeURIComponent(queueName)}/${encodeURIComponent(itemId)}`;
+      const response = await fetch(url, {
         method: "DELETE"
       });
       const data = await response.json();
@@ -8819,14 +9175,30 @@ ${question}`);
     async function refreshGitConfig() {
       const response = await fetch("/git-config");
       const data = await response.json();
+      phoneGitContexts = data.phone_contexts || [];
+      phoneGitContexts = phoneGitContexts.map((context) => {
+        if (context.git_context_key && context.git_context_key === data.git_context_key) {
+          return Object.assign({}, context, {
+            git_commit: data.git_commit || context.git_commit || "",
+            git_commit_short: data.git_commit_short || context.git_commit_short || "",
+            git_error: data.git_error || context.git_error || ""
+          });
+        }
+        return context;
+      });
+      renderGitPhoneOptions(activeQueuePhone() || (phoneGitContexts[0] && phoneGitContexts[0].phone) || "");
+      const activePhoneContext = phoneContextByPhone(activeQueuePhone());
+      const displayGitAddress = (activePhoneContext && activePhoneContext.git_address) || data.git_address || "";
+      const displayProjectName = (activePhoneContext && activePhoneContext.project_name) || data.project_name || "";
       if (document.activeElement !== gitAddressEl) {
-        gitAddressEl.value = data.git_address || "";
+        gitAddressEl.value = displayGitAddress;
       }
       if (document.activeElement !== gitProjectNameEl) {
-        gitProjectNameEl.value = data.project_name || "";
+        gitProjectNameEl.value = displayProjectName;
       }
       gitContexts = data.contexts || [];
-      currentGitContext = gitContexts.find((context) => context.is_current_port)
+      currentGitContext = activePhoneContext
+        || gitContexts.find((context) => context.is_current_port)
         || (data.git_context_key ? {
           project_name: data.project_name || "LLM Extractor",
           git_context_key: data.git_context_key,
@@ -8837,8 +9209,10 @@ ${question}`);
         } : null);
       renderGitContextOptions(historyGitContextEl.value || (currentGitContext && currentGitContext.git_context_key) || "");
       commitValueEl.textContent = data.git_commit_short || "не задан";
-      if (data.git_commit_short) {
-        setGitStatus(`Порт ${data.port}: ${data.project_name || "project"} · commit ${data.git_commit_short}`, "ok");
+      if (activePhoneContext) {
+        setGitStatus(`Телефон ${activePhoneContext.phone}: ${activePhoneContext.project_name || "project"} · ${activePhoneContext.git_context_key}`, "ok");
+      } else if (data.git_commit_short) {
+        setGitStatus(`Порт ${data.port}: ${data.project_name || "project"} · commit ${data.git_commit_short}. Выберите телефон и сохраните привязку.`, "ok");
       } else if (data.git_error) {
         setGitStatus(`Порт ${data.port}: ${data.git_error}`, "error");
       } else {
@@ -8847,16 +9221,23 @@ ${question}`);
     }
 
     function renderGitContextOptions(preferredKey = "") {
-      const selectedKey = gitContexts.some((context) => context.git_context_key === preferredKey)
-        ? preferredKey
-        : (currentGitContext && currentGitContext.git_context_key)
-          || (gitContexts[0] && gitContexts[0].git_context_key)
-          || "";
+      const activePhone = activeQueuePhone();
+      const activePhoneContext = phoneContextByPhone(activePhone);
+      const selectedKey = activePhone && !activePhoneContext
+        ? ""
+        : gitContexts.some((context) => context.git_context_key === preferredKey)
+          ? preferredKey
+          : (activePhoneContext && activePhoneContext.git_context_key)
+            || (currentGitContext && currentGitContext.git_context_key)
+            || (gitContexts[0] && gitContexts[0].git_context_key)
+            || "";
+      const emptyOption = selectedKey ? "" : `<option value="">Git context не выбран</option>`;
       historyGitContextEl.innerHTML = gitContexts.length
-        ? gitContexts.map((context) => {
+        ? emptyOption + gitContexts.map((context) => {
           const selected = context.git_context_key === selectedKey ? " selected" : "";
           const portText = context.ports && context.ports.length ? ` · port ${context.ports.join(", ")}` : "";
-          const label = `${context.project_name || "Project"} · ${context.git_context_key}${portText}`;
+          const phoneText = context.phones && context.phones.length ? ` · phone ${context.phones.join(", ")}` : "";
+          const label = `${context.project_name || "Project"} · ${context.git_context_key}${phoneText}${portText}`;
           return `<option value="${escapeHtml(context.git_context_key)}"${selected}>${escapeHtml(label)}</option>`;
         }).join("")
         : `<option value="">Git context не задан</option>`;
@@ -8866,6 +9247,11 @@ ${question}`);
     async function saveGitConfig() {
       const gitAddress = gitAddressEl.value.trim();
       const projectName = gitProjectNameEl.value.trim();
+      const phone = activeQueuePhone();
+      if (!phone) {
+        setGitStatus("Выберите телефон для Git context.", "error");
+        return;
+      }
       if (!gitAddress) {
         setGitStatus("Введите Git address.", "error");
         return;
@@ -8874,7 +9260,7 @@ ${question}`);
       const response = await fetch("/git-config", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({git_address: gitAddress, project_name: projectName})
+        body: JSON.stringify({phone, git_address: gitAddress, project_name: projectName})
       });
       const data = await response.json();
       if (!response.ok) {
@@ -8883,15 +9269,106 @@ ${question}`);
       }
       commitValueEl.textContent = data.git_commit_short || "не задан";
       gitContexts = data.contexts || [];
-      currentGitContext = gitContexts.find((context) => context.is_current_port) || currentGitContext;
+      phoneGitContexts = data.phone_contexts || [];
+      phoneGitContexts = phoneGitContexts.map((context) => {
+        if (context.phone === phone) {
+          return Object.assign({}, context, {
+            git_commit: data.git_commit || context.git_commit || "",
+            git_commit_short: data.git_commit_short || context.git_commit_short || "",
+            git_error: data.git_error || context.git_error || ""
+          });
+        }
+        return context;
+      });
+      renderGitPhoneOptions(phone);
+      currentGitContext = phoneContextByPhone(phone) || gitContexts.find((context) => context.is_current_port) || currentGitContext;
       renderGitContextOptions(data.git_context_key || (currentGitContext && currentGitContext.git_context_key) || "");
       if (data.git_commit_short) {
-        setGitStatus(`Сохранено для порта ${data.port}. Commit: ${data.git_commit_short}`, "ok");
+        setGitStatus(`Сохранено для телефона ${phone}. Commit: ${data.git_commit_short}`, "ok");
       } else if (data.git_error) {
         setGitStatus(`Сохранено для порта ${data.port}, но commit не получен: ${data.git_error}`, "error");
       } else {
         setGitStatus(`Сохранено для порта ${data.port}.`, "ok");
       }
+      await Promise.all([
+        refreshQueues(),
+        refreshScheduledTasks(),
+        refreshHistory(),
+        refreshAttachmentFolderChoices(),
+        refreshScreenshotFolders(),
+        refreshEvidenceFolders()
+      ]);
+    }
+
+    function addGitContext() {
+      const phone = gitNewPhoneEl.value.trim();
+      if (!phone) {
+        setGitStatus("Введите новый номер Git context.", "error");
+        return;
+      }
+      renderGitPhoneOptions(phone);
+      gitPhoneEl.value = phone;
+      const existing = phoneContextByPhone(phone);
+      if (existing) {
+        gitAddressEl.value = existing.git_address || "";
+        gitProjectNameEl.value = existing.project_name || "";
+        currentGitContext = existing;
+        renderGitContextOptions(existing.git_context_key || "");
+        setGitStatus(`Номер ${phone} уже сохранен. Можно изменить Git address и сохранить заново.`, "ok");
+      } else {
+        gitAddressEl.value = "";
+        gitProjectNameEl.value = "";
+        currentGitContext = null;
+        renderGitContextOptions("");
+        setGitStatus(`Новый Git context ${phone}: заполните Git address и сохраните привязку.`);
+      }
+      gitNewPhoneEl.value = "";
+      gitAddressEl.focus();
+    }
+
+    async function deleteSelectedGitContext() {
+      const phone = activeQueuePhone();
+      if (!phone) {
+        setGitStatus("Выберите номер Git context.", "error");
+        return;
+      }
+      const existing = phoneContextByPhone(phone);
+      if (!existing) {
+        setGitStatus(`Номер ${phone} еще не сохранен как Git context. Удалять нечего.`, "error");
+        return;
+      }
+      if (!window.confirm(`Удалить Git context для номера ${phone}? История сохранится.`)) {
+        setGitStatus("Удаление отменено.");
+        return;
+      }
+
+      setGitStatus("Удаляю Git context...");
+      const response = await fetch(`/git-config/phone/${encodeURIComponent(phone)}`, {
+        method: "DELETE"
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setGitStatus(data.detail || "Не удалось удалить Git context.", "error");
+        return;
+      }
+      phoneGitContexts = data.phone_contexts || [];
+      gitContexts = data.contexts || [];
+      const nextPhone = (phoneGitContexts[0] && phoneGitContexts[0].phone) || "";
+      renderGitPhoneOptions(nextPhone);
+      const nextContext = phoneContextByPhone(activeQueuePhone());
+      gitAddressEl.value = nextContext ? nextContext.git_address || "" : "";
+      gitProjectNameEl.value = nextContext ? nextContext.project_name || "" : "";
+      currentGitContext = nextContext || null;
+      renderGitContextOptions(nextContext ? nextContext.git_context_key || "" : "");
+      setGitStatus(`Git context для номера ${phone} удален.`, "ok");
+      await Promise.all([
+        refreshQueues(),
+        refreshScheduledTasks(),
+        refreshHistory(),
+        refreshAttachmentFolderChoices(),
+        refreshScreenshotFolders(),
+        refreshEvidenceFolders()
+      ]);
     }
 
     function historyParams(limit) {
@@ -9118,7 +9595,13 @@ ${data.patch || ""}
 
     async function restoreRemovedBackendHistoryRecord(recordId) {
       setHistoryStatus("Возвращаю сообщение в очередь...");
-      const response = await fetch(`/history/${encodeURIComponent(recordId)}/restore-to-queue`, {
+      const phone = activeMappedQueuePhone();
+      if (!phone) {
+        setHistoryStatus(activeGitContextRequiredMessage(), "error");
+        return;
+      }
+      const url = `/history/${encodeURIComponent(recordId)}/restore-to-queue/${encodeURIComponent(phone)}`;
+      const response = await fetch(url, {
         method: "POST"
       });
       const data = await response.json();
@@ -9131,6 +9614,13 @@ ${data.patch || ""}
     }
 
     async function refreshHistory() {
+      if (!activeMappedQueuePhone()) {
+        currentHistoryRecords = [];
+        historyCountEl.textContent = "Git context не выбран";
+        historyEl.innerHTML = `<div class="panel subtle">${escapeHtml(activeGitContextRequiredMessage())}</div>`;
+        setHistoryStatus("");
+        return;
+      }
       const records = await fetchHistoryRecords(500);
       currentHistoryRecords = records;
       const dateToText = historyToEl.value ? ` - ${historyToEl.value}` : "";
@@ -9180,9 +9670,8 @@ ${data.patch || ""}
     }
 
     async function refresh() {
-      await refreshQueues();
       await refreshGitConfig();
-      await Promise.all([refreshScheduledTasks(), refreshHistory()]);
+      await Promise.all([refreshQueues(), refreshScheduledTasks(), refreshHistory()]);
     }
 
     function setActiveView(view) {
@@ -9653,7 +10142,19 @@ ${data.patch || ""}
     document.getElementById("readyTemplateButton").addEventListener("click", () => setTemplate("ready"));
     document.getElementById("refreshButton").addEventListener("click", refresh);
     document.getElementById("saveGitButton").addEventListener("click", () => {
-      saveGitConfig().then(refreshHistory).catch((error) => setGitStatus(error.message, "error"));
+      saveGitConfig()
+        .then(() => Promise.all([refreshQueues(), refreshScheduledTasks(), refreshHistory()]))
+        .catch((error) => setGitStatus(error.message, "error"));
+    });
+    document.getElementById("addGitContextButton").addEventListener("click", addGitContext);
+    document.getElementById("deleteGitContextButton").addEventListener("click", () => {
+      deleteSelectedGitContext().catch((error) => setGitStatus(error.message, "error"));
+    });
+    gitNewPhoneEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        addGitContext();
+      }
     });
     document.getElementById("checkGitButton").addEventListener("click", () => {
       refreshGitConfig().catch((error) => setGitStatus(error.message, "error"));
@@ -9682,6 +10183,26 @@ ${data.patch || ""}
     document.getElementById("addEmailRouteButton").addEventListener("click", () => addEmailRoute());
     document.getElementById("saveEmailRoutesButton").addEventListener("click", () => {
       saveEmailRoutes().catch((error) => setEmailRoutesStatus(error.message, "error"));
+    });
+    gitPhoneEl.addEventListener("change", () => {
+      const context = phoneContextByPhone(activeQueuePhone());
+      updateActiveGitContextDisplay();
+      if (context) {
+        gitAddressEl.value = context.git_address || "";
+        gitProjectNameEl.value = context.project_name || "";
+        currentGitContext = context;
+        renderGitContextOptions(context.git_context_key || "");
+      } else {
+        gitAddressEl.value = "";
+        gitProjectNameEl.value = "";
+        currentGitContext = null;
+      }
+      refreshQueues().catch((error) => setStatus(error.message, "error"));
+      refreshScheduledTasks().catch((error) => setScheduledTasksStatus(error.message, "error"));
+      refreshHistory().catch((error) => setHistoryStatus(error.message, "error"));
+      refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
+      refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
+      refreshEvidenceFolders().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
     });
     document.getElementById("addAgentButton").addEventListener("click", () => addAgent());
     document.getElementById("cloneAgentButton").addEventListener("click", openCloneAgentModal);
@@ -9936,10 +10457,11 @@ ${data.patch || ""}
     renderEmailSenderOptions();
     renderQueueOptions();
     setTemplate("task");
-    refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
     refreshAgents().catch((error) => setAgentsStatus(error.message, "error"));
     refreshEmailRoutes().catch((error) => setEmailRoutesStatus(error.message, "error"));
-    refresh();
+    refresh()
+      .then(() => refreshAttachmentFolderChoices())
+      .catch((error) => setStatus(error.message, "error"));
     setInterval(refresh, 5000);
   </script>
 </body>
@@ -9990,8 +10512,7 @@ async def enqueue(
         if git_context is not None
         else await git_context_for_port(port)
     )
-    message_git_context = extract_git_context_from_message(message)
-    item = make_queue_item(message, {**clean_metadata, **item_git_context, **message_git_context})
+    item = make_queue_item(message, {**clean_metadata, **item_git_context})
     item_id = item["id"]
     async with locks[queue_name]:
         queues[queue_name].append(item)
@@ -10015,13 +10536,36 @@ async def dequeue(
     git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     queue_meta = queue_definition(queue_name)
+    target_context_key = (
+        git_context_key_from_metadata(git_context)
+        if isinstance(git_context, dict)
+        else ""
+    )
+    delivered_item: Any | None = None
     async with locks[queue_name]:
-        if not queues[queue_name]:
+        kept_items: deque[Any] = deque()
+        while queues[queue_name]:
+            item = queues[queue_name].popleft()
+            if (
+                delivered_item is None
+                and (
+                    not target_context_key
+                    or queue_item_matches_git_context(item, target_context_key)
+                )
+            ):
+                delivered_item = item
+                continue
+            kept_items.append(item)
+        queues[queue_name] = kept_items
+
+        if delivered_item is None:
+            detail = "Queue is empty"
+            if target_context_key:
+                detail = "Queue has no message for this phone Git context"
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Queue is empty",
+                detail=detail,
             )
-        delivered_item = queues[queue_name].popleft()
 
     item_id = queue_item_id(delivered_item)
     message = queue_item_message(delivered_item)
@@ -10144,14 +10688,27 @@ async def delete_queued_item(
     queue_name: str,
     item_id: str,
     port: int | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     queue_meta = queue_definition(queue_name)
+    target_context_key = (
+        git_context_key_from_metadata(git_context)
+        if isinstance(git_context, dict)
+        else ""
+    )
     deleted_item: Any | None = None
     async with locks[queue_name]:
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
-            if deleted_item is None and queue_item_id(item) == item_id:
+            if (
+                deleted_item is None
+                and queue_item_id(item) == item_id
+                and (
+                    not target_context_key
+                    or queue_item_matches_git_context(item, target_context_key)
+                )
+            ):
                 deleted_item = item
                 continue
             kept_items.append(item)
@@ -10191,7 +10748,7 @@ async def delete_queued_item(
             "action": "deleted_from_queue",
         },
         port=port,
-        git_context=deleted_git_context or None,
+        git_context=git_context or deleted_git_context or None,
     )
     return {"status": "deleted", "queue": queue_name, "id": item_id, "size": size}
 
@@ -10202,19 +10759,32 @@ async def index() -> str:
 
 
 @app.get("/queues")
-async def get_queues() -> dict[str, Any]:
+async def get_queues(phone: str | None = None) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone) if phone else None
+    git_context_key = (
+        git_context_key_from_metadata(git_context)
+        if isinstance(git_context, dict)
+        else ""
+    )
     result: dict[str, int] = {}
     items: dict[str, list[dict[str, Any]]] = {}
     for queue_name in queues:
         async with locks[queue_name]:
-            result[queue_name] = len(queues[queue_name])
-            items[queue_name] = [queue_item_snapshot(item) for item in queues[queue_name]]
+            queue_items = queue_items_for_git_context(queues[queue_name], git_context_key)
+            result[queue_name] = len(queue_items)
+            items[queue_name] = [queue_item_snapshot(item) for item in queue_items]
     return {"queues": result, "items": items}
 
 
 @app.get("/scheduled-tasks")
-async def get_scheduled_tasks() -> dict[str, Any]:
-    tasks = await list_scheduled_tasks()
+async def get_scheduled_tasks(phone: str | None = None) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone) if phone else None
+    git_context_key = (
+        git_context_key_from_metadata(git_context)
+        if isinstance(git_context, dict)
+        else None
+    )
+    tasks = await list_scheduled_tasks(git_context_key)
     return {"tasks": tasks, "count": len(tasks)}
 
 
@@ -10230,6 +10800,22 @@ async def delete_queue_item(
     request: Request,
 ) -> dict[str, Any]:
     return await delete_queued_item(queue_name, item_id, request_port(request))
+
+
+@app.delete("/queues/{queue_name}/{phone}/{item_id}")
+async def delete_queue_item_for_phone(
+    queue_name: str,
+    phone: str,
+    item_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone)
+    return await delete_queued_item(
+        queue_name,
+        item_id,
+        request_port(request),
+        git_context,
+    )
 
 
 @app.get("/history")
@@ -10276,6 +10862,23 @@ async def restore_history_to_queue(
     record_id: str,
     request: Request,
 ) -> dict[str, Any]:
+    return await restore_history_record_to_queue(record_id, request, None)
+
+
+@app.post("/history/{record_id}/restore-to-queue/{phone}", status_code=status.HTTP_201_CREATED)
+async def restore_history_to_queue_for_phone(
+    record_id: str,
+    phone: str,
+    request: Request,
+) -> dict[str, Any]:
+    return await restore_history_record_to_queue(record_id, request, phone)
+
+
+async def restore_history_record_to_queue(
+    record_id: str,
+    request: Request,
+    phone: str | None,
+) -> dict[str, Any]:
     record = await find_history_record(record_id)
     if record is None:
         raise HTTPException(
@@ -10302,6 +10905,7 @@ async def restore_history_to_queue(
         "action": "restored_to_original_queue",
         "restored_from_history_id": record_id,
     }
+    phone_git_context = await git_context_for_phone(phone) if phone else None
     record_metadata = git_context_metadata_from_record(record)
     record_git_context = {
         key: record_metadata.get(key)
@@ -10316,12 +10920,20 @@ async def restore_history_to_queue(
         )
         if record_metadata.get(key) is not None
     }
+    if phone_git_context and record_git_context:
+        record_context_key = git_context_key_from_metadata(record_git_context)
+        phone_context_key = git_context_key_from_metadata(phone_git_context)
+        if record_context_key and phone_context_key and record_context_key != phone_context_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Selected phone is mapped to a different Git context than this history record",
+            )
     return await enqueue(
         queue_name,
         record.get("message"),
         metadata,
         request_port(request),
-        record_git_context or None,
+        phone_git_context or record_git_context or None,
     )
 
 
@@ -10330,6 +10942,7 @@ async def get_git_config(request: Request) -> dict[str, Any]:
     port = request_port(request)
     config = await read_git_config()
     entry = config.get(str(port), {}) if port is not None else {}
+    phone_contexts = phone_git_contexts_from_config(config)
     git_address = entry.get("git_address") if isinstance(entry, dict) else None
     project_name = normalize_project_name(
         entry.get("project_name") if isinstance(entry, dict) else None,
@@ -10350,6 +10963,10 @@ async def get_git_config(request: Request) -> dict[str, Any]:
         "project_name": project_name,
         "git_context_key": git_context_key,
         "contexts": configured_git_contexts_from_config(config, port),
+        "phone_contexts": [
+            phone_contexts[phone]
+            for phone in sorted(phone_contexts)
+        ],
         **git_context,
     }
 
@@ -10384,15 +11001,45 @@ async def post_git_config(request: Request) -> dict[str, Any]:
             detail="project_name must be a string",
         )
 
-    entry = await save_git_address(port, git_address.strip(), project_name)
+    phone = payload.get("phone")
+    if phone is not None and not isinstance(phone, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="phone must be a string",
+        )
+
+    entry = await save_git_address(port, git_address.strip(), project_name, phone)
     git_context = await git_context_for_port(port)
     config = await read_git_config()
+    phone_contexts = phone_git_contexts_from_config(config)
     return {
         "port": port,
         "config_path": str(git_config_path),
         "contexts": configured_git_contexts_from_config(config, port),
+        "phone_contexts": [
+            phone_contexts[phone_key]
+            for phone_key in sorted(phone_contexts)
+        ],
         **entry,
         **git_context,
+    }
+
+
+@app.delete("/git-config/phone/{phone}")
+async def delete_git_config_phone(phone: str, request: Request) -> dict[str, Any]:
+    port = request_port(request)
+    removed = await delete_git_context_phone(phone)
+    config = await read_git_config()
+    phone_contexts = phone_git_contexts_from_config(config)
+    return {
+        "status": "deleted",
+        "phone": normalize_phone_key(phone),
+        "removed": removed,
+        "contexts": configured_git_contexts_from_config(config, port),
+        "phone_contexts": [
+            phone_contexts[phone_key]
+            for phone_key in sorted(phone_contexts)
+        ],
     }
 
 
@@ -10466,6 +11113,8 @@ async def post_attachment(request: Request) -> dict[str, Any]:
 async def get_screenshot_folders(
     date_from: str | None = None,
     date_to: str | None = None,
+    phone: str | None = None,
+    git_context: str | None = None,
 ) -> dict[str, Any]:
     try:
         if date_from:
@@ -10478,14 +11127,27 @@ async def get_screenshot_folders(
             detail="Dates must use YYYY-MM-DD format",
         ) from exc
 
+    phone_git_context = await git_context_for_phone(phone) if phone else None
+    git_context_key = (
+        git_context_key_from_metadata(phone_git_context)
+        if phone_git_context
+        else normalize_history_git_context_filter(git_context)
+    )
+
     async with screenshot_folders_lock:
-        return await asyncio.to_thread(list_screenshot_folders_file, date_from, date_to)
+        return await asyncio.to_thread(
+            list_screenshot_folders_file,
+            date_from,
+            date_to,
+            git_context_key,
+        )
 
 
 @app.post("/screenshot-folders", status_code=status.HTTP_201_CREATED)
-async def post_screenshot_folder() -> dict[str, Any]:
+async def post_screenshot_folder(phone: str | None = None) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone) if phone else None
     async with screenshot_folders_lock:
-        return await asyncio.to_thread(create_screenshot_folder_file)
+        return await asyncio.to_thread(create_screenshot_folder_file, git_context)
 
 
 @app.post("/screenshot-folders/{folder_id}/files", status_code=status.HTTP_201_CREATED)
@@ -10543,6 +11205,8 @@ async def copy_screenshot_file(folder_id: str, filename: str, request: Request) 
 async def get_evidence_folders(
     date_from: str | None = None,
     date_to: str | None = None,
+    phone: str | None = None,
+    git_context: str | None = None,
 ) -> dict[str, Any]:
     try:
         if date_from:
@@ -10555,14 +11219,27 @@ async def get_evidence_folders(
             detail="Dates must use YYYY-MM-DD format",
         ) from exc
 
+    phone_git_context = await git_context_for_phone(phone) if phone else None
+    git_context_key = (
+        git_context_key_from_metadata(phone_git_context)
+        if phone_git_context
+        else normalize_history_git_context_filter(git_context)
+    )
+
     async with evidence_folders_lock:
-        return await asyncio.to_thread(list_evidence_folders_file, date_from, date_to)
+        return await asyncio.to_thread(
+            list_evidence_folders_file,
+            date_from,
+            date_to,
+            git_context_key,
+        )
 
 
 @app.post("/evidence-folders", status_code=status.HTTP_201_CREATED)
-async def post_evidence_folder() -> dict[str, Any]:
+async def post_evidence_folder(phone: str | None = None) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone) if phone else None
     async with evidence_folders_lock:
-        return await asyncio.to_thread(create_evidence_folder_file)
+        return await asyncio.to_thread(create_evidence_folder_file, git_context)
 
 
 @app.post("/evidence-folders/{folder_id}/files", status_code=status.HTTP_201_CREATED)
@@ -10870,12 +11547,20 @@ async def ui_send(request: Request) -> dict[str, Any]:
             detail="Message is empty",
         )
 
-    message = await ensure_message_git_context_from_port(message.strip(), request_port(request))
+    phone = payload.get("phone")
+    if not isinstance(phone, str) or not phone.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="phone is required for queue Git context",
+        )
+    git_context = await git_context_for_phone(phone)
+    message = message.strip()
     metadata = {
         "submitted_via": "ui",
         "sender": payload.get("sender"),
         "receiver": payload.get("receiver"),
         "status": payload.get("status"),
+        "queue_phone": normalize_phone_key(phone),
     }
     schedule = payload.get("schedule")
     if schedule is not None and not isinstance(schedule, dict):
@@ -10889,6 +11574,7 @@ async def ui_send(request: Request) -> dict[str, Any]:
         metadata,
         request_port(request),
         schedule,
+        git_context,
     )
 
 
@@ -10924,13 +11610,14 @@ async def post_worker_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await enqueue_phone_channel(
         "worker-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
+        git_context,
     )
 
 
@@ -10940,11 +11627,13 @@ async def get_worker_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await dequeue_phone_channel(
         "worker-all",
         conversation_phone,
         to_phone,
         request_port(request),
+        git_context,
     )
 
 
@@ -10954,13 +11643,14 @@ async def post_tester_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await enqueue_phone_channel(
         "tester-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
+        git_context,
     )
 
 
@@ -10970,11 +11660,13 @@ async def get_tester_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await dequeue_phone_channel(
         "tester-all",
         conversation_phone,
         to_phone,
         request_port(request),
+        git_context,
     )
 
 
@@ -10984,13 +11676,14 @@ async def post_consultant_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await enqueue_phone_channel(
         "consultant-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
+        git_context,
     )
 
 
@@ -11000,76 +11693,137 @@ async def get_consultant_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
+    git_context = await git_context_for_phone_if_mapped(conversation_phone)
     return await dequeue_phone_channel(
         "consultant-all",
         conversation_phone,
         to_phone,
         request_port(request),
+        git_context,
     )
 
 
-@app.post("/work", status_code=status.HTTP_201_CREATED)
-async def post_work(request: Request) -> dict[str, Any]:
+@app.post("/work/{phone}", status_code=status.HTTP_201_CREATED)
+async def post_work_for_phone(phone: str, request: Request) -> dict[str, Any]:
     message = await read_message(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone(phone)
     return await enqueue(
         "work",
         message,
+        {"queue_phone": normalize_phone_key(phone)},
         port=request_port(request),
+        git_context=git_context,
     )
 
 
-@app.get("/work")
-async def get_work(request: Request) -> dict[str, Any]:
-    return await dequeue("work", request_port(request))
+@app.get("/work/{phone}")
+async def get_work_for_phone(phone: str, request: Request) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone)
+    return await dequeue("work", request_port(request), git_context)
 
 
-@app.post("/test", status_code=status.HTTP_201_CREATED)
-async def post_test(request: Request) -> dict[str, Any]:
+@app.post("/test/{phone}", status_code=status.HTTP_201_CREATED)
+async def post_test_for_phone(phone: str, request: Request) -> dict[str, Any]:
     message = await read_message(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone(phone)
     return await enqueue(
         "test",
         message,
+        {"queue_phone": normalize_phone_key(phone)},
         port=request_port(request),
+        git_context=git_context,
     )
 
 
-@app.get("/test")
-async def get_test(request: Request) -> dict[str, Any]:
-    return await dequeue("test", request_port(request))
+@app.get("/test/{phone}")
+async def get_test_for_phone(phone: str, request: Request) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone)
+    return await dequeue("test", request_port(request), git_context)
 
 
-@app.post("/work-design", status_code=status.HTTP_201_CREATED)
-async def post_work_design(request: Request) -> dict[str, Any]:
+@app.post("/work-design/{phone}", status_code=status.HTTP_201_CREATED)
+async def post_work_design_for_phone(phone: str, request: Request) -> dict[str, Any]:
     message = await read_message(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone(phone)
     return await enqueue(
         "work-design",
         message,
+        {"queue_phone": normalize_phone_key(phone)},
         port=request_port(request),
+        git_context=git_context,
     )
 
 
-@app.get("/work-design")
-async def get_work_design(request: Request) -> dict[str, Any]:
-    return await dequeue("work-design", request_port(request))
+@app.get("/work-design/{phone}")
+async def get_work_design_for_phone(phone: str, request: Request) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone)
+    return await dequeue("work-design", request_port(request), git_context)
 
 
-@app.post("/test-design", status_code=status.HTTP_201_CREATED)
-async def post_test_design(request: Request) -> dict[str, Any]:
+@app.post("/test-design/{phone}", status_code=status.HTTP_201_CREATED)
+async def post_test_design_for_phone(phone: str, request: Request) -> dict[str, Any]:
     message = await read_message(request)
-    require_message_git_context(message)
+    git_context = await git_context_for_phone(phone)
     return await enqueue(
         "test-design",
         message,
+        {"queue_phone": normalize_phone_key(phone)},
         port=request_port(request),
+        git_context=git_context,
     )
 
 
-@app.get("/test-design")
-async def get_test_design(request: Request) -> dict[str, Any]:
-    return await dequeue("test-design", request_port(request))
+@app.get("/test-design/{phone}")
+async def get_test_design_for_phone(phone: str, request: Request) -> dict[str, Any]:
+    git_context = await git_context_for_phone(phone)
+    return await dequeue("test-design", request_port(request), git_context)
+
+
+def legacy_queue_route_error(route: str) -> None:
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"Legacy queue URL {route} has no phone-bound Git context. Use {route}/{{phone}}.",
+    )
+
+
+@app.post("/work", status_code=status.HTTP_400_BAD_REQUEST)
+async def post_work_legacy() -> None:
+    legacy_queue_route_error("/work")
+
+
+@app.get("/work", status_code=status.HTTP_400_BAD_REQUEST)
+async def get_work_legacy() -> None:
+    legacy_queue_route_error("/work")
+
+
+@app.post("/test", status_code=status.HTTP_400_BAD_REQUEST)
+async def post_test_legacy() -> None:
+    legacy_queue_route_error("/test")
+
+
+@app.get("/test", status_code=status.HTTP_400_BAD_REQUEST)
+async def get_test_legacy() -> None:
+    legacy_queue_route_error("/test")
+
+
+@app.post("/work-design", status_code=status.HTTP_400_BAD_REQUEST)
+async def post_work_design_legacy() -> None:
+    legacy_queue_route_error("/work-design")
+
+
+@app.get("/work-design", status_code=status.HTTP_400_BAD_REQUEST)
+async def get_work_design_legacy() -> None:
+    legacy_queue_route_error("/work-design")
+
+
+@app.post("/test-design", status_code=status.HTTP_400_BAD_REQUEST)
+async def post_test_design_legacy() -> None:
+    legacy_queue_route_error("/test-design")
+
+
+@app.get("/test-design", status_code=status.HTTP_400_BAD_REQUEST)
+async def get_test_design_legacy() -> None:
+    legacy_queue_route_error("/test-design")
 
 
 if __name__ == "__main__":
