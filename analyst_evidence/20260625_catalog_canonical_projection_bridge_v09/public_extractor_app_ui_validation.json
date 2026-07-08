@@ -1,0 +1,106 @@
+{
+  "url": "https://gp2admin.neuro.uni-luebeck.de/extractor/",
+  "title": "MDSGene Curation Helper",
+  "loginAttempted": true,
+  "screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_canonical_projection_bridge_v09\\public_extractor_app_v09_ui.png",
+  "bodyTextSample": "V2.8 - CLINICIAN\nMDSGene Curation Helper\n\nПроверяйте извлеченные клинические, генетические и Excel-поля перед экспортом.\n\nFrontend testing-2026-06-25-09 / catalog-canonical-projection-bridge\nBackend testing-2026-06-25-09 / catalog-canonical-projection-bridge\nexcel_parameter_review.v9 · excel_review_field_scope_policy.v6\nОткрыть проверку Excel\nchristine.klein@uni-luebeck.de\nВЫЙТИ\n🇷🇺\nRU\n1. ВХОДЫ\n2. ОБРАБОТКА\n3. РЕЗУЛЬТАТЫ\nНовый запуск\nПрофили UC\nМониторинг обработки\nКлиническая проверка\nГенетическая проверка\nПроверка Excel-полей\nPatient QC\nDisease agents\nVirtual Doctor\nПравила и обратная связь\nOntology Mapping\nЗАГРУЗИТЬ ПО JOB ID\nЗАГРУЗИТЬ JOB\nТЕКУЩИЙ JOB\naedefc86c17d43c79a282fba48d232dc\nLive pipeline\n\nОбработка завершена, но качество результата ограничено. Проверьте quality summary.\n\nLIVE\nUpload\nГОТОВО\n1 files\nIngestion\nГОТОВО\n23278385_DOGU_2013.pdf\nCache / Reuse\nГОТОВО\nchecked\nRoute Selection\nГОТОВО\npaperqa\nGemini / AI-Lab\nГОТОВО\nCompleted\nEvidence\nГОТОВО\n3 evidence rows\nClinical QC\nНУЖНА ПРОВЕРКА\nprimary_success\nTemplate Export\nГОТОВО\nmdsgene_output.xlsx\nArtifacts Ready\nГОТОВО\n44 artifacts\nДокументы\n1\n23278385_DOGU_2013.pdf\nPMID 23278385\nГОТОВО\nАртефакты\n44\nPreflight report\npreflight_report.json\n1 KB\nDiagnostic MDSGene Excel\nDIAGNOSTIC ONLY\nmdsgene_output.xlsx\nSHA-256 6a8657e4736a\nТолько диагностический артефакт до готовности production readiness\n23 KB\nDiagnostic Extended Excel\nDIAGNOSTIC ONLY\nmdsgene_output_ext.xlsx\nSHA-256 665306d61a8d\nТолько диагностический артефакт до готовности production readiness\n78 KB\nTemplate conformance\ntemplate_conformance_report.json\n325 KB\nAlias trace\nuc154_alias_resolution_trace.jsonl\n33 KB\nIntermediate clinical evidence table\nintermediate_clinical_evidence_table.json\n311 KB\nClinical projection export report\nclinical_projection_export_r",
+  "assetMarker": {
+    "scripts": [
+      "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-CW_3zF0J.js"
+    ],
+    "markerHits": [
+      "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-CW_3zF0J.js"
+    ]
+  },
+  "exportFields": {
+    "status": 200,
+    "fieldCount": 136,
+    "sourceCounts": {
+      "target_symptom_catalog_uc139b": 118,
+      "clinician_approved": 18
+    },
+    "check": {
+      "upgoing_plantars_babinski_sign_HP:0003487": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "upgoing_plantars_(Babinski_sign)_HP:0003487": [],
+      "abnormal_pyramidal_sign_HP:0007256": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "pigmentary_retinopathy_HP:0000580": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "aao_other_sympt": [],
+      "subdomain_cognitive_impairment_sympt": [],
+      "Other_sympt": []
+    }
+  },
+  "version": {
+    "ok": true,
+    "testing_version": "testing-2026-06-25-09",
+    "change": "catalog-canonical-projection-bridge",
+    "frontend_expected_version": "testing-2026-06-25-09"
+  },
+  "consoleEvents": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "warning",
+      "text": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "verbose",
+      "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o"
+    }
+  ],
+  "failedRequests": [
+    {
+      "url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxeKYY.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxaKYbABA.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/webfonts/fa-solid-900.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    }
+  ],
+  "badResponses": [
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "status": 404,
+      "statusText": ""
+    }
+  ]
+}

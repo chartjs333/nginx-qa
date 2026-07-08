@@ -1,0 +1,110 @@
+{
+  "url": "https://gp2admin.neuro.uni-luebeck.de/management/#/dashboard",
+  "title": "MDSGene QC Management Suite",
+  "loginAttempted": true,
+  "screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_symptom_reasoning_v08\\public_extractor_v08_ui.png",
+  "bodyTextSample": "M\nMedQC Portal\n🇷🇺\nRU\nC\n\nchristine.klein@uni-luebeck.de\n\nVALIDATOR\n\nВыйти\nПортал медицинских систем\nLLM Extractor\n\nЗапуск отдельного конвейера экстракции MDSGene с выгрузкой Excel, JSON и журналов.\n\nЗАПУСТИТЬ ПРИЛОЖЕНИЕ\n\nВсе системы работают исправно через MDSGene QC Management Suite\n\n© 2024 Enjinx Medical Infrastructure Group. Все права защищены.",
+  "assetMarker": {
+    "scripts": [
+      "https://cdn.tailwindcss.com/",
+      "https://gp2admin.neuro.uni-luebeck.de/management/assets/index-BHAuKp73.js"
+    ],
+    "markerHits": []
+  },
+  "exportFields": {
+    "status": 200,
+    "fieldCount": 136,
+    "sourceCounts": {
+      "target_symptom_catalog_uc139b": 118,
+      "clinician_approved": 18
+    },
+    "check": {
+      "abnormal_pyramidal_sign_HP:0007256": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "upgoing_plantars_babinski_sign_HP:0003487": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "upgoing_plantars_(Babinski_sign)_HP:0003487": [],
+      "aao_other_sympt": [],
+      "subdomain_cognitive_impairment_sympt": [],
+      "Other_sympt": []
+    }
+  },
+  "version": {
+    "ok": true,
+    "testing_version": "testing-2026-06-25-08",
+    "change": "catalog-aligned-symptom-reasoning",
+    "frontend_expected_version": "testing-2026-06-25-08"
+  },
+  "consoleEvents": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "warning",
+      "text": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "verbose",
+      "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o"
+    },
+    {
+      "type": "error",
+      "text": "Access to fetch at 'https://cdn.tailwindcss.com/' from origin 'https://gp2admin.neuro.uni-luebeck.de' has been blocked by CORS policy: No 'Access-Control-Allow-Origin' header is present on the requested resource."
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: net::ERR_FAILED"
+    }
+  ],
+  "failedRequests": [
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxaKYbABA.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxeKYY.woff2",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_ABORTED"
+      }
+    },
+    {
+      "url": "https://cdn.tailwindcss.com/",
+      "method": "GET",
+      "failure": {
+        "errorText": "net::ERR_FAILED"
+      }
+    }
+  ],
+  "badResponses": [
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "status": 404,
+      "statusText": ""
+    }
+  ]
+}

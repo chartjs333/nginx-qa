@@ -1,0 +1,89 @@
+{
+  "use_case": "UC1.39B",
+  "step": "UC1.39B_effective_template_schema_generation",
+  "schema_version": "uc139b_job_dynamic_symptom_overlay_v1",
+  "job_id": "analyst-v10-c_projection_ready_concepts",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "base_template_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+  "projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "effective_schema_hash": "sha256:dd544b8b2afc7cea5c5d64350ecd5ac9a449e6cf0bb74bb8bba35e9b729b18b1",
+  "fields": [
+    {
+      "column_index": 155,
+      "column_name": "abnormal_pyramidal_sign_HP:0007256",
+      "display_column_name": "abnormal_pyramidal_sign_HP:0007256",
+      "canonical_field_name": "abnormal_pyramidal_sign_HP:0007256",
+      "field_class": "dynamic_hpo_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EY",
+      "source_field_name": "abnormal_pyramidal_sign_HP:0007256",
+      "source_dynamic_symptom_flag": "yes",
+      "source": "job_specific_informative_symptom_overlay",
+      "source_mapping_id": "",
+      "source_concept": "clinical_symptom:abnormal_pyramidal_sign_HP:0007256",
+      "hpo_id": "HP:0007256",
+      "clinical_label": "Abnormal Pyramidal Sign",
+      "clinical_definition": "A clinical sign indicating pyramidal tract involvement; individual signs such as Babinski sign may provide explicit supporting evidence.",
+      "projection_reason": "present_approved_only_patient_specific_evidence",
+      "uc_marker": "UC1.39B/UC1.54"
+    },
+    {
+      "column_index": 156,
+      "column_name": "headache_HP:0002315",
+      "display_column_name": "headache_HP:0002315",
+      "canonical_field_name": "headache_HP:0002315",
+      "field_class": "dynamic_hpo_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EZ",
+      "source_field_name": "headache_HP:0002315",
+      "source_dynamic_symptom_flag": "yes",
+      "source": "job_specific_informative_symptom_overlay",
+      "source_mapping_id": "",
+      "source_concept": "clinical_symptom:headache_HP:0002315",
+      "hpo_id": "HP:0002315",
+      "clinical_label": "Headache",
+      "clinical_definition": "Enter \"yes\" if the individual as a headache as defined by the Human Phenotype Ontology Project: Cephalgia, or pain sensed in various parts of the head, not confined to the area of distribution of any nerve. Clinically unaffected individuals require a \"no\"",
+      "projection_reason": "present_approved_only_patient_specific_evidence",
+      "uc_marker": "UC1.39B/UC1.54"
+    }
+  ],
+  "generated_at": "2026-06-25T17:35:31.726498+00:00",
+  "generated_by": "analyst-professor-statistics-v10"
+}

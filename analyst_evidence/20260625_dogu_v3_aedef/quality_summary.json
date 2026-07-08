@@ -1,0 +1,223 @@
+{
+  "use_case": "UC1.69",
+  "step": "UC1.69_quality_summary",
+  "job_id": "aedefc86c17d43c79a282fba48d232dc",
+  "execution_status": "completed",
+  "extraction_quality_status": "primary_success",
+  "comparison_reliability_status": "reliable",
+  "critical_field_completeness_rate": 1.0,
+  "degraded_input_processing_status": false,
+  "quality_badge": "green",
+  "warnings": [],
+  "required_artifact_checks": [
+    {
+      "artifact_key": "intermediate_clinical_evidence_table",
+      "filename": "intermediate_clinical_evidence_table.json",
+      "status": "present",
+      "size_bytes": 318764,
+      "required_for_production_export": true
+    },
+    {
+      "artifact_key": "clinical_projection_export_report",
+      "filename": "clinical_projection_export_report.json",
+      "status": "present",
+      "size_bytes": 301265,
+      "required_for_production_export": true
+    }
+  ],
+  "critical_missing_field_counts": {
+    "PMID": 0,
+    "author_year": 0,
+    "family_ID": 0,
+    "individual_ID": 0,
+    "gene1": 0,
+    "phenotype_block": 0,
+    "critical_evidence": 0
+  },
+  "production_readiness_dashboard": {
+    "execution_status": "completed",
+    "safety_status": "pass",
+    "row_universe_status": "unbenchmarked",
+    "comparison_reliability_status": "reliable",
+    "anchor_usability_status": "fallback_only",
+    "evidence_anchor_status": "fallback_only",
+    "genotype_review_status": "review_needed",
+    "required_artifacts_status": "pass",
+    "required_artifact_checks": [
+      {
+        "artifact_key": "intermediate_clinical_evidence_table",
+        "filename": "intermediate_clinical_evidence_table.json",
+        "status": "present",
+        "size_bytes": 318764,
+        "required_for_production_export": true
+      },
+      {
+        "artifact_key": "clinical_projection_export_report",
+        "filename": "clinical_projection_export_report.json",
+        "status": "present",
+        "size_bytes": 301265,
+        "required_for_production_export": true
+      }
+    ],
+    "production_export_readiness": "review_needed",
+    "production_export_blockers": [
+      "manual_benchmark_not_available",
+      "anchor_usability:fallback_only"
+    ],
+    "patient_row_universe_policy": {
+      "status": "unbenchmarked",
+      "mode": "normal_extraction_unbenchmarked",
+      "manual_comparison_available": false,
+      "manual_rows": null,
+      "auto_rows_before": 3,
+      "auto_rows_after_projected": 3,
+      "production_eligible_auto_rows": 3,
+      "diagnostic_excluded_auto_rows": 0,
+      "mdsgene_decision_counts": {
+        "IN": 3
+      },
+      "production_row_universe_scope": "mdsgene_decision_not_excluded",
+      "generated_only_rows_before": 0,
+      "generated_only_rows_after_projected": 0,
+      "projected_safe_reductions": 0,
+      "runtime_depends_on_manual_excel": false,
+      "pmid_specific_rules": 0,
+      "gold_standard_role": "regression_measurement_only",
+      "field_metric_scope": "diagnostic_only_without_manual_benchmark"
+    },
+    "canonical_row_matching": {
+      "status": "not_applicable",
+      "strong_match_rows": 0,
+      "tentative_match_rows": 0,
+      "unmatched_auto_rows": 0,
+      "unmatched_manual_rows": 0,
+      "field_metric_scope": "diagnostic_only_without_manual_benchmark"
+    },
+    "genotype_normalization_gate": {
+      "status": "review_needed",
+      "strong_match_rows": 0,
+      "genotype_review_needed_rows": 0,
+      "genotype_field_accuracy": null,
+      "genotype_metric_scope": "strong_match_only",
+      "conflict_route": "GENETIC_REVIEW"
+    },
+    "evidence_anchor_denominator": {
+      "status": "diagnostic_only",
+      "anchor_denominator_scope": "clinical_review_cases",
+      "total_anchors": 3,
+      "resolved_page_bbox": 0,
+      "approximate_page_only": 0,
+      "document_fallback": 3,
+      "unresolved": 0,
+      "phantom_row_anchor_count": 0,
+      "resolved_anchor_rate": 0.0,
+      "clickable_evidence_review_marketing_allowed": false
+    },
+    "row_matching_kpi": {
+      "status": "not_applicable_without_manual_benchmark",
+      "metric_scope": "diagnostic_only_without_manual_benchmark",
+      "production_kpi": false,
+      "reason": "manual_gold_standard_not_available",
+      "no_global_score": true,
+      "required_scope": "canonical_row_matching_before_field_accuracy",
+      "strong_match_rows": 0,
+      "tentative_match_rows": 0,
+      "unmatched_auto_rows": 0,
+      "unmatched_manual_rows": 0,
+      "auto_rows": 3,
+      "production_eligible_auto_rows": 3
+    },
+    "symptom_kpi": {
+      "status": "not_computed_without_manual_benchmark",
+      "metric_scope": "blocked_without_uploaded_gold_standard",
+      "production_kpi": false,
+      "reason": "manual_gold_standard_not_available",
+      "no_global_score": true,
+      "required_scope": "strong_match_rows_only",
+      "total_fields_evaluated": 0
+    },
+    "genetic_kpi": {
+      "status": "not_computed_without_manual_benchmark",
+      "metric_scope": "blocked_without_uploaded_gold_standard",
+      "production_kpi": false,
+      "reason": "manual_gold_standard_not_available",
+      "no_global_score": true,
+      "required_scope": "strong_match_rows_only",
+      "total_fields_evaluated": 0
+    },
+    "evidence_localization_kpi": {
+      "status": "diagnostic_only",
+      "metric_scope": "clinical_review_cases_without_manual_benchmark",
+      "production_kpi": false,
+      "reason": "manual_gold_standard_not_available",
+      "no_global_score": true,
+      "required_scope": "comparable_rows_with_source_anchors",
+      "total_anchors": 3,
+      "document_fallback": 3,
+      "resolved_page_bbox": 0,
+      "clickable_evidence_review_marketing_allowed": false
+    },
+    "template_fidelity_kpi": {
+      "status": "not_computed_without_template_benchmark",
+      "metric_scope": "generated_excel_template_only",
+      "production_kpi": false,
+      "reason": "manual_gold_standard_not_available",
+      "no_global_score": true,
+      "required_scope": "mdsgene_template_compatible"
+    },
+    "kpi_blocks": {
+      "row_matching_kpi": {
+        "status": "not_applicable_without_manual_benchmark",
+        "metric_scope": "diagnostic_only_without_manual_benchmark",
+        "production_kpi": false,
+        "reason": "manual_gold_standard_not_available",
+        "no_global_score": true,
+        "required_scope": "canonical_row_matching_before_field_accuracy",
+        "strong_match_rows": 0,
+        "tentative_match_rows": 0,
+        "unmatched_auto_rows": 0,
+        "unmatched_manual_rows": 0,
+        "auto_rows": 3,
+        "production_eligible_auto_rows": 3
+      },
+      "symptom_kpi": {
+        "status": "not_computed_without_manual_benchmark",
+        "metric_scope": "blocked_without_uploaded_gold_standard",
+        "production_kpi": false,
+        "reason": "manual_gold_standard_not_available",
+        "no_global_score": true,
+        "required_scope": "strong_match_rows_only",
+        "total_fields_evaluated": 0
+      },
+      "genetic_kpi": {
+        "status": "not_computed_without_manual_benchmark",
+        "metric_scope": "blocked_without_uploaded_gold_standard",
+        "production_kpi": false,
+        "reason": "manual_gold_standard_not_available",
+        "no_global_score": true,
+        "required_scope": "strong_match_rows_only",
+        "total_fields_evaluated": 0
+      },
+      "evidence_localization_kpi": {
+        "status": "diagnostic_only",
+        "metric_scope": "clinical_review_cases_without_manual_benchmark",
+        "production_kpi": false,
+        "reason": "manual_gold_standard_not_available",
+        "no_global_score": true,
+        "required_scope": "comparable_rows_with_source_anchors",
+        "total_anchors": 3,
+        "document_fallback": 3,
+        "resolved_page_bbox": 0,
+        "clickable_evidence_review_marketing_allowed": false
+      },
+      "template_fidelity_kpi": {
+        "status": "not_computed_without_template_benchmark",
+        "metric_scope": "generated_excel_template_only",
+        "production_kpi": false,
+        "reason": "manual_gold_standard_not_available",
+        "no_global_score": true,
+        "required_scope": "mdsgene_template_compatible"
+      }
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "scenario": "invalid displayed country XYZ with Turkish patient/family source evidence",
+  "expected": "invalid/non-ISO country value must fail closed or route to country_value_evidence_mismatch; must not be source_backed",
+  "actual": {
+    "anchor_validation_status": "accepted",
+    "anchor_validation_reason": "patient_country_origin_evidence",
+    "country_evidence_role": "family_origin",
+    "country_evidence_country_iso3": "TUR",
+    "country_evidence_accepted": true,
+    "semantic_support_status": "supports_value",
+    "evidence_role": "supporting_evidence",
+    "source_certification": {
+      "source_certification_status": "source_backed",
+      "source_certification_blocker": null,
+      "source_certification_severity": null,
+      "confirm_requires_rationale": false
+    }
+  }
+}

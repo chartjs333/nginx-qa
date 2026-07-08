@@ -1,0 +1,175 @@
+{
+  "task_source": {
+    "get_test_endpoint_status": 200,
+    "task_id": "579bd196-dce2-4e3c-b7ac-c06907bc21a1",
+    "commit": "05099c3d042eafd0b7d9afd8d9c41198a00fd944",
+    "build": "testing-2026-06-25-09 / catalog-canonical-projection-bridge"
+  },
+  "catalog_suffix_validation": {
+    "template_target_like_count": 121,
+    "expected_catalog_targets_excluding_service": 118,
+    "catalog_field_count": 118,
+    "registry_mapping_count": 118,
+    "registry_projection_target_count": 118,
+    "missing_template_targets_in_catalog_count": 0,
+    "service_fields_present_in_catalog": [],
+    "canonical_babinski_in_catalog": true,
+    "legacy_babinski_in_catalog": false,
+    "canonical_babinski_in_registry_targets": true,
+    "legacy_babinski_in_registry_targets": false,
+    "abnormal_pyramidal_in_catalog": true,
+    "abnormal_pyramidal_in_registry_targets": true
+  },
+  "targeted_pytest": {
+    "working_directory": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend",
+    "result": "239 passed, 1 warning, 3 subtests passed",
+    "coverage": [
+      "open testing endpoints",
+      "UC1.39B target catalog",
+      "UC1.39B/UC1.54 effective schema",
+      "UC1.39 symptom projection mapping",
+      "UC1.37 ontology",
+      "UC1.35 semantic normalization",
+      "UC1.36 backfill",
+      "UC1.46 HPO layer",
+      "UC1.55/UC1.59 governance",
+      "UC1.33 NER",
+      "UC2.10 review batch UI"
+    ]
+  },
+  "synthetic_probe": {
+    "uc135_trace": {
+      "clinical_entity_count": 14,
+      "normalized_count": 14,
+      "review_needed_count": 0,
+      "no_match_count": 0,
+      "status": "success"
+    },
+    "babinski_variants": {
+      "Babinski sign": "clinical_symptom:babinski_sign / HP:0003487",
+      "upgoing plantar": "clinical_symptom:babinski_sign / HP:0003487",
+      "upgoing plantars": "clinical_symptom:babinski_sign / HP:0003487",
+      "upgoing plantar response": "clinical_symptom:babinski_sign / HP:0003487",
+      "upgoing plantar responses": "clinical_symptom:babinski_sign / HP:0003487"
+    },
+    "other_variants": {
+      "hyperreflexia": "clinical_symptom:hyperreflexia / HP:0001347",
+      "hyperactive deep tendon reflexes": "clinical_symptom:hyperreflexia / HP:0001347",
+      "abnormal pyramidal signs": "clinical_symptom:abnormal_pyramidal_sign / HP:0007256",
+      "optic nerve atrophy": "clinical_symptom:optic_atrophy / HP:0000648",
+      "retinal pigmentary changes": "clinical_symptom:pigmentary_retinopathy / HP:0000580",
+      "slowed horizontal saccades": "clinical_symptom:slowed_horizontal_saccades / HP:0007885",
+      "slow horizontal saccades": "clinical_symptom:slowed_horizontal_saccades / HP:0007885",
+      "slowed vertical saccades": "clinical_symptom:slowing_of_vertical_saccades / non-HPO catalog symptom",
+      "compulsive shopping": "clinical_symptom:behavioral_disorder / HP:0000708"
+    },
+    "uc136_backfill": {
+      "upgoing_plantar_response_candidate_field": "upgoing_plantars_babinski_sign_HP:0003487"
+    },
+    "uc156_structured_projection": {
+      "babinski_positive": {
+        "upgoing_plantars_babinski_sign_HP:0003487": "yes",
+        "abnormal_pyramidal_sign_HP:0007256": "yes",
+        "legacy_upgoing_plantars_(Babinski_sign)_HP:0003487_present": false
+      },
+      "hyperreflexia_negative_control": {
+        "hyperreflexia_HP:0001347": "yes",
+        "upgoing_plantars_babinski_sign_HP:0003487": "-99",
+        "abnormal_pyramidal_sign_HP:0007256": "-99"
+      }
+    },
+    "uc139_catalog_candidate_bridge": {
+      "pigmentary_retinopathy_HP:0000580": "yes",
+      "projection_strategy": "CATALOG_CANDIDATE_FIELD",
+      "projection_reason": "catalog_candidate_symptom_field"
+    },
+    "overlay_refresh_same_process": {
+      "warm_uc135_concept": "clinical_symptom:pigmentary_retinopathy",
+      "warm_uc146_hpo": "HP:0000580",
+      "warm_uc136_field": "pigmentary_retinopathy_HP:0000580",
+      "removed_uc135_status": "no-match",
+      "removed_uc135_normalized_count": 0,
+      "removed_uc146_status": "unmapped",
+      "removed_uc146_hpos": [],
+      "removed_uc136_field": null,
+      "removed_uc136_projection_count": 0
+    }
+  },
+  "api_export_fields": {
+    "local": {
+      "field_count": 118,
+      "source_counts": {
+        "target_symptom_catalog_uc139b": 118
+      },
+      "canonical_babinski_count": 1,
+      "legacy_babinski_count": 0,
+      "abnormal_pyramidal_count": 1,
+      "pigmentary_retinopathy_count": 1,
+      "service_field_counts": {
+        "aao_other_sympt": 0,
+        "subdomain_cognitive_impairment_sympt": 0,
+        "Other_sympt": 0
+      }
+    },
+    "public": {
+      "field_count": 136,
+      "source_counts": {
+        "target_symptom_catalog_uc139b": 118,
+        "clinician_approved": 18
+      },
+      "canonical_babinski_count": 1,
+      "legacy_babinski_count": 0,
+      "abnormal_pyramidal_count": 1,
+      "pigmentary_retinopathy_count": 1,
+      "service_field_counts": {
+        "aao_other_sympt": 0,
+        "subdomain_cognitive_impairment_sympt": 0,
+        "Other_sympt": 0
+      }
+    }
+  },
+  "job_artifact_contracts": {
+    "job_id": "aedefc86c17d43c79a282fba48d232dc",
+    "status": "succeeded",
+    "quality_summary": {
+      "execution_status": "completed",
+      "extraction_quality_status": "primary_success",
+      "comparison_reliability_status": "reliable",
+      "row_universe_status": "unbenchmarked",
+      "required_artifacts_status": "pass",
+      "production_export_readiness": "review_needed",
+      "production_export_blockers": [
+        "manual_benchmark_not_available",
+        "anchor_usability:fallback_only"
+      ]
+    },
+    "patient_segmentation_report": {
+      "schema_version": "patient_segmentation_report.v1",
+      "manual_rows": 3,
+      "generated_rows": 3,
+      "row_universe_comparable": true,
+      "review_needed": false
+    },
+    "reviewed_patient_row_universe_report": {
+      "schema_version": "reviewed_patient_row_universe_report.v1",
+      "status": "no_merge_candidates"
+    }
+  },
+  "hardcoding_scan": {
+    "changed_runtime_modules_checked": 6,
+    "specific_pmid_literals": 0,
+    "pdf_filename_literals": 0,
+    "absolute_windows_paths": 0
+  },
+  "ui_validation": {
+    "public_extractor_screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_canonical_projection_bridge_v09\\public_extractor_app_v09_ui.png",
+    "public_extractor_report": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_canonical_projection_bridge_v09\\public_extractor_app_ui_validation.json",
+    "frontend_marker": "testing-2026-06-25-09",
+    "backend_marker": "testing-2026-06-25-09",
+    "asset_marker": "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-CW_3zF0J.js",
+    "notes": [
+      "Public extractor UI loads after login and displays frontend/backend v09 markers.",
+      "Known non-blocking /index.css 404 remains in browser console during auth/navigation; no extraction UI or API contract failure observed."
+    ]
+  }
+}

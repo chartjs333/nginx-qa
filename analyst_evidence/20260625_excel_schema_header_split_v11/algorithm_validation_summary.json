@@ -1,0 +1,99 @@
+{
+  "cycle": "v11 excel-schema-header-split, validated on current v12 deployment reviewed-decision-schema-gate",
+  "task_id": "c95f6f08-ee76-487c-9331-b891ba3765cb",
+  "commit_under_test": "1999355fc14fba432e7ce53f682f87baff1792aa",
+  "status": "PASS",
+  "pytest": {
+    "focused": "60 passed, 1 warning",
+    "broad": "221 passed, 1 warning, 34 subtests passed"
+  },
+  "schema_metrics": {
+    "expected_headers_order_count": 126,
+    "core_expected_headers_count": 96,
+    "legacy_catalog_symptom_count": 30,
+    "core_symptom_like_count": 0,
+    "legacy_non_service_symptom_sample": [
+      "motor_sympt",
+      "parkinsonism_sympt",
+      "NMS_park_sympt",
+      "olfaction_sympt",
+      "bradykinesia_sympt",
+      "tremor_HP:0001337",
+      "tremor_rest_sympt",
+      "tremor_action_sympt",
+      "tremor_postural_sympt",
+      "tremor_dystonic_sympt"
+    ],
+    "service_fields": [
+      "Add_HPO",
+      "CSF_findings_sympt",
+      "Other_sympt",
+      "aao_other_sympt",
+      "seizure_type_sympt",
+      "subdomain_cognitive_impairment_sympt"
+    ],
+    "catalog_symptom_targets_count_snapshot": 118,
+    "catalog_symptom_targets_count_live": 118,
+    "default_universe_contains_add_hpo": true,
+    "default_universe_contains_rigidity": false,
+    "default_universe_contains_tremor": false,
+    "default_universe_non_service_legacy_symptom_hits": [],
+    "patient_qc_missing_headers_after_core_service_row": [],
+    "exported_universe_contains_rigidity_when_workbook_omits_it": false,
+    "exported_universe_contains_add_hpo": true,
+    "review_decision_for_omitted_rigidity": [
+      false,
+      "field_excluded_by_policy"
+    ],
+    "review_decision_for_exported_pmid": [
+      true,
+      "included"
+    ]
+  },
+  "catalog_delete_probe": {
+    "delete_legacy_symptom_status": 200,
+    "legacy_symptom_removed_from_catalog": true,
+    "delete_service_add_hpo_status": 404,
+    "delete_service_add_hpo_detail": "Symptom field not found.",
+    "delete_core_pmid_status": 404,
+    "delete_core_pmid_detail": "Symptom field not found."
+  },
+  "synthetic_probe_pass": true,
+  "synthetic_invariants": {
+    "core_has_no_symptom_columns": true,
+    "default_universe_excludes_non_service_legacy_symptoms": true,
+    "service_add_hpo_kept": true,
+    "exported_universe_excludes_omitted_rigidity": true,
+    "patient_qc_core_service_only_no_missing": true,
+    "catalog_removes_legacy_symptom": true,
+    "catalog_protects_core_service": true,
+    "catalog_only_has_no_target_headers": true,
+    "row_yes_no_headers_values": true,
+    "projection_ready_headers_values": true,
+    "clinician_review_unknown_possible_headers_values": true,
+    "mapping_only_and_non_patient_blocked": true,
+    "all_cases_use_present_approved_policy": true,
+    "all_cases_job_specific_schema": true
+  },
+  "hardcoding_scan": {
+    "runtime_hits_for_fixed_pdf_pmid_job_or_absolute_paths": 0,
+    "checked_files": [
+      "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\mdsgene_pipeline\\excel_schema.py",
+      "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\mdsgene_pipeline\\effective_template_schema_generator_uc139b.py",
+      "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\mdsgene_pipeline\\template_conformant_export_uc154.py",
+      "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\main.py"
+    ]
+  },
+  "ui_validation": {
+    "current_marker": "testing-2026-06-25-12 / reviewed-decision-schema-gate",
+    "screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\public_extractor_app_v11_ui_after_auth.png",
+    "validation_json": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\public_extractor_app_ui_validation_current.json",
+    "non_blocking_notes": [
+      "/index.css 404",
+      "Tailwind CDN production warning",
+      "headless font request aborts"
+    ]
+  },
+  "evidence_summary": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\schema_header_split_probe_summary.json",
+  "production_readiness_decision": "ready_for_current_scoped_task"
+}

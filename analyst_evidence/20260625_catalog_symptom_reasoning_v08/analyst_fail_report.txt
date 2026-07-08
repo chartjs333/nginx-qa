@@ -1,0 +1,74 @@
+TO: Programmer
+FROM: Analyst (Professor of Statistics)
+STATUS: FAIL
+
+CURRENT CYCLE LOG (Данные для истории изменений):
+- Проблема: Catalog target and downstream projection are inconsistent for Babinski/upgoing plantars. The system catalog and `/extractor-api/export-fields` expose `upgoing_plantars_babinski_sign_HP:0003487`, but UC1.36/UC1.56 still project Babinski evidence into legacy `upgoing_plantars_(Babinski_sign)_HP:0003487`, which is absent from the export-field contract.
+- Предпринятые действия: Require the backend to canonicalize all Babinski/upgoing projection targets through the shared UC1.39B target catalog, while preserving the legacy name only as an alias/export compatibility layer when explicitly needed.
+- Обоснование (Почему): In a synthetic positive-control row, Babinski evidence produced `abnormal_pyramidal_sign_HP:0007256=yes` but left the catalog field `upgoing_plantars_babinski_sign_HP:0003487=-99` and created out-of-contract `upgoing_plantars_(Babinski_sign)_HP:0003487=yes`. This is a 100% false-negative rate for the published catalog field in the tested Babinski-positive scenario and a 100% out-of-contract field insertion rate. That violates the requirement that template symptom targets are represented through the shared UC1.39B catalog/registry.
+- Автор изменений: Analyst
+
+CHECKED:
+- Commit/build: `dce9a16b72a76bb1c3e09130f0dcc072f69cdb99`, `testing-2026-06-25-08 / catalog-aligned-symptom-reasoning`.
+- Code: `target_symptom_fields_uc139b.json`, `ontology_projection_registry_uc139.json`, `clinical_entity_normalization.py`, `clinical_symptom_backfill_uc136.py`, `clinical_hpo_concept_layer_uc146.py`, `clinical_symptom_ontology_uc137.py`, `effective_template_schema_generator_uc139b.py`, `mdsgene_case_governance_uc155_uc159.py`, `runtime_clinical_review_projection_patch.py`.
+- Targeted pytest from `D:\nginx\apps\mdsgene-llm-extractor-backend`: 77 passed, 1 warning.
+- Independent suffix/catalog audit: 121 template symptom-like fields; 118 expected catalog targets after excluding `aao_other_sympt`, `subdomain_cognitive_impairment_sympt`, `Other_sympt`; catalog has 118 system targets; service exclusions are absent as required.
+- API contract: local `/extractor-api/export-fields` returns 118 system fields; public server returns 136 fields = 118 system + 18 clinician-approved overlays.
+- UI validation: public `/extractor/` authenticated successfully, frontend/backend markers are both `testing-2026-06-25-08`; asset `/extractor/assets/index-CHKyVmqJ.js` contains the v08 marker.
+- Hardcoding scan of changed runtime modules: no specific PMID literals, PDF filename literals, or absolute Windows paths detected.
+
+PROBLEMS & STATISTICAL ANOMALIES:
+- problem: Babinski/upgoing plantars projection writes to a legacy target that is not exposed by the system catalog/export-field API.
+- page/url/endpoint: Local and public `/extractor-api/export-fields`; code paths `config/target_symptom_fields_uc139b.json:1354`, `config/target_symptom_fields_uc139b.json:1400`, `config/ontology_projection_registry_uc139.json:489`, `mdsgene_pipeline/clinical_symptom_backfill_uc136.py:120`, `mdsgene_pipeline/clinical_symptom_backfill_uc136.py:162`, `mdsgene_pipeline/mdsgene_case_governance_uc155_uc159.py:333`.
+- expected: A Babinski-positive patient row should set the published catalog target `upgoing_plantars_babinski_sign_HP:0003487=yes` and may also infer `abnormal_pyramidal_sign_HP:0007256=yes`. Legacy `upgoing_plantars_(Babinski_sign)_HP:0003487` may be retained only as a documented export alias, not as the primary runtime target and not as an extra non-catalog field.
+- actual: `/extractor-api/export-fields` exposes `upgoing_plantars_babinski_sign_HP:0003487` from `target_symptom_catalog_uc139b`; it does not expose `upgoing_plantars_(Babinski_sign)_HP:0003487`. However the synthetic UC1.56 row with `motor_symptoms = "Babinski sign: yes"` and only the normalized catalog field present resulted in:
+  `upgoing_plantars_babinski_sign_HP:0003487 = -99`,
+  `upgoing_plantars_(Babinski_sign)_HP:0003487 = yes`,
+  `abnormal_pyramidal_sign_HP:0007256 = yes`.
+- hardcoding risk: No file/PMID/path hardcoding was found, but there is a catalog-abstraction risk: symptom projection logic still carries hard-coded legacy Babinski targets instead of resolving through the catalog target name/alias map.
+- steps to reproduce / logs:
+  1. In `D:\nginx\apps\mdsgene-llm-extractor-backend`, construct a row with `normalized_excel_row = {"motor_symptoms": "Babinski sign: yes", "upgoing_plantars_babinski_sign_HP:0003487": "-99", "abnormal_pyramidal_sign_HP:0007256": "-99"}`.
+  2. Run `apply_mdsgene_case_governance_uc155_uc159(json_rows=[row])`.
+  3. Observe that `upgoing_plantars_babinski_sign_HP:0003487` remains `-99` while `upgoing_plantars_(Babinski_sign)_HP:0003487` is inserted as `yes`.
+  4. Confirm via public `/extractor-api/export-fields` that the legacy field has count 0 and the normalized field is the system catalog target.
+
+- problem: The phrase variant `upgoing plantar response` is under-recalled before UC1.46 HPO enrichment.
+- page/url/endpoint: UC1.35/UC1.46 synthetic variant probe.
+- expected: Babinski/upgoing plantars variants should normalize through reviewed/catalog mapping with high confidence and enrich to HP:0003487.
+- actual: `upgoing plantar` and `upgoing plantars` pass, but `upgoing plantar response` normalizes only as `review-needed` with similarity `0.7405`, `review_reason=low_similarity`, and UC1.46 skips HPO enrichment with `phase_1_requires_approved_local_concept`.
+- hardcoding risk: Not file-specific; this is an alias coverage gap in reviewed/catalog vocabulary.
+- steps to reproduce / logs: Run UC1.35 with an `EntityAssertion(entity_text="upgoing plantar response", status="present", patient_link="patient_specific")`, then UC1.46. The entity gets `clinical_symptom:babinski_sign` but remains `review_needed=true` and has no HPO mapping.
+
+- problem: UI/network validation found a non-algorithm 404 on `/index.css`.
+- page/url/endpoint: `https://gp2admin.neuro.uni-luebeck.de/extractor/`
+- expected: No avoidable 404s in production UI.
+- actual: Browser console/network recorded `https://gp2admin.neuro.uni-luebeck.de/index.css` 404. This did not block extractor loading and is not the reason for the algorithm FAIL, but it should be cleaned up separately.
+- hardcoding risk: None observed.
+- steps to reproduce / logs: See `D:\nginx-qa\analyst_evidence\20260625_catalog_symptom_reasoning_v08\public_extractor_app_ui_validation.json`.
+
+FIX REQUEST (ТЗ для программиста):
+- Make `upgoing_plantars_babinski_sign_HP:0003487` the canonical runtime projection target everywhere the system catalog/API uses it.
+- Update `ontology_projection_registry_uc139.json` and the `ontology_mapping_seed.projection_targets` in `target_symptom_fields_uc139b.json` so normalized catalog target and registry projection target agree. If legacy `upgoing_plantars_(Babinski_sign)_HP:0003487` must be preserved, model it as an alias/export-name compatibility field, not as the primary `projection_targets[0]`.
+- Update UC1.36 whitelist/backfill generation so it resolves Babinski targets via catalog-normalized display/canonical field names and aliases, not via a static legacy target string.
+- Update UC1.56 structured positive rules so Babinski/upgoing plantars project into the catalog target and infer `abnormal_pyramidal_sign_HP:0007256`, while hyperreflexia remains distinct and does not infer pyramidal sign.
+- Add regression tests where the row contains only `upgoing_plantars_babinski_sign_HP:0003487`; expected result after Babinski evidence is normalized target `yes`, no out-of-contract legacy field insertion, and abnormal pyramidal sign `yes`.
+- Add reviewed aliases for `upgoing plantar response` / `upgoing plantar responses` so they pass UC1.35 as approved Babinski/upgoing plantars concepts and receive UC1.46 HP:0003487 mapping.
+- Clean the `/index.css` 404 in the public UI when convenient; this is secondary to the backend data-contract failure.
+
+RETEST AFTER FIX:
+- Re-run independent suffix/catalog audit: 118 expected system targets, no service fields, and registry projection target for Babinski equals or canonicalizes to `upgoing_plantars_babinski_sign_HP:0003487`.
+- Re-run UC1.35/UC1.46 variants: `Babinski sign`, `upgoing plantar`, `upgoing plantars`, `upgoing plantar response` should map to `clinical_symptom:babinski_sign` without `review_needed` and enrich to HP:0003487.
+- Re-run UC1.36: Babinski candidates should use the normalized catalog target, not the legacy parenthesized target.
+- Re-run UC1.56: Babinski-positive rows set `upgoing_plantars_babinski_sign_HP:0003487=yes` and `abnormal_pyramidal_sign_HP:0007256=yes`; hyperreflexia-only rows set only `hyperreflexia_HP:0001347=yes`.
+- Re-run `/extractor-api/export-fields` local and public and verify field counts/sources remain stable.
+- Re-run public UI screenshot and network validation.
+
+SCREENSHOTS / DATA EVIDENCE:
+- absolute_path: `D:\nginx-qa\analyst_evidence\20260625_catalog_symptom_reasoning_v08\algorithm_validation_summary.json`
+  comment: Machine-readable validation summary with suffix audit, API counts, synthetic probes, hardcoding scan, and UI evidence paths.
+- absolute_path: `D:\nginx-qa\analyst_evidence\20260625_catalog_symptom_reasoning_v08\public_extractor_app_v08_ui.png`
+  comment: Public extractor UI screenshot after login, showing frontend/backend v08 markers.
+- absolute_path: `D:\nginx-qa\analyst_evidence\20260625_catalog_symptom_reasoning_v08\public_extractor_app_ui_validation.json`
+  comment: Browser console/network and asset-marker validation for `/extractor/`.
+- absolute_path: `D:\nginx-qa\analyst_evidence\20260625_catalog_symptom_reasoning_v08\public_ui_network_validation.json`
+  comment: Auth/dashboard + API export-field validation from browser context.

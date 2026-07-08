@@ -1,0 +1,103 @@
+{
+  "analysis": "UC1.39B/UC1.54 v12 reviewed-decision schema gate sparse Excel probe",
+  "cases": [
+    {
+      "case": "a_reviewed_unknown_possible",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\a_reviewed_unknown_possible",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\a_reviewed_unknown_possible\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\a_reviewed_unknown_possible\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\a_reviewed_unknown_possible\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\a_reviewed_unknown_possible\\omitted_dynamic_symptoms.json",
+      "target_headers_present": [
+        "rigidity_HP:0002063",
+        "tremor_HP:0001337"
+      ],
+      "target_values_by_patient_row": {
+        "rigidity_HP:0002063": [
+          "yes",
+          "-99"
+        ],
+        "tremor_HP:0001337": [
+          "-99",
+          "no"
+        ]
+      },
+      "dynamic_symptom_export_policy": "present_approved_only",
+      "present_dynamic_symptom_field_count": 2,
+      "not_present_target_symptom_omitted_count": 116,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "b_reviewed_missing_assertion",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\b_reviewed_missing_assertion",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\b_reviewed_missing_assertion\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\b_reviewed_missing_assertion\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\b_reviewed_missing_assertion\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\b_reviewed_missing_assertion\\omitted_dynamic_symptoms.json",
+      "target_headers_present": [
+        "headache_HP:0002315",
+        "abnormal_pyramidal_sign_HP:0007256"
+      ],
+      "target_values_by_patient_row": {
+        "headache_HP:0002315": [
+          "yes",
+          "-99"
+        ],
+        "abnormal_pyramidal_sign_HP:0007256": [
+          "-99",
+          "no"
+        ]
+      },
+      "dynamic_symptom_export_policy": "present_approved_only",
+      "present_dynamic_symptom_field_count": 2,
+      "not_present_target_symptom_omitted_count": 116,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "c_reviewed_blocked_by_source_scope_qc",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\c_reviewed_blocked_by_source_scope_qc",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\c_reviewed_blocked_by_source_scope_qc\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\c_reviewed_blocked_by_source_scope_qc\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\c_reviewed_blocked_by_source_scope_qc\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\c_reviewed_blocked_by_source_scope_qc\\omitted_dynamic_symptoms.json",
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "dynamic_symptom_export_policy": "present_approved_only",
+      "present_dynamic_symptom_field_count": 0,
+      "not_present_target_symptom_omitted_count": 118,
+      "blocked_count": 4,
+      "blocked_reasons": [
+        "UC1.37/UC1.41 support quality blocked or downgraded the signal",
+        "clinical signal was found outside patient-specific findings",
+        "evidence is not patient-specific"
+      ]
+    },
+    {
+      "case": "d_mapping_only_catalog_only_omitted",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\omitted_dynamic_symptoms.json",
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "dynamic_symptom_export_policy": "present_approved_only",
+      "present_dynamic_symptom_field_count": 0,
+      "not_present_target_symptom_omitted_count": 118,
+      "blocked_count": 1,
+      "blocked_reasons": [
+        "mapping/projection has not passed approval/QC"
+      ]
+    }
+  ],
+  "invariants": {
+    "reviewed_unknown_possible_included": true,
+    "reviewed_missing_assertion_included": true,
+    "reviewed_blocked_by_source_scope_qc": true,
+    "mapping_only_catalog_only_omitted": true,
+    "all_cases_present_approved_policy": true
+  },
+  "pass": true
+}

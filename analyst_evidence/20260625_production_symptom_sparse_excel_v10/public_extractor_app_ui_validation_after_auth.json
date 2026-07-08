@@ -1,0 +1,72 @@
+{
+  "checked_at_utc": "2026-06-25T17:37:44.075Z",
+  "url": "https://gp2admin.neuro.uni-luebeck.de/extractor/",
+  "title": "MDSGene Curation Helper",
+  "body_text_excerpt": "V2.8 - CLINICIAN\nMDSGene Curation Helper\n\nПроверяйте извлеченные клинические, генетические и Excel-поля перед экспортом.\n\nFrontend testing-2026-06-25-10 / production-symptom-sparse-excel\nBackend testing-2026-06-25-10 / production-symptom-sparse-excel\nexcel_parameter_review.v9 · excel_review_field_scope_policy.v6\nОткрыть проверку Excel\nchristine.klein@uni-luebeck.de\nВЫЙТИ\n🇷🇺\nRU\n1. ВХОДЫ\n2. ОБРАБОТКА\n3. РЕЗУЛЬТАТЫ\nНовый запуск\nПрофили UC\nМониторинг обработки\nКлиническая проверка\nГенетическая проверка\nПроверка Excel-полей\nPatient QC\nDisease agents\nVirtual Doctor\nПравила и обратная связь\nOntology Mapping\nЗАГРУЗИТЬ ПО JOB ID\nЗАГРУЗИТЬ JOB\nТЕКУЩИЙ JOB\naedefc86c17d43c79a282fba48d232dc\nLive pipeline\n\nОбработка завершена, но качество результата ограничено. Проверьте quality summary.\n\nLIVE\nUpload\nГОТОВО\n1 files\nIngestion\nГОТОВО\n23278385_DOGU_2013.pdf\nCache / Reuse\nГОТОВО\nchecked\nRoute Selection\nГОТОВО\npaperqa\nGemini / AI-Lab\nГОТОВО\nCompleted\nEvidence\nГОТОВО\n3 evidence rows\nClinical QC\nНУЖНА ПРОВЕРКА\nprimary_success\nTemplate Export\nГОТОВО\nmdsgene_output.xlsx\nArtifacts Ready\nГОТОВО\n44 artifacts\nДокументы\n1\n23278385_DOGU_2013.pdf\nPMID 23278385\nГОТОВО\nАртефакты\n44\nPreflight report\npreflight_report.json\n1 KB\nDiagnostic MDSGene Excel\nDIAGNOSTIC ONLY\nmdsgene_output.xlsx\nSHA-256 6a8657e4736a\nТолько диагностический артефакт до готовности production readiness\n23 KB\nDiagnostic Extended Excel\nDIAGNOSTIC ONLY\nmdsgene_output_ext.xlsx\nSHA-256 665306d61a8d\nТолько диагностический артефакт до готовности production readiness\n78 KB\nTemplate conformance\ntemplate_conformance_report.json\n325 KB\nAlias trace\nuc154_alias_resolution_trace.jsonl\n33 KB\nIntermediate clinical evidence table\nintermediate_clinical_evidence_table.json\n311 KB\nClinical projection export report\nclinical_projection_export_report.json\n294 KB\nPer-paper JSON archive\naedefc86c17d43c79a282fba48d232dc_json_output.zip\n267 KB\nМониторинг обработки\nИНФОРМАЦИЯ\n3\nИзвлечение завершено\n3 rows / 1 papers\nExcel создан\nАртефакт MDSGene workbook доступен.\nПакет review создан\nClinical review cases подготовлены из QC findings.\nТРЕБУЕТСЯ ДЕЙСТВИЕ\n5\nТребуется clinical review\nОткройте clinical review queue и закройте ожидающие cases.\nТребуется genetic review\nreview_needed\nЭкспорт заблокирован\nmanual_benchmark_not_available, anchor_usability:fallback_only\nuc141_upstream_yes_without_concept_support_review_needed\nuc141_upstream_yes_without_concept_support_review_needed: 42\nrow:uc134_review_required\nrow:uc134_review_required: 3\nБЛОКЕРЫ\n6\nProduc",
+  "marker_in_body": true,
+  "marker_in_assets": true,
+  "asset_marker_sources": [
+    "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-BaQP5pbJ.js"
+  ],
+  "script_urls": [
+    "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-BaQP5pbJ.js"
+  ],
+  "css_urls": [
+    "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css",
+    "https://gp2admin.neuro.uni-luebeck.de/extractor/assets/index-DtlT4qmv.css"
+  ],
+  "bad_responses": [
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "status": 404,
+      "statusText": ""
+    }
+  ],
+  "failed_requests": [
+    {
+      "url": "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/webfonts/fa-solid-900.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxeKYY.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxaKYbABA.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "console_messages": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "warning",
+      "text": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "verbose",
+      "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o"
+    }
+  ],
+  "screenshot": "D:/nginx-qa/analyst_evidence/20260625_production_symptom_sparse_excel_v10/public_extractor_app_v10_ui_after_auth.png"
+}

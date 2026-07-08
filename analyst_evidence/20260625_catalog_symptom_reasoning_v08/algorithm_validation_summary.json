@@ -1,0 +1,145 @@
+{
+  "task_source": {
+    "get_test_endpoint_status": 404,
+    "attachment": "C:\\Users\\madoev\\.codex\\attachments\\e32512a8-1281-4b63-a34b-eb33eb8f3374\\pasted-text.txt",
+    "commit": "dce9a16b72a76bb1c3e09130f0dcc072f69cdb99",
+    "build": "testing-2026-06-25-08 / catalog-aligned-symptom-reasoning"
+  },
+  "catalog_suffix_validation": {
+    "template_target_like_count": 121,
+    "expected_catalog_targets_excluding_service": 118,
+    "catalog_field_count": 118,
+    "registry_mapping_count": 118,
+    "registry_projection_target_count": 118,
+    "service_fields_present_in_catalog": [],
+    "required_system_targets_in_catalog": {
+      "abnormal_pyramidal_sign_HP:0007256": true,
+      "upgoing_plantars_babinski_sign_HP:0003487": true
+    },
+    "raw_template_target_missing_after_catalog_name_check": [
+      "upgoing_plantars_(Babinski_sign)_HP:0003487"
+    ],
+    "legacy_babinski_target_in_registry_targets": true,
+    "normalized_babinski_target_in_registry_targets": false
+  },
+  "api_export_fields": {
+    "local": {
+      "field_count": 118,
+      "source_counts": {
+        "target_symptom_catalog_uc139b": 118
+      },
+      "upgoing_plantars_babinski_sign_HP:0003487": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "upgoing_plantars_(Babinski_sign)_HP:0003487": [],
+      "abnormal_pyramidal_sign_HP:0007256": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "service_fields": {
+        "aao_other_sympt": [],
+        "subdomain_cognitive_impairment_sympt": [],
+        "Other_sympt": []
+      }
+    },
+    "public": {
+      "field_count": 136,
+      "source_counts": {
+        "target_symptom_catalog_uc139b": 118,
+        "clinician_approved": 18
+      },
+      "upgoing_plantars_babinski_sign_HP:0003487": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "upgoing_plantars_(Babinski_sign)_HP:0003487": [],
+      "abnormal_pyramidal_sign_HP:0007256": [
+        "target_symptom_catalog_uc139b"
+      ],
+      "service_fields": {
+        "aao_other_sympt": [],
+        "subdomain_cognitive_impairment_sympt": [],
+        "Other_sympt": []
+      }
+    }
+  },
+  "targeted_pytest": {
+    "command": "python -m pytest tests/test_target_symptom_catalog_uc139b.py tests/test_effective_template_schema_uc139b_uc154.py tests/test_semantic_normalization_uc135.py tests/test_clinical_symptom_backfill_uc136.py tests/test_hpo_clinical_concept_layer_uc146.py tests/test_clinical_symptom_ontology_uc137.py tests/test_mdsgene_case_governance_uc155_uc159.py -q",
+    "working_directory": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend",
+    "result": "77 passed, 1 warning"
+  },
+  "synthetic_clinical_variant_probe": {
+    "uc135": {
+      "clinical_entity_count": 10,
+      "normalized_count": 9,
+      "review_needed_count": 1,
+      "failed_variant": {
+        "text": "upgoing plantar response",
+        "concept": "clinical_symptom:babinski_sign",
+        "normalization_status": "review-needed",
+        "review_reason": "low_similarity",
+        "similarity_score": 0.7405,
+        "matched_alias": "upgoing plantar"
+      }
+    },
+    "uc146": {
+      "entity_count": 10,
+      "high_confidence_count": 5,
+      "unmapped_count": 4,
+      "upgoing_plantar_response_hpo_status": "skipped",
+      "upgoing_plantar_response_hpo_reason": "phase_1_requires_approved_local_concept",
+      "slowed_saccadic_eye_movements_hpo_status": "unmapped"
+    },
+    "uc156_structured_projection": {
+      "legacy_field_case": {
+        "input_fields": [
+          "upgoing_plantars_(Babinski_sign)_HP:0003487",
+          "abnormal_pyramidal_sign_HP:0007256"
+        ],
+        "result": {
+          "upgoing_plantars_(Babinski_sign)_HP:0003487": "yes",
+          "abnormal_pyramidal_sign_HP:0007256": "yes"
+        }
+      },
+      "normalized_catalog_field_case": {
+        "input_fields": [
+          "upgoing_plantars_babinski_sign_HP:0003487",
+          "abnormal_pyramidal_sign_HP:0007256"
+        ],
+        "actual_result": {
+          "upgoing_plantars_babinski_sign_HP:0003487": "-99",
+          "upgoing_plantars_(Babinski_sign)_HP:0003487": "yes",
+          "abnormal_pyramidal_sign_HP:0007256": "yes"
+        },
+        "expected_result": {
+          "upgoing_plantars_babinski_sign_HP:0003487": "yes",
+          "abnormal_pyramidal_sign_HP:0007256": "yes",
+          "no_out_of_contract_legacy_field_created": true
+        }
+      },
+      "hyperreflexia_negative_control": {
+        "input_label": "Hyperreflexia: yes",
+        "actual_result": {
+          "hyperreflexia_HP:0001347": "yes",
+          "upgoing_plantars_babinski_sign_HP:0003487": "-99",
+          "abnormal_pyramidal_sign_HP:0007256": "-99"
+        }
+      }
+    }
+  },
+  "hardcoding_scan": {
+    "changed_runtime_modules_checked": 6,
+    "specific_pmid_literals": 0,
+    "pdf_filename_literals": 0,
+    "absolute_windows_paths": 0
+  },
+  "ui_validation": {
+    "public_extractor_screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_symptom_reasoning_v08\\public_extractor_app_v08_ui.png",
+    "public_extractor_report": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_symptom_reasoning_v08\\public_extractor_app_ui_validation.json",
+    "public_management_report": "D:\\nginx-qa\\analyst_evidence\\20260625_catalog_symptom_reasoning_v08\\public_ui_network_validation.json",
+    "frontend_marker": "testing-2026-06-25-08",
+    "backend_marker": "testing-2026-06-25-08",
+    "network_notes": [
+      "Public extractor UI loads and asset index-CHKyVmqJ.js contains testing-2026-06-25-08.",
+      "Browser console/network recorded a 404 for https://gp2admin.neuro.uni-luebeck.de/index.css; no direct evidence that this caused the backend algorithm mismatch."
+    ]
+  }
+}

@@ -1,0 +1,165 @@
+{
+  "schema_version": "canonical_row_matching_report.v1",
+  "policy_version": "excel_review.uploaded_gold_standard_row_matching.v2",
+  "benchmark_mode": "benchmark_qc",
+  "job_id": "aedefc86c17d43c79a282fba48d232dc",
+  "generated_at": "2026-06-25T10:07:38.932387+00:00",
+  "generated_by": "christine.klein@uni-luebeck.de",
+  "manual_gold_standard_artifact_available": true,
+  "runtime_depends_on_manual_gold_standard": false,
+  "normal_extraction_depends_on_manual_gold_standard": false,
+  "strong_match_definition": "PMID + normalized patient identity: canonical family/individual metadata preferred, with explicit individual-ID aliases considered before display-label fallback and globally unique individual aliases accepted when family-local canonical IDs repeat.",
+  "summary": {
+    "generated_rows": 3,
+    "auto_rows": 3,
+    "manual_rows": 3,
+    "strong_match": 3,
+    "strong_match_rows": 3,
+    "tentative_match": 0,
+    "tentative_match_rows": 0,
+    "unmatched_auto": 0,
+    "unmatched_auto_rows": 0,
+    "unmatched_manual": 0,
+    "unmatched_manual_rows": 0,
+    "diagnostic_only_auto_rows": 0,
+    "production_metric_eligible_auto_rows": 3
+  },
+  "metric_policy": {
+    "primary_production_metrics_scope": "strong_match_only",
+    "tentative_match_scope": "diagnostic_only",
+    "unmatched_auto_scope": "diagnostic_only",
+    "unmatched_manual_scope": "segmentation_or_scope_diagnostic",
+    "manual_gold_standard_role": "regression_validation_oracle_only",
+    "runtime_depends_on_manual_gold_standard": false
+  },
+  "row_match_status_counts": {
+    "strong_match": 3,
+    "unmatched_manual": 0
+  },
+  "row_matches": [
+    {
+      "source": "auto",
+      "row_id": "3bd8362376504977b9b2fd68aed21621",
+      "PMID": "23278385",
+      "family_ID": "Family 1",
+      "individual_ID": "Case 1",
+      "patient_label": "Case 1",
+      "match_status": "strong_match",
+      "match_reason": "exact_pmid_family_id_individual_id",
+      "match_score": 100,
+      "matched_manual": {
+        "row_id": "manual-row-0639e572275250eb",
+        "manual_excel_row": 14,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "1f",
+        "individual_ID": "P1",
+        "patient_label": ""
+      }
+    },
+    {
+      "source": "auto",
+      "row_id": "4b63905e65024b51af3cbdd818b5ff72",
+      "PMID": "23278385",
+      "family_ID": "Family 1",
+      "individual_ID": "Case 2",
+      "patient_label": "Case 2",
+      "match_status": "strong_match",
+      "match_reason": "unique_pmid_individual_id",
+      "match_score": 85,
+      "matched_manual": {
+        "row_id": "manual-row-a8e1c955838f4355",
+        "manual_excel_row": 15,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "2f",
+        "individual_ID": "P2",
+        "patient_label": ""
+      }
+    },
+    {
+      "source": "auto",
+      "row_id": "850506fc251b44f4b1f8f211d8614ba0",
+      "PMID": "23278385",
+      "family_ID": "Family 2",
+      "individual_ID": "Case 3",
+      "patient_label": "Case 3",
+      "match_status": "strong_match",
+      "match_reason": "unique_pmid_individual_alias",
+      "match_score": 85,
+      "matched_manual": {
+        "row_id": "manual-row-ba80517dd738a60b",
+        "manual_excel_row": 16,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "3f",
+        "individual_ID": "P3",
+        "patient_label": ""
+      }
+    }
+  ],
+  "generated_only_rows": [],
+  "unmatched_manual_rows": [],
+  "alignment_rows": [
+    {
+      "source": "auto",
+      "row_id": "3bd8362376504977b9b2fd68aed21621",
+      "PMID": "23278385",
+      "family_ID": "Family 1",
+      "individual_ID": "Case 1",
+      "patient_label": "Case 1",
+      "match_status": "strong_match",
+      "match_reason": "exact_pmid_family_id_individual_id",
+      "match_score": 100,
+      "matched_manual": {
+        "row_id": "manual-row-0639e572275250eb",
+        "manual_excel_row": 14,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "1f",
+        "individual_ID": "P1",
+        "patient_label": ""
+      }
+    },
+    {
+      "source": "auto",
+      "row_id": "4b63905e65024b51af3cbdd818b5ff72",
+      "PMID": "23278385",
+      "family_ID": "Family 1",
+      "individual_ID": "Case 2",
+      "patient_label": "Case 2",
+      "match_status": "strong_match",
+      "match_reason": "unique_pmid_individual_id",
+      "match_score": 85,
+      "matched_manual": {
+        "row_id": "manual-row-a8e1c955838f4355",
+        "manual_excel_row": 15,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "2f",
+        "individual_ID": "P2",
+        "patient_label": ""
+      }
+    },
+    {
+      "source": "auto",
+      "row_id": "850506fc251b44f4b1f8f211d8614ba0",
+      "PMID": "23278385",
+      "family_ID": "Family 2",
+      "individual_ID": "Case 3",
+      "patient_label": "Case 3",
+      "match_status": "strong_match",
+      "match_reason": "unique_pmid_individual_alias",
+      "match_score": 85,
+      "matched_manual": {
+        "row_id": "manual-row-ba80517dd738a60b",
+        "manual_excel_row": 16,
+        "manual_sheet": "C19ORF12",
+        "PMID": "23278385",
+        "family_ID": "3f",
+        "individual_ID": "P3",
+        "patient_label": ""
+      }
+    }
+  ]
+}

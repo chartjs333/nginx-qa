@@ -1,0 +1,64 @@
+{
+  "checked_at_utc": "2026-06-25T17:36:57.576Z",
+  "url": "https://gp2admin.neuro.uni-luebeck.de/management/#/dashboard",
+  "title": "MDSGene QC Management Suite",
+  "body_text_excerpt": "M\nMedQC Portal\n🇷🇺\nRU\nC\n\nchristine.klein@uni-luebeck.de\n\nVALIDATOR\n\nВыйти\nПортал медицинских систем\nLLM Extractor\n\nЗапуск отдельного конвейера экстракции MDSGene с выгрузкой Excel, JSON и журналов.\n\nЗАПУСТИТЬ ПРИЛОЖЕНИЕ\n\nВсе системы работают исправно через MDSGene QC Management Suite\n\n© 2024 Enjinx Medical Infrastructure Group. Все права защищены.",
+  "marker_in_body": false,
+  "marker_in_assets": false,
+  "script_urls": [
+    "https://cdn.tailwindcss.com/",
+    "https://gp2admin.neuro.uni-luebeck.de/management/assets/index-BHAuKp73.js"
+  ],
+  "css_urls": [
+    "https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap",
+    "https://gp2admin.neuro.uni-luebeck.de/index.css"
+  ],
+  "bad_responses": [
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "status": 404,
+      "statusText": ""
+    }
+  ],
+  "failed_requests": [
+    {
+      "url": "https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxaKYbABA.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://fonts.gstatic.com/s/ibmplexsans/v23/zYXzKVElMYYaJe8bpLHnCwDKr932-G7dytD-Dmu1syxeKYY.woff2",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    },
+    {
+      "url": "https://gp2admin.neuro.uni-luebeck.de/index.css",
+      "method": "GET",
+      "failure": "net::ERR_ABORTED"
+    }
+  ],
+  "console_messages": [
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "warning",
+      "text": "cdn.tailwindcss.com should not be used in production. To use Tailwind CSS in production, install it as a PostCSS plugin or use the Tailwind CLI: https://tailwindcss.com/docs/installation"
+    },
+    {
+      "type": "error",
+      "text": "Failed to load resource: the server responded with a status of 404 ()"
+    },
+    {
+      "type": "verbose",
+      "text": "[DOM] Input elements should have autocomplete attributes (suggested: \"current-password\"): (More info: https://www.chromium.org/developers/design-documents/create-amazing-password-forms) %o"
+    }
+  ],
+  "screenshot": "D:/nginx-qa/analyst_evidence/20260625_production_symptom_sparse_excel_v10/public_extractor_app_v10_ui.png"
+}

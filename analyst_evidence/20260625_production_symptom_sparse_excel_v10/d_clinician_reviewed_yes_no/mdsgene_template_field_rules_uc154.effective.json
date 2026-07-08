@@ -1,0 +1,4183 @@
+{
+  "template_id": "MDSGene_NBIA_C19ORF12",
+  "template_version": "2025-10-24",
+  "template_gene": "C19ORF12",
+  "sheet_name": "C19ORF12",
+  "header_row": 1,
+  "rule_start_row": 2,
+  "rule_end_row": 13,
+  "data_start_row": 14,
+  "uc_marker": "UC1.54",
+  "fields": [
+    {
+      "column_index": 1,
+      "column_name": "PMID",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "A",
+      "source_field_name": "PMID",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 2,
+      "column_name": "author_year",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[First author, year]"
+      ],
+      "rule_cells": [
+        "[First author, year]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "B",
+      "source_field_name": "author_year",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 3,
+      "column_name": "study_design",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Case report/case series",
+        "Mutational screen",
+        "Family study",
+        "Sib pair study",
+        "other/mixed"
+      ],
+      "rule_cells": [
+        "Case report/case series",
+        "Mutational screen",
+        "Family study",
+        "Sib pair study",
+        "other/mixed",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "C",
+      "source_field_name": "study_design",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 4,
+      "column_name": "genet_methods",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "D",
+      "source_field_name": "genet_methods",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 5,
+      "column_name": "lower_age_limit",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "E",
+      "source_field_name": "lower_age_limit",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 6,
+      "column_name": "upper_age_limit",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "F",
+      "source_field_name": "upper_age_limit",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 7,
+      "column_name": "comments_study",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "can be left empty"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "can be left empty",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "G",
+      "source_field_name": "comments_study",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 8,
+      "column_name": "family_ID",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "H",
+      "source_field_name": "family_ID",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 9,
+      "column_name": "individual_ID",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "I",
+      "source_field_name": "individual_ID",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 10,
+      "column_name": "disease_abbrev",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "PANK2",
+        "MPAN"
+      ],
+      "rule_cells": [
+        "PANK2",
+        "MPAN",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "J",
+      "source_field_name": "disease_abbrev",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 11,
+      "column_name": "ethnicity",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Caucasian",
+        "Asian",
+        "Jewish (Ashkenazi)",
+        "Jewish (non-Ashkenazi/undefined)",
+        "Arab",
+        "Hispanic",
+        "African ancestry",
+        "Indian ancestry",
+        "Native American",
+        "Mixed/other",
+        "-99"
+      ],
+      "rule_cells": [
+        "Caucasian",
+        "Asian",
+        "Jewish (Ashkenazi)",
+        "Jewish (non-Ashkenazi/undefined)",
+        "Arab",
+        "Hispanic",
+        "African ancestry",
+        "Indian ancestry",
+        "Native American",
+        "Mixed/other",
+        "-99",
+        ""
+      ],
+      "source_excel_col": "K",
+      "source_field_name": "ethnicity",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 12,
+      "column_name": "country",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[ISO three letter code]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[ISO three letter code]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "L",
+      "source_field_name": "country",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 13,
+      "column_name": "sex",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "male",
+        "female",
+        "-99"
+      ],
+      "rule_cells": [
+        "male",
+        "female",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "M",
+      "source_field_name": "sex",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 14,
+      "column_name": "index_pat",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "N",
+      "source_field_name": "index_pat",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 15,
+      "column_name": "consanguinity",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "O",
+      "source_field_name": "consanguinity",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 16,
+      "column_name": "famhx",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "P",
+      "source_field_name": "famhx",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 17,
+      "column_name": "num_het_mut_affected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "Q",
+      "source_field_name": "num_het_mut_affected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 18,
+      "column_name": "num_hom_mut_affected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "R",
+      "source_field_name": "num_hom_mut_affected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 19,
+      "column_name": "num_hemi_mut_affected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "S",
+      "source_field_name": "num_hemi_mut_affected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 20,
+      "column_name": "num_het_mut_unaffected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "T",
+      "source_field_name": "num_het_mut_unaffected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 21,
+      "column_name": "num_hom_mut_unaffected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "U",
+      "source_field_name": "num_hom_mut_unaffected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 22,
+      "column_name": "num_hemi_mut_unaffected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "V",
+      "source_field_name": "num_hemi_mut_unaffected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 23,
+      "column_name": "num_wildtype_affected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "W",
+      "source_field_name": "num_wildtype_affected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 24,
+      "column_name": "num_wildtype_unaffected",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "X",
+      "source_field_name": "num_wildtype_unaffected",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 25,
+      "column_name": "status_clinical",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "clinically affected",
+        "clinically unaffected",
+        "clinically uncertain"
+      ],
+      "rule_cells": [
+        "clinically affected",
+        "clinically unaffected",
+        "clinically uncertain",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "Y",
+      "source_field_name": "status_clinical",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 26,
+      "column_name": "aae",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "Z",
+      "source_field_name": "aae",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 27,
+      "column_name": "aao_movement_disorder",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AA",
+      "source_field_name": "aao_movement_disorder",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 28,
+      "column_name": "aao_other_sympt",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AB",
+      "source_field_name": "aao_other_sympt",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 29,
+      "column_name": "duration",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AC",
+      "source_field_name": "duration",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 30,
+      "column_name": "age_dx",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AD",
+      "source_field_name": "age_dx",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 31,
+      "column_name": "age_death",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[some number]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[some number]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AE",
+      "source_field_name": "age_death",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 32,
+      "column_name": "early_onset_PKAN",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AF",
+      "source_field_name": "early onset PKAN",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 33,
+      "column_name": "late_onset_PKAN",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AG",
+      "source_field_name": "late onset PKAN",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 34,
+      "column_name": "classified_as_typical_PKAN",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AH",
+      "source_field_name": "classified as typical PKAN",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 35,
+      "column_name": "classified_as_atypical_PKAN",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AI",
+      "source_field_name": "classified as atypical PKAN",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 36,
+      "column_name": "hg_version",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "19",
+        "38",
+        "-99"
+      ],
+      "rule_cells": [
+        "19",
+        "38",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AJ",
+      "source_field_name": "hg_version",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 37,
+      "column_name": "genome_build",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AK",
+      "source_field_name": "genome_build",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 38,
+      "column_name": "gene1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "PANK2",
+        "C9orf12",
+        "[see variable list for other genes]"
+      ],
+      "rule_cells": [
+        "PANK2",
+        "C9orf12",
+        "",
+        "",
+        "[see variable list for other genes]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AL",
+      "source_field_name": "gene1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 39,
+      "column_name": "physical_location1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AM",
+      "source_field_name": "physical_location1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 40,
+      "column_name": "reference_allele1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AN",
+      "source_field_name": "reference_allele1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 41,
+      "column_name": "observed_allele1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AO",
+      "source_field_name": "observed_allele1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 42,
+      "column_name": "mut1_g",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AP",
+      "source_field_name": "mut1_g",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 43,
+      "column_name": "mut1_c",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AQ",
+      "source_field_name": "mut1_c",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 44,
+      "column_name": "mut1_p",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AR",
+      "source_field_name": "mut1_p",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 45,
+      "column_name": "mut1_alias_original",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AS",
+      "source_field_name": "mut1_alias_original",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 46,
+      "column_name": "mut1_alias",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AT",
+      "source_field_name": "mut1_alias",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 47,
+      "column_name": "mut1_genotype",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "het",
+        "hom",
+        "hemi",
+        "-99"
+      ],
+      "rule_cells": [
+        "het",
+        "hom",
+        "hemi",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AU",
+      "source_field_name": "mut1_genotype",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 48,
+      "column_name": "patient_genotype1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "het",
+        "hom",
+        "compound het (confirmed)",
+        "compound het (unconfirmed)",
+        "-99"
+      ],
+      "rule_cells": [
+        "het",
+        "hom",
+        "compound het (confirmed)",
+        "compound het (unconfirmed)",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AV",
+      "source_field_name": "patient_genotype1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 49,
+      "column_name": "mut1_type",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect"
+      ],
+      "rule_cells": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AW",
+      "source_field_name": "mut1_type",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 50,
+      "column_name": "mut1_sporadic",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AX",
+      "source_field_name": "mut1_sporadic",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 51,
+      "column_name": "mut1_de_novo",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AY",
+      "source_field_name": "mut1_de_novo",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 52,
+      "column_name": "gnomAD_dbSNP1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "AZ",
+      "source_field_name": "gnomAD_dbSNP1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 53,
+      "column_name": "gnomAD_1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BA",
+      "source_field_name": "gnomAD_1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 54,
+      "column_name": "gene2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "PANK2",
+        "C9orf12"
+      ],
+      "rule_cells": [
+        "PANK2",
+        "C9orf12",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BB",
+      "source_field_name": "gene2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 55,
+      "column_name": "physical_location2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BC",
+      "source_field_name": "physical_location2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 56,
+      "column_name": "reference_allele2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BD",
+      "source_field_name": "reference_allele2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 57,
+      "column_name": "observed_allele2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BE",
+      "source_field_name": "observed_allele2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 58,
+      "column_name": "mut2_g",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BF",
+      "source_field_name": "mut2_g",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 59,
+      "column_name": "mut2_c",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BG",
+      "source_field_name": "mut2_c",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 60,
+      "column_name": "mut2_p",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BH",
+      "source_field_name": "mut2_p",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 61,
+      "column_name": "mut2_alias_original",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BI",
+      "source_field_name": "mut2_alias_original",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 62,
+      "column_name": "mut2_alias",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BJ",
+      "source_field_name": "mut2_alias",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 63,
+      "column_name": "mut2_genotype",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "het",
+        "hom",
+        "hemi",
+        "-99"
+      ],
+      "rule_cells": [
+        "het",
+        "hom",
+        "hemi",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BK",
+      "source_field_name": "mut2_genotype",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 64,
+      "column_name": "mut2_type",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect",
+        "-99"
+      ],
+      "rule_cells": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect",
+        "-99",
+        "",
+        ""
+      ],
+      "source_excel_col": "BL",
+      "source_field_name": "mut2_type",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 65,
+      "column_name": "mut2_sporadic",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BM",
+      "source_field_name": "mut2_sporadic",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 66,
+      "column_name": "mut2_de_novo",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BN",
+      "source_field_name": "mut2_de_novo",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 67,
+      "column_name": "gnomAD_dbSNP2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BO",
+      "source_field_name": "gnomAD_dbSNP2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 68,
+      "column_name": "gnomAD_2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BP",
+      "source_field_name": "gnomAD_2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 69,
+      "column_name": "gene3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "PANK2",
+        "C9orf12"
+      ],
+      "rule_cells": [
+        "PANK2",
+        "C9orf12",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BQ",
+      "source_field_name": "gene3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 70,
+      "column_name": "physical_location3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BR",
+      "source_field_name": "physical_location3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 71,
+      "column_name": "reference_allele3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BS",
+      "source_field_name": "reference_allele3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 72,
+      "column_name": "observed_allele3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BT",
+      "source_field_name": "observed_allele3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 73,
+      "column_name": "mut3_g",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BU",
+      "source_field_name": "mut3_g",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 74,
+      "column_name": "mut3_c",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BV",
+      "source_field_name": "mut3_c",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 75,
+      "column_name": "mut3_p",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BW",
+      "source_field_name": "mut3_p",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 76,
+      "column_name": "mut3_alias_original",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BX",
+      "source_field_name": "mut3_alias_original",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 77,
+      "column_name": "mut3_alias",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]",
+        "-99"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BY",
+      "source_field_name": "mut3_alias",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 78,
+      "column_name": "mut3_genotype",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "het",
+        "hom",
+        "hemi",
+        "-99"
+      ],
+      "rule_cells": [
+        "het",
+        "hom",
+        "hemi",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "BZ",
+      "source_field_name": "mut3_genotype",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 79,
+      "column_name": "mut_3_type",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect",
+        "-99"
+      ],
+      "rule_cells": [
+        "missense",
+        "nonsense",
+        "in-frame indel",
+        "repeat expansion",
+        "frameshift",
+        "splice site",
+        "structural variation",
+        "silent",
+        "unknown effect",
+        "-99",
+        "",
+        ""
+      ],
+      "source_excel_col": "CA",
+      "source_field_name": "mut_3_type",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 80,
+      "column_name": "mut3_sporadic",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CB",
+      "source_field_name": "mut3_sporadic",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 81,
+      "column_name": "gnomAD_dbSNP3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CC",
+      "source_field_name": "gnomAD_dbSNP3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 82,
+      "column_name": "gnomAD_3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CD",
+      "source_field_name": "gnomAD_3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 83,
+      "column_name": "subdomain_cognitive_impairment_sympt",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "MCI",
+        "dementia",
+        "unclassified/other",
+        "-99"
+      ],
+      "rule_cells": [
+        "MCI",
+        "dementia",
+        "unclassified/other",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CE",
+      "source_field_name": "subdomain_cognitive_impairment_sympt",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 84,
+      "column_name": "cognitive_decline_scale",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CF",
+      "source_field_name": "cognitive_decline_scale",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 85,
+      "column_name": "seizure_type_sympt",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CG",
+      "source_field_name": "seizure_type_sympt",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 86,
+      "column_name": "wheelchair_bound_age",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "age",
+        "not applicable",
+        "-99"
+      ],
+      "rule_cells": [
+        "age",
+        "not applicable",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CH",
+      "source_field_name": "wheelchair_bound_age",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 87,
+      "column_name": "CSF_findings_sympt",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CI",
+      "source_field_name": "csf_findings_sympt",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 88,
+      "column_name": "mri_brain_description",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CJ",
+      "source_field_name": "mri_brain_description",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 89,
+      "column_name": "mri_iron_cortical",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CK",
+      "source_field_name": "mri_iron_cortical",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 90,
+      "column_name": "mri_iron_basal_ganglia",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CL",
+      "source_field_name": "mri_iron_basal_ganglia",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 91,
+      "column_name": "mri_iron_thalamus",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CM",
+      "source_field_name": "mri_iron_thalamus",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 92,
+      "column_name": "mri_iron_brainstem",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CN",
+      "source_field_name": "mri_iron_brainstem",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 93,
+      "column_name": "mri_iron_cerebellar",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CO",
+      "source_field_name": "mri_iron_cerebellar",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 94,
+      "column_name": "mri_other_features",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CP",
+      "source_field_name": "mri_other_features",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 95,
+      "column_name": "medications_used",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[free text]"
+      ],
+      "rule_cells": [
+        "[free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CQ",
+      "source_field_name": "medications_used",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 96,
+      "column_name": "botulinum_toxin_response",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CR",
+      "source_field_name": "botulinum_toxin_response",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 97,
+      "column_name": "botulinum_toxin_response_quantification",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99"
+      ],
+      "rule_cells": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CS",
+      "source_field_name": "botulinum_toxin_response_quantification",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 98,
+      "column_name": "levodopa_response",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CT",
+      "source_field_name": "levodopa_response",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 99,
+      "column_name": "levodopa_response_quantification",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99"
+      ],
+      "rule_cells": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CU",
+      "source_field_name": "levodopa_response_quantification",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 100,
+      "column_name": "iron_chelator_response",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CV",
+      "source_field_name": "iron_chelator_response",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 101,
+      "column_name": "iron_chelator_name",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[Free text]"
+      ],
+      "rule_cells": [
+        "[Free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CW",
+      "source_field_name": "iron_chelator_name",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 102,
+      "column_name": "iron_chelator_response_quantification",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99"
+      ],
+      "rule_cells": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CX",
+      "source_field_name": "iron_chelator_response_quantification",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 103,
+      "column_name": "DBS_response",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CY",
+      "source_field_name": "DBS_response",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 104,
+      "column_name": "DBS_response_quantification",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99"
+      ],
+      "rule_cells": [
+        "Positive",
+        "Negative",
+        "None",
+        "Temporary",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "CZ",
+      "source_field_name": "DBS_response_quantification",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 105,
+      "column_name": "other_drug_response",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "DrugX_positive",
+        "DrugX_negative",
+        "DrugX_none",
+        "DrugX_temporary",
+        "-99"
+      ],
+      "rule_cells": [
+        "DrugX_positive",
+        "DrugX_negative",
+        "DrugX_none",
+        "DrugX_temporary",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DA",
+      "source_field_name": "other_drug_response",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 106,
+      "column_name": "muscle_biopsy",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DB",
+      "source_field_name": "muscle_biopsy",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 107,
+      "column_name": "muscle_biopsy_result",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "(free text result)"
+      ],
+      "rule_cells": [
+        "(free text result)",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DC",
+      "source_field_name": "muscle_biopsy_result",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 108,
+      "column_name": "elevated_creatine_kinase_(CK)",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DD",
+      "source_field_name": "elevated_creatine_kinase_(CK)",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 109,
+      "column_name": "autopsy",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DE",
+      "source_field_name": "autopsy",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 110,
+      "column_name": "autopsy_comments",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "(free text)"
+      ],
+      "rule_cells": [
+        "(free text)",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DF",
+      "source_field_name": "autopsy_comments",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 111,
+      "column_name": "Add_HPO",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "[free text using format symptom_HPOCode:yes/no]"
+      ],
+      "rule_cells": [
+        "[free text using format symptom_HPOCode:yes/no]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DG",
+      "source_field_name": "add_hpo",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 112,
+      "column_name": "Other_sympt",
+      "field_class": "special_symptom_related",
+      "allowed_values": [
+        "[Free text]",
+        "."
+      ],
+      "rule_cells": [
+        "[Free text]",
+        ".",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DH",
+      "source_field_name": "other_sympt",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54",
+      "special_template_field_policy": "template_required_special_field",
+      "dynamic_symptom_export_policy": "base_template_required_field"
+    },
+    {
+      "column_index": 113,
+      "column_name": "initial_sympt1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99"
+      ],
+      "rule_cells": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DI",
+      "source_field_name": "initial_sympt1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 114,
+      "column_name": "initial_sympt2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99"
+      ],
+      "rule_cells": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DJ",
+      "source_field_name": "initial_sympt2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 115,
+      "column_name": "initial_sympt3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99"
+      ],
+      "rule_cells": [
+        "[categories will be identical to the variables on the nbia variable list], -99",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DK",
+      "source_field_name": "initial_sympt3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 116,
+      "column_name": "comments_pat",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "[Free text]"
+      ],
+      "rule_cells": [
+        "[Free text]",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DL",
+      "source_field_name": "comments_pat",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 117,
+      "column_name": "mdsgene_decision",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "IN",
+        "EX"
+      ],
+      "rule_cells": [
+        "IN",
+        "EX",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DM",
+      "source_field_name": "mdsgene_decision",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 118,
+      "column_name": "pathogenicity1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "benign (<5 points)",
+        "possibly pathogenic (5-9 points)",
+        "probably pathogenic (10-14 points)",
+        "definetely pathogenic (>14 points)"
+      ],
+      "rule_cells": [
+        "benign (<5 points)",
+        "possibly pathogenic (5-9 points)",
+        "probably pathogenic (10-14 points)",
+        "definetely pathogenic (>14 points)",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DN",
+      "source_field_name": "pathogenicity1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 119,
+      "column_name": "pathogenicity2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DO",
+      "source_field_name": "pathogenicity2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 120,
+      "column_name": "pathogenicity3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DP",
+      "source_field_name": "pathogenicity3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 121,
+      "column_name": "num_index_pat_two_mut",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        " ",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DQ",
+      "source_field_name": "num_index_pat_two_mut",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 122,
+      "column_name": "num_index_pat_het_mut1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DR",
+      "source_field_name": "num_index_pat_het_mut1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 123,
+      "column_name": "num_fam_with_segregation1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DS",
+      "source_field_name": "num_fam_with_segregation1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 124,
+      "column_name": "CADD_1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DT",
+      "source_field_name": "CADD_1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 125,
+      "column_name": "functional_studies1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DU",
+      "source_field_name": "functional_studies1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 126,
+      "column_name": "points_segregation1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DV",
+      "source_field_name": "points_segregation1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 127,
+      "column_name": "points_frequency_controls1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DW",
+      "source_field_name": "points_frequency_controls1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 128,
+      "column_name": "points_CADD_score1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DX",
+      "source_field_name": "points_CADD_score1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 129,
+      "column_name": "points_functional_studies1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DY",
+      "source_field_name": "points_functional_studies1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 130,
+      "column_name": "final_score1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "DZ",
+      "source_field_name": "final_score1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 131,
+      "column_name": "num_index_pat_two_mut2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EA",
+      "source_field_name": "num_index_pat_two_mut2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 132,
+      "column_name": "num_index_pat_het_mut2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EB",
+      "source_field_name": "num_index_pat_het_mut2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 133,
+      "column_name": "num_fam_with_segregation2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EC",
+      "source_field_name": "num_fam_with_segregation2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 134,
+      "column_name": "CADD_2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "ED",
+      "source_field_name": "CADD_2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 135,
+      "column_name": "functional_studies2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EE",
+      "source_field_name": "functional_studies2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 136,
+      "column_name": "points_segregation2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EF",
+      "source_field_name": "points_segregation2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 137,
+      "column_name": "points_frequency_controls2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EG",
+      "source_field_name": "points_frequency_controls2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 138,
+      "column_name": "points_CADD_score2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EH",
+      "source_field_name": "points_CADD_score2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 139,
+      "column_name": "points_functional_studies2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EI",
+      "source_field_name": "points_functional_studies2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 140,
+      "column_name": "final_score2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EJ",
+      "source_field_name": "final_score2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 141,
+      "column_name": "num_index_pat_two_mut3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EK",
+      "source_field_name": "num_index_pat_two_mut3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 142,
+      "column_name": "num_index_pat_het_mut3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EL",
+      "source_field_name": "num_index_pat_het_mut3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 143,
+      "column_name": "num_fam_with_segregation3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EM",
+      "source_field_name": "num_fam_with_segregation3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 144,
+      "column_name": "CADD_3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EN",
+      "source_field_name": "CADD_3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 145,
+      "column_name": "functional_studies3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EO",
+      "source_field_name": "functional_studies3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 146,
+      "column_name": "points_segregation3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EP",
+      "source_field_name": "points_segregation3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 147,
+      "column_name": "points_frequency_controls3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EQ",
+      "source_field_name": "points_frequency_controls3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 148,
+      "column_name": "points_CADD_score3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "ER",
+      "source_field_name": "points_CADD_score3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 149,
+      "column_name": "points_functional_studies3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "ES",
+      "source_field_name": "points_functional_studies3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 150,
+      "column_name": "final_score3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "ET",
+      "source_field_name": "final_score3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 151,
+      "column_name": "fun_evidence_pos_1",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EU",
+      "source_field_name": "fun_evidence_pos_1",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 152,
+      "column_name": "fun_evidence_pos_2",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EV",
+      "source_field_name": "fun_evidence_pos_2",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 153,
+      "column_name": "fun_evidence_pos_3",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [],
+      "rule_cells": [
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EW",
+      "source_field_name": "fun_evidence_pos_3",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    },
+    {
+      "column_index": 154,
+      "column_name": "mdsgene_final_decision",
+      "field_class": "fixed_core_or_non_symptom",
+      "allowed_values": [
+        "IN",
+        "EX"
+      ],
+      "rule_cells": [
+        "IN",
+        "EX",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EX",
+      "source_field_name": "mdsgene_final_decision",
+      "source_dynamic_symptom_flag": "no",
+      "uc_marker": "UC1.54"
+    }
+  ],
+  "base_template_dynamic_symptom_policy": "fixed_core_or_non_symptom_and_special_symptom_related_base_fields_only",
+  "template_required_special_fields": [
+    "aao_other_sympt",
+    "subdomain_cognitive_impairment_sympt",
+    "seizure_type_sympt",
+    "CSF_findings_sympt",
+    "Add_HPO",
+    "Other_sympt"
+  ],
+  "template_required_special_field_count": 6,
+  "dynamic_special_symptom_field_omitted_count": 0,
+  "omitted_base_dynamic_symptom_field_count": 116,
+  "schema_generation_mode": "base_plus_ontology_projection_overlay",
+  "use_case_overlay": "UC1.39B",
+  "generated_at": "2026-06-25T17:35:31.983198+00:00",
+  "generated_by": "analyst-professor-statistics-v10",
+  "base_template_rules_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\mdsgene_template_field_rules_uc154.base.json",
+  "base_template_rules_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+  "ontology_projection_registry_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_projection_registry_uc139.json;D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_mapping_uc139_user.json",
+  "ontology_projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+  "target_symptom_catalog_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\target_symptom_fields_uc139b.json",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "available_target_symptom_count": 118,
+  "present_dynamic_symptom_field_count": 0,
+  "not_present_target_symptom_omitted_count": 118,
+  "unmatched_detected_symptom_omitted_count": 0,
+  "job_specific_effective_schema": true,
+  "generated_dynamic_symptom_field_count": 0,
+  "base_fixed_field_count": 148,
+  "base_field_count": 154,
+  "dynamic_symptom_overlay_fields": [],
+  "audit_metadata_fields": [
+    {
+      "field_suffix": "_confidence",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    },
+    {
+      "field_suffix": "_evidence",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    },
+    {
+      "field_suffix": "_source_uc",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    },
+    {
+      "field_suffix": "_reason",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    },
+    {
+      "field_suffix": "_hpo_id",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    },
+    {
+      "field_suffix": "_context_type",
+      "field_class": "audit_metadata",
+      "source": "schema_generator"
+    }
+  ],
+  "schema_generation_audit_trace": [],
+  "effective_schema_hash": "sha256:4f8d6189fe8b3b0ac1d145cb13947f5bf6a70c7b33005fec29a8ac3804dda4f6",
+  "job_id": "analyst-v10-d_clinician_reviewed_yes_no"
+}

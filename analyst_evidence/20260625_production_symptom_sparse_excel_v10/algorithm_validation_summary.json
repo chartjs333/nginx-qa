@@ -1,0 +1,122 @@
+{
+  "cycle": "v10 production-symptom-sparse-excel",
+  "commit_under_test": "6b63d19b39ffd1599313cdc7a4b6563214570c69",
+  "status": "FAIL",
+  "reason": "Clinician-reviewed yes/no concepts are omitted when raw assertion is 'unknown', despite v10 requirement that clinician-reviewed yes/no must admit/materialize dynamic symptom columns.",
+  "targeted_pytest": "189 passed, 1 warning, 34 subtests passed",
+  "hardcoding_scan": {
+    "runtime_modules_checked": [
+      "mdsgene_pipeline/effective_template_schema_generator_uc139b.py",
+      "mdsgene_pipeline/template_conformant_export_uc154.py",
+      "mdsgene_pipeline/target_symptom_catalog_uc139b.py"
+    ],
+    "pmid_pdf_job_static_path_hits": 0,
+    "note": "Test fixtures contain fixed PMIDs/targets; runtime modules did not show file-name/job-id hardcoding."
+  },
+  "code_findings": [
+    {
+      "file": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\mdsgene_pipeline\\effective_template_schema_generator_uc139b.py",
+      "lines": "1473-1481",
+      "issue": "reviewed_decision is computed, but assertion in UC139B_BLOCKED_ASSERTIONS, including 'unknown', is blocked before clinician-reviewed yes/no can include the target."
+    },
+    {
+      "file": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\mdsgene_pipeline\\template_conformant_export_uc154.py",
+      "lines": "1566-1580",
+      "issue": "Workbook materialization can convert reviewed decisions to yes/no, but it only runs for fields admitted into the effective schema; the schema gate drops the reviewed-unknown targets first."
+    }
+  ],
+  "synthetic_probe": {
+    "summary_path": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\sparse_excel_probe_summary.json",
+    "overall_pass": false,
+    "cases": {
+      "catalog_only_no_evidence": {
+        "result": "pass",
+        "target_headers_present": [],
+        "omitted_count": 118
+      },
+      "row_explicit_yes_no": {
+        "result": "pass",
+        "target_headers_present": [
+          "rigidity_HP:0002063",
+          "tremor_HP:0001337"
+        ],
+        "target_values_by_patient_row": {
+          "rigidity_HP:0002063": [
+            "yes",
+            "-99"
+          ],
+          "tremor_HP:0001337": [
+            "-99",
+            "no"
+          ]
+        }
+      },
+      "projection_ready_concepts": {
+        "result": "pass",
+        "target_headers_present": [
+          "headache_HP:0002315",
+          "abnormal_pyramidal_sign_HP:0007256"
+        ],
+        "target_values_by_patient_row": {
+          "headache_HP:0002315": [
+            "yes",
+            "-99"
+          ],
+          "abnormal_pyramidal_sign_HP:0007256": [
+            "-99",
+            "no"
+          ]
+        }
+      },
+      "clinician_reviewed_yes_no_unknown_assertion": {
+        "result": "fail",
+        "expected_headers": [
+          "rigidity_HP:0002063",
+          "tremor_HP:0001337"
+        ],
+        "actual_headers": [],
+        "actual_present_dynamic_symptom_field_count": 0,
+        "actual_not_present_target_symptom_omitted_count": 118,
+        "evidence_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no",
+        "blocked_reason": "assertion_status is neither explicit yes nor explicit no"
+      },
+      "mapping_only_and_non_patient_blocked": {
+        "result": "pass_for_blocking_policy",
+        "target_headers_present": [],
+        "blocked_findings_file": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\omitted_dynamic_symptoms.json"
+      }
+    }
+  },
+  "server_ui_validation": {
+    "screenshot": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\public_extractor_app_v10_ui_after_auth.png",
+    "validation_json": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\public_extractor_app_ui_validation_after_auth.json",
+    "frontend_backend_marker_confirmed": true,
+    "non_blocking_network_notes": [
+      "/index.css 404",
+      "font/css request aborts during headless run"
+    ]
+  },
+  "server_observations": {
+    "public_testing_version": "testing-2026-06-25-10 / production-symptom-sparse-excel",
+    "current_ui_job_id": "aedefc86c17d43c79a282fba48d232dc",
+    "current_ui_job_quality_summary": {
+      "execution_status": "completed",
+      "extraction_quality_status": "primary_success",
+      "production_export_readiness": "review_needed_or_blocked_by_gold_standard_reports",
+      "noted_blockers": [
+        "manual_benchmark_not_available",
+        "anchor_usability:fallback_only",
+        "value_mismatches_gold_standard"
+      ]
+    },
+    "current_ui_job_template_conformance_policy_observed": "all_catalog_symptoms",
+    "current_ui_job_policy_note": "Observed current public job artifact may be stale/pre-v10, but it is not acceptable proof of the v10 production-sparse default. New production jobs must regenerate effective schema with present_approved_only.",
+    "excel_parameter_review_current_job": {
+      "batch_status": "review_batch_created",
+      "case_count": 68,
+      "field_inclusion_scope": "exported_excel_non_missing_source_evidence_review",
+      "exported_field_count_observed": 289
+    }
+  },
+  "production_readiness_decision": "not ready"
+}

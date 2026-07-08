@@ -1,0 +1,192 @@
+{
+  "analysis": "UC1.39B/UC1.54 production sparse dynamic symptom Excel independent synthetic probe",
+  "cases": [
+    {
+      "case": "a_catalog_only_no_evidence",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\omitted_dynamic_symptoms.json",
+      "uc139_dynamic_symptom_overlay": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\uc139_dynamic_symptom_overlay.json",
+      "unmapped_clinical_findings": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\a_catalog_only_no_evidence\\unmapped_clinical_findings.json",
+      "header_count": 154,
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "effective_present_dynamic_symptom_field_count": 0,
+      "effective_not_present_target_symptom_omitted_count": 118,
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 0,
+      "report_not_present_target_symptom_omitted_count": 118,
+      "report_job_specific_effective_schema": true,
+      "overlay_present_targets": [],
+      "overlay_blocked_count": 0,
+      "overlay_blocked_reasons": [],
+      "omitted_count": 118,
+      "omitted_sample_contains_targets": {
+        "rigidity_HP:0002063": true,
+        "tremor_HP:0001337": true,
+        "headache_HP:0002315": true,
+        "abnormal_pyramidal_sign_HP:0007256": true
+      },
+      "unmapped_count": 0
+    },
+    {
+      "case": "b_row_explicit_yes_no",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\omitted_dynamic_symptoms.json",
+      "uc139_dynamic_symptom_overlay": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\uc139_dynamic_symptom_overlay.json",
+      "unmapped_clinical_findings": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\b_row_explicit_yes_no\\unmapped_clinical_findings.json",
+      "header_count": 156,
+      "target_headers_present": [
+        "rigidity_HP:0002063",
+        "tremor_HP:0001337"
+      ],
+      "target_values_by_patient_row": {
+        "rigidity_HP:0002063": [
+          "yes",
+          "-99"
+        ],
+        "tremor_HP:0001337": [
+          "-99",
+          "no"
+        ]
+      },
+      "effective_present_dynamic_symptom_field_count": 2,
+      "effective_not_present_target_symptom_omitted_count": 116,
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 2,
+      "report_not_present_target_symptom_omitted_count": 116,
+      "report_job_specific_effective_schema": true,
+      "overlay_present_targets": [],
+      "overlay_blocked_count": 0,
+      "overlay_blocked_reasons": [],
+      "omitted_count": 116,
+      "omitted_sample_contains_targets": {
+        "rigidity_HP:0002063": false,
+        "tremor_HP:0001337": false,
+        "headache_HP:0002315": true,
+        "abnormal_pyramidal_sign_HP:0007256": true
+      },
+      "unmapped_count": 0
+    },
+    {
+      "case": "c_projection_ready_concepts",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\omitted_dynamic_symptoms.json",
+      "uc139_dynamic_symptom_overlay": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\uc139_dynamic_symptom_overlay.json",
+      "unmapped_clinical_findings": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\c_projection_ready_concepts\\unmapped_clinical_findings.json",
+      "header_count": 156,
+      "target_headers_present": [
+        "headache_HP:0002315",
+        "abnormal_pyramidal_sign_HP:0007256"
+      ],
+      "target_values_by_patient_row": {
+        "headache_HP:0002315": [
+          "yes",
+          "-99"
+        ],
+        "abnormal_pyramidal_sign_HP:0007256": [
+          "-99",
+          "no"
+        ]
+      },
+      "effective_present_dynamic_symptom_field_count": 2,
+      "effective_not_present_target_symptom_omitted_count": 116,
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 2,
+      "report_not_present_target_symptom_omitted_count": 116,
+      "report_job_specific_effective_schema": true,
+      "overlay_present_targets": [],
+      "overlay_blocked_count": 0,
+      "overlay_blocked_reasons": [],
+      "omitted_count": 116,
+      "omitted_sample_contains_targets": {
+        "rigidity_HP:0002063": true,
+        "tremor_HP:0001337": true,
+        "headache_HP:0002315": false,
+        "abnormal_pyramidal_sign_HP:0007256": false
+      },
+      "unmapped_count": 0
+    },
+    {
+      "case": "d_clinician_reviewed_yes_no",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\omitted_dynamic_symptoms.json",
+      "uc139_dynamic_symptom_overlay": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\uc139_dynamic_symptom_overlay.json",
+      "unmapped_clinical_findings": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\d_clinician_reviewed_yes_no\\unmapped_clinical_findings.json",
+      "header_count": 154,
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "effective_present_dynamic_symptom_field_count": 0,
+      "effective_not_present_target_symptom_omitted_count": 118,
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 0,
+      "report_not_present_target_symptom_omitted_count": 118,
+      "report_job_specific_effective_schema": true,
+      "overlay_present_targets": [],
+      "overlay_blocked_count": 0,
+      "overlay_blocked_reasons": [],
+      "omitted_count": 118,
+      "omitted_sample_contains_targets": {
+        "rigidity_HP:0002063": true,
+        "tremor_HP:0001337": true,
+        "headache_HP:0002315": true,
+        "abnormal_pyramidal_sign_HP:0007256": true
+      },
+      "unmapped_count": 0
+    },
+    {
+      "case": "e_mapping_only_and_non_patient_blocked",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\omitted_dynamic_symptoms.json",
+      "uc139_dynamic_symptom_overlay": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\uc139_dynamic_symptom_overlay.json",
+      "unmapped_clinical_findings": "D:\\nginx-qa\\analyst_evidence\\20260625_production_symptom_sparse_excel_v10\\e_mapping_only_and_non_patient_blocked\\unmapped_clinical_findings.json",
+      "header_count": 154,
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "effective_present_dynamic_symptom_field_count": 0,
+      "effective_not_present_target_symptom_omitted_count": 118,
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 0,
+      "report_not_present_target_symptom_omitted_count": 118,
+      "report_job_specific_effective_schema": true,
+      "overlay_present_targets": [],
+      "overlay_blocked_count": 0,
+      "overlay_blocked_reasons": [],
+      "omitted_count": 118,
+      "omitted_sample_contains_targets": {
+        "rigidity_HP:0002063": true,
+        "tremor_HP:0001337": true,
+        "headache_HP:0002315": true,
+        "abnormal_pyramidal_sign_HP:0007256": true
+      },
+      "unmapped_count": 0
+    }
+  ],
+  "invariants": {
+    "catalog_only_has_no_target_headers": true,
+    "row_yes_no_headers": true,
+    "row_yes_no_values": true,
+    "projection_ready_headers": true,
+    "projection_ready_values": true,
+    "clinician_review_headers": false,
+    "clinician_review_values": false,
+    "mapping_only_and_non_patient_blocked": false,
+    "all_cases_use_present_approved_policy": true,
+    "all_cases_job_specific_schema": true
+  },
+  "pass": false
+}

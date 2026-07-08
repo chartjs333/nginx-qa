@@ -1,0 +1,14 @@
+{
+  "use_case": "UC1.39B",
+  "step": "UC1.39B_effective_template_schema_generation",
+  "schema_version": "uc139b_job_dynamic_symptom_overlay_v1",
+  "job_id": "analyst-v12-c_reviewed_blocked_by_source_scope_qc",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "base_template_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+  "projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "effective_schema_hash": "sha256:ce26f792e29ad29786d24f03e14f44a8e1fc4a8af478b7f1fb715b33ced083c4",
+  "fields": [],
+  "generated_at": "2026-06-25T17:56:19.937664+00:00",
+  "generated_by": "analyst-professor-statistics-v12"
+}

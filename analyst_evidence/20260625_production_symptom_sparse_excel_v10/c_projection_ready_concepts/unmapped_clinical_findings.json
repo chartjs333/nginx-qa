@@ -1,0 +1,13 @@
+{
+  "use_case": "UC1.39B/UC1.54",
+  "job_id": "analyst-v10-c_projection_ready_concepts",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "target_symptom_catalog_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\target_symptom_fields_uc139b.json",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "effective_schema_hash": "sha256:dd544b8b2afc7cea5c5d64350ecd5ac9a449e6cf0bb74bb8bba35e9b729b18b1",
+  "generated_at": "2026-06-25T17:35:31.727051+00:00",
+  "step": "UC1.39B_unmapped_clinical_findings_review_queue",
+  "clinical_signal_status": "unmapped_needs_review",
+  "finding_count": 0,
+  "findings": []
+}

@@ -1,0 +1,553 @@
+{
+  "two_family": {
+    "rows": [
+      {
+        "row_id": "row-segregation-f1-p1",
+        "family": "F1",
+        "individual": "P1",
+        "excel": {
+          "num_hom_mut_affected": "2",
+          "num_het_mut_unaffected": "2",
+          "num_wildtype_unaffected": "1",
+          "pedigree_review_needed": null
+        },
+        "issues": [],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_hom_mut_affected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "2",
+            "evidence": "Family 1: two affected siblings were homozygous",
+            "extraction_rule": "homozygous_mutant",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_het_mut_unaffected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "2",
+            "evidence": "their healthy parents were heterozygous carriers.",
+            "extraction_rule": "heterozygous_carrier",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_wildtype_unaffected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "1",
+            "evidence": "One healthy sibling was wild-type.",
+            "extraction_rule": "wildtype",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "yes",
+            "selected_row_id": "row-segregation-f1-p1",
+            "provenance": "first_described_affected_patient",
+            "max_one_yes_per_family": true
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670001|family:f1",
+          "counts": {
+            "num_hom_mut_affected": {
+              "value": 2,
+              "evidence": "Family 1: two affected siblings were homozygous",
+              "rule": "homozygous_mutant"
+            },
+            "num_het_mut_unaffected": {
+              "value": 2,
+              "evidence": "their healthy parents were heterozygous carriers.",
+              "rule": "heterozygous_carrier"
+            },
+            "num_wildtype_unaffected": {
+              "value": 1,
+              "evidence": "One healthy sibling was wild-type.",
+              "rule": "wildtype"
+            }
+          },
+          "review_needed_fields": [],
+          "scoped_segment_count": 4,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 0,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      },
+      {
+        "row_id": "row-segregation-f1-p2",
+        "family": "F1",
+        "individual": "P2",
+        "excel": {
+          "num_hom_mut_affected": "2",
+          "num_het_mut_unaffected": "2",
+          "num_wildtype_unaffected": "1",
+          "pedigree_review_needed": null
+        },
+        "issues": [],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_hom_mut_affected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "2",
+            "evidence": "Family 1: two affected siblings were homozygous",
+            "extraction_rule": "homozygous_mutant",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_het_mut_unaffected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "2",
+            "evidence": "their healthy parents were heterozygous carriers.",
+            "extraction_rule": "heterozygous_carrier",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_wildtype_unaffected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "1",
+            "evidence": "One healthy sibling was wild-type.",
+            "extraction_rule": "wildtype",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670001|family:f1",
+            "value": "no",
+            "selected_row_id": "row-segregation-f1-p1",
+            "provenance": "first_described_affected_patient",
+            "max_one_yes_per_family": true
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670001|family:f1",
+          "counts": {
+            "num_hom_mut_affected": {
+              "value": 2,
+              "evidence": "Family 1: two affected siblings were homozygous",
+              "rule": "homozygous_mutant"
+            },
+            "num_het_mut_unaffected": {
+              "value": 2,
+              "evidence": "their healthy parents were heterozygous carriers.",
+              "rule": "heterozygous_carrier"
+            },
+            "num_wildtype_unaffected": {
+              "value": 1,
+              "evidence": "One healthy sibling was wild-type.",
+              "rule": "wildtype"
+            }
+          },
+          "review_needed_fields": [],
+          "scoped_segment_count": 4,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 0,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      },
+      {
+        "row_id": "row-segregation-f2-p1",
+        "family": "F2",
+        "individual": "P1",
+        "excel": {
+          "num_hom_mut_affected": "1",
+          "num_het_mut_unaffected": "-99",
+          "num_wildtype_unaffected": "-99",
+          "pedigree_review_needed": "yes"
+        },
+        "issues": [
+          "row:uc157_family_segregation_review_needed",
+          "row:uc157_pedigree_review_needed"
+        ],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_hom_mut_affected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670001|family:f2",
+            "value": "1",
+            "evidence": "Family 2: the proband was homozygous.",
+            "extraction_rule": "homozygous_mutant",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_het_mut_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670001|family:f2",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "unaffected_heterozygous_count_requires_explicit_genotype_evidence",
+            "evidence": "Family 2: the proband was homozygous.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_wildtype_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670001|family:f2",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "unaffected_wildtype_count_requires_explicit_genotype_evidence",
+            "evidence": "Family 2: the proband was homozygous.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "famhx",
+            "decision": "field_specific_family_history_inferred",
+            "family_key": "pmid:45670001|family:f2",
+            "value": "no",
+            "provenance": "single_reported_affected_patient_no_affected_relative_evidence",
+            "generic_family_yes_propagation_forbidden": true
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670001|family:f2",
+            "value": "yes",
+            "selected_row_id": "row-segregation-f2-p1",
+            "provenance": "explicit_proband_detected",
+            "max_one_yes_per_family": true
+          },
+          {
+            "use_case": "UC1.57",
+            "decision": "pedigree_review_needed",
+            "pedigree_review_needed": true,
+            "reason": "pedigree_or_family_figure_detected_without_structured_parse"
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670001|family:f2",
+          "counts": {
+            "num_hom_mut_affected": {
+              "value": 1,
+              "evidence": "Family 2: the proband was homozygous.",
+              "rule": "homozygous_mutant"
+            }
+          },
+          "review_needed_fields": [
+            "num_het_mut_unaffected",
+            "num_wildtype_unaffected"
+          ],
+          "scoped_segment_count": 2,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 0,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      }
+    ],
+    "trace_summary": null
+  },
+  "article_aggregate": {
+    "rows": [
+      {
+        "row_id": "row-aggregate-f1",
+        "family": "F1",
+        "individual": "P1",
+        "excel": {
+          "num_hom_mut_affected": "-99",
+          "num_het_mut_unaffected": "-99",
+          "num_wildtype_unaffected": "-99",
+          "pedigree_review_needed": "yes"
+        },
+        "issues": [
+          "row:uc157_family_segregation_review_needed"
+        ],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_hom_mut_affected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670002|family:f1",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "article_level_aggregate_not_family_scoped",
+            "evidence": "Across all families, three affected patients were homozygous and four unaffected relatives were heterozygous carriers.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_het_mut_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670002|family:f1",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "article_level_aggregate_not_family_scoped",
+            "evidence": "Across all families, three affected patients were homozygous and four unaffected relatives were heterozygous carriers.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_wildtype_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670002|family:f1",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "article_level_aggregate_not_family_scoped",
+            "evidence": "Across all families, three affected patients were homozygous and four unaffected relatives were heterozygous carriers.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "famhx",
+            "decision": "field_specific_family_history_inferred",
+            "family_key": "pmid:45670002|family:f1",
+            "value": "no",
+            "provenance": "single_reported_affected_patient_no_affected_relative_evidence",
+            "generic_family_yes_propagation_forbidden": true
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670002|family:f1",
+            "value": "yes",
+            "selected_row_id": "row-aggregate-f1",
+            "provenance": "first_described_affected_patient",
+            "max_one_yes_per_family": true
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670002|family:f1",
+          "counts": {},
+          "review_needed_fields": [
+            "num_hom_mut_affected",
+            "num_het_mut_unaffected",
+            "num_wildtype_unaffected"
+          ],
+          "scoped_segment_count": 0,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 1,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      },
+      {
+        "row_id": "row-aggregate-f2",
+        "family": "F2",
+        "individual": "P1",
+        "excel": {
+          "num_hom_mut_affected": null,
+          "num_het_mut_unaffected": null,
+          "num_wildtype_unaffected": null,
+          "pedigree_review_needed": "yes"
+        },
+        "issues": [
+          "row:uc157_pedigree_review_needed"
+        ],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "field_name": "famhx",
+            "decision": "field_specific_family_history_inferred",
+            "family_key": "pmid:45670002|family:f2",
+            "value": "no",
+            "provenance": "single_reported_affected_patient_no_affected_relative_evidence",
+            "generic_family_yes_propagation_forbidden": true
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670002|family:f2",
+            "value": "yes",
+            "selected_row_id": "row-aggregate-f2",
+            "provenance": "first_described_affected_patient",
+            "max_one_yes_per_family": true
+          },
+          {
+            "use_case": "UC1.57",
+            "decision": "pedigree_review_needed",
+            "pedigree_review_needed": true,
+            "reason": "pedigree_or_family_figure_detected_without_structured_parse"
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670002|family:f2",
+          "counts": {},
+          "review_needed_fields": [],
+          "scoped_segment_count": 1,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 0,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      }
+    ],
+    "trace_summary": null
+  },
+  "proband_only": {
+    "rows": [
+      {
+        "row_id": "row-proband-only",
+        "family": "F1",
+        "individual": "P1",
+        "excel": {
+          "num_hom_mut_affected": "1",
+          "num_het_mut_unaffected": "-99",
+          "num_wildtype_unaffected": "-99",
+          "pedigree_review_needed": "yes"
+        },
+        "issues": [
+          "row:uc157_family_segregation_review_needed",
+          "row:uc157_pedigree_review_needed"
+        ],
+        "uc1_57_trace": [
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_hom_mut_affected",
+            "decision": "family_segregation_count_applied",
+            "family_key": "pmid:45670003|family:f1",
+            "value": "1",
+            "evidence": "Family 1: the proband was homozygous.",
+            "extraction_rule": "homozygous_mutant",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_het_mut_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670003|family:f1",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "unaffected_heterozygous_count_requires_explicit_genotype_evidence",
+            "evidence": "Family 1: the proband was homozygous.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "engine": "family_segregation_engine.v1",
+            "field_name": "num_wildtype_unaffected",
+            "decision": "family_segregation_review_needed",
+            "family_key": "pmid:45670003|family:f1",
+            "value": "-99",
+            "pedigree_review_needed": true,
+            "reason": "unaffected_wildtype_count_requires_explicit_genotype_evidence",
+            "evidence": "Family 1: the proband was homozygous.",
+            "family_scoped": true,
+            "article_level_aggregation_forbidden": true,
+            "runtime_manual_oracle_used": false
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "famhx",
+            "decision": "field_specific_family_history_inferred",
+            "family_key": "pmid:45670003|family:f1",
+            "value": "no",
+            "provenance": "single_reported_affected_patient_no_affected_relative_evidence",
+            "generic_family_yes_propagation_forbidden": true
+          },
+          {
+            "use_case": "UC1.57",
+            "field_name": "index_pat",
+            "decision": "one_index_patient_per_family_enforced",
+            "family_key": "pmid:45670003|family:f1",
+            "value": "yes",
+            "selected_row_id": "row-proband-only",
+            "provenance": "explicit_proband_detected",
+            "max_one_yes_per_family": true
+          },
+          {
+            "use_case": "UC1.57",
+            "decision": "pedigree_review_needed",
+            "pedigree_review_needed": true,
+            "reason": "pedigree_or_family_figure_detected_without_structured_parse"
+          }
+        ],
+        "family_segregation_engine": {
+          "engine": "family_segregation_engine.v1",
+          "use_case": "UC1.57",
+          "family_key": "pmid:45670003|family:f1",
+          "counts": {
+            "num_hom_mut_affected": {
+              "value": 1,
+              "evidence": "Family 1: the proband was homozygous.",
+              "rule": "homozygous_mutant"
+            }
+          },
+          "review_needed_fields": [
+            "num_het_mut_unaffected",
+            "num_wildtype_unaffected"
+          ],
+          "scoped_segment_count": 2,
+          "unscoped_segment_count": 0,
+          "aggregate_segment_count": 0,
+          "article_level_aggregation_forbidden": true,
+          "runtime_manual_oracle_used": false
+        }
+      }
+    ],
+    "trace_summary": null
+  }
+}

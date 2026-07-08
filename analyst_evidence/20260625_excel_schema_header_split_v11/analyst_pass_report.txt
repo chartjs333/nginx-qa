@@ -1,0 +1,55 @@
+TO: Programmer
+FROM: Analyst (Professor of Statistics)
+STATUS: PASS
+
+CHECKED:
+- Task id: c95f6f08-ee76-487c-9331-b891ba3765cb.
+- Note on deployment drift: task described testing-2026-06-25-11 / excel-schema-header-split, but while validating the public server and local HEAD advanced to 1999355fc14fba432e7ce53f682f87baff1792aa, marker testing-2026-06-25-12 / reviewed-decision-schema-gate. This current state includes the v11 header split and the reviewed-decision schema gate fix, so validation was completed against the active production candidate.
+- Code structures:
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\excel_schema.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\effective_template_schema_generator_uc139b.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\template_conformant_export_uc154.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\main.py
+- Regression tests:
+  Focused v11 suite: 60 passed, 1 warning.
+  Broad suite: 221 passed, 1 warning, 34 subtests passed.
+- Schema partition metrics:
+  EXPECTED_HEADERS_ORDER=126 legacy compatibility headers.
+  CORE_EXPECTED_HEADERS_ORDER=96 and core_symptom_like_count=0.
+  LEGACY_CATALOG_SYMPTOM_HEADERS_ORDER=30.
+  Excel Parameter Review default universe contains Add_HPO and service fields, but excludes non-service legacy symptom headers such as rigidity_HP:0002063 and tremor_HP:0001337.
+  Patient QC missing-header check is core/service only; no legacy symptom headers are required.
+- Dynamic symptom production Excel probes:
+  Catalog-only / no evidence: 0 dynamic target headers, omitted_dynamic_symptoms count=118.
+  Row-level explicit yes/no: rigidity_HP:0002063 and tremor_HP:0001337 included; row values yes/-99 and -99/no.
+  UC1.39 projection-ready concepts: headache_HP:0002315 and abnormal_pyramidal_sign_HP:0007256 included; row values yes/-99 and -99/no.
+  Clinician-reviewed unknown/possible assertions: rigidity_HP:0002063 and tremor_HP:0001337 included and materialized as yes/no. This closes the previous v10 failure mode.
+  Approved mapping only plus background/group evidence: 0 target headers; blocked reasons include mapping/projection not ready, background context, and non-patient-specific evidence.
+- Excel Parameter Review:
+  Fallback/default field universe excludes non-service legacy symptom headers.
+  Exported workbook header universe excludes omitted rigidity when workbook omits it; omitted field is not reviewable.
+  Exported PMID is still included and reviewable.
+- Catalog removal/overlay behavior:
+  Legacy/template symptom target rigidity_HP:0002063 can be governed-removed from symptom catalog.
+  Core/service names such as PMID and Add_HPO are not removable through symptom catalog endpoint.
+- UI validation:
+  https://gp2admin.neuro.uni-luebeck.de/extractor/ authenticated successfully.
+  UI displays current marker testing-2026-06-25-12 / reviewed-decision-schema-gate.
+  Non-blocking UI observations remain: /index.css 404, Tailwind CDN production warning, headless font request aborts.
+- Hardcoding audit:
+  No runtime hits for fixed PDF filename, fixed PMID, fixed job id, or absolute Windows data path in checked production modules.
+
+RESULT:
+- Algorithms are generic and not driven by EXPECTED_HEADERS_ORDER, catalog presence, template presence, approved mapping alone, fixed filenames, or static job paths.
+- Production Excel dynamic symptom columns are admitted only from job-specific patient-scoped yes/no/reviewed/projection-ready evidence.
+- Excel Parameter Review and Patient QC use core/service/exported workbook field scope correctly.
+- Quality for the scoped task is production-ready and matches the required sparse-export behavior.
+
+SCREENSHOTS / EVIDENCE:
+- D:\nginx-qa\analyst_evidence\20260625_excel_schema_header_split_v11\algorithm_validation_summary.json
+- D:\nginx-qa\analyst_evidence\20260625_excel_schema_header_split_v11\schema_header_split_probe_summary.json
+- D:\nginx-qa\analyst_evidence\20260625_excel_schema_header_split_v11\public_extractor_app_v11_ui_after_auth.png
+- D:\nginx-qa\analyst_evidence\20260625_excel_schema_header_split_v11\public_extractor_app_ui_validation_current.json
+
+FIX REQUEST:
+- No fix needed. Task is ready for Production.

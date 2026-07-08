@@ -1,0 +1,97 @@
+{
+  "schema_version": "patient_row_universe_policy_report.v1",
+  "policy_version": "excel_review.patient_row_universe_policy.v1",
+  "job_id": "aedefc86c17d43c79a282fba48d232dc",
+  "generated_at": "2026-06-25T10:07:38.932709+00:00",
+  "generated_by": "christine.klein@uni-luebeck.de",
+  "benchmark_mode": "benchmark_qc",
+  "manual_gold_standard_role": "uploaded_per_job_regression_validation_oracle",
+  "manual_gold_standard_usage": "regression_validation_oracle_only",
+  "runtime_depends_on_manual_gold_standard": false,
+  "normal_extraction_depends_on_manual_gold_standard": false,
+  "manual_specific_runtime_rules_encoded": false,
+  "pmid_specific_runtime_rules_encoded": false,
+  "filename_specific_runtime_rules_encoded": false,
+  "auto_rows_before": 3,
+  "auto_rows_after_projected": 3,
+  "manual_rows": 3,
+  "production_eligible_auto_rows": 3,
+  "diagnostic_excluded_auto_rows": 0,
+  "row_match_status_counts": {
+    "strong_match": 3,
+    "tentative_match": 0,
+    "unmatched_auto": 0,
+    "unmatched_manual": 0
+  },
+  "segmentation_decision_counts": {
+    "compatible": 1
+  },
+  "production_readiness_gate": {
+    "schema_version": "excel_review_row_universe_gate.v1",
+    "product_kpi_allowed": true,
+    "primary_metrics_scope": "strong_match_only",
+    "non_strong_match_metric_label": "diagnostic_only",
+    "row_universe_status": "production_comparable",
+    "benchmark_scope_status": "complete_source_coverage",
+    "source_scope_blockers": [],
+    "comparison_reliability_status": "strong_match_only",
+    "production_export_readiness": "review_needed",
+    "production_metric_eligible_count": 3,
+    "production_metric_eligible_auto_rows": 3,
+    "diagnostic_only_auto_rows": 0,
+    "strong_match_coverage": 1.0,
+    "manual_strong_capture_coverage": 1.0,
+    "generated_rows": 3,
+    "manual_rows": 3,
+    "strong_match": 3,
+    "tentative_match": 0,
+    "unmatched_auto": 0,
+    "unmatched_manual": 0,
+    "blockers": []
+  },
+  "benchmark_scope_status": "complete_source_coverage",
+  "source_scope_blockers": [],
+  "source_scope_summary": {
+    "manual_pmid_count": 1,
+    "generated_pmid_count": 1,
+    "in_both_sources_count": 1,
+    "manual_only_source_missing_from_job_count": 0,
+    "manual_only_source_missing_row_count": 0,
+    "generated_only_outside_manual_benchmark_count": 0,
+    "generated_only_outside_manual_row_count": 0,
+    "pmid_alias_or_metadata_mismatch_review_needed_count": 0,
+    "source_metadata_missing_review_needed_count": 0,
+    "source_metadata_issue_count": 0,
+    "classification_counts": {
+      "in_both_sources": 1
+    }
+  },
+  "source_scope_metric_policy": {
+    "manual_only_source_missing_from_job": "source_scope_blocker_not_segmentation_error",
+    "generated_only_outside_manual_benchmark": "source_scope_blocker_not_segmentation_error",
+    "pmid_alias_or_metadata_mismatch_review_needed": "source_metadata_review_before_kpi",
+    "source_metadata_missing_review_needed": "source_metadata_review_before_kpi",
+    "in_both_sources": "eligible_for_patient_segmentation_diagnostics"
+  },
+  "metric_policy": {
+    "primary_field_accuracy_metrics": "strong_match_only",
+    "primary_genotype_metrics": "strong_match_only",
+    "primary_symptom_metrics": "strong_match_only",
+    "primary_imaging_metrics": "strong_match_only",
+    "primary_evidence_anchor_metrics": "strong_match_only",
+    "tentative_and_unmatched_rows": "diagnostic_only"
+  },
+  "policy_rows": [
+    {
+      "PMID": "23278385",
+      "manual_row_count": 3,
+      "generated_row_count": 3,
+      "row_count_delta": 0,
+      "policy_decision": "compatible",
+      "rule_id": "RULE_0_COMPATIBLE_ROW_UNIVERSE",
+      "metric_scope": "primary_metrics_allowed",
+      "review_needed": false,
+      "reason": "Generated and manual row counts agree for this PMID."
+    }
+  ]
+}

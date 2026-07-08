@@ -1,0 +1,55 @@
+{
+  "schema_version": "excel_review_gold_standard_summary.v1",
+  "job_id": "aedefc86c17d43c79a282fba48d232dc",
+  "generated_at": "2026-06-25T10:07:42.136631+00:00",
+  "manual_excel": "/app/runtime/jobs/aedefc86c17d43c79a282fba48d232dc/benchmark/manual_gold_standard.xlsx",
+  "generated_excel": "/app/runtime/jobs/aedefc86c17d43c79a282fba48d232dc/output/mdsgene_output.xlsx",
+  "cases_path": "/app/runtime/jobs/aedefc86c17d43c79a282fba48d232dc/benchmark/gold-standard-e2e/excel_review_params_gold_standard_e2e_audit.csv",
+  "field_inclusion_policy_version": "excel_parameter_review.field_inclusion.production_review.v2",
+  "total_review_cases_checked": 68,
+  "strong_match_review_cases": 68,
+  "strong_match_mapped_review_cases": 68,
+  "tentative_or_unmatched_review_cases": 0,
+  "exact_value_matches_gold_standard": 34,
+  "normalized_value_matches_gold_standard": 34,
+  "value_mismatches_gold_standard": 28,
+  "cases_where_evidence_supports_system_value": 3,
+  "cases_where_evidence_does_not_support_system_value": 65,
+  "cases_where_evidence_supports_system_value_unclear": 0,
+  "wrong_patient_evidence_cases": 0,
+  "wrong_field_evidence_cases": 0,
+  "bbox_missing_cases": 65,
+  "bbox_wrong_cases": 0,
+  "row_alignment_uncertain_cases": 0,
+  "not_comparable_cases": 0,
+  "status_counts": {
+    "EXACT_VALUE_MATCH": 34,
+    "VALUE_MISMATCH": 28,
+    "MANUAL_VALUE_MISSING": 6
+  },
+  "problem_class_counts": {
+    "EVIDENCE_MAPPING_ERROR": 31,
+    "VALUE_EXTRACTION_ERROR": 28,
+    "MANUAL_VALUE_MISSING": 6,
+    "OK_VALUE_AND_EVIDENCE": 3
+  },
+  "row_match_status_counts": {
+    "strong_match": 68
+  },
+  "top_value_mismatch_fields": {
+    "consanguinity": 3,
+    "mri_brain_description": 3,
+    "mri_iron_brainstem": 3,
+    "index_pat": 3,
+    "famhx": 1,
+    "comments_pat": 3,
+    "family_ID": 3,
+    "individual_ID": 3,
+    "genet_methods": 3,
+    "study_design": 3
+  },
+  "benchmark_mode": "benchmark_qc",
+  "manual_gold_standard_role": "uploaded_per_job_regression_validation_oracle",
+  "runtime_depends_on_manual_gold_standard": false,
+  "normal_extraction_depends_on_manual_gold_standard": false
+}

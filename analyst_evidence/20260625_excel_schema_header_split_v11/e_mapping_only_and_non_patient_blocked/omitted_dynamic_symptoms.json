@@ -1,0 +1,771 @@
+{
+  "use_case": "UC1.39B/UC1.54",
+  "job_id": "analyst-v11-e_mapping_only_and_non_patient_blocked",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "target_symptom_catalog_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\target_symptom_fields_uc139b.json",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "effective_schema_hash": "sha256:be05792ee05045d0fb57b1920b7e3a85d2a295d5abbed5ac516d6adab3be2b85",
+  "generated_at": "2026-06-25T17:50:35.620934+00:00",
+  "step": "UC1.39B_omitted_dynamic_symptom_targets",
+  "not_present_target_symptom_omitted_count": 118,
+  "omitted_target_symptoms": [
+    {
+      "target_field": "CSF_findings_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "abnormal_pyramidal_sign_HP:0007256",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "acanthocytosis_HP:0001927",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "aggression_HP:0000718",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "anarthria_HP:0002425",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "anxiety_HP:0000739",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "apathy_HP:0000741",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "areflexia_HP:0001284",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "ataxia_HP:0001251",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "autism_HP:0000717",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "autonomic_dysfunction_HP:0012332",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "axial_dystonia_HP:0002530",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "axonal_neuropathy_HP:0003477",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "bowel_incontinence_HP:0002607",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "bradykinesia_HP:0002067",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "bradykinesia_arms_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "bradykinesia_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "cerebellar_atrophy_HP:0001272",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "cervical_dystonia_HP:0000473",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "chorea_HP:0002072",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "choreoathetosis_HP:0001266",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "cognitive_impairment_HP:0100543",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "delayed_motor_skills_HP:0002194",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "depression_HP:0000716",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "diabetes_mellitus_type_1_HP:0100651",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "diabetes_mellitus_type_2_HP:0005978",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "diplopia_HP:0000651",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "divergent_strabismus_HP:0020049",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dysarthria_HP:0001260",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dysphagia_HP:0002015",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dystonia_HP:0001332",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dystonia_head_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dystonia_lower_limbs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dystonia_upper_limbs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "dystonic_opisthotonus_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "emotional_lability_HP:0000712",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "encephalopathy_HP:0001298",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "eye_of_the_tiger_anomaly_of_globus_pallidus_HP:0002454",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "facial_dysmorphism_HP:0001999",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "freezing_of_gait_HP:0031825",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "gait_ataxia_HP:0002066",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "generalized_dystonia_HP:0007325",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "global_development_delay_HP:0001263",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hallucinations_HP:0000738",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hand_tremor_HP:0002378",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "head_tremor_HP:0002346",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "headache_HP:0002315",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hemiplegia_HP:0002301",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hirsutism_HP:0001007",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hyperactivity_attention_disorder_HP:0000736",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hyperreflexia_HP:0001347",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hypertonia_HP:0001276",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hypophonia_HP:0001621",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "hyporeflexia_HP:0001265",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "impulsivity_HP:0100710",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "intellectual_disability_HP:0001249",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "joint_contractures_HP:0034392",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "kinetic_tremor_hands_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "kinetic_tremor_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "laryngospasm_HP:0025425",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "limb_ataxia_HP:0002070",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "microcephaly_HP:0000252",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "motor_axonal_neuropathy_HP:0007002",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "muscle_cramps_HP:0003394",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "muscle_weakness_HP:0003324",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "muscular_hypotonia_HP:0001252",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "myoclonus_HP:0001336",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "neuromyotonia_HP:0034351",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "nystagmus_HP:0000639",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "obsessive_compulsive_disorder_HP:0000722",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "ophthalmoplegia_HP:0000602",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "optic_atrophy_HP:0000648",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "oromandibular_dystonia_HP:0012048",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "orthostatic_hypotension_HP:0001278",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "palilalia_HP:0031814",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "parkinsonism_HP:0001300",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "perioral_myokymia_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "peripheral_neuropathy_HP:0009830",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "pes_cavus_HP:0001761",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "pigmentary_retinopathy_HP:0000580",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "postural_instability_HP:0002172",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "postural_tremor_hands_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "postural_tremor_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "precocious_puberty_HP:0000826",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "pseudobulbar_affect_HP:0100851",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "psychosis_HP:0000709",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "respiratory_distress_HP:0002098",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rest_tremor_hands_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rest_tremor_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rigidity_HP:0002063",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rigidity_arms_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rigidity_axial_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "rigidity_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "seizure_HP:0001250",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "seizure_type_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "sensorineural_hearing_impairement_HP:0000407",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "skeletal_muscle_atrophy_HP:0003202",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "slowed_horizontal_saccades_HP:0007885",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "slowing_of_vertical_saccades_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "spasticity_HP:0001257",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "square-wave_jerks_HP:0025402",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "stereotypic_behavior_HP:0000733",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "stuttering_HP:0025268",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "supranuclear_gaze_palsy_HP:0000605",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tachylalia_HP:0031937",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tetraparesis_HP:0002273",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tics_HP:0100033",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tinnitus_HP:0000360",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tongue_dystonia_HP:0031008",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tremor_HP:0001337",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "tremor_legs_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "upgaze_palsy_HP:0025331",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "upgoing_plantars_babinski_sign_HP:0003487",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "urinary_incontinence_HP:0000020",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "urinary_incontinence_autonomic_HP:0000020",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "visual_disturbance_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "wheelchair_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    },
+    {
+      "target_field": "wing_beating_tremor_sympt",
+      "status": "target_available",
+      "export_status": "not_exported_no_present_evidence",
+      "reason": "no patient-specific yes/no evidence or reviewed decision in this PDF/job"
+    }
+  ],
+  "blocked_or_non_projectable_findings": [
+    {
+      "job_id": "analyst-v11-e_mapping_only_and_non_patient_blocked",
+      "row_index": 0,
+      "row_id": "row-P1",
+      "patient_id": "P1",
+      "source_text": "rigidity HP:0002063",
+      "local_concept": "clinical_symptom:rigidity_HP:0002063",
+      "assertion_status": "present",
+      "projection_status": "approved",
+      "projection_gate_status": "approved",
+      "projection_targets": [
+        "rigidity_HP:0002063"
+      ],
+      "suggested_projection_targets": [],
+      "reason": "mapping/projection has not passed approval/QC"
+    },
+    {
+      "job_id": "analyst-v11-e_mapping_only_and_non_patient_blocked",
+      "row_index": 1,
+      "row_id": "row-P2",
+      "patient_id": "P2",
+      "source_text": "tremor HP:0001337",
+      "local_concept": "clinical_symptom:tremor_HP:0001337",
+      "assertion_status": "present",
+      "projection_status": "excel_projected",
+      "projection_gate_status": "projection_ready",
+      "projection_targets": [
+        "tremor_HP:0001337"
+      ],
+      "suggested_projection_targets": [],
+      "reason": "clinical signal was found outside patient-specific findings"
+    },
+    {
+      "job_id": "analyst-v11-e_mapping_only_and_non_patient_blocked",
+      "row_index": 1,
+      "row_id": "row-P2",
+      "patient_id": "P2",
+      "source_text": "headache HP:0002315",
+      "local_concept": "clinical_symptom:headache_HP:0002315",
+      "assertion_status": "present",
+      "projection_status": "excel_projected",
+      "projection_gate_status": "projection_ready",
+      "projection_targets": [
+        "headache_HP:0002315"
+      ],
+      "suggested_projection_targets": [],
+      "reason": "evidence is not patient-specific"
+    }
+  ]
+}

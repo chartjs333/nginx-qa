@@ -1,0 +1,105 @@
+TO: Programmer
+FROM: Analyst (Professor of Statistics)
+STATUS: FAIL
+
+CURRENT CYCLE LOG (Данные для истории изменений):
+- Проблема: UC1.39B/UC1.54 sparse production Excel не выполняет обязательный сценарий "clinician-reviewed yes/no": если clinical_symptom_concept имеет review_status=reviewed/confirmed и clinician_decision=yes/no, но исходный assertion=unknown, динамический симптомный столбец не включается в effective schema и не материализуется в Excel.
+- Предпринятые действия: Требуется изменить gate order в UC1.39B effective schema generation и добавить регрессионные тесты для clinician-reviewed yes/no поверх unknown/possible/missing assertion, сохранив patient-specific/source/QC/projection gates.
+- Обоснование (Почему): Текущая логика сначала блокирует assertion in UC139B_BLOCKED_ASSERTIONS, включая unknown, и только потом могла бы применить reviewed_decision. На обязательном классе выборки recall=0/2: ожидаемые столбцы rigidity_HP:0002063 и tremor_HP:0001337 отсутствуют, present_dynamic_symptom_field_count=0, not_present_target_symptom_omitted_count=118.
+- Автор изменений: Analyst
+
+SESSION AUDIT TRAIL:
+- v08: Проблема -> canonical Babinski catalog existed but runtime projected legacy Babinski column; Действие -> FAIL sent to Programmer; Причина -> catalog/export-fields and runtime projection disagreed; Автор -> Analyst.
+- v09: Проблема -> validate canonical projection bridge after programmer fix; Действие -> PASS sent to Programmer; Причина -> canonical Babinski, projection bridge, overlay refresh, API/UI checks passed; Автор -> Analyst.
+- v10: Проблема -> sparse Excel policy misses clinician-reviewed unknown-assertion decisions; Действие -> FAIL sent with synthetic evidence and code-line diagnosis; Причина -> reviewer yes/no is not authoritative at schema admission gate; Автор -> Analyst.
+
+CHECKED:
+- Code under commit 6b63d19b39ffd1599313cdc7a4b6563214570c69.
+- Runtime modules:
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\effective_template_schema_generator_uc139b.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\template_conformant_export_uc154.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\target_symptom_catalog_uc139b.py
+- Targeted pytest:
+  python -m pytest tests/test_clinical_symptom_backfill_uc136.py tests/test_clinical_symptom_ontology_uc137.py tests/test_symptom_value_verifier_uc141.py tests/test_hpo_clinical_concept_layer_uc146.py tests/test_mdsgene_case_governance_uc155_uc159.py tests/test_effective_template_schema_uc139b_uc154.py tests/test_target_symptom_catalog_uc139b.py tests/test_excel_parameter_review_uc217.py tests/test_open_testing_endpoints.py -q
+  Result: 189 passed, 1 warning, 34 subtests passed.
+- Independent synthetic production Excel probes:
+  1. catalog/registry only, no patient evidence
+  2. row-level explicit yes/no
+  3. UC1.39 projection-ready concept evidence
+  4. clinician-reviewed yes/no with assertion=unknown
+  5. approved mapping only + background/group evidence blocking
+- Generated artifacts inspected:
+  mdsgene_template_field_rules_uc154.effective.json
+  template_conformance_report.json
+  uc139_dynamic_symptom_overlay.json
+  omitted_dynamic_symptoms.json
+  production mdsgene_output.xlsx
+- Public UI checked:
+  https://gp2admin.neuro.uni-luebeck.de/extractor/
+  Frontend and backend marker confirmed: testing-2026-06-25-10 / production-symptom-sparse-excel.
+- Public current JobResult/quality summary and Excel Parameter Review checked for current UI job aedefc86c17d43c79a282fba48d232dc.
+- Hardcoding audit: no production runtime hits for fixed PDF filename, PMID, job id, or absolute Windows data path in checked runtime modules. Fixed PMIDs/targets are present only in test fixtures.
+
+PROBLEMS & STATISTICAL ANOMALIES:
+- problem: Clinician-reviewed yes/no branch is a false-negative schema admission case.
+  page/url/endpoint: Local module path D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\effective_template_schema_generator_uc139b.py, lines 1473-1481; synthetic case d_clinician_reviewed_yes_no.
+  expected: For patient-scoped, projection-ready concepts with review_status in {reviewed, confirmed} and clinician_decision in {yes, no}, dynamic symptom columns must be included and materialized. Expected headers: rigidity_HP:0002063, tremor_HP:0001337. Expected row values: rigidity=[yes, -99], tremor=[-99, no].
+  actual: No dynamic symptom headers were included. present_dynamic_symptom_field_count=0. not_present_target_symptom_omitted_count=118. omitted_dynamic_symptoms.json records both targets as not_exported_no_present_evidence and blocked_or_non_projectable_findings reason "assertion_status is neither explicit yes nor explicit no".
+  hardcoding risk: None detected for this defect; it is a logical gate-order bug, not file-specific behavior.
+  steps to reproduce / logs: See D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\sparse_excel_probe_summary.json and D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\d_clinician_reviewed_yes_no\.
+
+- problem: Current public UI job artifact is not proof that v10 sparse production path is deployed end-to-end.
+  page/url/endpoint: https://gp2admin.neuro.uni-luebeck.de/extractor-api/jobs/aedefc86c17d43c79a282fba48d232dc/download/template_conformance_report?user_id=christine.klein%40uni-luebeck.de
+  expected: A newly generated v10 production job must report dynamic_symptom_export_policy=present_approved_only and omit all-99 dynamic symptom columns from production Excel.
+  actual: Current UI job template_conformance_report reports dynamic_symptom_export_policy=all_catalog_symptoms, available_target_symptom_count=113, not_present_target_symptom_omitted_count=0, exported_field_count observed in Excel Parameter Review=289. This may be a stale pre-v10 job, but it cannot be used as server evidence for v10 production-sparse readiness.
+  hardcoding risk: No file-name hardcoding proven; risk is stale/regenerated artifact policy mismatch.
+  steps to reproduce / logs: Current UI job id aedefc86c17d43c79a282fba48d232dc; Excel review batch endpoint returned 68 cases with field_inclusion_scope=exported_excel_non_missing_source_evidence_review.
+
+- problem: UI has non-blocking asset/network issues during validation.
+  page/url/endpoint: https://gp2admin.neuro.uni-luebeck.de/extractor/
+  expected: UI should load v10 extractor without critical console/network errors.
+  actual: Frontend/backend v10 marker is visible and usable, but browser validation still records /index.css 404 and Tailwind CDN production warning. These do not explain the Excel algorithm failure.
+  hardcoding risk: None.
+  steps to reproduce / logs: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\public_extractor_app_ui_validation_after_auth.json
+
+FIX REQUEST (ТЗ для программиста):
+- In effective_template_schema_generator_uc139b._evaluate_job_specific_concept_projection, make clinician-reviewed yes/no an authoritative assertion source for schema admission. The assertion gate must not block reviewed yes/no merely because raw assertion is unknown/possible/missing.
+- Preserve safety gates after/around the reviewer decision: broad concept blocking, section/background/reference blocking, patient attribution, evidence_scope patient specificity, UC1.37/UC1.41 QC flags/risk, reliable target matching, and projection-ready status must still be enforced.
+- Align UC1.39B schema admission with UC1.54 materialization: if _uc154_value_from_projectable_clinical_concept can materialize a reviewed decision, the effective schema generator must include the corresponding target under the same patient-scoped projection-ready conditions.
+- Add regression tests:
+  1. reviewed yes with assertion=unknown creates target column and materializes yes;
+  2. reviewed no with assertion=unknown creates target column and materializes no;
+  3. reviewed yes/no with missing assertion works;
+  4. reviewed yes/no still cannot bypass background/group/document_fallback/QC-blocked evidence;
+  5. approved Ontology Mapping without projection-ready evidence remains omitted;
+  6. all-99 dynamic symptoms remain omitted and listed in omitted_dynamic_symptoms.json.
+- Ensure new production server jobs regenerate mdsgene_template_field_rules_uc154.effective.json with dynamic_symptom_export_policy=present_approved_only; do not let stale all_catalog_symptoms artifacts represent the default production export path.
+- Excel Parameter Review field universe must be based on exported production Excel fields after sparsification and must not create review cases for dynamic symptom fields omitted as all-99/no patient evidence.
+
+RETEST AFTER FIX:
+- Re-run the targeted pytest suite above plus the new clinician-reviewed sparse Excel tests.
+- Re-run the independent five-case synthetic probe. Required acceptance:
+  catalog-only target headers = 0;
+  explicit row yes/no columns materialize yes/no;
+  UC1.39 projection-ready columns materialize yes/no;
+  clinician-reviewed unknown assertion columns materialize yes/no;
+  mapping-only/background/group evidence remains omitted;
+  all cases report dynamic_symptom_export_policy=present_approved_only.
+- On a fresh public v10 production job, verify template_conformance_report dynamic_symptom_export_policy=present_approved_only, not_present_target_symptom_omitted_count>0 when catalog targets have no job evidence, and Excel Parameter Review excludes omitted all-99 dynamic symptoms.
+- Re-check public UI marker, screenshot, Console, and Network.
+
+SCREENSHOTS / DATA EVIDENCE:
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\algorithm_validation_summary.json
+  comment: Machine-readable validation summary and PASS/FAIL decision.
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\sparse_excel_probe_summary.json
+  comment: Independent synthetic sparse Excel probe; clinician-reviewed yes/no scenario fails.
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\d_clinician_reviewed_yes_no\template_conformance_report.json
+  comment: Failing conformance report with present_dynamic_symptom_field_count=0.
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\d_clinician_reviewed_yes_no\omitted_dynamic_symptoms.json
+  comment: Shows reviewed targets omitted and blocked with reason "assertion_status is neither explicit yes nor explicit no".
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\d_clinician_reviewed_yes_no\mdsgene_output.xlsx
+  comment: Production workbook lacks expected rigidity_HP:0002063 and tremor_HP:0001337 columns.
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\public_extractor_app_v10_ui_after_auth.png
+  comment: UI screenshot confirming deployed v10 frontend/backend marker.
+- absolute_path: D:\nginx-qa\analyst_evidence\20260625_production_symptom_sparse_excel_v10\public_extractor_app_ui_validation_after_auth.json
+  comment: UI validation, network/console observations.

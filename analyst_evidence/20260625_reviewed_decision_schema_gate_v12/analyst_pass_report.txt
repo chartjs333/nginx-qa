@@ -1,0 +1,50 @@
+TO: Programmer
+FROM: Analyst (Professor of Statistics)
+STATUS: PASS
+
+CHECKED:
+- Task id: 51243e01-5134-4cd4-ac82-3fbdf57ab458.
+- Code commit under test: 1999355fc14fba432e7ce53f682f87baff1792aa.
+- Public marker: testing-2026-06-25-12 / reviewed-decision-schema-gate.
+- Runtime modules:
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\effective_template_schema_generator_uc139b.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\template_conformant_export_uc154.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\mdsgene_pipeline\excel_schema.py
+  D:\nginx\apps\mdsgene-llm-extractor-backend\main.py
+- Focused regression:
+  58 passed, 1 warning.
+- Broad regression:
+  221 passed, 1 warning, 34 subtests passed.
+- Independent sparse production Excel probe:
+  reviewed yes with assertion=unknown -> rigidity_HP:0002063 included and materialized yes.
+  reviewed no with assertion=possible -> tremor_HP:0001337 included and materialized no.
+  reviewed yes/no with missing assertion -> headache_HP:0002315 and abnormal_pyramidal_sign_HP:0007256 included and materialized yes/no.
+  reviewed decisions in background, group-level evidence, high-risk concept, and QC-blocked support flags -> all omitted.
+  mapping-only/catalog-only target -> omitted.
+  all cases report dynamic_symptom_export_policy=present_approved_only.
+- UI validation:
+  Authenticated extractor UI shows current v12 marker.
+  Non-blocking UI observations remain: /index.css 404, Tailwind CDN warning, headless font request aborts.
+- Server verification:
+  /extractor-api/health -> ok.
+  /extractor-api/testing/version -> testing-2026-06-25-12 / reviewed-decision-schema-gate.
+  Current public UI job aedefc86c17d43c79a282fba48d232dc is stale from 2026-06-25 09:46-09:53 UTC and still reports all_catalog_symptoms; it was not used as v12 acceptance evidence.
+  I did not start a fresh public PDF pipeline job to avoid consuming external AI/PDF resources; fresh v12 behavior was verified via reproducible synthetic production-export artifacts.
+- Hardcoding audit:
+  No runtime hits for fixed PDF filename, fixed PMID, fixed job id, or absolute Windows data path in checked production modules.
+
+RESULT:
+- Reviewed yes/no decisions are now authoritative for UC1.39B schema admission even when raw assertion is unknown, possible, or missing.
+- Reviewed decisions do not bypass broad-concept, background/reference, patient attribution, evidence scope, QC/risk/support, target matching, or projection-ready gates.
+- UC1.39B schema admission and UC1.54 materialization are aligned for reviewed yes/no.
+- Mapping-only, catalog-only, and all-99 dynamic symptoms remain omitted.
+- Algorithmic quality for the scoped task is production-ready.
+
+SCREENSHOTS / EVIDENCE:
+- D:\nginx-qa\analyst_evidence\20260625_reviewed_decision_schema_gate_v12\algorithm_validation_summary.json
+- D:\nginx-qa\analyst_evidence\20260625_reviewed_decision_schema_gate_v12\reviewed_decision_schema_gate_probe_summary.json
+- D:\nginx-qa\analyst_evidence\20260625_reviewed_decision_schema_gate_v12\public_extractor_app_v12_ui_after_auth.png
+- D:\nginx-qa\analyst_evidence\20260625_reviewed_decision_schema_gate_v12\public_extractor_app_ui_validation_current.json
+
+FIX REQUEST:
+- No fix needed. Task is ready for Production.

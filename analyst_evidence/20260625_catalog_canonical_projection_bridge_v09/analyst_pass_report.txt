@@ -1,0 +1,29 @@
+TO: Programmer
+FROM: Analyst (Professor of Statistics)
+STATUS: PASS
+
+CHECKED:
+- Commit/build: `05099c3d042eafd0b7d9afd8d9c41198a00fd944`, `testing-2026-06-25-09 / catalog-canonical-projection-bridge`.
+- Code and data contracts: UC1.35, UC1.36, UC1.37, UC1.39, UC1.39B, UC1.46, UC1.54, UC1.56; `target_symptom_fields_uc139b.json`; `ontology_projection_registry_uc139.json`; runtime projection patch; public/local `/extractor-api/export-fields`.
+- Targeted regression suite from `D:\nginx\apps\mdsgene-llm-extractor-backend`: `239 passed, 1 warning, 3 subtests passed`.
+- Independent suffix/catalog audit: 121 template symptom-like fields; 118 expected system catalog targets after excluding `aao_other_sympt`, `subdomain_cognitive_impairment_sympt`, and `Other_sympt`; catalog has 118/118 targets; no missing targets; service fields absent.
+- Canonical Babinski contract: `upgoing_plantars_babinski_sign_HP:0003487` is present in catalog and registry projection targets; legacy `upgoing_plantars_(Babinski_sign)_HP:0003487` is absent from catalog, registry targets, and public/local export fields.
+- Synthetic clinical probe: 14/14 clinical variants normalized, 0 review-needed. `Babinski sign`, `upgoing plantar`, `upgoing plantars`, `upgoing plantar response`, and `upgoing plantar responses` all map to `clinical_symptom:babinski_sign` and HP:0003487.
+- Conservative reasoning probe: Babinski-positive row sets `upgoing_plantars_babinski_sign_HP:0003487=yes` and `abnormal_pyramidal_sign_HP:0007256=yes` with no legacy field insertion. Hyperreflexia-only row sets `hyperreflexia_HP:0001347=yes` while keeping Babinski and abnormal pyramidal sign at `-99`.
+- UC1.39 catalog projection bridge: `pigmentary_retinopathy_HP:0000580` projects to Excel as `yes` with `projection_strategy=CATALOG_CANDIDATE_FIELD` and `projection_reason=catalog_candidate_symptom_field`.
+- Overlay/removal refresh: after same-process warmup, user removal of `pigmentary_retinopathy_HP:0000580` makes UC1.35 return no-match, UC1.46 remove HPO enrichment, and UC1.36 stop projecting the removed field.
+- API verification: local `/export-fields` = 118 system fields; public `/export-fields` = 136 fields (118 system + 18 clinician-approved). Canonical Babinski, abnormal pyramidal sign, and pigmentary retinopathy are present; legacy Babinski and the three service fields are absent.
+- Job artifacts/gates for current public job `aedefc86c17d43c79a282fba48d232dc`: `quality_summary.json` is completed/primary_success, comparison reliability is reliable, required artifacts pass; `patient_segmentation_report.json` is schema v1 with 3 manual rows vs 3 generated rows and comparable row universe; reviewed row-universe report has no merge candidates.
+- Hardcoding scan: no specific PMID literals, PDF filename literals, or absolute Windows paths in changed runtime modules.
+- UI validation: public `/extractor/` loads after login, displays frontend/backend v09 markers, and serves asset `/extractor/assets/index-CW_3zF0J.js` containing the v09 marker.
+
+RESULT:
+- Algorithms are catalog-driven and universal for the tested symptom-projection surface. The prior Babinski legacy/canonical split is fixed. Quality and contracts satisfy the current Production Readiness gate for this task.
+
+SCREENSHOTS / EVIDENCE:
+- `D:\nginx-qa\analyst_evidence\20260625_catalog_canonical_projection_bridge_v09\algorithm_validation_summary.json`
+- `D:\nginx-qa\analyst_evidence\20260625_catalog_canonical_projection_bridge_v09\public_extractor_app_v09_ui.png`
+- `D:\nginx-qa\analyst_evidence\20260625_catalog_canonical_projection_bridge_v09\public_extractor_app_ui_validation.json`
+
+FIX REQUEST:
+- No fix needed. Task is ready for Production.

@@ -1,0 +1,3271 @@
+{
+  "step": "UC1.54_mdsgene_template_conformant_export",
+  "template_rules_source": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+  "template_rules_source_resolved": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+  "template_rules_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+  "base_template_rules_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\mdsgene_template_field_rules_uc154.base.json",
+  "base_template_rules_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+  "ontology_projection_registry_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_projection_registry_uc139.json;D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_mapping_uc139_user.json",
+  "ontology_projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+  "effective_template_rules_source": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+  "effective_template_rules_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+  "effective_schema_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+  "target_symptom_catalog_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\target_symptom_fields_uc139b.json",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "available_target_symptom_count": 118,
+  "present_dynamic_symptom_field_count": 0,
+  "not_present_target_symptom_omitted_count": 118,
+  "unmatched_detected_symptom_omitted_count": 0,
+  "job_specific_effective_schema": true,
+  "template_required_special_field_count": 6,
+  "dynamic_special_symptom_field_omitted_count": 0,
+  "generated_dynamic_symptom_field_count": 0,
+  "base_fixed_field_count": 148,
+  "base_field_count": 154,
+  "schema_generation_mode": "base_plus_ontology_projection_overlay",
+  "template_field_aliases_source": "apps/mdsgene-llm-extractor-backend/config/mdsgene_template_field_aliases_uc154.json",
+  "template_field_aliases_source_resolved": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\mdsgene_template_field_aliases_uc154.json",
+  "template_field_aliases_hash": "sha256:b349046d96434fff635040adb13d30b9734bdd84e641a0d292422d791d141212",
+  "template_field_aliases_count": 23,
+  "template_field_aliases_mappings": {
+    "autonomic_dysfunction_HP:0012332": [
+      "autonomic_sympt"
+    ],
+    "bradykinesia_HP:0002067": [
+      "bradykinesia_sympt"
+    ],
+    "cognitive_impairment_HP:0100543": [
+      "cognitive_decline_sympt"
+    ],
+    "dysarthria_HP:0001260": [
+      "dysarthria_sympt"
+    ],
+    "dysphagia_HP:0002015": [
+      "dysphagia_sympt"
+    ],
+    "dystonia_HP:0001332": [
+      "dystonia_sympt"
+    ],
+    "dystonia_lower_limbs_sympt": [
+      "leg_dystonia_sympt",
+      "foot_inversion_sympt"
+    ],
+    "dystonia_upper_limbs_sympt": [
+      "right_arm_dystonia_sympt"
+    ],
+    "hallucinations_HP:0000738": [
+      "hallucinations_sympt"
+    ],
+    "hand_tremor_HP:0002378": [
+      "hand_tremor_sympt",
+      "right_hand_tremor_sympt",
+      "right_hand_resting_tremor_sympt"
+    ],
+    "hyperreflexia_HP:0001347": [
+      "hyperreflexia_sympt",
+      "hyperactive_deep_tendon_reflexes_sympt"
+    ],
+    "hypophonia_HP:0001621": [
+      "hypophonia_sympt"
+    ],
+    "kinetic_tremor_hands_sympt": [
+      "tremor_action_sympt"
+    ],
+    "muscle_weakness_HP:0003324": [
+      "upper_extremity_weakness_sympt",
+      "lower_extremity_weakness_sympt"
+    ],
+    "optic_atrophy_HP:0000648": [
+      "optic_atrophy_sympt"
+    ],
+    "parkinsonism_HP:0001300": [
+      "parkinsonism_sympt"
+    ],
+    "postural_instability_HP:0002172": [
+      "postural_instability_sympt",
+      "retropulsion_sympt"
+    ],
+    "postural_tremor_hands_sympt": [
+      "tremor_postural_sympt"
+    ],
+    "rest_tremor_hands_sympt": [
+      "tremor_rest_sympt",
+      "right_hand_resting_tremor_sympt"
+    ],
+    "rigidity_HP:0002063": [
+      "rigidity_sympt"
+    ],
+    "spasticity_HP:0001257": [
+      "spasticity_sympt"
+    ],
+    "upgoing_plantars_babinski_sign_HP:0003487": [
+      "upgoing_plantars_(Babinski_sign)_HP:0003487",
+      "bilateral_babinski_signs_sympt"
+    ],
+    "urinary_incontinence_HP:0000020": [
+      "urinary_incontinence_sympt"
+    ]
+  },
+  "template_field_alias_source_state": "final_verified_export_row",
+  "template_field_alias_value_policy": "copy_existing_source_value_only",
+  "template_field_alias_resolution_count": 0,
+  "template_field_alias_resolution_trace": [],
+  "template_id": "MDSGene_NBIA_C19ORF12",
+  "template_version": "2025-10-24",
+  "template_gene": "C19ORF12",
+  "sheet_name": "C19ORF12",
+  "header_row": 1,
+  "rule_start_row": 2,
+  "rule_end_row": 13,
+  "data_start_row": 14,
+  "production_value_mode": "legacy",
+  "production_columns_count": 154,
+  "template_columns": 154,
+  "export_columns": 154,
+  "missing_columns": [],
+  "extra_columns": [],
+  "column_order_matches": true,
+  "column_order_mismatches": [],
+  "template_column_order_hash": "sha256:f7f10fac237dbb2aa8b6ffdf4ccad70dee81be66174c3f54082670d2b740c909",
+  "export_column_order_hash": "sha256:f7f10fac237dbb2aa8b6ffdf4ccad70dee81be66174c3f54082670d2b740c909",
+  "extended_columns_count": 190,
+  "generated_audit_columns_count": 36,
+  "dynamic_hpo_symptom_count": 0,
+  "dynamic_boolean_symptom_count": 0,
+  "special_symptom_related_count": 6,
+  "fixed_core_or_non_symptom_count": 148,
+  "audit_metadata_count": 0,
+  "missing_json_rules": [],
+  "unmapped_internal_fields": [],
+  "unfilled_template_fields": [],
+  "warnings": [],
+  "generated_at": "2026-06-25T17:56:20.260779+00:00",
+  "status": "template_conformant",
+  "structural_template_conformance_status": "template_conformant",
+  "semantic_export_quality_status": "ok",
+  "allowed_values_validation": {
+    "schema_version": "uc154_allowed_values_validation_v1",
+    "status": "normalized_with_warnings",
+    "strict_allowed_values_enforced": true,
+    "checked_cell_count": 206,
+    "invalid_value_count": 2,
+    "canonicalized_value_count": 0,
+    "missing_alias_normalized_count": 132,
+    "decision_counts": {
+      "free_text_placeholder_normalized_to_missing": 70,
+      "invalid_enum_value_rejected": 2,
+      "invalid_iso3_country_code_rejected": 2,
+      "missing_alias_normalized": 108,
+      "missing_alias_replaced_by_schema_fallback": 24
+    },
+    "records": [
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "study_design",
+        "allowed_values": [
+          "Case report/case series",
+          "Mutational screen",
+          "Family study",
+          "Sib pair study",
+          "other/mixed"
+        ],
+        "source_value": "-99",
+        "exported_value": "Case report/case series",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "genet_methods",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "lower_age_limit",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "upper_age_limit",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "comments_study",
+        "allowed_values": [
+          "[free text]",
+          "can be left empty"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "disease_abbrev",
+        "allowed_values": [
+          "PANK2",
+          "MPAN"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "ethnicity",
+        "allowed_values": [
+          "Caucasian",
+          "Asian",
+          "Jewish (Ashkenazi)",
+          "Jewish (non-Ashkenazi/undefined)",
+          "Arab",
+          "Hispanic",
+          "African ancestry",
+          "Indian ancestry",
+          "Native American",
+          "Mixed/other",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "country",
+        "allowed_values": [
+          "[ISO three letter code]",
+          "-99"
+        ],
+        "source_value": "DE",
+        "exported_value": "-99",
+        "decision": "invalid_iso3_country_code_rejected",
+        "reason": "value_does_not_match_iso3166_alpha3_allowed_value_marker"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "sex",
+        "allowed_values": [
+          "male",
+          "female",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "index_pat",
+        "allowed_values": [
+          "yes",
+          "no"
+        ],
+        "source_value": "-99",
+        "exported_value": "yes",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "consanguinity",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "famhx",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_het_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_hom_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_hemi_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_het_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_hom_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_hemi_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_wildtype_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "num_wildtype_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "status_clinical",
+        "allowed_values": [
+          "clinically affected",
+          "clinically unaffected",
+          "clinically uncertain"
+        ],
+        "source_value": "-99",
+        "exported_value": "clinically affected",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "aae",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "aao_movement_disorder",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "aao_other_sympt",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "duration",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "age_dx",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "age_death",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "early_onset_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "late_onset_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "classified_as_typical_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "classified_as_atypical_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "hg_version",
+        "allowed_values": [
+          "19",
+          "38",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "genome_build",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "gene1",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12",
+          "[see variable list for other genes]"
+        ],
+        "source_value": "C19ORF12",
+        "exported_value": "PANK2",
+        "decision": "invalid_enum_value_rejected",
+        "reason": "value_not_in_allowed_values"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "physical_location1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "reference_allele1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "observed_allele1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "patient_genotype1",
+        "allowed_values": [
+          "het",
+          "hom",
+          "compound het (confirmed)",
+          "compound het (unconfirmed)",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect"
+        ],
+        "source_value": "-99",
+        "exported_value": "missense",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut1_de_novo",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "gene2",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "physical_location2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "reference_allele2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "observed_allele2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut2_de_novo",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "gene3",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "physical_location3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "reference_allele3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "observed_allele3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut_3_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mut3_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "subdomain_cognitive_impairment_sympt",
+        "allowed_values": [
+          "MCI",
+          "dementia",
+          "unclassified/other",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "cognitive_decline_scale",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "seizure_type_sympt",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "wheelchair_bound_age",
+        "allowed_values": [
+          "age",
+          "not applicable",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "CSF_findings_sympt",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mri_brain_description",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "medications_used",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "botulinum_toxin_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "botulinum_toxin_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "levodopa_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "levodopa_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "iron_chelator_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "iron_chelator_name",
+        "allowed_values": [
+          "[Free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "iron_chelator_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "DBS_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "DBS_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "other_drug_response",
+        "allowed_values": [
+          "DrugX_positive",
+          "DrugX_negative",
+          "DrugX_none",
+          "DrugX_temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "muscle_biopsy",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "muscle_biopsy_result",
+        "allowed_values": [
+          "(free text result)"
+        ],
+        "source_value": "-99",
+        "exported_value": "(free text result)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "elevated_creatine_kinase_(CK)",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "autopsy",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "autopsy_comments",
+        "allowed_values": [
+          "(free text)"
+        ],
+        "source_value": "-99",
+        "exported_value": "(free text)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "Add_HPO",
+        "allowed_values": [
+          "[free text using format symptom_HPOCode:yes/no]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "Other_sympt",
+        "allowed_values": [
+          "[Free text]",
+          "."
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "initial_sympt1",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "initial_sympt2",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "initial_sympt3",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "comments_pat",
+        "allowed_values": [
+          "[Free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mdsgene_decision",
+        "allowed_values": [
+          "IN",
+          "EX"
+        ],
+        "source_value": "-99",
+        "exported_value": "IN",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "pathogenicity1",
+        "allowed_values": [
+          "benign (<5 points)",
+          "possibly pathogenic (5-9 points)",
+          "probably pathogenic (10-14 points)",
+          "definetely pathogenic (>14 points)"
+        ],
+        "source_value": "-99",
+        "exported_value": "benign (<5 points)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 14,
+        "target_column": "mdsgene_final_decision",
+        "allowed_values": [
+          "IN",
+          "EX"
+        ],
+        "source_value": "-99",
+        "exported_value": "IN",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "study_design",
+        "allowed_values": [
+          "Case report/case series",
+          "Mutational screen",
+          "Family study",
+          "Sib pair study",
+          "other/mixed"
+        ],
+        "source_value": "-99",
+        "exported_value": "Case report/case series",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "genet_methods",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "lower_age_limit",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "upper_age_limit",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "comments_study",
+        "allowed_values": [
+          "[free text]",
+          "can be left empty"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "disease_abbrev",
+        "allowed_values": [
+          "PANK2",
+          "MPAN"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "ethnicity",
+        "allowed_values": [
+          "Caucasian",
+          "Asian",
+          "Jewish (Ashkenazi)",
+          "Jewish (non-Ashkenazi/undefined)",
+          "Arab",
+          "Hispanic",
+          "African ancestry",
+          "Indian ancestry",
+          "Native American",
+          "Mixed/other",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "country",
+        "allowed_values": [
+          "[ISO three letter code]",
+          "-99"
+        ],
+        "source_value": "DE",
+        "exported_value": "-99",
+        "decision": "invalid_iso3_country_code_rejected",
+        "reason": "value_does_not_match_iso3166_alpha3_allowed_value_marker"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "sex",
+        "allowed_values": [
+          "male",
+          "female",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "index_pat",
+        "allowed_values": [
+          "yes",
+          "no"
+        ],
+        "source_value": "-99",
+        "exported_value": "yes",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "consanguinity",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "famhx",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_het_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_hom_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_hemi_mut_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_het_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_hom_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_hemi_mut_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_wildtype_affected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "num_wildtype_unaffected",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "status_clinical",
+        "allowed_values": [
+          "clinically affected",
+          "clinically unaffected",
+          "clinically uncertain"
+        ],
+        "source_value": "-99",
+        "exported_value": "clinically affected",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "aae",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "aao_movement_disorder",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "aao_other_sympt",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "duration",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "age_dx",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "age_death",
+        "allowed_values": [
+          "[some number]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "early_onset_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "late_onset_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "classified_as_typical_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "classified_as_atypical_PKAN",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "hg_version",
+        "allowed_values": [
+          "19",
+          "38",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "genome_build",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "gene1",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12",
+          "[see variable list for other genes]"
+        ],
+        "source_value": "C19ORF12",
+        "exported_value": "PANK2",
+        "decision": "invalid_enum_value_rejected",
+        "reason": "value_not_in_allowed_values"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "physical_location1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "reference_allele1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "observed_allele1",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "patient_genotype1",
+        "allowed_values": [
+          "het",
+          "hom",
+          "compound het (confirmed)",
+          "compound het (unconfirmed)",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect"
+        ],
+        "source_value": "-99",
+        "exported_value": "missense",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut1_de_novo",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "gene2",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "physical_location2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "reference_allele2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "observed_allele2",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut2_de_novo",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "gene3",
+        "allowed_values": [
+          "PANK2",
+          "C9orf12"
+        ],
+        "source_value": "-99",
+        "exported_value": "PANK2",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "physical_location3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "reference_allele3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "observed_allele3",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_g",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_c",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_p",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_alias_original",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_alias",
+        "allowed_values": [
+          "[free text]",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_genotype",
+        "allowed_values": [
+          "het",
+          "hom",
+          "hemi",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut_3_type",
+        "allowed_values": [
+          "missense",
+          "nonsense",
+          "in-frame indel",
+          "repeat expansion",
+          "frameshift",
+          "splice site",
+          "structural variation",
+          "silent",
+          "unknown effect",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mut3_sporadic",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "subdomain_cognitive_impairment_sympt",
+        "allowed_values": [
+          "MCI",
+          "dementia",
+          "unclassified/other",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "cognitive_decline_scale",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "seizure_type_sympt",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "wheelchair_bound_age",
+        "allowed_values": [
+          "age",
+          "not applicable",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "CSF_findings_sympt",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mri_brain_description",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "medications_used",
+        "allowed_values": [
+          "[free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "botulinum_toxin_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "botulinum_toxin_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "levodopa_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "levodopa_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "iron_chelator_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "iron_chelator_name",
+        "allowed_values": [
+          "[Free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "iron_chelator_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "DBS_response",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "DBS_response_quantification",
+        "allowed_values": [
+          "Positive",
+          "Negative",
+          "None",
+          "Temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "other_drug_response",
+        "allowed_values": [
+          "DrugX_positive",
+          "DrugX_negative",
+          "DrugX_none",
+          "DrugX_temporary",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "muscle_biopsy",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "muscle_biopsy_result",
+        "allowed_values": [
+          "(free text result)"
+        ],
+        "source_value": "-99",
+        "exported_value": "(free text result)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "elevated_creatine_kinase_(CK)",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "autopsy",
+        "allowed_values": [
+          "yes",
+          "no",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "autopsy_comments",
+        "allowed_values": [
+          "(free text)"
+        ],
+        "source_value": "-99",
+        "exported_value": "(free text)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "Add_HPO",
+        "allowed_values": [
+          "[free text using format symptom_HPOCode:yes/no]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "Other_sympt",
+        "allowed_values": [
+          "[Free text]",
+          "."
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "initial_sympt1",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "initial_sympt2",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "initial_sympt3",
+        "allowed_values": [
+          "[categories will be identical to the variables on the nbia variable list], -99",
+          "-99"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "missing_alias_normalized",
+        "reason": "missing_alias_allowed_as_minus_99"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "comments_pat",
+        "allowed_values": [
+          "[Free text]"
+        ],
+        "source_value": "-99",
+        "exported_value": "-99",
+        "decision": "free_text_placeholder_normalized_to_missing",
+        "reason": "free_text_rule_marker_is_not_a_clinical_value"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mdsgene_decision",
+        "allowed_values": [
+          "IN",
+          "EX"
+        ],
+        "source_value": "-99",
+        "exported_value": "IN",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "pathogenicity1",
+        "allowed_values": [
+          "benign (<5 points)",
+          "possibly pathogenic (5-9 points)",
+          "probably pathogenic (10-14 points)",
+          "definetely pathogenic (>14 points)"
+        ],
+        "source_value": "-99",
+        "exported_value": "benign (<5 points)",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      },
+      {
+        "use_case": "UC1.54",
+        "step": "UC1.54_mdsgene_template_conformant_export",
+        "patient_data_row": 15,
+        "target_column": "mdsgene_final_decision",
+        "allowed_values": [
+          "IN",
+          "EX"
+        ],
+        "source_value": "-99",
+        "exported_value": "IN",
+        "decision": "missing_alias_replaced_by_schema_fallback",
+        "reason": "missing_alias_not_allowed_for_field"
+      }
+    ]
+  },
+  "allowed_values_validation_status": "normalized_with_warnings",
+  "invalid_allowed_value_count": 2,
+  "allowed_value_canonicalized_count": 0,
+  "missing_alias_normalized_count": 132,
+  "exact_template_value_used_count": 0,
+  "alias_value_copied_count": 0,
+  "alias_fallback_value_copied_count": 0,
+  "critical_missing_field_counts": {
+    "PMID": 0,
+    "author_year": 0,
+    "family_ID": 0,
+    "individual_ID": 0,
+    "gene1": 0
+  },
+  "duplicate_column_name_count": 0,
+  "duplicate_column_names": [],
+  "template_gene_profile_mismatch": false,
+  "degraded_input_processing_status": false,
+  "processing_trace": {
+    "step": "UC1.54_mdsgene_template_conformant_export",
+    "template_id": "MDSGene_NBIA_C19ORF12",
+    "template_version": "2025-10-24",
+    "template_rules_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+    "template_rules_source": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+    "schema_generation_mode": "base_plus_ontology_projection_overlay",
+    "base_template_rules_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\mdsgene_template_field_rules_uc154.base.json",
+    "base_template_rules_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+    "ontology_projection_registry_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_projection_registry_uc139.json;D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\ontology_mapping_uc139_user.json",
+    "ontology_projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+    "effective_template_rules_source": "D:\\nginx-qa\\analyst_evidence\\20260625_reviewed_decision_schema_gate_v12\\d_mapping_only_catalog_only_omitted\\mdsgene_template_field_rules_uc154.effective.json",
+    "effective_template_rules_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+    "effective_schema_hash": "sha256:4b9e2f41aecffda57784ec7a3812d2240528d8e26e34422e7abfce798d67a5ab",
+    "target_symptom_catalog_source": "D:\\nginx\\apps\\mdsgene-llm-extractor-backend\\config\\target_symptom_fields_uc139b.json",
+    "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+    "dynamic_symptom_export_policy": "present_approved_only",
+    "available_target_symptom_count": 118,
+    "present_dynamic_symptom_field_count": 0,
+    "not_present_target_symptom_omitted_count": 118,
+    "unmatched_detected_symptom_omitted_count": 0,
+    "job_specific_effective_schema": true,
+    "template_required_special_field_count": 6,
+    "dynamic_special_symptom_field_omitted_count": 0,
+    "generated_dynamic_symptom_field_count": 0,
+    "base_fixed_field_count": 148,
+    "sheet_name": "C19ORF12",
+    "header_row": 1,
+    "rule_rows": [
+      2,
+      13
+    ],
+    "data_start_row": 14,
+    "production_value_mode": "legacy",
+    "template_field_alias_source_state": "final_verified_export_row",
+    "template_field_alias_value_policy": "copy_existing_source_value_only",
+    "decision": "template_conformant_export_created",
+    "template_field_aliases_hash": "sha256:b349046d96434fff635040adb13d30b9734bdd84e641a0d292422d791d141212",
+    "template_field_aliases_source": "apps/mdsgene-llm-extractor-backend/config/mdsgene_template_field_aliases_uc154.json",
+    "template_field_aliases_count": 23,
+    "template_field_alias_resolution_count": 0
+  },
+  "missingness_audit_report": "missingness_audit_report.json",
+  "template_field_alias_resolution_trace_artifact": "uc154_alias_resolution_trace.jsonl",
+  "artifacts": {
+    "missingness_audit_report_json": "missingness_audit_report.json",
+    "alias_resolution_trace_jsonl": "uc154_alias_resolution_trace.jsonl"
+  }
+}

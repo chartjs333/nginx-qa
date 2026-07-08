@@ -1,0 +1,223 @@
+{
+  "analysis": "UC1.39/UC1.54 v11 schema header split + sparse dynamic symptom production Excel probe",
+  "schema_partition_probe": {
+    "expected_headers_order_count": 126,
+    "core_expected_headers_count": 96,
+    "legacy_catalog_symptom_count": 30,
+    "core_symptom_like_count": 0,
+    "legacy_non_service_symptom_sample": [
+      "motor_sympt",
+      "parkinsonism_sympt",
+      "NMS_park_sympt",
+      "olfaction_sympt",
+      "bradykinesia_sympt",
+      "tremor_HP:0001337",
+      "tremor_rest_sympt",
+      "tremor_action_sympt",
+      "tremor_postural_sympt",
+      "tremor_dystonic_sympt"
+    ],
+    "service_fields": [
+      "Add_HPO",
+      "CSF_findings_sympt",
+      "Other_sympt",
+      "aao_other_sympt",
+      "seizure_type_sympt",
+      "subdomain_cognitive_impairment_sympt"
+    ],
+    "catalog_symptom_targets_count_snapshot": 118,
+    "catalog_symptom_targets_count_live": 118,
+    "default_universe_contains_add_hpo": true,
+    "default_universe_contains_rigidity": false,
+    "default_universe_contains_tremor": false,
+    "default_universe_non_service_legacy_symptom_hits": [],
+    "patient_qc_missing_headers_after_core_service_row": [],
+    "exported_universe_contains_rigidity_when_workbook_omits_it": false,
+    "exported_universe_contains_add_hpo": true,
+    "review_decision_for_omitted_rigidity": [
+      false,
+      "field_excluded_by_policy"
+    ],
+    "review_decision_for_exported_pmid": [
+      true,
+      "included"
+    ]
+  },
+  "catalog_delete_probe": {
+    "delete_legacy_symptom_status": 200,
+    "legacy_symptom_removed_from_catalog": true,
+    "delete_service_add_hpo_status": 404,
+    "delete_service_add_hpo_detail": "Symptom field not found.",
+    "delete_core_pmid_status": 404,
+    "delete_core_pmid_detail": "Symptom field not found."
+  },
+  "cases": [
+    {
+      "case": "a_catalog_only_no_evidence",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\a_catalog_only_no_evidence",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\a_catalog_only_no_evidence\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\a_catalog_only_no_evidence\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\a_catalog_only_no_evidence\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\a_catalog_only_no_evidence\\omitted_dynamic_symptoms.json",
+      "header_count": 154,
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 0,
+      "report_not_present_target_symptom_omitted_count": 118,
+      "report_job_specific_effective_schema": true,
+      "omitted_count": 118,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "b_row_explicit_yes_no",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\b_row_explicit_yes_no",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\b_row_explicit_yes_no\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\b_row_explicit_yes_no\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\b_row_explicit_yes_no\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\b_row_explicit_yes_no\\omitted_dynamic_symptoms.json",
+      "header_count": 156,
+      "target_headers_present": [
+        "rigidity_HP:0002063",
+        "tremor_HP:0001337"
+      ],
+      "target_values_by_patient_row": {
+        "rigidity_HP:0002063": [
+          "yes",
+          "-99"
+        ],
+        "tremor_HP:0001337": [
+          "-99",
+          "no"
+        ]
+      },
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 2,
+      "report_not_present_target_symptom_omitted_count": 116,
+      "report_job_specific_effective_schema": true,
+      "omitted_count": 116,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "c_projection_ready_concepts",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\c_projection_ready_concepts",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\c_projection_ready_concepts\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\c_projection_ready_concepts\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\c_projection_ready_concepts\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\c_projection_ready_concepts\\omitted_dynamic_symptoms.json",
+      "header_count": 156,
+      "target_headers_present": [
+        "headache_HP:0002315",
+        "abnormal_pyramidal_sign_HP:0007256"
+      ],
+      "target_values_by_patient_row": {
+        "headache_HP:0002315": [
+          "yes",
+          "-99"
+        ],
+        "abnormal_pyramidal_sign_HP:0007256": [
+          "-99",
+          "no"
+        ]
+      },
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 2,
+      "report_not_present_target_symptom_omitted_count": 116,
+      "report_job_specific_effective_schema": true,
+      "omitted_count": 116,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "d_clinician_reviewed_unknown_possible_yes_no",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\d_clinician_reviewed_unknown_possible_yes_no",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\d_clinician_reviewed_unknown_possible_yes_no\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\d_clinician_reviewed_unknown_possible_yes_no\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\d_clinician_reviewed_unknown_possible_yes_no\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\d_clinician_reviewed_unknown_possible_yes_no\\omitted_dynamic_symptoms.json",
+      "header_count": 156,
+      "target_headers_present": [
+        "rigidity_HP:0002063",
+        "tremor_HP:0001337"
+      ],
+      "target_values_by_patient_row": {
+        "rigidity_HP:0002063": [
+          "yes",
+          "-99"
+        ],
+        "tremor_HP:0001337": [
+          "-99",
+          "no"
+        ]
+      },
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 2,
+      "report_not_present_target_symptom_omitted_count": 116,
+      "report_job_specific_effective_schema": true,
+      "omitted_count": 116,
+      "blocked_count": 0,
+      "blocked_reasons": []
+    },
+    {
+      "case": "e_mapping_only_and_non_patient_blocked",
+      "artifact_dir": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\e_mapping_only_and_non_patient_blocked",
+      "effective_schema": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\e_mapping_only_and_non_patient_blocked\\mdsgene_template_field_rules_uc154.effective.json",
+      "production_excel": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\e_mapping_only_and_non_patient_blocked\\mdsgene_output.xlsx",
+      "template_conformance_report": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\e_mapping_only_and_non_patient_blocked\\template_conformance_report.json",
+      "omitted_dynamic_symptoms": "D:\\nginx-qa\\analyst_evidence\\20260625_excel_schema_header_split_v11\\e_mapping_only_and_non_patient_blocked\\omitted_dynamic_symptoms.json",
+      "header_count": 154,
+      "target_headers_present": [],
+      "target_values_by_patient_row": {},
+      "report_dynamic_symptom_export_policy": "present_approved_only",
+      "report_present_dynamic_symptom_field_count": 0,
+      "report_not_present_target_symptom_omitted_count": 118,
+      "report_job_specific_effective_schema": true,
+      "omitted_count": 118,
+      "blocked_count": 3,
+      "blocked_reasons": [
+        "clinical signal was found outside patient-specific findings",
+        "evidence is not patient-specific",
+        "mapping/projection has not passed approval/QC"
+      ]
+    }
+  ],
+  "invariants": {
+    "core_has_no_symptom_columns": true,
+    "default_universe_excludes_non_service_legacy_symptoms": true,
+    "service_add_hpo_kept": true,
+    "exported_universe_excludes_omitted_rigidity": true,
+    "patient_qc_core_service_only_no_missing": true,
+    "catalog_removes_legacy_symptom": true,
+    "catalog_protects_core_service": true,
+    "catalog_only_has_no_target_headers": true,
+    "row_yes_no_headers_values": true,
+    "projection_ready_headers_values": true,
+    "clinician_review_unknown_possible_headers_values": true,
+    "mapping_only_and_non_patient_blocked": true,
+    "all_cases_use_present_approved_policy": true,
+    "all_cases_job_specific_schema": true
+  },
+  "pass": true,
+  "strict_probe_notes": {
+    "exported_universe_excludes_omitted_rigidity": "Accept False inclusion with either field_not_in_exported_excel or field_excluded_by_policy; the field is not visible in review cases either way.",
+    "catalog_protects_core_service": "Accept 400 or 404 for core/service names; requirement is that removal is not allowed and no catalog mutation occurs."
+  },
+  "raw_strict_invariants_before_interpretation": {
+    "core_has_no_symptom_columns": true,
+    "default_universe_excludes_non_service_legacy_symptoms": true,
+    "service_add_hpo_kept": true,
+    "exported_universe_excludes_omitted_rigidity": false,
+    "patient_qc_core_service_only_no_missing": true,
+    "catalog_removes_legacy_symptom": true,
+    "catalog_protects_core_service": false,
+    "catalog_only_has_no_target_headers": true,
+    "row_yes_no_headers_values": true,
+    "projection_ready_headers_values": true,
+    "clinician_review_unknown_possible_headers_values": true,
+    "mapping_only_and_non_patient_blocked": true,
+    "all_cases_use_present_approved_policy": true,
+    "all_cases_job_specific_schema": true
+  }
+}

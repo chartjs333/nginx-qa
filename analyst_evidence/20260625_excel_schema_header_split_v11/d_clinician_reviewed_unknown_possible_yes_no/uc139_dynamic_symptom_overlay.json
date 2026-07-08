@@ -1,0 +1,89 @@
+{
+  "use_case": "UC1.39B",
+  "step": "UC1.39B_effective_template_schema_generation",
+  "schema_version": "uc139b_job_dynamic_symptom_overlay_v1",
+  "job_id": "analyst-v11-d_clinician_reviewed_unknown_possible_yes_no",
+  "dynamic_symptom_export_policy": "present_approved_only",
+  "base_template_hash": "sha256:0e3afd0a60507fa41417ce035b93bc03df2d8fd385b89fbd48bb670a98b2c238",
+  "projection_registry_hash": "sha256:31e013de77d237cc7d01ce59c747661c93bb9299d7dbc13b75dad59f59dc4bd1",
+  "target_symptom_catalog_hash": "sha256:e678217819592c743934d072147509a4a78293b16ca1f975f7eaba1cfd42c384",
+  "effective_schema_hash": "sha256:97c2dc436440e8701782bc8302cd92a1fb56ee4d4b0b36bb67e93fa5612dc0a6",
+  "fields": [
+    {
+      "column_index": 155,
+      "column_name": "rigidity_HP:0002063",
+      "display_column_name": "rigidity_HP:0002063",
+      "canonical_field_name": "rigidity_HP:0002063",
+      "field_class": "dynamic_hpo_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EY",
+      "source_field_name": "rigidity_HP:0002063",
+      "source_dynamic_symptom_flag": "yes",
+      "source": "job_specific_informative_symptom_overlay",
+      "source_mapping_id": "",
+      "source_concept": "clinical_symptom:rigidity_HP:0002063",
+      "hpo_id": "HP:0002063",
+      "clinical_label": "Rigidity",
+      "clinical_definition": "Continuous involuntary sustained muscle contraction. When an affected muscle is passively stretched, the degree of resistance remains constant regardless of the rate at which the muscle is stretched. This feature helps to distinguish rigidity from muscle spasticity. Rigidity of any body part",
+      "projection_reason": "present_approved_only_patient_specific_evidence",
+      "uc_marker": "UC1.39B/UC1.54"
+    },
+    {
+      "column_index": 156,
+      "column_name": "tremor_HP:0001337",
+      "display_column_name": "tremor_HP:0001337",
+      "canonical_field_name": "tremor_HP:0001337",
+      "field_class": "dynamic_hpo_symptom",
+      "allowed_values": [
+        "yes",
+        "no",
+        "-99"
+      ],
+      "rule_cells": [
+        "yes",
+        "no",
+        "-99",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        ""
+      ],
+      "source_excel_col": "EZ",
+      "source_field_name": "tremor_HP:0001337",
+      "source_dynamic_symptom_flag": "yes",
+      "source": "job_specific_informative_symptom_overlay",
+      "source_mapping_id": "",
+      "source_concept": "clinical_symptom:tremor_HP:0001337",
+      "hpo_id": "HP:0001337",
+      "clinical_label": "Tremor",
+      "clinical_definition": "Enter \"yes\" any tremor (no body part specified) is present. An unintentional, oscillating to-and-fro muscle movement about a joint axis.",
+      "projection_reason": "present_approved_only_patient_specific_evidence",
+      "uc_marker": "UC1.39B/UC1.54"
+    }
+  ],
+  "generated_at": "2026-06-25T17:50:35.361266+00:00",
+  "generated_by": "analyst-professor-statistics-v11"
+}
