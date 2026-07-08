@@ -9,6 +9,18 @@
 * **Отправить задачу Аналитику на проверку:** `POST http://localhost:8025/test`
 * Если `GET` возвращает `404`, новых задач или отчетов от Аналитика нет.
 
+## Git context в теле сообщения
+* URL очередей не меняются: не добавляй git context в query string.
+* Каждое сообщение, отправляемое через `POST`, должно содержать в начале блок:
+```text
+GIT CONTEXT:
+- Project: LLM Extractor
+- Git context: <git_context_key>
+- Git address: <repository_or_local_path>
+- Commit: <commit_hash>
+```
+* Если входящая задача уже содержит `GIT CONTEXT`, сохрани этот блок в ответе. Сервер отклоняет POST без git context в тексте сообщения.
+
 ## Динамическое получение заданий (Polling)
 * Проверяй `GET http://localhost:8025/work` автоматически каждые 60 секунд.
 * Если пришел `404`, ничего не исправляй и повтори проверку через 60 секунд.
@@ -94,6 +106,12 @@ RETEST AFTER FIX:
 Ты обязан строго заполнять этот шаблон для Аналитика:
 
 ```text
+GIT CONTEXT:
+- Project: LLM Extractor
+- Git context: <git_context_key>
+- Git address: <repository_or_local_path>
+- Commit: <commit_hash>
+
 TO: Analyst
 FROM: Programmer
 STATUS: READY_FOR_TEST

@@ -123,6 +123,15 @@ screenshot_folders_path = base_dir / "screenshot_folders"
 evidence_folders_path = base_dir / "evidence_folders"
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
+DEFAULT_PROJECT_NAME = "LLM Extractor"
+PROJECT_NAMES_BY_GIT_CONTEXT = {
+    "github.com/chartjs333/nginx-qc-qc_symptoms-mdsgene-validator": DEFAULT_PROJECT_NAME,
+}
+GIT_CONTEXT_HEADER_PATTERN = re.compile(r"^\s*(?:\[)?GIT CONTEXT(?:\])?\s*:?\s*$", re.IGNORECASE)
+GIT_CONTEXT_LINE_PATTERN = re.compile(
+    r"^\s*(?:[-*]\s*)?(project|project name|git context|git context key|git address|repository|commit|git commit)\s*:\s*(.+?)\s*$",
+    re.IGNORECASE,
+)
 PASS_STATUS_PATTERN = re.compile(r"STATUS:\s*PASS\b", re.IGNORECASE)
 SCHEDULE_DELAY_STEP_MINUTES = 5
 SCHEDULE_DELAY_MINUTES_MIN = 5
@@ -1533,11 +1542,18 @@ async def save_email_routes(raw_routes: Any) -> list[dict[str, str]]:
     return routes
 
 
-async def save_git_address(port: int, git_address: str) -> dict[str, Any]:
+async def save_git_address(
+    port: int,
+    git_address: str,
+    project_name: str | None = None,
+) -> dict[str, Any]:
     async with git_config_lock:
         config = await asyncio.to_thread(read_git_config_file)
+        clean_git_address = git_address.strip()
         config[str(port)] = {
-            "git_address": git_address,
+            "git_address": clean_git_address,
+            "project_name": normalize_project_name(project_name, clean_git_address),
+            "git_context_key": normalize_git_context_key(clean_git_address),
             "updated_at": utc_now(),
         }
         await asyncio.to_thread(write_git_config_file, config)
@@ -1739,6 +1755,250 @@ def normalize_git_remote_address(value: str) -> str:
     return address
 
 
+def normalize_git_context_key(value: str) -> str:
+    address = str(value or "").strip()
+    if not address:
+        return ""
+
+    local_path = Path(address)
+    if local_path.exists():
+        try:
+            return f"local:{local_path.resolve()}".lower()
+        except OSError:
+            return f"local:{local_path.absolute()}".lower()
+
+    return normalize_git_remote_address(address)
+
+
+def project_name_from_git_address(git_address: str) -> str:
+    context_key = normalize_git_context_key(git_address)
+    if context_key in PROJECT_NAMES_BY_GIT_CONTEXT:
+        return PROJECT_NAMES_BY_GIT_CONTEXT[context_key]
+
+    parsed = urllib.parse.urlparse(git_address.strip())
+    raw_name = ""
+    if parsed.path:
+        raw_name = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+    if not raw_name:
+        raw_name = git_address.strip().rstrip("/").rsplit("/", 1)[-1]
+    if raw_name.endswith(".git"):
+        raw_name = raw_name[:-4]
+    return raw_name or DEFAULT_PROJECT_NAME
+
+
+def normalize_project_name(value: Any, git_address: str = "") -> str:
+    name = str(value or "").strip()
+    return name or project_name_from_git_address(git_address) or DEFAULT_PROJECT_NAME
+
+
+def configured_git_contexts_from_config(
+    config: dict[str, Any],
+    current_port: int | None = None,
+) -> list[dict[str, Any]]:
+    contexts_by_key: dict[str, dict[str, Any]] = {}
+    for raw_port, entry in config.items():
+        if not isinstance(entry, dict):
+            continue
+
+        git_address = entry.get("git_address")
+        if not isinstance(git_address, str) or not git_address.strip():
+            continue
+
+        port_text = str(raw_port)
+        context_key = str(entry.get("git_context_key") or "").strip()
+        if not context_key:
+            context_key = normalize_git_context_key(git_address)
+        if not context_key:
+            continue
+
+        project_name = normalize_project_name(entry.get("project_name"), git_address)
+        context = contexts_by_key.setdefault(
+            context_key,
+            {
+                "git_context_key": context_key,
+                "project_name": project_name,
+                "git_address": git_address.strip(),
+                "ports": [],
+                "updated_at": entry.get("updated_at"),
+                "is_current_port": False,
+            },
+        )
+        if port_text not in context["ports"]:
+            context["ports"].append(port_text)
+        if current_port is not None and port_text == str(current_port):
+            context["is_current_port"] = True
+            context["project_name"] = project_name
+            context["git_address"] = git_address.strip()
+            context["updated_at"] = entry.get("updated_at")
+
+    return sorted(
+        contexts_by_key.values(),
+        key=lambda item: (
+            not bool(item.get("is_current_port")),
+            str(item.get("project_name", "")).lower(),
+            str(item.get("git_context_key", "")),
+        ),
+    )
+
+
+def configured_git_context_for_key(
+    config: dict[str, Any],
+    git_context_key: str,
+    current_port: int | None = None,
+) -> dict[str, Any] | None:
+    normalized_key = normalize_git_context_key(git_context_key)
+    for context in configured_git_contexts_from_config(config, current_port):
+        if context.get("git_context_key") == normalized_key:
+            return context
+    return None
+
+
+def git_context_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    metadata = record.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def git_context_key_from_metadata(metadata: dict[str, Any]) -> str:
+    explicit_key = str(metadata.get("git_context_key") or "").strip()
+    if explicit_key:
+        return normalize_git_context_key(explicit_key)
+
+    git_address = metadata.get("git_address")
+    if isinstance(git_address, str) and git_address.strip():
+        return normalize_git_context_key(git_address)
+
+    return ""
+
+
+def project_name_from_metadata(metadata: dict[str, Any]) -> str:
+    project_name = str(metadata.get("project_name") or "").strip()
+    if project_name:
+        return project_name
+
+    git_address = metadata.get("git_address")
+    if isinstance(git_address, str) and git_address.strip():
+        return project_name_from_git_address(git_address)
+
+    return ""
+
+
+def extract_git_context_from_message(message: Any) -> dict[str, Any]:
+    text = message_text_for_search(message)
+    lines = text.splitlines()
+    context_lines: list[str] = []
+    in_context_block = False
+
+    for line in lines:
+        if not in_context_block:
+            if GIT_CONTEXT_HEADER_PATTERN.match(line):
+                in_context_block = True
+            continue
+
+        if not line.strip():
+            break
+
+        context_lines.append(line)
+
+    if not context_lines:
+        return {}
+
+    parsed: dict[str, str] = {}
+    for line in context_lines:
+        match = GIT_CONTEXT_LINE_PATTERN.match(line)
+        if not match:
+            continue
+        field = match.group(1).strip().lower()
+        value = match.group(2).strip()
+        if not value:
+            continue
+        if field in {"project", "project name"}:
+            parsed["project_name"] = value
+        elif field in {"git context", "git context key"}:
+            parsed["git_context_key"] = normalize_git_context_key(value)
+        elif field in {"git address", "repository"}:
+            parsed["git_address"] = value
+        elif field in {"commit", "git commit"}:
+            parsed["git_commit"] = value
+            parsed["git_commit_short"] = value[:12]
+
+    git_address = parsed.get("git_address", "")
+    if not parsed.get("git_context_key") and git_address:
+        parsed["git_context_key"] = normalize_git_context_key(git_address)
+    if not parsed.get("project_name"):
+        parsed["project_name"] = normalize_project_name("", git_address)
+
+    return {key: value for key, value in parsed.items() if value}
+
+
+def message_has_git_context(message: Any) -> bool:
+    context = extract_git_context_from_message(message)
+    return bool(context.get("git_context_key") or context.get("git_address"))
+
+
+def strip_git_context_block_from_text(text: str) -> str:
+    lines = text.splitlines()
+    stripped_lines: list[str] = []
+    skipping = False
+    skipped = False
+
+    for line in lines:
+        if not skipped and GIT_CONTEXT_HEADER_PATTERN.match(line):
+            skipping = True
+            skipped = True
+            continue
+        if skipping:
+            if not line.strip():
+                skipping = False
+            continue
+        stripped_lines.append(line)
+
+    return "\n".join(stripped_lines).strip()
+
+
+def require_message_git_context(message: Any) -> None:
+    if message_has_git_context(message):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail="Message body must include a GIT CONTEXT block with Git context or Git address",
+    )
+
+
+def format_git_context_block(git_context: dict[str, Any]) -> str:
+    project_name = normalize_project_name(
+        git_context.get("project_name"),
+        str(git_context.get("git_address") or ""),
+    )
+    git_context_key = str(git_context.get("git_context_key") or "").strip()
+    git_address = str(git_context.get("git_address") or "").strip()
+    commit = str(git_context.get("git_commit") or git_context.get("git_commit_short") or "").strip()
+    lines = [
+        "GIT CONTEXT:",
+        f"- Project: {project_name}",
+    ]
+    if git_context_key:
+        lines.append(f"- Git context: {git_context_key}")
+    if git_address:
+        lines.append(f"- Git address: {git_address}")
+    if commit:
+        lines.append(f"- Commit: {commit}")
+    return "\n".join(lines)
+
+
+async def ensure_message_git_context_from_port(message: str, port: int | None) -> str:
+    if message_has_git_context(message):
+        return message
+
+    git_context = await git_context_for_port(port)
+    if not git_context.get("git_context_key") and not git_context.get("git_address"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Git context is required before sending a message",
+        )
+
+    return f"{format_git_context_block(git_context)}\n\n{message}"
+
+
 def local_repo_remote_urls(repo_path: Path) -> list[str]:
     command = ["git", "-C", str(repo_path), "remote", "-v"]
     try:
@@ -1864,9 +2124,15 @@ async def git_context_for_port(port: int | None) -> dict[str, Any]:
     if not isinstance(git_address, str) or not git_address.strip():
         return {"fastapi_port": port}
 
+    project_name = normalize_project_name(entry.get("project_name"), git_address)
+    git_context_key = str(entry.get("git_context_key") or "").strip()
+    if not git_context_key:
+        git_context_key = normalize_git_context_key(git_address)
     git_context = await asyncio.to_thread(resolve_git_reference, git_address)
     return {
         "fastapi_port": port,
+        "project_name": project_name,
+        "git_context_key": git_context_key,
         "git_address": git_address,
         **git_context,
     }
@@ -1888,11 +2154,18 @@ async def append_history(
     message: Any,
     metadata: dict[str, Any] | None = None,
     port: int | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     queue_meta = queue_definition(queue_name)
     submitted_metadata = {
         key: value for key, value in (metadata or {}).items() if value is not None
     }
+    history_git_context = (
+        {key: value for key, value in git_context.items() if value is not None}
+        if git_context is not None
+        else await git_context_for_port(port)
+    )
+    message_git_context = extract_git_context_from_message(message)
     enriched_metadata = {
         "route": queue_meta["route"],
         "context": queue_meta["context"],
@@ -1901,7 +2174,8 @@ async def append_history(
         "receiver": submitted_metadata.get("receiver") or queue_meta["default_receiver"],
         "direction": queue_meta["label"],
         **submitted_metadata,
-        **(await git_context_for_port(port)),
+        **history_git_context,
+        **message_git_context,
     }
     record = {
         "id": str(uuid4()),
@@ -1953,9 +2227,22 @@ def queue_item_metadata(item: Any) -> dict[str, Any]:
     return {}
 
 
+def queue_item_matches_git_context(item: Any, git_context_key: str | None) -> bool:
+    if not git_context_key:
+        return True
+    return git_context_key_from_metadata(queue_item_metadata(item)) == git_context_key
+
+
+def queue_items_for_git_context(
+    items: deque[Any],
+    git_context_key: str | None,
+) -> list[Any]:
+    return [item for item in items if queue_item_matches_git_context(item, git_context_key)]
+
+
 def summarize_message(message: Any) -> str:
     if isinstance(message, str):
-        text = " ".join(message.split())
+        text = " ".join(strip_git_context_block_from_text(message).split())
     else:
         text = json.dumps(message, ensure_ascii=False)
 
@@ -2031,7 +2318,16 @@ def scheduled_task_snapshot(task: dict[str, Any]) -> dict[str, Any]:
         "summary": summarize_message(task.get("message")),
         "metadata": {
             key: metadata.get(key)
-            for key in ("sender", "receiver", "status", "submitted_via")
+            for key in (
+                "sender",
+                "receiver",
+                "status",
+                "submitted_via",
+                "project_name",
+                "git_context_key",
+                "git_address",
+                "git_commit_short",
+            )
             if metadata.get(key) is not None
         },
     }
@@ -2062,6 +2358,19 @@ async def release_scheduled_task(
         timer.cancel()
 
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    task_git_context = {
+        key: metadata.get(key)
+        for key in (
+            "fastapi_port",
+            "project_name",
+            "git_context_key",
+            "git_address",
+            "git_commit",
+            "git_commit_short",
+            "git_error",
+        )
+        if metadata.get(key) is not None
+    }
     release_metadata = {
         **metadata,
         "submitted_via": "scheduled_release",
@@ -2082,6 +2391,7 @@ async def release_scheduled_task(
         task.get("message"),
         release_metadata,
         task.get("port", port),
+        task_git_context,
     )
 
 
@@ -2090,10 +2400,20 @@ async def release_pass_scheduled_tasks(
     port: int | None = None,
 ) -> list[dict[str, Any]]:
     async with scheduled_tasks_lock:
+        trigger_context_key = git_context_key_from_metadata(
+            git_context_metadata_from_record(trigger_record)
+        )
         task_ids = [
             task_id
             for task_id, task in scheduled_tasks.items()
             if task.get("schedule_mode") == "pass"
+            and (
+                not trigger_context_key
+                or git_context_key_from_metadata(
+                    task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+                )
+                == trigger_context_key
+            )
         ]
 
     released: list[dict[str, Any]] = []
@@ -2110,11 +2430,12 @@ async def schedule_message(
     metadata: dict[str, Any] | None = None,
     port: int | None = None,
     schedule: dict[str, Any] | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     schedule = schedule if isinstance(schedule, dict) else {}
     mode = str(schedule.get("mode") or "now").strip().lower()
     if mode in {"", "now", "immediate"}:
-        return await enqueue(queue_name, message, metadata, port)
+        return await enqueue(queue_name, message, metadata, port, git_context)
 
     if mode not in {"delay", "pass"}:
         raise HTTPException(
@@ -2122,13 +2443,22 @@ async def schedule_message(
             detail="Unknown schedule mode.",
         )
 
+    message_git_context = extract_git_context_from_message(message)
     task_id = str(uuid4())
     created_at = datetime.now(timezone.utc)
     task: dict[str, Any] = {
         "id": task_id,
         "queue": queue_name,
         "message": message,
-        "metadata": {key: value for key, value in (metadata or {}).items() if value is not None},
+        "metadata": {
+            key: value
+            for key, value in {
+                **(metadata or {}),
+                **(git_context or {}),
+                **message_git_context,
+            }.items()
+            if value is not None
+        },
         "port": port,
         "schedule_mode": mode,
         "created_at": created_at.isoformat(),
@@ -2163,6 +2493,7 @@ async def schedule_message(
             "scheduled_trigger_text": task.get("trigger_text"),
         },
         port,
+        git_context,
     )
     return {
         "status": "scheduled",
@@ -2172,9 +2503,17 @@ async def schedule_message(
     }
 
 
-async def list_scheduled_tasks() -> list[dict[str, Any]]:
+async def list_scheduled_tasks(git_context_key: str | None = None) -> list[dict[str, Any]]:
     async with scheduled_tasks_lock:
-        tasks = [scheduled_task_snapshot(task) for task in scheduled_tasks.values()]
+        tasks = [
+            scheduled_task_snapshot(task)
+            for task in scheduled_tasks.values()
+            if not git_context_key
+            or git_context_key_from_metadata(
+                task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+            )
+            == git_context_key
+        ]
 
     return sorted(
         tasks,
@@ -2203,6 +2542,19 @@ async def cancel_scheduled_task(
         timer.cancel()
 
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    task_git_context = {
+        key: metadata.get(key)
+        for key in (
+            "fastapi_port",
+            "project_name",
+            "git_context_key",
+            "git_address",
+            "git_commit",
+            "git_commit_short",
+            "git_error",
+        )
+        if metadata.get(key) is not None
+    }
     await append_history(
         "scheduled_cancelled",
         str(task["queue"]),
@@ -2214,6 +2566,7 @@ async def cancel_scheduled_task(
             "scheduled_mode": task.get("schedule_mode"),
         },
         port,
+        task_git_context,
     )
     return {
         "status": "cancelled",
@@ -2241,10 +2594,31 @@ def record_matches_date_range(
     return True
 
 
+def normalize_history_git_context_filter(value: str | None) -> str:
+    if not value:
+        return ""
+    clean_value = value.strip()
+    if not clean_value or clean_value.lower() in {"all", "*"}:
+        return ""
+    return normalize_git_context_key(clean_value)
+
+
+def record_matches_git_context(
+    record: dict[str, Any],
+    git_context_key: str,
+) -> bool:
+    if not git_context_key:
+        return True
+
+    metadata = git_context_metadata_from_record(record)
+    return git_context_key_from_metadata(metadata) == git_context_key
+
+
 def read_history_file(
     limit: int,
     date_from: str | None = None,
     date_to: str | None = None,
+    git_context: str | None = None,
 ) -> list[dict[str, Any]]:
     if not history_path.exists():
         return []
@@ -2254,6 +2628,7 @@ def read_history_file(
 
     start_at = parse_date_boundary(date_from or local_today_iso(), end=False)
     end_before = parse_date_boundary(date_to, end=True) if date_to else None
+    git_context_key = normalize_history_git_context_filter(git_context)
     records: list[dict[str, Any]] = []
     for line in lines:
         line = line.strip()
@@ -2272,7 +2647,8 @@ def read_history_file(
             }
 
         if record_matches_date_range(record, start_at, end_before):
-            records.append(record)
+            if record_matches_git_context(record, git_context_key):
+                records.append(record)
 
     return records[-limit:]
 
@@ -2281,10 +2657,17 @@ async def read_history(
     limit: int = 200,
     date_from: str | None = None,
     date_to: str | None = None,
+    git_context: str | None = None,
 ) -> list[dict[str, Any]]:
     safe_limit = max(1, min(limit, 10000))
     async with history_lock:
-        return await asyncio.to_thread(read_history_file, safe_limit, date_from, date_to)
+        return await asyncio.to_thread(
+            read_history_file,
+            safe_limit,
+            date_from,
+            date_to,
+            git_context,
+        )
 
 
 def delete_removed_backend_history_record_file(record_id: str) -> dict[str, Any]:
@@ -2690,6 +3073,8 @@ def render_index() -> str:
         <h2>Git context</h2>
         <label for="gitAddress">Git address для текущего порта</label>
         <input id="gitAddress" placeholder="D:\\nginx или https://github.com/org/repo.git">
+        <label for="gitProjectName">Project name</label>
+        <input id="gitProjectName" placeholder="LLM Extractor">
         <div class="actions">
           <button class="primary" id="saveGitButton" type="button">Сохранить Git address</button>
           <button class="secondary" id="checkGitButton" type="button">Проверить commit</button>
@@ -4377,6 +4762,10 @@ def render_index_v2() -> str:
       </div>
       <div class="panel history-filters">
         <div>
+          <label for="historyGitContext">Git context</label>
+          <select id="historyGitContext"></select>
+        </div>
+        <div>
           <label for="historyFrom">От</label>
           <input id="historyFrom" type="date">
         </div>
@@ -4675,6 +5064,30 @@ def render_index_v2() -> str:
       <div class="modal-actions">
         <button class="secondary" id="cancelCloneAgentButton" type="button">Отмена</button>
         <button class="primary" id="acceptCloneAgentButton" type="button" disabled>Accept</button>
+      </div>
+    </div>
+  </div>
+  <div class="modal-backdrop" id="copyProfilePhoneModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="copyProfilePhoneTitle">
+      <div class="modal-head">
+        <h2 id="copyProfilePhoneTitle">Скопировать с параметрами</h2>
+        <button class="icon-button" id="closeCopyProfilePhoneButton" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+      </div>
+      <div class="subtle">Выберите телефон, который будет добавлен в URL очередей в скопированном тексте.</div>
+      <div class="clone-form-grid">
+        <div>
+          <label for="copyProfilePhoneSelect">Телефон агента</label>
+          <select id="copyProfilePhoneSelect"></select>
+        </div>
+        <div>
+          <label for="copyProfilePhoneManual">Другой номер</label>
+          <input id="copyProfilePhoneManual" placeholder="1001">
+        </div>
+      </div>
+      <div class="status" id="copyProfilePhoneStatus"></div>
+      <div class="modal-actions">
+        <button class="secondary" id="cancelCopyProfilePhoneButton" type="button">Отмена</button>
+        <button class="primary" id="confirmCopyProfilePhoneButton" type="button">Скопировать</button>
       </div>
     </div>
   </div>
@@ -5314,8 +5727,18 @@ def render_index_v2() -> str:
       },
       "button:copyAgentProfileButton": {
         title: "Скопировать с параметрами",
-        purpose: "Копирует профиль агента уже с подставленными значениями.",
-        logic: "Такой текст можно передать агенту или проверить вручную."
+        purpose: "Открывает выбор телефона и копирует профиль агента уже с подставленными значениями.",
+        logic: "Выбранный номер добавляется в URL очередей в скопированном тексте."
+      },
+      "field:copyProfilePhoneSelect": {
+        title: "Телефон агента",
+        purpose: "Выбирает номер, который будет добавлен к endpoint URL в копируемом профиле.",
+        logic: "Например, GET http://localhost:8025/test станет GET http://localhost:8025/test/1001."
+      },
+      "field:copyProfilePhoneManual": {
+        title: "Другой номер",
+        purpose: "Позволяет вручную указать телефон, которого нет в списке агентов.",
+        logic: "Если поле заполнено, оно имеет приоритет над выбранным номером из списка."
       },
       "button:saveAgentsButton": {
         title: "Сохранить агентов",
@@ -5544,6 +5967,7 @@ def render_index_v2() -> str:
     const consultantStatusEl = document.getElementById("consultantStatus");
     const historyEl = document.getElementById("history");
     const historyCountEl = document.getElementById("historyCount");
+    const historyGitContextEl = document.getElementById("historyGitContext");
     const historyFromEl = document.getElementById("historyFrom");
     const historyToEl = document.getElementById("historyTo");
     const historyStatusEl = document.getElementById("historyStatus");
@@ -5552,6 +5976,7 @@ def render_index_v2() -> str:
     const scheduledTasksCountEl = document.getElementById("scheduledTasksCount");
     const scheduledTasksStatusEl = document.getElementById("scheduledTasksStatus");
     const gitAddressEl = document.getElementById("gitAddress");
+    const gitProjectNameEl = document.getElementById("gitProjectName");
     const gitStatusEl = document.getElementById("gitStatus");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
@@ -5578,6 +6003,11 @@ def render_index_v2() -> str:
     const cloneCandidateProfileEl = document.getElementById("cloneCandidateProfile");
     const cloneRawResponseEl = document.getElementById("cloneRawResponse");
     const acceptCloneAgentButtonEl = document.getElementById("acceptCloneAgentButton");
+    const copyProfilePhoneModalEl = document.getElementById("copyProfilePhoneModal");
+    const copyProfilePhoneSelectEl = document.getElementById("copyProfilePhoneSelect");
+    const copyProfilePhoneManualEl = document.getElementById("copyProfilePhoneManual");
+    const copyProfilePhoneStatusEl = document.getElementById("copyProfilePhoneStatus");
+    const confirmCopyProfilePhoneButtonEl = document.getElementById("confirmCopyProfilePhoneButton");
     const commitValueEl = document.getElementById("commitValue");
     const contextSummaryEl = document.getElementById("contextSummary");
     const createEmptyAgentButtonEl = document.getElementById("createEmptyAgentButton");
@@ -5597,6 +6027,8 @@ def render_index_v2() -> str:
     const helpModalBodyEl = document.getElementById("helpModalBody");
     const closeHelpModalButtonEl = document.getElementById("closeHelpModalButton");
     let currentHistoryRecords = [];
+    let gitContexts = [];
+    let currentGitContext = null;
     let activeQueueItemIds = new Set();
     let emailRoutes = [];
     let attachmentFolderChoices = [];
@@ -6566,6 +6998,91 @@ def render_index_v2() -> str:
       setAgentsStatus("Агент удален из списка. Нажмите «Сохранить агентов», чтобы записать изменение.", "ok");
     }
 
+    function addPhoneToQueueUrls(text, phone) {
+      const phoneValue = String(phone || "").trim();
+      if (!phoneValue) {
+        return String(text || "");
+      }
+      const encodedPhone = encodeURIComponent(phoneValue);
+      return String(text || "").replace(/\\/(work-design|test-design|work|test)(?:\\/[^/?#\\s`'"]*)?(?=([?#\\s`'"]|$))/g, (match, route) => {
+        return `/${route}/${encodedPhone}`;
+      });
+    }
+
+    function parametersForProfileCopy(agent, phone) {
+      const parameters = Object.assign({}, agent.parameters || {});
+      const phoneValue = String(phone || "").trim();
+      parameters.agent_phone = phoneValue;
+      parameters.phone = phoneValue;
+      parameters.selected_phone = phoneValue;
+      parameters.queue_phone = phoneValue;
+      Object.keys(parameters).forEach((key) => {
+        const isEndpoint = key === "get_task_endpoint"
+          || key === "post_report_endpoint"
+          || /(^|_)endpoint$/i.test(key);
+        if (isEndpoint) {
+          parameters[key] = addPhoneToQueueUrls(parameters[key], phoneValue);
+        }
+      });
+      return parameters;
+    }
+
+    function copyProfilePhoneOptions() {
+      const currentAgent = agents.find((item) => item.id === selectedAgentId) || null;
+      const seen = new Set();
+      const options = [];
+      [currentAgent].concat(agents).forEach((agent) => {
+        if (!agent) {
+          return;
+        }
+        const phone = String(agent.phone || "").trim();
+        if (!phone || seen.has(phone)) {
+          return;
+        }
+        seen.add(phone);
+        options.push({
+          phone,
+          label: `${agent.name || "Agent"} · ${phone}`
+        });
+      });
+      return options;
+    }
+
+    function renderCopyProfilePhoneOptions() {
+      const options = copyProfilePhoneOptions();
+      copyProfilePhoneSelectEl.innerHTML = options.length
+        ? options.map((option) => `<option value="${escapeHtml(option.phone)}">${escapeHtml(option.label)}</option>`).join("")
+        : `<option value="">Нет телефонов в списке агентов</option>`;
+    }
+
+    function setCopyProfilePhoneStatus(text, state = "") {
+      copyProfilePhoneStatusEl.textContent = text;
+      copyProfilePhoneStatusEl.className = "status" + (state ? " " + state : "");
+    }
+
+    function selectedCopyProfilePhone() {
+      return (copyProfilePhoneManualEl.value.trim() || copyProfilePhoneSelectEl.value.trim());
+    }
+
+    function openCopyProfilePhoneModal() {
+      captureCurrentAgent();
+      const agent = agents.find((item) => item.id === selectedAgentId);
+      if (!agent) {
+        setAgentsStatus("Агент не выбран.", "error");
+        return;
+      }
+      renderCopyProfilePhoneOptions();
+      copyProfilePhoneManualEl.value = "";
+      setCopyProfilePhoneStatus("");
+      copyProfilePhoneModalEl.hidden = false;
+      copyProfilePhoneSelectEl.focus();
+    }
+
+    function closeCopyProfilePhoneModal() {
+      copyProfilePhoneModalEl.hidden = true;
+      setCopyProfilePhoneStatus("");
+    }
+
     async function copySelectedAgentProfile() {
       captureCurrentAgent();
       const agent = agents.find((item) => item.id === selectedAgentId);
@@ -6573,16 +7090,23 @@ def render_index_v2() -> str:
         setAgentsStatus("Агент не выбран.", "error");
         return;
       }
-      const result = profileWithParameters(agent.profile, agent.parameters || {});
+      const phone = selectedCopyProfilePhone();
+      if (!phone) {
+        setCopyProfilePhoneStatus("Выберите или введите номер телефона.", "error");
+        return;
+      }
+      const result = profileWithParameters(agent.profile, parametersForProfileCopy(agent, phone));
+      result.text = addPhoneToQueueUrls(result.text, phone);
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(result.text);
       } else {
         fallbackCopyText(result.text);
       }
+      closeCopyProfilePhoneModal();
       if (result.missing.length) {
         setAgentsStatus(`Скопировано, но не заполнены placeholders: ${result.missing.join(", ")}.`, "error");
       } else {
-        setAgentsStatus("Профиль скопирован с подставленными параметрами.", "ok");
+        setAgentsStatus(`Профиль скопирован с параметрами для телефона ${phone}.`, "ok");
       }
       updateAgentPreview();
     }
@@ -6969,11 +7493,22 @@ UI TEST TASK FOR DESIGNER:
     }
 
     function extractSummary(message) {
+      let insideGitContext = false;
       const lines = String(message)
         .split("\\n")
         .map((line) => line.trim())
         .filter(Boolean)
-        .filter((line) => !line.startsWith("TO:") && !line.startsWith("FROM:") && !line.startsWith("STATUS:"));
+        .filter((line) => {
+          if (/^\\[?GIT CONTEXT\\]?\\s*:?$/i.test(line)) {
+            insideGitContext = true;
+            return false;
+          }
+          if (insideGitContext && /^[-*]?\\s*(Project|Git context|Git address|Repository|Commit)\\s*:/i.test(line)) {
+            return false;
+          }
+          insideGitContext = false;
+          return !line.startsWith("TO:") && !line.startsWith("FROM:") && !line.startsWith("STATUS:");
+        });
       return lines.slice(0, 2).join(" ");
     }
 
@@ -7009,12 +7544,53 @@ UI TEST TASK FOR DESIGNER:
       return {mode: "now"};
     }
 
+    function selectedGitContext() {
+      const selectedKey = historyGitContextEl.value || "";
+      return gitContexts.find((context) => context.git_context_key === selectedKey)
+        || currentGitContext
+        || gitContexts[0]
+        || null;
+    }
+
+    function messageAlreadyHasGitContext(message) {
+      return /^\\s*\\[?GIT CONTEXT\\]?\\s*:?\\s*$/im.test(message);
+    }
+
+    function gitContextBlock(context) {
+      if (!context || (!context.git_context_key && !context.git_address)) {
+        throw new Error("Выберите Git context перед отправкой сообщения.");
+      }
+      const lines = [
+        "GIT CONTEXT:",
+        `- Project: ${context.project_name || "LLM Extractor"}`
+      ];
+      if (context.git_context_key) {
+        lines.push(`- Git context: ${context.git_context_key}`);
+      }
+      if (context.git_address) {
+        lines.push(`- Git address: ${context.git_address}`);
+      }
+      if (context.git_commit || context.git_commit_short) {
+        lines.push(`- Commit: ${context.git_commit || context.git_commit_short}`);
+      }
+      return lines.join("\\n");
+    }
+
+    function withGitContextBlock(message) {
+      const cleanMessage = String(message || "").trim();
+      if (messageAlreadyHasGitContext(cleanMessage)) {
+        return cleanMessage;
+      }
+      return `${gitContextBlock(selectedGitContext())}\\n\\n${cleanMessage}`;
+    }
+
     async function sendMessage() {
-      const message = messageEl.value.trim();
+      let message = messageEl.value.trim();
       if (!message) {
         setStatus("Введите текст сообщения.", "error");
         return;
       }
+      message = withGitContextBlock(message);
       const config = queueConfig[queueEl.value];
       const schedule = buildSchedulePayload();
       setStatus("Отправляю...");
@@ -8001,7 +8577,7 @@ UI TEST TASK FOR DESIGNER:
     }
 
     async function sendPhoneMessage() {
-      const message = phoneMessageEl.value.trim();
+      let message = phoneMessageEl.value.trim();
       const conversationPhone = conversationPhoneEl.value.trim();
       const sender = agentById(phoneSenderEl.value);
       const receiver = agentById(phoneReceiverEl.value);
@@ -8021,6 +8597,7 @@ UI TEST TASK FOR DESIGNER:
         setPhoneStatus("Введите текст сообщения.", "error");
         return;
       }
+      message = withGitContextBlock(message);
 
       const channelPathByQueue = {
         "worker-all": "worker/all",
@@ -8051,12 +8628,12 @@ UI TEST TASK FOR DESIGNER:
     }
 
     function consultantQuestionMessage(sender, expert, question) {
-      return `TO: ${expert.name}
+      return withGitContextBlock(`TO: ${expert.name}
 FROM: ${sender.name}
 STATUS: QUESTION
 
 QUESTION:
-${question}`;
+${question}`);
     }
 
     async function askConsultant() {
@@ -8146,6 +8723,7 @@ ${question}`;
           ? `<div class="queue-items">${items.map((item) => `
             <div class="queue-item">
               <div>
+                ${item.metadata && item.metadata.project_name ? `<div class="queue-item-phone">${escapeHtml(item.metadata.project_name)}${item.metadata.git_commit_short ? ` · ${escapeHtml(item.metadata.git_commit_short)}` : ""}</div>` : ""}
                 ${item.metadata && item.metadata.conversation_phone ? `<div class="queue-item-phone">call ${escapeHtml(item.metadata.conversation_phone)} · ${escapeHtml(item.metadata.from_phone || "?")} -> ${escapeHtml(item.metadata.to_phone || "?")}</div>` : ""}
                 <div class="queue-item-text">${escapeHtml(item.summary || item.id || "message")}</div>
               </div>
@@ -8192,6 +8770,7 @@ ${question}`;
               <div class="entry-title">
                 <span class="dot ${escapeHtml(context)}"></span>
                 <span class="badge ${escapeHtml(context)}">${escapeHtml(context)}</span>
+                ${meta.project_name ? `<span class="badge">${escapeHtml(meta.project_name)}</span>` : ""}
                 <span class="badge">${escapeHtml(task.route || task.queue)}</span>
                 <span class="badge event">${escapeHtml(scheduledModeLabel(task))}</span>
               </div>
@@ -8243,9 +8822,23 @@ ${question}`;
       if (document.activeElement !== gitAddressEl) {
         gitAddressEl.value = data.git_address || "";
       }
+      if (document.activeElement !== gitProjectNameEl) {
+        gitProjectNameEl.value = data.project_name || "";
+      }
+      gitContexts = data.contexts || [];
+      currentGitContext = gitContexts.find((context) => context.is_current_port)
+        || (data.git_context_key ? {
+          project_name: data.project_name || "LLM Extractor",
+          git_context_key: data.git_context_key,
+          git_address: data.git_address || "",
+          git_commit: data.git_commit || "",
+          git_commit_short: data.git_commit_short || "",
+          is_current_port: true
+        } : null);
+      renderGitContextOptions(historyGitContextEl.value || (currentGitContext && currentGitContext.git_context_key) || "");
       commitValueEl.textContent = data.git_commit_short || "не задан";
       if (data.git_commit_short) {
-        setGitStatus(`Порт ${data.port}: commit ${data.git_commit_short}`, "ok");
+        setGitStatus(`Порт ${data.port}: ${data.project_name || "project"} · commit ${data.git_commit_short}`, "ok");
       } else if (data.git_error) {
         setGitStatus(`Порт ${data.port}: ${data.git_error}`, "error");
       } else {
@@ -8253,8 +8846,26 @@ ${question}`;
       }
     }
 
+    function renderGitContextOptions(preferredKey = "") {
+      const selectedKey = gitContexts.some((context) => context.git_context_key === preferredKey)
+        ? preferredKey
+        : (currentGitContext && currentGitContext.git_context_key)
+          || (gitContexts[0] && gitContexts[0].git_context_key)
+          || "";
+      historyGitContextEl.innerHTML = gitContexts.length
+        ? gitContexts.map((context) => {
+          const selected = context.git_context_key === selectedKey ? " selected" : "";
+          const portText = context.ports && context.ports.length ? ` · port ${context.ports.join(", ")}` : "";
+          const label = `${context.project_name || "Project"} · ${context.git_context_key}${portText}`;
+          return `<option value="${escapeHtml(context.git_context_key)}"${selected}>${escapeHtml(label)}</option>`;
+        }).join("")
+        : `<option value="">Git context не задан</option>`;
+      historyGitContextEl.value = selectedKey;
+    }
+
     async function saveGitConfig() {
       const gitAddress = gitAddressEl.value.trim();
+      const projectName = gitProjectNameEl.value.trim();
       if (!gitAddress) {
         setGitStatus("Введите Git address.", "error");
         return;
@@ -8263,7 +8874,7 @@ ${question}`;
       const response = await fetch("/git-config", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({git_address: gitAddress})
+        body: JSON.stringify({git_address: gitAddress, project_name: projectName})
       });
       const data = await response.json();
       if (!response.ok) {
@@ -8271,6 +8882,9 @@ ${question}`;
         return;
       }
       commitValueEl.textContent = data.git_commit_short || "не задан";
+      gitContexts = data.contexts || [];
+      currentGitContext = gitContexts.find((context) => context.is_current_port) || currentGitContext;
+      renderGitContextOptions(data.git_context_key || (currentGitContext && currentGitContext.git_context_key) || "");
       if (data.git_commit_short) {
         setGitStatus(`Сохранено для порта ${data.port}. Commit: ${data.git_commit_short}`, "ok");
       } else if (data.git_error) {
@@ -8284,6 +8898,9 @@ ${question}`;
       const params = new URLSearchParams();
       params.set("limit", String(limit));
       params.set("date_from", historyFromEl.value || todayInputValue());
+      if (historyGitContextEl.value) {
+        params.set("git_context", historyGitContextEl.value);
+      }
       if (historyToEl.value) {
         params.set("date_to", historyToEl.value);
       }
@@ -8303,9 +8920,10 @@ ${question}`;
       const meta = record.metadata || {};
       const timestamp = new Date(record.timestamp).toLocaleString("ru-RU");
       const commit = meta.git_commit_short || "no-commit";
+      const project = meta.project_name || "no-project";
       const actor = [meta.sender, meta.receiver].filter(Boolean).join(" -> ") || meta.direction || record.route || record.queue;
       const message = formatMessage(record.message);
-      return `[${timestamp}] [Commit: ${commit}] [${actor}] [${record.event}]
+      return `[${timestamp}] [Project: ${project}] [Commit: ${commit}] [${actor}] [${record.event}]
 ${message}`;
     }
 
@@ -8450,7 +9068,8 @@ ${data.patch || ""}
 
     async function copyHistoryWithPatchesToClipboard() {
       setHistoryStatus("Готовлю историю и патчи между commit...");
-      const gitAddress = gitAddressEl.value.trim();
+      const activeProject = selectedGitContext();
+      const gitAddress = (activeProject && activeProject.git_address) || gitAddressEl.value.trim();
       if (!gitAddress) {
         setHistoryStatus("Введите Git address в блоке Git context. Он нужен, чтобы получить patch между commit.", "error");
         return;
@@ -8515,12 +9134,15 @@ ${data.patch || ""}
       const records = await fetchHistoryRecords(500);
       currentHistoryRecords = records;
       const dateToText = historyToEl.value ? ` - ${historyToEl.value}` : "";
-      historyCountEl.textContent = `${records.length} сообщений с ${historyFromEl.value || todayInputValue()}${dateToText}`;
+      const activeProject = selectedGitContext();
+      const projectText = activeProject ? ` · ${activeProject.project_name || activeProject.git_context_key}` : "";
+      historyCountEl.textContent = `${records.length} сообщений с ${historyFromEl.value || todayInputValue()}${dateToText}${projectText}`;
       historyEl.innerHTML = records.slice().reverse().map((record) => {
         const meta = record.metadata || {};
         const context = record.context || meta.context || "unknown";
         const timestamp = new Date(record.timestamp).toLocaleString("ru-RU");
         const commit = meta.git_commit_short || "no-commit";
+        const project = meta.project_name || "no-project";
         const actor = [meta.sender, meta.receiver].filter(Boolean).join(" -> ") || meta.direction || record.route || record.queue;
         const message = formatMessage(record.message);
         const statusText = extractStatus(message);
@@ -8534,6 +9156,7 @@ ${data.patch || ""}
               <div class="entry-title">
                 <span class="dot ${escapeHtml(context)}"></span>
                 <span class="badge ${escapeHtml(context)}">${escapeHtml(context)}</span>
+                <span class="badge">${escapeHtml(project)}</span>
                 <span class="badge">Commit: ${escapeHtml(commit)}</span>
                 <span class="badge event">${escapeHtml(record.event)}</span>
               </div>
@@ -8558,7 +9181,8 @@ ${data.patch || ""}
 
     async function refresh() {
       await refreshQueues();
-      await Promise.all([refreshScheduledTasks(), refreshHistory(), refreshGitConfig()]);
+      await refreshGitConfig();
+      await Promise.all([refreshScheduledTasks(), refreshHistory()]);
     }
 
     function setActiveView(view) {
@@ -9062,9 +9686,7 @@ ${data.patch || ""}
     document.getElementById("addAgentButton").addEventListener("click", () => addAgent());
     document.getElementById("cloneAgentButton").addEventListener("click", openCloneAgentModal);
     document.getElementById("removeSelectedAgentButton").addEventListener("click", removeSelectedAgent);
-    document.getElementById("copyAgentProfileButton").addEventListener("click", () => {
-      copySelectedAgentProfile().catch((error) => setAgentsStatus(error.message, "error"));
-    });
+    document.getElementById("copyAgentProfileButton").addEventListener("click", openCopyProfilePhoneModal);
     document.getElementById("saveAgentsButton").addEventListener("click", () => {
       saveAgents().catch((error) => setAgentsStatus(error.message, "error"));
     });
@@ -9188,9 +9810,19 @@ ${data.patch || ""}
       requestAgentClonePreview().catch((error) => setCloneAgentStatus(error.message, "error"));
     });
     acceptCloneAgentButtonEl.addEventListener("click", acceptAgentClone);
+    document.getElementById("closeCopyProfilePhoneButton").addEventListener("click", closeCopyProfilePhoneModal);
+    document.getElementById("cancelCopyProfilePhoneButton").addEventListener("click", closeCopyProfilePhoneModal);
+    confirmCopyProfilePhoneButtonEl.addEventListener("click", () => {
+      copySelectedAgentProfile().catch((error) => setCopyProfilePhoneStatus(error.message, "error"));
+    });
     cloneAgentModalEl.addEventListener("click", (event) => {
       if (event.target === cloneAgentModalEl) {
         closeCloneAgentModal();
+      }
+    });
+    copyProfilePhoneModalEl.addEventListener("click", (event) => {
+      if (event.target === copyProfilePhoneModalEl) {
+        closeCopyProfilePhoneModal();
       }
     });
     document.addEventListener("keydown", (event) => {
@@ -9202,6 +9834,9 @@ ${data.patch || ""}
       }
       if (event.key === "Escape" && !cloneAgentModalEl.hidden) {
         closeCloneAgentModal();
+      }
+      if (event.key === "Escape" && !copyProfilePhoneModalEl.hidden) {
+        closeCopyProfilePhoneModal();
       }
       if (event.key === "Escape" && !helpModalEl.hidden) {
         closeHelpModal();
@@ -9267,6 +9902,10 @@ ${data.patch || ""}
       if (target && target.dataset && target.dataset.action === "restore-history-record") {
         restoreRemovedBackendHistoryRecord(target.dataset.recordId).catch((error) => setHistoryStatus(error.message, "error"));
       }
+    });
+    historyGitContextEl.addEventListener("change", () => {
+      setHistoryStatus("");
+      refreshHistory().catch((error) => setHistoryStatus(error.message, "error"));
     });
     historyFromEl.addEventListener("change", () => setHistoryStatus(""));
     historyToEl.addEventListener("change", () => setHistoryStatus(""));
@@ -9342,9 +9981,17 @@ async def enqueue(
     message: Any,
     metadata: dict[str, Any] | None = None,
     port: int | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     queue_meta = queue_definition(queue_name)
-    item = make_queue_item(message, metadata)
+    clean_metadata = {key: value for key, value in (metadata or {}).items() if value is not None}
+    item_git_context = (
+        {key: value for key, value in git_context.items() if value is not None}
+        if git_context is not None
+        else await git_context_for_port(port)
+    )
+    message_git_context = extract_git_context_from_message(message)
+    item = make_queue_item(message, {**clean_metadata, **item_git_context, **message_git_context})
     item_id = item["id"]
     async with locks[queue_name]:
         queues[queue_name].append(item)
@@ -9355,13 +10002,18 @@ async def enqueue(
         event,
         queue_name,
         message,
-        {"queue_item_id": item_id, **(metadata or {})},
+        {"queue_item_id": item_id, **clean_metadata},
         port,
+        item_git_context,
     )
     return {"status": "queued", "queue": queue_name, "id": item_id, "size": size}
 
 
-async def dequeue(queue_name: str, port: int | None = None) -> dict[str, Any]:
+async def dequeue(
+    queue_name: str,
+    port: int | None = None,
+    git_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     queue_meta = queue_definition(queue_name)
     async with locks[queue_name]:
         if not queues[queue_name]:
@@ -9369,13 +10021,14 @@ async def dequeue(queue_name: str, port: int | None = None) -> dict[str, Any]:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Queue is empty",
             )
-        item = queues[queue_name].popleft()
+        delivered_item = queues[queue_name].popleft()
 
-    item_id = queue_item_id(item)
-    message = queue_item_message(item)
+    item_id = queue_item_id(delivered_item)
+    message = queue_item_message(delivered_item)
     event = queue_meta["get_event"]
-    metadata = {"queue_item_id": item_id} if item_id else None
-    await append_history(event, queue_name, message, metadata, port=port)
+    item_metadata = queue_item_metadata(delivered_item)
+    metadata = {"queue_item_id": item_id, **item_metadata} if item_id else item_metadata
+    await append_history(event, queue_name, message, metadata, port=port, git_context=git_context)
     return {"message": message, "id": item_id}
 
 
@@ -9397,6 +10050,7 @@ async def enqueue_phone_channel(
     message: Any,
     metadata: dict[str, Any],
     port: int | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if queue_name not in {"worker-all", "tester-all", "consultant-all"}:
         raise HTTPException(
@@ -9420,7 +10074,7 @@ async def enqueue_phone_channel(
         "to_phone": to_phone,
         "phone_channel": queue_name,
     }
-    return await enqueue(queue_name, message, phone_metadata, port)
+    return await enqueue(queue_name, message, phone_metadata, port, git_context)
 
 
 async def dequeue_phone_channel(
@@ -9428,6 +10082,7 @@ async def dequeue_phone_channel(
     conversation_phone: str,
     to_phone: str,
     port: int | None = None,
+    git_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if queue_name not in {"worker-all", "tester-all", "consultant-all"}:
         raise HTTPException(
@@ -9449,7 +10104,10 @@ async def dequeue_phone_channel(
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
-            if delivered_item is None and phone_channel_item_matches(item, conversation_phone, to_phone):
+            if (
+                delivered_item is None
+                and phone_channel_item_matches(item, conversation_phone, to_phone)
+            ):
                 delivered_item = item
                 continue
             kept_items.append(item)
@@ -9464,7 +10122,14 @@ async def dequeue_phone_channel(
     item_id = queue_item_id(delivered_item)
     message = queue_item_message(delivered_item)
     metadata = {"queue_item_id": item_id, **queue_item_metadata(delivered_item)}
-    await append_history(queue_meta["get_event"], queue_name, message, metadata, port=port)
+    await append_history(
+        queue_meta["get_event"],
+        queue_name,
+        message,
+        metadata,
+        port=port,
+        git_context=git_context,
+    )
     return {
         "message": message,
         "id": item_id,
@@ -9500,17 +10165,33 @@ async def delete_queued_item(
         )
 
     message = queue_item_message(deleted_item)
+    deleted_metadata = queue_item_metadata(deleted_item)
+    deleted_git_context = {
+        key: deleted_metadata.get(key)
+        for key in (
+            "fastapi_port",
+            "project_name",
+            "git_context_key",
+            "git_address",
+            "git_commit",
+            "git_commit_short",
+            "git_error",
+        )
+        if deleted_metadata.get(key) is not None
+    }
     await append_history(
         f"removed_from_{queue_meta['context']}_queue",
         queue_name,
         message,
         {
             "queue_item_id": item_id,
+            **deleted_metadata,
             "sender": "Owner",
             "receiver": queue_meta["default_receiver"],
             "action": "deleted_from_queue",
         },
         port=port,
+        git_context=deleted_git_context or None,
     )
     return {"status": "deleted", "queue": queue_name, "id": item_id, "size": size}
 
@@ -9556,6 +10237,7 @@ async def get_history(
     limit: int = 200,
     date_from: str | None = None,
     date_to: str | None = None,
+    git_context: str | None = None,
 ) -> list[dict[str, Any]]:
     try:
         if date_from:
@@ -9568,7 +10250,7 @@ async def get_history(
             detail="Dates must use YYYY-MM-DD format",
         ) from exc
 
-    return await read_history(limit, date_from, date_to)
+    return await read_history(limit, date_from, date_to, git_context)
 
 
 @app.delete("/history/{record_id}")
@@ -9620,11 +10302,26 @@ async def restore_history_to_queue(
         "action": "restored_to_original_queue",
         "restored_from_history_id": record_id,
     }
+    record_metadata = git_context_metadata_from_record(record)
+    record_git_context = {
+        key: record_metadata.get(key)
+        for key in (
+            "fastapi_port",
+            "project_name",
+            "git_context_key",
+            "git_address",
+            "git_commit",
+            "git_commit_short",
+            "git_error",
+        )
+        if record_metadata.get(key) is not None
+    }
     return await enqueue(
         queue_name,
         record.get("message"),
         metadata,
         request_port(request),
+        record_git_context or None,
     )
 
 
@@ -9634,11 +10331,25 @@ async def get_git_config(request: Request) -> dict[str, Any]:
     config = await read_git_config()
     entry = config.get(str(port), {}) if port is not None else {}
     git_address = entry.get("git_address") if isinstance(entry, dict) else None
+    project_name = normalize_project_name(
+        entry.get("project_name") if isinstance(entry, dict) else None,
+        git_address if isinstance(git_address, str) else "",
+    ) if git_address else ""
+    git_context_key = (
+        str(entry.get("git_context_key") or "").strip()
+        if isinstance(entry, dict)
+        else ""
+    )
+    if not git_context_key and isinstance(git_address, str) and git_address.strip():
+        git_context_key = normalize_git_context_key(git_address)
     git_context = await git_context_for_port(port)
     return {
         "port": port,
         "config_path": str(git_config_path),
         "git_address": git_address or "",
+        "project_name": project_name,
+        "git_context_key": git_context_key,
+        "contexts": configured_git_contexts_from_config(config, port),
         **git_context,
     }
 
@@ -9666,11 +10377,20 @@ async def post_git_config(request: Request) -> dict[str, Any]:
             detail="Git address is empty",
         )
 
-    entry = await save_git_address(port, git_address.strip())
+    project_name = payload.get("project_name")
+    if project_name is not None and not isinstance(project_name, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_name must be a string",
+        )
+
+    entry = await save_git_address(port, git_address.strip(), project_name)
     git_context = await git_context_for_port(port)
+    config = await read_git_config()
     return {
         "port": port,
         "config_path": str(git_config_path),
+        "contexts": configured_git_contexts_from_config(config, port),
         **entry,
         **git_context,
     }
@@ -10150,6 +10870,7 @@ async def ui_send(request: Request) -> dict[str, Any]:
             detail="Message is empty",
         )
 
+    message = await ensure_message_git_context_from_port(message.strip(), request_port(request))
     metadata = {
         "submitted_via": "ui",
         "sender": payload.get("sender"),
@@ -10164,7 +10885,7 @@ async def ui_send(request: Request) -> dict[str, Any]:
         )
     return await schedule_message(
         queue_name,
-        message.strip(),
+        message,
         metadata,
         request_port(request),
         schedule,
@@ -10203,6 +10924,7 @@ async def post_worker_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    require_message_git_context(message)
     return await enqueue_phone_channel(
         "worker-all",
         conversation_phone,
@@ -10218,7 +10940,12 @@ async def get_worker_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
-    return await dequeue_phone_channel("worker-all", conversation_phone, to_phone, request_port(request))
+    return await dequeue_phone_channel(
+        "worker-all",
+        conversation_phone,
+        to_phone,
+        request_port(request),
+    )
 
 
 @app.post("/tester/all/{conversation_phone}", status_code=status.HTTP_201_CREATED)
@@ -10227,6 +10954,7 @@ async def post_tester_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    require_message_git_context(message)
     return await enqueue_phone_channel(
         "tester-all",
         conversation_phone,
@@ -10242,7 +10970,12 @@ async def get_tester_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
-    return await dequeue_phone_channel("tester-all", conversation_phone, to_phone, request_port(request))
+    return await dequeue_phone_channel(
+        "tester-all",
+        conversation_phone,
+        to_phone,
+        request_port(request),
+    )
 
 
 @app.post("/consultant/all/{conversation_phone}", status_code=status.HTTP_201_CREATED)
@@ -10251,6 +10984,7 @@ async def post_consultant_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    require_message_git_context(message)
     return await enqueue_phone_channel(
         "consultant-all",
         conversation_phone,
@@ -10266,12 +11000,23 @@ async def get_consultant_all(
     request: Request,
     to_phone: str,
 ) -> dict[str, Any]:
-    return await dequeue_phone_channel("consultant-all", conversation_phone, to_phone, request_port(request))
+    return await dequeue_phone_channel(
+        "consultant-all",
+        conversation_phone,
+        to_phone,
+        request_port(request),
+    )
 
 
 @app.post("/work", status_code=status.HTTP_201_CREATED)
 async def post_work(request: Request) -> dict[str, Any]:
-    return await enqueue("work", await read_message(request), port=request_port(request))
+    message = await read_message(request)
+    require_message_git_context(message)
+    return await enqueue(
+        "work",
+        message,
+        port=request_port(request),
+    )
 
 
 @app.get("/work")
@@ -10281,7 +11026,13 @@ async def get_work(request: Request) -> dict[str, Any]:
 
 @app.post("/test", status_code=status.HTTP_201_CREATED)
 async def post_test(request: Request) -> dict[str, Any]:
-    return await enqueue("test", await read_message(request), port=request_port(request))
+    message = await read_message(request)
+    require_message_git_context(message)
+    return await enqueue(
+        "test",
+        message,
+        port=request_port(request),
+    )
 
 
 @app.get("/test")
@@ -10291,9 +11042,11 @@ async def get_test(request: Request) -> dict[str, Any]:
 
 @app.post("/work-design", status_code=status.HTTP_201_CREATED)
 async def post_work_design(request: Request) -> dict[str, Any]:
+    message = await read_message(request)
+    require_message_git_context(message)
     return await enqueue(
         "work-design",
-        await read_message(request),
+        message,
         port=request_port(request),
     )
 
@@ -10305,9 +11058,11 @@ async def get_work_design(request: Request) -> dict[str, Any]:
 
 @app.post("/test-design", status_code=status.HTTP_201_CREATED)
 async def post_test_design(request: Request) -> dict[str, Any]:
+    message = await read_message(request)
+    require_message_git_context(message)
     return await enqueue(
         "test-design",
-        await read_message(request),
+        message,
         port=request_port(request),
     )
 

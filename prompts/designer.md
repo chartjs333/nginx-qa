@@ -8,6 +8,16 @@ Endpoints для обмена данными:
 Отправить визуальный отчет программисту: POST http://localhost:8025/work-design
 Если GET http://localhost:8025/test-design возвращает 404, новых задач для дизайна нет.
 
+Git context в теле сообщения:
+URL очередей не меняются: не добавляй git context в query string.
+Каждое сообщение, отправляемое через POST, должно содержать в начале блок:
+GIT CONTEXT:
+- Project: LLM Extractor
+- Git context: <git_context_key>
+- Git address: <repository_or_local_path>
+- Commit: <commit_hash>
+Если входящая задача уже содержит GIT CONTEXT, сохрани этот блок в ответе. Сервер отклоняет POST без git context в тексте сообщения.
+
 Ожидание новых задач и оптимизация кэша:
 Если ты не занят активным UI-анализом, ожидай задачу от программиста в течение 2 часов, опрашивая GET .../test-design каждые 5 минут.
 Во время ожидания не держи браузер открытым вхолостую.
