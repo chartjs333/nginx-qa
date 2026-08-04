@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import html
 import json
 import os
@@ -10,10 +11,13 @@ import random
 import re
 import shutil
 import subprocess
+import time as time_module
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from copy import deepcopy
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -110,12 +114,15 @@ specialization_lock = asyncio.Lock()
 screenshot_folders_lock = asyncio.Lock()
 evidence_folders_lock = asyncio.Lock()
 scheduled_tasks_lock = asyncio.Lock()
+group_task_submission_lock = asyncio.Lock()
 scheduled_tasks: dict[str, dict[str, Any]] = {}
 scheduled_timer_tasks: dict[str, asyncio.Task[Any]] = {}
 base_dir = Path(__file__).resolve().parent
 history_path = base_dir / "conversation_log.jsonl"
 git_config_path = base_dir / "port_git_map.json"
 PHONE_GIT_CONTEXTS_KEY = "phone_git_contexts"
+PROJECTS_KEY = "projects"
+group_templates_path = base_dir / "group_templates.json"
 email_routes_path = base_dir / "email_routes.json"
 agents_path = base_dir / "agents.json"
 specializations_path = base_dir / "specializations.json"
@@ -148,7 +155,22 @@ SCREENSHOT_EXTENSIONS = {
 MAX_SCREENSHOT_SIZE = 25 * 1024 * 1024
 MAX_EVIDENCE_SIZE = 100 * 1024 * 1024
 MAX_PATCH_SIZE = 5 * 1024 * 1024
+PROJECT_MANAGER_PHONE = "0001"
+PROJECT_MANAGER_AGENT_ID = "agent-project-manager"
+PROJECT_MANAGER_AGENT_NAME = "Project Manager"
+PROJECT_PHONE_MIN = 9000
+PROJECT_PHONE_MAX = 9999
+GROUP_AGENT_PHONE_MIN = 4000
+GROUP_AGENT_PHONE_MAX = 8999
+GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
+CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
+CYCLE_LIFECYCLE_EVENT_TYPES = {
+    "ARTIFACT_CREATED",
+    "GROUP_REPORT_SUBMITTED",
+    "CYCLE_COMPLETED",
+}
 DEFAULT_AGENT_PHONES: dict[str, str] = {
+    PROJECT_MANAGER_AGENT_NAME: PROJECT_MANAGER_PHONE,
     "Owner": "1000",
     "Analyst": "1001",
     "Backend": "1002",
@@ -161,6 +183,16 @@ DEFAULT_AGENT_PHONES: dict[str, str] = {
     "Frontend & UX Technical Advisor": "2002",
 }
 DEFAULT_AGENTS: list[dict[str, str]] = [
+    {
+        "id": PROJECT_MANAGER_AGENT_ID,
+        "name": PROJECT_MANAGER_AGENT_NAME,
+        "phone": PROJECT_MANAGER_PHONE,
+        "profile": (
+            "Системный менеджер проектов. По Git-адресу находит существующий "
+            "проект и его агентов или регистрирует новый чистый проект."
+        ),
+        "status": "system",
+    },
     {
         "id": "agent-analyst",
         "name": "Analyst",
@@ -221,10 +253,18 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def write_history_line(record: dict[str, Any]) -> None:
+def _write_history_line_unlocked(record: dict[str, Any]) -> None:
     history_path.parent.mkdir(parents=True, exist_ok=True)
     with history_path.open("a", encoding="utf-8") as file:
         file.write(json.dumps(record, ensure_ascii=False) + "\n")
+        file.flush()
+        os.fsync(file.fileno())
+
+
+def write_history_line(record: dict[str, Any]) -> None:
+    lock_path = history_path.with_name(f"{history_path.name}.lock")
+    with interprocess_file_lock(lock_path):
+        _write_history_line_unlocked(record)
 
 
 def local_today_iso() -> str:
@@ -266,11 +306,97 @@ def read_git_config_file() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+@contextmanager
+def interprocess_file_lock(lock_path: Path, timeout_seconds: float = 30.0):
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as lock_file:
+        lock_file.seek(0, os.SEEK_END)
+        if lock_file.tell() == 0:
+            lock_file.write(b"\0")
+            lock_file.flush()
+        lock_file.seek(0)
+
+        if os.name == "nt":
+            import msvcrt
+
+            expires_at = time_module.monotonic() + timeout_seconds
+            while True:
+                try:
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time_module.monotonic() >= expires_at:
+                        raise TimeoutError("Timed out waiting for Git config file lock")
+                    time_module.sleep(0.05)
+            try:
+                yield
+            finally:
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            expires_at = time_module.monotonic() + timeout_seconds
+            while True:
+                try:
+                    fcntl.flock(
+                        lock_file.fileno(),
+                        fcntl.LOCK_EX | fcntl.LOCK_NB,
+                    )
+                    break
+                except BlockingIOError:
+                    if time_module.monotonic() >= expires_at:
+                        raise TimeoutError("Timed out waiting for Git config file lock")
+                    time_module.sleep(0.05)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def git_config_file_lock(timeout_seconds: float = 30.0):
+    lock_path = git_config_path.with_name(f"{git_config_path.name}.lock")
+    with interprocess_file_lock(lock_path, timeout_seconds):
+        yield
+
+
+@contextmanager
+def agents_file_lock(timeout_seconds: float = 30.0):
+    lock_path = agents_path.with_name(f"{agents_path.name}.lock")
+    with interprocess_file_lock(lock_path, timeout_seconds):
+        yield
+
+
+def write_json_file_atomic(target_path: Path, data: Any) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = target_path.with_name(
+        f".{target_path.name}.{os.getpid()}.{uuid4().hex}.tmp"
+    )
+    try:
+        with temp_path.open("w", encoding="utf-8") as file:
+            json.dump(data, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+            file.flush()
+            os.fsync(file.fileno())
+        replace_deadline = time_module.monotonic() + 5.0
+        while True:
+            try:
+                os.replace(temp_path, target_path)
+                break
+            except PermissionError:
+                if time_module.monotonic() >= replace_deadline:
+                    raise
+                time_module.sleep(0.05)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 def write_git_config_file(data: dict[str, Any]) -> None:
-    git_config_path.parent.mkdir(parents=True, exist_ok=True)
-    with git_config_path.open("w", encoding="utf-8") as file:
-        json.dump(data, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    write_json_file_atomic(git_config_path, data)
 
 
 def normalize_email_route(raw_route: Any) -> dict[str, str] | None:
@@ -292,6 +418,21 @@ def normalize_email_route(raw_route: Any) -> dict[str, str] | None:
 
 def default_agents() -> list[dict[str, Any]]:
     return [agent.copy() for agent in DEFAULT_AGENTS]
+
+
+def project_manager_agent() -> dict[str, Any]:
+    return {
+        "id": PROJECT_MANAGER_AGENT_ID,
+        "name": PROJECT_MANAGER_AGENT_NAME,
+        "phone": PROJECT_MANAGER_PHONE,
+        "profile": (
+            "Системный менеджер проектов. По Git-адресу находит существующий "
+            "проект и его агентов или регистрирует новый чистый проект."
+        ),
+        "parameters": {},
+        "template_source": "system:project_manager",
+        "status": "system",
+    }
 
 
 def normalize_agent_parameters(raw_parameters: Any) -> dict[str, str]:
@@ -343,13 +484,20 @@ def normalize_agent(raw_agent: Any) -> dict[str, Any] | None:
 
 def normalize_agents(raw_agents: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_agents, list):
-        return []
+        return [project_manager_agent()]
 
-    agents: list[dict[str, Any]] = []
-    seen_names: set[str] = set()
+    agents: list[dict[str, Any]] = [project_manager_agent()]
+    seen_names: set[str] = {PROJECT_MANAGER_AGENT_NAME.casefold()}
     for raw_agent in raw_agents:
         agent = normalize_agent(raw_agent)
         if agent is None:
+            continue
+
+        if (
+            agent["id"] == PROJECT_MANAGER_AGENT_ID
+            or agent["phone"] == PROJECT_MANAGER_PHONE
+            or agent["name"].casefold() == PROJECT_MANAGER_AGENT_NAME.casefold()
+        ):
             continue
 
         name_key = agent["name"].casefold()
@@ -362,15 +510,37 @@ def normalize_agents(raw_agents: Any) -> list[dict[str, Any]]:
     return agents
 
 
+def validate_project_manager_reservation(raw_agents: Any) -> None:
+    if not isinstance(raw_agents, list):
+        return
+
+    for raw_agent in raw_agents:
+        agent = normalize_agent(raw_agent)
+        if agent is None:
+            continue
+        if agent["phone"] == PROJECT_MANAGER_PHONE and agent["id"] != PROJECT_MANAGER_AGENT_ID:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Phone {PROJECT_MANAGER_PHONE} is reserved for Project Manager",
+            )
+        if agent["id"] == PROJECT_MANAGER_AGENT_ID and agent["phone"] != PROJECT_MANAGER_PHONE:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Project Manager must keep reserved phone {PROJECT_MANAGER_PHONE}"
+                ),
+            )
+
+
 def read_agents_file() -> list[dict[str, Any]]:
     if not agents_path.exists():
-        return default_agents()
+        return normalize_agents(default_agents())
 
     with agents_path.open("r", encoding="utf-8") as file:
         try:
             data = json.load(file)
         except json.JSONDecodeError:
-            return default_agents()
+            return normalize_agents(default_agents())
 
     if isinstance(data, dict):
         raw_agents = data.get("agents", [])
@@ -378,16 +548,18 @@ def read_agents_file() -> list[dict[str, Any]]:
         raw_agents = data
 
     if not isinstance(raw_agents, list):
-        return default_agents()
+        return normalize_agents(default_agents())
 
     return normalize_agents(raw_agents)
 
 
+def write_agents_file_unlocked(agents: list[dict[str, Any]]) -> None:
+    write_json_file_atomic(agents_path, {"agents": agents})
+
+
 def write_agents_file(agents: list[dict[str, Any]]) -> None:
-    agents_path.parent.mkdir(parents=True, exist_ok=True)
-    with agents_path.open("w", encoding="utf-8") as file:
-        json.dump({"agents": agents}, file, ensure_ascii=False, indent=2)
-        file.write("\n")
+    with agents_file_lock():
+        write_agents_file_unlocked(agents)
 
 
 def normalize_specialization(raw_spec: Any) -> dict[str, Any] | None:
@@ -1129,6 +1301,71 @@ async def read_agents() -> list[dict[str, Any]]:
         return await asyncio.to_thread(read_agents_file)
 
 
+def save_agents_transaction(raw_agents: list[Any]) -> list[dict[str, Any]]:
+    with agents_file_lock():
+        existing_agents = read_agents_file()
+        incoming_agents = normalize_agents(raw_agents)
+        managed_agents = [
+            agent for agent in existing_agents if is_group_managed_agent(agent)
+        ]
+        managed_by_id = {
+            str(agent.get("id") or "").strip(): agent
+            for agent in managed_agents
+        }
+        managed_names = {
+            str(agent.get("name") or "").strip().casefold(): agent
+            for agent in managed_agents
+        }
+        managed_phones = {
+            str(agent.get("phone") or "").strip(): agent
+            for agent in managed_agents
+        }
+
+        retained: list[dict[str, Any]] = []
+        submitted_managed_ids: set[str] = set()
+        for candidate in incoming_agents:
+            candidate_id = str(candidate.get("id") or "").strip()
+            candidate_name = str(candidate.get("name") or "").strip().casefold()
+            candidate_phone = str(candidate.get("phone") or "").strip()
+            protected = (
+                managed_by_id.get(candidate_id)
+                or managed_names.get(candidate_name)
+                or managed_phones.get(candidate_phone)
+            )
+            if protected is not None:
+                protected_id = str(protected.get("id") or "").strip()
+                if candidate_id != protected_id or candidate != protected:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_managed_agent_is_immutable",
+                            "agent_id": protected_id,
+                        },
+                    )
+                submitted_managed_ids.add(protected_id)
+                retained.append(deepcopy(protected))
+                continue
+            retained.append(candidate)
+
+        for agent_id, managed_agent in managed_by_id.items():
+            if agent_id not in submitted_managed_ids:
+                retained.append(deepcopy(managed_agent))
+        agents = normalize_agents(retained)
+        missing_managed_ids = set(managed_by_id) - {
+            str(agent.get("id") or "").strip() for agent in agents
+        }
+        if missing_managed_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "group_managed_agent_name_conflict",
+                    "agent_ids": sorted(missing_managed_ids),
+                },
+            )
+        write_agents_file_unlocked(agents)
+        return agents
+
+
 async def save_agents(raw_agents: Any) -> list[dict[str, Any]]:
     if not isinstance(raw_agents, list):
         raise HTTPException(
@@ -1136,11 +1373,9 @@ async def save_agents(raw_agents: Any) -> list[dict[str, Any]]:
             detail="Expected agents list",
         )
 
-    agents = normalize_agents(raw_agents)
+    validate_project_manager_reservation(raw_agents)
     async with agents_lock:
-        await asyncio.to_thread(write_agents_file, agents)
-
-    return agents
+        return await asyncio.to_thread(save_agents_transaction, raw_agents)
 
 
 EMPTY_AGENT_POLL_INTERVAL = "5 минут"
@@ -1609,37 +1844,160 @@ async def save_email_routes(raw_routes: Any) -> list[dict[str, str]]:
     return routes
 
 
+def save_git_address_transaction(
+    port: int,
+    entry: dict[str, Any],
+    phone_key: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        canonical_context_key = canonical_project_context_key_for_phone(
+            config,
+            phone_key,
+        )
+        if (
+            canonical_context_key
+            and canonical_context_key != entry.get("git_context_key")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Phone {phone_key} is reserved for project "
+                    f"{canonical_context_key}"
+                ),
+            )
+        raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+        protected_mapping = (
+            raw_phone_map.get(phone_key)
+            if phone_key and isinstance(raw_phone_map, dict)
+            else None
+        )
+        if (
+            isinstance(protected_mapping, dict)
+            and str(protected_mapping.get("managed_by") or "").strip()
+            == "group_api"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "group_managed_phone_is_immutable",
+                    "phone": phone_key,
+                    "agent_id": protected_mapping.get("agent_id"),
+                },
+            )
+        config[str(port)] = entry
+        if phone_key:
+            phone_map = dict(raw_phone_map) if isinstance(raw_phone_map, dict) else {}
+            phone_map[phone_key] = {
+                **entry,
+                "phone": phone_key,
+                "fastapi_port": port,
+                **(
+                    {"project_phone": phone_key}
+                    if canonical_context_key
+                    else {}
+                ),
+            }
+            config[PHONE_GIT_CONTEXTS_KEY] = phone_map
+        write_git_config_file(config)
+    return {
+        **entry,
+        **({"phone": phone_key} if phone_key else {}),
+    }
+
+
 async def save_git_address(
     port: int,
     git_address: str,
     project_name: str | None = None,
     phone: str | None = None,
+    git_context_key: str | None = None,
 ) -> dict[str, Any]:
+    clean_git_address = git_address.strip()
+    clean_git_context_key = (
+        normalize_project_context_reference(git_context_key)
+        if git_context_key
+        else normalize_project_context_reference(clean_git_address)
+    )
+    if git_context_key:
+        try:
+            _, repository_key = normalize_project_git_address(clean_git_address)
+        except HTTPException:
+            repository_key = ""
+        if (
+            repository_key
+            and project_repository_key_from_context(clean_git_context_key)
+            != repository_key
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_context_key belongs to a different Git repository",
+            )
+    entry = {
+        "git_address": clean_git_address,
+        "project_name": normalize_project_name(project_name, clean_git_address),
+        "git_context_key": clean_git_context_key,
+        "updated_at": utc_now(),
+    }
+    phone_key = normalize_phone_key(phone)
+    if phone_key == PROJECT_MANAGER_PHONE:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Phone {PROJECT_MANAGER_PHONE} is reserved for Project Manager",
+        )
     async with git_config_lock:
-        config = await asyncio.to_thread(read_git_config_file)
-        clean_git_address = git_address.strip()
-        entry = {
-            "git_address": clean_git_address,
-            "project_name": normalize_project_name(project_name, clean_git_address),
-            "git_context_key": normalize_git_context_key(clean_git_address),
-            "updated_at": utc_now(),
-        }
-        config[str(port)] = entry
-        phone_key = normalize_phone_key(phone)
-        if phone_key:
-            raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
-            phone_map = raw_phone_map if isinstance(raw_phone_map, dict) else {}
-            phone_map[phone_key] = {
-                **entry,
-                "phone": phone_key,
-                "fastapi_port": port,
-            }
+        return await asyncio.to_thread(
+            save_git_address_transaction,
+            port,
+            entry,
+            phone_key,
+        )
+
+
+def delete_git_context_phone_transaction(phone_key: str) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        canonical_context_key = canonical_project_context_key_for_phone(
+            config,
+            phone_key,
+        )
+        if canonical_context_key:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"Phone {phone_key} is reserved for project "
+                    f"{canonical_context_key} and cannot be deleted"
+                ),
+            )
+        raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+        if not isinstance(raw_phone_map, dict) or phone_key not in raw_phone_map:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Git context for phone {phone_key} was not found",
+            )
+        protected_mapping = raw_phone_map.get(phone_key)
+        if (
+            isinstance(protected_mapping, dict)
+            and str(protected_mapping.get("managed_by") or "").strip()
+            == "group_api"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "group_managed_phone_is_immutable",
+                    "phone": phone_key,
+                    "agent_id": protected_mapping.get("agent_id"),
+                },
+            )
+
+        phone_map = dict(raw_phone_map)
+        removed = phone_map.pop(phone_key)
+        if phone_map:
             config[PHONE_GIT_CONTEXTS_KEY] = phone_map
-        await asyncio.to_thread(write_git_config_file, config)
-        return {
-            **entry,
-            **({"phone": phone_key} if phone_key else {}),
-        }
+        else:
+            config.pop(PHONE_GIT_CONTEXTS_KEY, None)
+        write_git_config_file(config)
+    return removed if isinstance(removed, dict) else {"phone": phone_key}
 
 
 async def delete_git_context_phone(phone: str) -> dict[str, Any]:
@@ -1651,22 +2009,7 @@ async def delete_git_context_phone(phone: str) -> dict[str, Any]:
         )
 
     async with git_config_lock:
-        config = await asyncio.to_thread(read_git_config_file)
-        raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
-        if not isinstance(raw_phone_map, dict) or phone_key not in raw_phone_map:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Git context for phone {phone_key} was not found",
-            )
-
-        removed = raw_phone_map.pop(phone_key)
-        if raw_phone_map:
-            config[PHONE_GIT_CONTEXTS_KEY] = raw_phone_map
-        else:
-            config.pop(PHONE_GIT_CONTEXTS_KEY, None)
-        await asyncio.to_thread(write_git_config_file, config)
-
-    return removed if isinstance(removed, dict) else {"phone": phone_key}
+        return await asyncio.to_thread(delete_git_context_phone_transaction, phone_key)
 
 
 def request_port(request: Request) -> int | None:
@@ -1855,7 +2198,7 @@ def normalize_git_remote_address(value: str) -> str:
     parsed = urllib.parse.urlparse(address)
     if parsed.netloc:
         path = parsed.path.strip("/")
-        if path.endswith(".git"):
+        if path.lower().endswith(".git"):
             path = path[:-4]
         return f"{parsed.netloc.lower()}/{path.lower()}"
 
@@ -1879,18 +2222,221 @@ def normalize_git_context_key(value: str) -> str:
     return normalize_git_remote_address(address)
 
 
+def normalize_project_repository_path(hostname: str, raw_path: str) -> str:
+    path = raw_path.strip("/")
+    if path.lower().endswith(".git"):
+        path = path[:-4]
+    if hostname.rstrip(".").lower() == "github.com":
+        return path.lower()
+    return path
+
+
+def normalize_project_git_address(value: Any) -> tuple[str, str]:
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_address must be a string",
+        )
+
+    address = value.strip()
+    if not address:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_address is required",
+        )
+    if len(address) > 2048:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_address is too long",
+        )
+    if any(ord(character) < 32 or ord(character) == 127 for character in address):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_address contains control characters",
+        )
+
+    is_windows_path = bool(re.match(r"^[A-Za-z]:[\\/]", address))
+    is_absolute_path = is_windows_path or address.startswith(("/", "\\\\"))
+    if is_absolute_path:
+        if "#" in address:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Local git_address must not contain '#'",
+            )
+        try:
+            resolved_path = Path(os.path.abspath(address))
+        except OSError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address contains an invalid local path",
+            ) from exc
+        return address, f"local:{resolved_path}".lower()
+
+    scp_match = None
+    if "://" not in address:
+        scp_match = re.fullmatch(
+            r"(?:[^@\s/:]+@)?(?P<host>[A-Za-z0-9.-]+):(?P<path>[^\s]+)",
+            address,
+        )
+    if scp_match:
+        host = scp_match.group("host").lower()
+        path = normalize_project_repository_path(host, scp_match.group("path"))
+        if not path:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address does not contain a repository path",
+            )
+        return address, f"{host}/{path}"
+
+    parsed = urllib.parse.urlparse(address)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in {"http", "https", "ssh", "git"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address uses an unsupported URL scheme",
+            )
+        if not parsed.hostname:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address does not contain a host",
+            )
+        if parsed.password is not None or (
+            parsed.scheme.lower() in {"http", "https", "git"}
+            and parsed.username is not None
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address must not contain credentials",
+            )
+        if parsed.query or parsed.fragment:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address must not contain a query or fragment",
+            )
+        path = normalize_project_repository_path(parsed.hostname, parsed.path)
+        if not path:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address does not contain a repository path",
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_address contains an invalid port",
+            ) from exc
+        host = parsed.hostname.lower()
+        default_port = {
+            "http": 80,
+            "https": 443,
+            "ssh": 22,
+            "git": 9418,
+        }[parsed.scheme.lower()]
+        if port is not None and port != default_port:
+            host = f"{host}:{port}"
+        return address, f"{host}/{path}"
+
+    bare_remote_match = re.fullmatch(
+        r"(?P<host>(?:localhost|[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+))/(?P<path>[^\s]+)",
+        address,
+        re.IGNORECASE,
+    )
+    if bare_remote_match:
+        host = bare_remote_match.group("host").lower()
+        path = normalize_project_repository_path(
+            host,
+            bare_remote_match.group("path"),
+        )
+        if path:
+            return address, f"{host}/{path}"
+
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=(
+            "git_address must be an absolute local path, a Git URL, "
+            "an SCP-style address, or a host/repository path"
+        ),
+    )
+
+
+def project_repository_key_from_context(value: Any) -> str:
+    raw_key = str(value or "").strip()
+    base_reference = raw_key.split("#", 1)[0]
+    if not base_reference:
+        return ""
+    if not base_reference.lower().startswith("local:"):
+        try:
+            _, repository_key = normalize_project_git_address(base_reference)
+            return repository_key
+        except HTTPException:
+            pass
+    normalized_key = normalize_git_context_key(base_reference)
+    return normalized_key.split("#", 1)[0]
+
+
+def normalize_project_context_reference(value: Any) -> str:
+    raw_key = str(value or "").strip()
+    if not raw_key:
+        return ""
+    base_reference, separator, raw_suffix = raw_key.partition("#")
+    repository_key = project_repository_key_from_context(base_reference)
+    if not repository_key:
+        return ""
+    suffix = raw_suffix.strip().casefold() if separator else ""
+    return f"{repository_key}#{suffix}" if suffix else repository_key
+
+
+def normalize_requested_project_context_key(value: Any, repository_key: str) -> str:
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_context_key must be a string",
+        )
+
+    raw_key = value.strip()
+    if not raw_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_context_key must not be blank when provided",
+        )
+    if len(raw_key) > 512 or any(ord(character) < 32 for character in raw_key):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_context_key is invalid",
+        )
+
+    context_key = normalize_project_context_reference(raw_key)
+    if not context_key or project_repository_key_from_context(context_key) != repository_key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_context_key belongs to a different Git repository",
+        )
+    return context_key
+
+
 def project_name_from_git_address(git_address: str) -> str:
-    context_key = normalize_git_context_key(git_address)
+    try:
+        _, context_key = normalize_project_git_address(git_address)
+    except HTTPException:
+        context_key = normalize_git_context_key(git_address)
     if context_key in PROJECT_NAMES_BY_GIT_CONTEXT:
         return PROJECT_NAMES_BY_GIT_CONTEXT[context_key]
 
-    parsed = urllib.parse.urlparse(git_address.strip())
+    clean_address = git_address.strip()
+    if re.match(r"^[A-Za-z]:[\\/]", clean_address) or clean_address.startswith("\\\\"):
+        raw_name = Path(clean_address.rstrip("/\\")).name
+        return raw_name or DEFAULT_PROJECT_NAME
+
+    parsed = urllib.parse.urlparse(clean_address)
     raw_name = ""
     if parsed.path:
         raw_name = parsed.path.rstrip("/").rsplit("/", 1)[-1]
     if not raw_name:
         raw_name = git_address.strip().rstrip("/").rsplit("/", 1)[-1]
-    if raw_name.endswith(".git"):
+    if raw_name.lower().endswith(".git"):
         raw_name = raw_name[:-4]
     return raw_name or DEFAULT_PROJECT_NAME
 
@@ -1904,6 +2450,29 @@ def normalize_phone_key(value: Any) -> str:
     return str(value or "").strip()
 
 
+def normalize_project_phone(value: Any) -> str:
+    phone = normalize_phone_key(value)
+    if not (phone.isdigit() and len(phone) == 4):
+        return ""
+    numeric_phone = int(phone)
+    if not PROJECT_PHONE_MIN <= numeric_phone <= PROJECT_PHONE_MAX:
+        return ""
+    return phone
+
+
+def canonical_project_context_key_for_phone(
+    config: dict[str, Any],
+    phone: Any,
+) -> str:
+    project_phone = normalize_project_phone(phone)
+    if not project_phone:
+        return ""
+    for context_key, entry in project_registry_from_config(config).items():
+        if normalize_project_phone(entry.get("project_phone")) == project_phone:
+            return context_key
+    return ""
+
+
 def normalize_git_context_config_entry(raw_entry: Any) -> dict[str, Any] | None:
     if not isinstance(raw_entry, dict):
         return None
@@ -1913,9 +2482,26 @@ def normalize_git_context_config_entry(raw_entry: Any) -> dict[str, Any] | None:
         return None
 
     clean_git_address = git_address.strip()
-    context_key = str(raw_entry.get("git_context_key") or "").strip()
-    if not context_key:
-        context_key = normalize_git_context_key(clean_git_address)
+    raw_context_key = str(raw_entry.get("git_context_key") or "").strip()
+    address_context_key = normalize_project_context_reference(clean_git_address)
+    if not raw_context_key:
+        context_key = address_context_key
+    else:
+        context_key = normalize_project_context_reference(raw_context_key)
+        address_repository_key = project_repository_key_from_context(address_context_key)
+        context_repository_key = project_repository_key_from_context(context_key)
+        if (
+            address_repository_key
+            and context_repository_key
+            and address_repository_key != context_repository_key
+            and address_repository_key.casefold() == context_repository_key.casefold()
+        ):
+            _, separator, suffix = context_key.partition("#")
+            context_key = (
+                f"{address_repository_key}#{suffix}"
+                if separator and suffix
+                else address_repository_key
+            )
     if not context_key:
         return None
 
@@ -1924,11 +2510,42 @@ def normalize_git_context_config_entry(raw_entry: Any) -> dict[str, Any] | None:
         "project_name": normalize_project_name(raw_entry.get("project_name"), clean_git_address),
         "git_context_key": context_key,
     }
-    for key in ("updated_at", "fastapi_port", "phone"):
+    for key in (
+        "created_at",
+        "updated_at",
+        "fastapi_port",
+        "phone",
+        "project_phone",
+    ):
         value = raw_entry.get(key)
         if value is not None:
             entry[key] = value
+    for key, expected_type, default_value in (
+        ("groups", list, []),
+        ("group_relationships", list, []),
+        ("customer_reporting", dict, {}),
+    ):
+        value = raw_entry.get(key)
+        entry[key] = deepcopy(value) if isinstance(value, expected_type) else default_value
     return entry
+
+
+def project_registry_from_config(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    raw_projects = config.get(PROJECTS_KEY)
+    if not isinstance(raw_projects, dict):
+        return {}
+
+    projects: dict[str, dict[str, Any]] = {}
+    for raw_key, raw_entry in raw_projects.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        candidate = dict(raw_entry)
+        candidate.setdefault("git_context_key", str(raw_key))
+        entry = normalize_git_context_config_entry(candidate)
+        if entry is None:
+            continue
+        projects[entry["git_context_key"]] = entry
+    return projects
 
 
 def phone_git_contexts_from_config(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -1940,7 +2557,7 @@ def phone_git_contexts_from_config(config: dict[str, Any]) -> dict[str, dict[str
     for raw_phone, raw_entry in raw_phone_map.items():
         phone = normalize_phone_key(raw_phone)
         entry = normalize_git_context_config_entry(raw_entry)
-        if not phone or entry is None:
+        if not phone or phone == PROJECT_MANAGER_PHONE or entry is None:
             continue
         phone_map[phone] = {
             **entry,
@@ -1956,6 +2573,25 @@ def phone_git_context_entry_from_config(
     return phone_git_contexts_from_config(config).get(normalize_phone_key(phone))
 
 
+def git_context_entry_has_consistent_repository(entry: dict[str, Any]) -> bool:
+    try:
+        _, address_repository_key = normalize_project_git_address(
+            entry.get("git_address")
+        )
+    except HTTPException:
+        safe_address = safe_public_git_address(entry.get("git_address"))
+        if not safe_address:
+            return False
+        try:
+            _, address_repository_key = normalize_project_git_address(safe_address)
+        except HTTPException:
+            return False
+    context_repository_key = project_repository_key_from_context(
+        entry.get("git_context_key")
+    )
+    return bool(context_repository_key) and context_repository_key == address_repository_key
+
+
 def configured_git_contexts_from_config(
     config: dict[str, Any],
     current_port: int | None = None,
@@ -1965,6 +2601,8 @@ def configured_git_contexts_from_config(
     def add_context(raw_entry: Any, *, port_text: str = "", phone: str = "") -> None:
         entry = normalize_git_context_config_entry(raw_entry)
         if entry is None:
+            return
+        if not git_context_entry_has_consistent_repository(entry):
             return
 
         context_key = entry["git_context_key"]
@@ -1976,10 +2614,28 @@ def configured_git_contexts_from_config(
                 "git_address": entry["git_address"],
                 "ports": [],
                 "phones": [],
+                "project_phone": "",
+                "groups": [],
+                "group_relationships": [],
+                "customer_reporting": {},
+                "created_at": entry.get("created_at"),
                 "updated_at": entry.get("updated_at"),
                 "is_current_port": False,
             },
         )
+        project_phone = normalize_project_phone(entry.get("project_phone"))
+        if project_phone and not context.get("project_phone"):
+            context["project_phone"] = project_phone
+        if entry.get("groups") and not context.get("groups"):
+            context["groups"] = deepcopy(entry["groups"])
+        if entry.get("group_relationships") and not context.get("group_relationships"):
+            context["group_relationships"] = deepcopy(entry["group_relationships"])
+        if entry.get("customer_reporting") and not context.get("customer_reporting"):
+            context["customer_reporting"] = deepcopy(entry["customer_reporting"])
+        if not context.get("created_at") and entry.get("created_at"):
+            context["created_at"] = entry["created_at"]
+        if not context.get("updated_at") and entry.get("updated_at"):
+            context["updated_at"] = entry["updated_at"]
         if port_text and port_text not in context["ports"]:
             context["ports"].append(port_text)
         if phone and phone not in context["phones"]:
@@ -1990,8 +2646,11 @@ def configured_git_contexts_from_config(
             context["git_address"] = entry["git_address"]
             context["updated_at"] = entry.get("updated_at")
 
+    for entry in project_registry_from_config(config).values():
+        add_context(entry)
+
     for raw_port, entry in config.items():
-        if raw_port == PHONE_GIT_CONTEXTS_KEY:
+        if raw_port in {PHONE_GIT_CONTEXTS_KEY, PROJECTS_KEY}:
             continue
         if not isinstance(entry, dict):
             continue
@@ -2018,11 +2677,3363 @@ def configured_git_context_for_key(
     git_context_key: str,
     current_port: int | None = None,
 ) -> dict[str, Any] | None:
-    normalized_key = normalize_git_context_key(git_context_key)
+    normalized_key = normalize_project_context_reference(git_context_key)
     for context in configured_git_contexts_from_config(config, current_port):
         if context.get("git_context_key") == normalized_key:
             return context
     return None
+
+
+def project_repository_key_for_context(context: dict[str, Any]) -> str:
+    git_address = context.get("git_address")
+    if isinstance(git_address, str) and git_address.strip():
+        try:
+            _, repository_key = normalize_project_git_address(git_address)
+            return repository_key
+        except HTTPException:
+            safe_address = safe_public_git_address(git_address)
+            if safe_address:
+                try:
+                    _, repository_key = normalize_project_git_address(safe_address)
+                    return repository_key
+                except HTTPException:
+                    pass
+    return project_repository_key_from_context(context.get("git_context_key"))
+
+
+def safe_public_git_address(value: Any) -> str:
+    address = str(value or "").strip()
+    if re.match(r"^[A-Za-z]:[\\/]", address) or address.startswith(("/", "\\\\")):
+        return address
+
+    scp_match = re.fullmatch(
+        r"(?:(?P<user>[^@\s/:]+)@)?(?P<host>[A-Za-z0-9.-]+):(?P<path>[^\s]+)",
+        address,
+    )
+    if scp_match:
+        user = str(scp_match.group("user") or "")
+        safe_user = "git@" if user.casefold() == "git" else ""
+        return f"{safe_user}{scp_match.group('host')}:{scp_match.group('path')}"
+
+    parsed = urllib.parse.urlparse(address)
+    if not parsed.scheme:
+        bare_remote_match = re.fullmatch(
+            r"(?:localhost|[A-Za-z0-9.-]+\.[A-Za-z0-9.-]+)/[^\s]+",
+            address,
+            re.IGNORECASE,
+        )
+        return address if bare_remote_match else ""
+    if parsed.scheme.lower() not in {"http", "https", "ssh", "git"} or not parsed.hostname:
+        return ""
+
+    host = parsed.hostname
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    if port is not None:
+        host = f"{host}:{port}"
+    return urllib.parse.urlunparse(
+        (parsed.scheme, host, parsed.path, parsed.params, "", "")
+    )
+
+
+def public_project_context(context: dict[str, Any]) -> dict[str, Any]:
+    project = {
+        "project_name": normalize_project_name(
+            context.get("project_name"),
+            str(context.get("git_address") or ""),
+        ),
+        "git_address": safe_public_git_address(context.get("git_address")),
+        "git_context_key": normalize_project_context_reference(
+            str(context.get("git_context_key") or "").strip()
+        ),
+        "project_phone": normalize_project_phone(context.get("project_phone")),
+        "project_id": normalize_project_phone(context.get("project_phone")),
+        "groups": deepcopy(context.get("groups"))
+        if isinstance(context.get("groups"), list)
+        else [],
+        "group_relationships": deepcopy(context.get("group_relationships"))
+        if isinstance(context.get("group_relationships"), list)
+        else [],
+        "customer_reporting": deepcopy(context.get("customer_reporting"))
+        if isinstance(context.get("customer_reporting"), dict)
+        else {},
+        "phones": sorted(
+            {
+                str(phone).strip()
+                for phone in context.get("phones", [])
+                if str(phone).strip()
+            }
+        ),
+        "ports": sorted(
+            {
+                str(port).strip()
+                for port in context.get("ports", [])
+                if str(port).strip()
+            }
+        ),
+    }
+    for key in ("created_at", "updated_at"):
+        value = context.get(key)
+        if value:
+            project[key] = value
+    return project
+
+
+def resolve_project_context_from_config(
+    config: dict[str, Any],
+    repository_key: str,
+    requested_context_key: str = "",
+    current_port: int | None = None,
+) -> dict[str, Any] | None:
+    contexts = configured_git_contexts_from_config(config, current_port)
+    candidates = [
+        context
+        for context in contexts
+        if project_repository_key_for_context(context) == repository_key
+        and project_repository_key_from_context(context.get("git_context_key"))
+        == repository_key
+    ]
+
+    if requested_context_key:
+        for context in candidates:
+            if context.get("git_context_key") == requested_context_key:
+                return context
+        if candidates:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "project_context_not_found",
+                    "message": (
+                        "The requested git_context_key is not registered for this "
+                        "Git repository; choose one of the listed values"
+                    ),
+                    "candidates": [
+                        public_project_context(context) for context in candidates
+                    ],
+                },
+            )
+        return None
+
+    exact_match = next(
+        (
+            context
+            for context in candidates
+            if context.get("git_context_key") == repository_key
+        ),
+        None,
+    )
+    if exact_match is not None:
+        return exact_match
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "ambiguous_project",
+                "message": (
+                    "Several projects use this Git repository; repeat the request "
+                    "with one of the listed git_context_key values"
+                ),
+                "candidates": [public_project_context(context) for context in candidates],
+            },
+        )
+    return None
+
+
+def resolve_or_create_project_transaction(
+    git_address: str,
+    repository_key: str,
+    requested_context_key: str = "",
+    project_name: str | None = None,
+    current_port: int | None = None,
+) -> tuple[bool, dict[str, Any], str, bool]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        existing = resolve_project_context_from_config(
+            config,
+            repository_key,
+            requested_context_key,
+            current_port,
+        )
+        created = existing is None
+        timestamp = utc_now()
+        if created:
+            context_key = requested_context_key or repository_key
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[context_key] = {
+                "project_name": normalize_project_name(project_name, git_address),
+                "git_address": git_address,
+                "git_context_key": context_key,
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            }
+            config[PROJECTS_KEY] = projects
+            project_context = configured_git_context_for_key(
+                config,
+                context_key,
+                current_port,
+            )
+        else:
+            project_context = existing
+
+        if project_context is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Project was saved but could not be loaded",
+            )
+
+        context_key = str(project_context.get("git_context_key") or "").strip()
+        project_phone = normalize_project_phone(
+            project_context.get("project_phone")
+        )
+        phone_assigned = not project_phone
+
+        raw_phone_map = config.get(PHONE_GIT_CONTEXTS_KEY)
+        phone_map = dict(raw_phone_map) if isinstance(raw_phone_map, dict) else {}
+        raw_projects = config.get(PROJECTS_KEY)
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+
+        registry_key = context_key
+        registry_entry: dict[str, Any] | None = None
+        for raw_key, raw_entry in projects.items():
+            if not isinstance(raw_entry, dict):
+                continue
+            candidate = dict(raw_entry)
+            candidate.setdefault("git_context_key", str(raw_key))
+            normalized_entry = normalize_git_context_config_entry(candidate)
+            if (
+                normalized_entry is not None
+                and normalized_entry.get("git_context_key") == context_key
+            ):
+                registry_key = str(raw_key)
+                registry_entry = dict(raw_entry)
+                break
+
+        def persist_project_phone_binding(phone: str) -> bool:
+            changed = False
+            project_entry = dict(registry_entry or {})
+            required_project_fields = {
+                "project_name": normalize_project_name(
+                    project_context.get("project_name"),
+                    git_address,
+                ),
+                "git_address": git_address,
+                "git_context_key": context_key,
+                "project_phone": phone,
+            }
+            if registry_entry is None:
+                project_entry.update(required_project_fields)
+                for date_key in ("created_at", "updated_at"):
+                    if project_context.get(date_key):
+                        project_entry[date_key] = project_context[date_key]
+                changed = True
+            elif project_entry.get("project_phone") != phone:
+                project_entry["project_phone"] = phone
+                changed = True
+            projects[registry_key] = project_entry
+            config[PROJECTS_KEY] = projects
+
+            raw_mapping = phone_map.get(phone)
+            mapping = dict(raw_mapping) if isinstance(raw_mapping, dict) else {}
+            normalized_mapping = normalize_git_context_config_entry(mapping)
+            raw_mapping_key = (
+                str(normalized_mapping.get("git_context_key") or "").strip()
+                if normalized_mapping is not None
+                else normalize_project_context_reference(
+                    str(mapping.get("git_context_key") or "").strip()
+                )
+            )
+            if raw_mapping_key and raw_mapping_key != context_key:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "project_phone_conflict",
+                        "message": (
+                            f"Project phone {phone} is already mapped to a different "
+                            "Git context"
+                        ),
+                    },
+                )
+
+            required_mapping_fields: dict[str, Any] = {
+                "project_name": required_project_fields["project_name"],
+                "git_address": git_address,
+                "git_context_key": context_key,
+                "phone": phone,
+                "project_phone": phone,
+            }
+            if current_port is not None and not mapping.get("fastapi_port"):
+                required_mapping_fields["fastapi_port"] = current_port
+            mapping_changed = not isinstance(raw_mapping, dict) or any(
+                mapping.get(key) != value
+                for key, value in required_mapping_fields.items()
+            )
+            if mapping_changed:
+                mapping.update(required_mapping_fields)
+                mapping.setdefault("created_at", timestamp)
+                mapping["updated_at"] = timestamp
+                phone_map[phone] = mapping
+                config[PHONE_GIT_CONTEXTS_KEY] = phone_map
+                changed = True
+            return changed
+
+        if phone_assigned:
+            with agents_file_lock():
+                used_phones = {
+                    normalize_phone_key(phone)
+                    for phone in phone_map
+                    if normalize_phone_key(phone)
+                }
+                used_phones.update(
+                    normalize_project_phone(entry.get("project_phone"))
+                    for entry in project_registry_from_config(config).values()
+                    if normalize_project_phone(entry.get("project_phone"))
+                )
+                used_phones.update(
+                    normalize_phone_key(agent.get("phone"))
+                    for agent in read_agents_file()
+                    if normalize_phone_key(agent.get("phone"))
+                )
+                used_phones.update(DEFAULT_AGENT_PHONES.values())
+                used_phones.add(PROJECT_MANAGER_PHONE)
+
+                for candidate in range(PROJECT_PHONE_MIN, PROJECT_PHONE_MAX + 1):
+                    candidate_phone = f"{candidate:04d}"
+                    if candidate_phone not in used_phones:
+                        project_phone = candidate_phone
+                        break
+                if not project_phone:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=(
+                            "No free project phone numbers in range "
+                            f"{PROJECT_PHONE_MIN:04d}-{PROJECT_PHONE_MAX:04d}."
+                        ),
+                    )
+
+                persist_project_phone_binding(project_phone)
+                write_git_config_file(config)
+        else:
+            binding_changed = persist_project_phone_binding(project_phone)
+            if created or binding_changed:
+                write_git_config_file(config)
+
+        resolved = configured_git_context_for_key(
+            config,
+            context_key,
+            current_port,
+        )
+        if resolved is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Project was saved but could not be loaded",
+            )
+        return created, resolved, project_phone, phone_assigned
+
+
+async def resolve_or_create_project(
+    git_address: str,
+    repository_key: str,
+    requested_context_key: str = "",
+    project_name: str | None = None,
+    current_port: int | None = None,
+) -> tuple[bool, dict[str, Any], str, bool]:
+    async with git_config_lock:
+        return await asyncio.to_thread(
+            resolve_or_create_project_transaction,
+            git_address,
+            repository_key,
+            requested_context_key,
+            project_name,
+            current_port,
+        )
+
+
+def agent_context_key_values(raw_value: Any) -> set[str]:
+    if isinstance(raw_value, (list, tuple, set)):
+        raw_items = list(raw_value)
+    else:
+        raw_items = re.split(r"[,\n;|]+", str(raw_value or ""))
+
+    keys: set[str] = set()
+    for raw_item in raw_items:
+        item = str(raw_item or "").strip().strip("[]\"'").strip()
+        if not item:
+            continue
+        context_key = normalize_project_context_reference(item)
+        if context_key:
+            keys.add(context_key)
+    return keys
+
+
+def agent_matches_project_context(
+    agent: dict[str, Any],
+    target_context_key: str,
+    phone_contexts: dict[str, dict[str, Any]],
+) -> bool:
+    if (
+        str(agent.get("id") or "").strip() == PROJECT_MANAGER_AGENT_ID
+        or str(agent.get("phone") or "").strip() == PROJECT_MANAGER_PHONE
+    ):
+        return False
+
+    normalized_target_context_key = normalize_project_context_reference(
+        target_context_key
+    )
+    parameters = agent.get("parameters")
+    if not isinstance(parameters, dict):
+        parameters = {}
+
+    included_keys: set[str] = set()
+    agent_phone = str(agent.get("phone") or "").strip()
+    phone_context = phone_contexts.get(agent_phone)
+    if phone_context is not None:
+        included_keys.update(agent_context_key_values(phone_context.get("git_context_key")))
+    included_keys.update(agent_context_key_values(parameters.get("git_context_key")))
+    included_keys.update(agent_context_key_values(parameters.get("git_context_keys")))
+
+    excluded_keys = agent_context_key_values(
+        parameters.get("git_context_excluded_keys")
+    )
+    return (
+        normalized_target_context_key in included_keys
+        and normalized_target_context_key not in excluded_keys
+    )
+
+
+def full_agents_for_project(
+    agents: list[dict[str, Any]],
+    target_context_key: str,
+    phone_contexts: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    project_agents: list[dict[str, Any]] = []
+    for agent in agents:
+        if not agent_matches_project_context(
+            agent,
+            target_context_key,
+            phone_contexts,
+        ):
+            continue
+        full_agent = dict(agent)
+        parameters = agent.get("parameters")
+        full_agent["parameters"] = (
+            dict(parameters) if isinstance(parameters, dict) else {}
+        )
+        full_agent["status"] = agent_status_value(agent) or "active"
+        project_agents.append(full_agent)
+    return sorted(
+        project_agents,
+        key=lambda agent: (
+            str(agent.get("name") or "").casefold(),
+            str(agent.get("phone") or ""),
+            str(agent.get("id") or ""),
+        ),
+    )
+
+
+GROUP_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+
+
+def read_group_templates_file() -> dict[str, Any]:
+    if not group_templates_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Group template registry was not found: {group_templates_path}",
+        )
+    try:
+        with group_templates_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Group template registry is invalid: {exc}",
+        ) from exc
+    if not isinstance(data, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Group template registry must contain a JSON object",
+        )
+    for key in ("agent_specs", "group_templates"):
+        if not isinstance(data.get(key), dict):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Group template registry field '{key}' must be an object",
+            )
+    if not isinstance(data.get("group_topologies", {}), dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Group template registry field 'group_topologies' must be an object",
+        )
+    return data
+
+
+def normalized_group_id(value: Any) -> str:
+    group_id = str(value or "").strip()
+    if not group_id or not GROUP_ID_PATTERN.fullmatch(group_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "group_id must contain 1-96 letters, digits, dots, underscores, "
+                "or hyphens and start with a letter or digit"
+            ),
+        )
+    return group_id
+
+
+def stable_group_id(context_key: str, template_id: str, group_name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", template_id).strip("-").lower()
+    slug = slug[:36] or "group"
+    digest = hashlib.sha256(
+        f"{context_key}\0{template_id}\0{group_name.casefold()}".encode("utf-8")
+    ).hexdigest()[:12]
+    return f"group-{slug}-{digest}"
+
+
+def raw_project_registry_entry_for_context(
+    config: dict[str, Any],
+    context_key: str,
+) -> tuple[str, dict[str, Any]] | None:
+    raw_projects = config.get(PROJECTS_KEY)
+    if not isinstance(raw_projects, dict):
+        return None
+    for raw_key, raw_entry in raw_projects.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        candidate = dict(raw_entry)
+        candidate.setdefault("git_context_key", str(raw_key))
+        normalized = normalize_git_context_config_entry(candidate)
+        if normalized is not None and normalized.get("git_context_key") == context_key:
+            return str(raw_key), dict(raw_entry)
+    return None
+
+
+def project_for_group_api(
+    config: dict[str, Any],
+    project_id: str,
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    clean_project_id = urllib.parse.unquote(str(project_id or "").strip())
+    project_phone = normalize_project_phone(clean_project_id)
+    if not project_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_project_id",
+                "message": (
+                    "project_id must be the canonical project_phone returned by "
+                    "Project Manager 0001"
+                ),
+            },
+        )
+    context_key = canonical_project_context_key_for_phone(config, project_phone)
+    if not context_key:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "project_not_found",
+                "message": f"Canonical project phone {project_phone} was not found",
+            },
+        )
+
+    located = raw_project_registry_entry_for_context(config, context_key)
+    if located is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "project_not_found",
+                "message": f"Project {clean_project_id} was not found",
+            },
+        )
+    raw_key, project_entry = located
+    canonical_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if not canonical_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_phone_required",
+                "message": "Resolve the project through Project Manager 0001 first",
+            },
+        )
+    context = configured_git_context_for_key(config, context_key)
+    if context is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Project registry entry could not be normalized",
+        )
+    return raw_key, context_key, project_entry, context
+
+
+def group_template_agent_definitions(
+    registry: dict[str, Any],
+    template: dict[str, Any],
+    requested_roles: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    raw_definitions = template.get("agent_templates")
+    if not isinstance(raw_definitions, list) or not raw_definitions:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Group template must define a non-empty agent_templates list",
+        )
+    specs = registry["agent_specs"]
+    definitions: list[dict[str, Any]] = []
+    seen_roles: set[str] = set()
+    for raw_definition in raw_definitions:
+        if not isinstance(raw_definition, dict):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Each group agent template must be an object",
+            )
+        role = str(raw_definition.get("role") or "").strip()
+        spec_id = str(raw_definition.get("spec") or "").strip()
+        if not role or not GROUP_ID_PATTERN.fullmatch(role):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Invalid group role: {role or '<empty>'}",
+            )
+        if role in seen_roles:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Duplicate group role: {role}",
+            )
+        if spec_id not in specs or not isinstance(specs[spec_id], dict):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Unknown agent spec '{spec_id}' for role '{role}'",
+            )
+        seen_roles.add(role)
+        definitions.append(
+            {
+                "role": role,
+                "spec": spec_id,
+                "is_entrypoint": bool(raw_definition.get("is_entrypoint")),
+            }
+        )
+
+    if requested_roles is None:
+        return definitions
+    clean_roles = [str(role or "").strip() for role in requested_roles]
+    if not clean_roles or any(not role for role in clean_roles):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="task_template.agents must contain at least one role",
+        )
+    if len(set(clean_roles)) != len(clean_roles):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="task_template.agents contains duplicate roles",
+        )
+    unknown = sorted(set(clean_roles) - seen_roles)
+    if unknown:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "unknown_group_agent_role",
+                "roles": unknown,
+            },
+        )
+    selected = set(clean_roles)
+    return [definition for definition in definitions if definition["role"] in selected]
+
+
+def normalize_group_connections(
+    raw_connections: Any,
+    allowed_roles: set[str],
+) -> list[dict[str, str]]:
+    if raw_connections is None:
+        return []
+    if not isinstance(raw_connections, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="connections must be a list",
+        )
+    connections: list[dict[str, str]] = []
+    seen_ids: set[str] = set()
+    for index, raw_connection in enumerate(raw_connections):
+        if not isinstance(raw_connection, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"connections[{index}] must be an object",
+            )
+        from_role = str(
+            raw_connection.get("from") or raw_connection.get("from_role") or ""
+        ).strip()
+        to_role = str(
+            raw_connection.get("to") or raw_connection.get("to_role") or ""
+        ).strip()
+        queue_name = str(raw_connection.get("queue") or "worker-all").strip()
+        event = str(raw_connection.get("event") or "task").strip()
+        channel_type = str(
+            raw_connection.get("channel_type") or "queue"
+        ).strip()
+        connection_id = str(raw_connection.get("id") or "").strip()
+        if not connection_id:
+            connection_id = f"{from_role}-to-{to_role}-{event}"
+        normalized_group_id(connection_id)
+        if connection_id in seen_ids:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Duplicate connection id: {connection_id}",
+            )
+        if from_role not in allowed_roles or to_role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "connection_role_not_in_group",
+                    "connection_id": connection_id,
+                },
+            )
+        if queue_name not in GROUP_QUEUE_NAMES:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "unsupported_group_queue",
+                    "queue": queue_name,
+                },
+            )
+        if channel_type != "queue":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "unsupported_group_channel_type",
+                    "channel_type": channel_type,
+                },
+            )
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Connection event is empty: {connection_id}",
+            )
+        seen_ids.add(connection_id)
+        connections.append(
+            {
+                "id": connection_id,
+                "from_role": from_role,
+                "to_role": to_role,
+                "channel_type": "queue",
+                "queue": queue_name,
+                "event": event,
+            }
+        )
+    return connections
+
+
+def group_queue_route(queue_name: str, project_phone: str) -> str:
+    route = QUEUE_DEFINITIONS[queue_name]["route"]
+    if "{conversation_phone}" in route:
+        return route.replace("{conversation_phone}", project_phone)
+    return f"{route}/{project_phone}"
+
+
+def expand_group_connections(
+    connections: list[dict[str, str]],
+    role_bindings: dict[str, str],
+    agents_by_id: dict[str, dict[str, Any]],
+    project_phone: str,
+    group_id: str,
+) -> list[dict[str, Any]]:
+    expanded: list[dict[str, Any]] = []
+    for connection in connections:
+        from_agent_id = role_bindings[connection["from_role"]]
+        to_agent_id = role_bindings[connection["to_role"]]
+        from_agent = agents_by_id[from_agent_id]
+        to_agent = agents_by_id[to_agent_id]
+        route = group_queue_route(connection["queue"], project_phone)
+        to_phone = str(to_agent.get("phone") or "").strip()
+        expanded.append(
+            {
+                **connection,
+                "group_id": group_id,
+                "from_agent_id": from_agent_id,
+                "from_phone": str(from_agent.get("phone") or "").strip(),
+                "to_agent_id": to_agent_id,
+                "to_phone": to_phone,
+                "post_endpoint": route,
+                "poll_endpoint": (
+                    f"{route}?to_phone={urllib.parse.quote(to_phone, safe='')}"
+                ),
+                "send_endpoint": (
+                    f"/api/v1/groups/{urllib.parse.quote(group_id, safe='')}"
+                    f"/connections/{urllib.parse.quote(connection['id'], safe='')}/tasks"
+                ),
+                "receive_endpoint": (
+                    f"/api/v1/groups/{urllib.parse.quote(group_id, safe='')}"
+                    f"/agents/{urllib.parse.quote(to_agent_id, safe='')}/tasks"
+                ),
+                "allowed_actions": ["post", "poll"],
+            }
+        )
+    return expanded
+
+
+def load_group_agent_profile(spec_id: str, spec: dict[str, Any]) -> tuple[str, str]:
+    inline_profile = str(spec.get("profile") or "").strip()
+    profile_path_value = str(spec.get("profile_path") or "").strip()
+    if bool(inline_profile) == bool(profile_path_value):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Agent spec '{spec_id}' must define exactly one of profile "
+                "or profile_path"
+            ),
+        )
+    if inline_profile:
+        return inline_profile, f"group_templates:{spec_id}"
+    resolved_path = (base_dir / profile_path_value).resolve()
+    resolved_prompts = (base_dir / "prompts").resolve()
+    if resolved_path == resolved_prompts or resolved_prompts not in resolved_path.parents:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent spec '{spec_id}' profile_path must stay inside prompts/",
+        )
+    try:
+        profile = resolved_path.read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not read agent spec '{spec_id}': {exc}",
+        ) from exc
+    if not profile:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Agent spec '{spec_id}' profile is empty",
+        )
+    return profile, profile_path_value
+
+
+def canonical_json_fingerprint(value: Any) -> str:
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return f"sha256:{hashlib.sha256(serialized.encode('utf-8')).hexdigest()}"
+
+
+def group_template_for_id(
+    registry: dict[str, Any],
+    template_id: Any,
+) -> tuple[str, dict[str, Any]]:
+    clean_template_id = str(template_id or "").strip()
+    if not clean_template_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="template_id is required",
+        )
+    raw_template = registry["group_templates"].get(clean_template_id)
+    if not isinstance(raw_template, dict):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "group_template_not_found",
+                "template_id": clean_template_id,
+            },
+        )
+    declared_template_id = str(raw_template.get("template_id") or clean_template_id).strip()
+    if declared_template_id != clean_template_id:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                f"Group template registry key '{clean_template_id}' does not match "
+                f"template_id '{declared_template_id}'"
+            ),
+        )
+    return clean_template_id, deepcopy(raw_template)
+
+
+def normalize_requested_group_roles(raw_roles: Any) -> list[str] | None:
+    if raw_roles is None:
+        return None
+    if not isinstance(raw_roles, list):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The group agent list must be an array of roles",
+        )
+    roles: list[str] = []
+    for index, raw_role in enumerate(raw_roles):
+        if isinstance(raw_role, dict):
+            role = str(raw_role.get("role") or "").strip()
+        else:
+            role = str(raw_role or "").strip()
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"agents[{index}] must identify a role",
+            )
+        roles.append(role)
+    return roles
+
+
+def requested_group_roles_from_payload(payload: dict[str, Any]) -> list[str] | None:
+    enabled_roles = normalize_requested_group_roles(payload.get("enabled_roles"))
+    task_template = payload.get("task_template")
+    if task_template is not None and not isinstance(task_template, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="task_template must be an object",
+        )
+    task_roles = (
+        normalize_requested_group_roles(task_template.get("agents"))
+        if isinstance(task_template, dict) and "agents" in task_template
+        else None
+    )
+    if enabled_roles is not None and task_roles is not None:
+        if set(enabled_roles) != set(task_roles):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="enabled_roles and task_template.agents must select the same roles",
+            )
+        return enabled_roles
+    return enabled_roles if enabled_roles is not None else task_roles
+
+
+def base_group_connection(connection: dict[str, Any]) -> dict[str, str]:
+    return {
+        "id": str(connection.get("id") or "").strip(),
+        "from_role": str(
+            connection.get("from_role") or connection.get("from") or ""
+        ).strip(),
+        "to_role": str(
+            connection.get("to_role") or connection.get("to") or ""
+        ).strip(),
+        "channel_type": "queue",
+        "queue": str(connection.get("queue") or "worker-all").strip(),
+        "event": str(connection.get("event") or "task").strip(),
+    }
+
+
+def validate_group_reporting_rule(
+    raw_rule: Any,
+    allowed_roles: set[str],
+) -> dict[str, Any]:
+    if raw_rule is None:
+        return {}
+    if not isinstance(raw_rule, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="reporting_rule must be an object",
+        )
+    rule = deepcopy(raw_rule)
+    report_from = str(rule.get("report_from") or "").strip()
+    if report_from and report_from not in allowed_roles:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "reporting_role_not_in_group",
+                "role": report_from,
+            },
+        )
+    output_queue = str(rule.get("output_queue") or "").strip()
+    if output_queue and output_queue not in GROUP_QUEUE_NAMES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "unsupported_group_queue",
+                "queue": output_queue,
+            },
+        )
+    return rule
+
+
+def validate_group_graph(
+    definitions: list[dict[str, Any]],
+    connections: list[dict[str, str]],
+) -> str:
+    entrypoints = [
+        definition["role"]
+        for definition in definitions
+        if definition.get("is_entrypoint")
+    ]
+    if len(entrypoints) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "group_entrypoint_invalid",
+                "message": "A deployed group must contain exactly one entrypoint",
+                "entrypoints": entrypoints,
+            },
+        )
+
+    entrypoint = entrypoints[0]
+    reachable = {entrypoint}
+    while True:
+        expanded = {
+            connection["to_role"]
+            for connection in connections
+            if connection["from_role"] in reachable
+        }
+        next_reachable = reachable | expanded
+        if next_reachable == reachable:
+            break
+        reachable = next_reachable
+    all_roles = {definition["role"] for definition in definitions}
+    unreachable = sorted(all_roles - reachable)
+    if unreachable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "group_agents_unreachable",
+                "entrypoint": entrypoint,
+                "roles": unreachable,
+            },
+        )
+    return entrypoint
+
+
+def group_blueprint_from_payload(
+    registry: dict[str, Any],
+    payload: dict[str, Any],
+    *,
+    current_group: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    template_value = payload.get("template_id")
+    if template_value is None and current_group is not None:
+        template_value = current_group.get("template_id")
+    template_id, template = group_template_for_id(registry, template_value)
+
+    if current_group is not None and template_id != current_group.get("template_id"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="template_id is immutable; create another group for another template",
+        )
+
+    requested_roles = requested_group_roles_from_payload(payload)
+    if requested_roles is None and current_group is not None:
+        requested_roles = [
+            str(binding.get("role") or "").strip()
+            for binding in current_group.get("agents", [])
+            if isinstance(binding, dict) and str(binding.get("role") or "").strip()
+        ]
+    all_definitions = group_template_agent_definitions(
+        registry,
+        template,
+    )
+    definitions = group_template_agent_definitions(
+        registry,
+        template,
+        requested_roles,
+    )
+    allowed_roles = {definition["role"] for definition in definitions}
+    all_roles = {definition["role"] for definition in all_definitions}
+    full_connections = normalize_group_connections(
+        template.get("internal_connections", []),
+        all_roles,
+    )
+    validate_group_graph(all_definitions, full_connections)
+    full_reporting_rule = validate_group_reporting_rule(
+        template.get("reporting_rule", {}),
+        all_roles,
+    )
+    current_roles = {
+        str(binding.get("role") or "").strip()
+        for binding in (current_group or {}).get("agents", [])
+        if isinstance(binding, dict) and str(binding.get("role") or "").strip()
+    }
+    roles_were_reselected = (
+        current_group is not None
+        and requested_roles is not None
+        and current_roles != allowed_roles
+    )
+
+    if "connections" in payload:
+        raw_connections = payload.get("connections")
+    elif payload.get("custom_connections"):
+        raw_connections = payload.get("custom_connections")
+    elif current_group is not None and not roles_were_reselected:
+        raw_connections = [
+            base_group_connection(connection)
+            for connection in current_group.get("connections", [])
+            if isinstance(connection, dict)
+            and connection.get("from_role") in allowed_roles
+            and connection.get("to_role") in allowed_roles
+        ]
+    else:
+        raw_connections = [
+            connection
+            for connection in template.get("internal_connections", [])
+            if isinstance(connection, dict)
+            and str(connection.get("from") or connection.get("from_role") or "").strip()
+            in allowed_roles
+            and str(connection.get("to") or connection.get("to_role") or "").strip()
+            in allowed_roles
+        ]
+    connections = normalize_group_connections(raw_connections, allowed_roles)
+    entrypoint = validate_group_graph(definitions, connections)
+
+    if "reporting_rule" in payload:
+        raw_reporting_rule = payload.get("reporting_rule")
+    elif current_group is not None:
+        raw_reporting_rule = current_group.get("reporting_rule", {})
+    else:
+        raw_reporting_rule = template.get("reporting_rule", {})
+    reporting_rule = validate_group_reporting_rule(
+        raw_reporting_rule,
+        allowed_roles,
+    )
+
+    raw_group_name = payload.get("group_name")
+    if raw_group_name is None:
+        raw_group_name = payload.get("name")
+    if raw_group_name is None and current_group is not None:
+        raw_group_name = current_group.get("group_name")
+    group_name = str(raw_group_name or template.get("name") or template_id).strip()
+    if not group_name or len(group_name) > 160:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="group_name must contain 1-160 characters",
+        )
+
+    raw_group_key = payload.get("group_key")
+    if raw_group_key is None and current_group is not None:
+        raw_group_key = current_group.get("group_key")
+    if raw_group_key is None:
+        raw_group_key = re.sub(r"[^A-Za-z0-9._-]+", "-", group_name).strip("-").lower()
+    group_key = normalized_group_id(raw_group_key)
+    description = str(
+        payload.get("description")
+        if payload.get("description") is not None
+        else (
+            current_group.get("description")
+            if current_group is not None
+            else template.get("description") or ""
+        )
+    ).strip()
+    if "task_template" in payload and isinstance(payload.get("task_template"), dict):
+        task_template = deepcopy(payload["task_template"])
+    elif current_group is not None and isinstance(current_group.get("task_template"), dict):
+        task_template = deepcopy(current_group["task_template"])
+    else:
+        task_template = {}
+    if isinstance(task_template.get("agents"), list):
+        task_template["agents"] = sorted(
+            normalize_requested_group_roles(task_template["agents"]) or []
+        )
+
+    all_spec_snapshots: dict[str, dict[str, Any]] = {}
+    for definition in all_definitions:
+        spec_id = definition["spec"]
+        if spec_id in all_spec_snapshots:
+            continue
+        spec = registry["agent_specs"][spec_id]
+        spec_name = str(spec.get("name") or "").strip()
+        if not spec_name:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Agent spec '{spec_id}' must define a non-empty name",
+            )
+        if "parameters" in spec and not isinstance(spec.get("parameters"), dict):
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Agent spec '{spec_id}' parameters must be an object",
+            )
+        profile, template_source = load_group_agent_profile(spec_id, spec)
+        parameters = normalize_agent_parameters(spec.get("parameters"))
+        snapshot = {
+            "spec": spec_id,
+            "name": spec_name,
+            "profile": profile,
+            "parameters": parameters,
+            "template_source": template_source,
+            "status": str(spec.get("status") or "active").strip() or "active",
+        }
+        snapshot["fingerprint"] = canonical_json_fingerprint(snapshot)
+        all_spec_snapshots[spec_id] = snapshot
+
+    selected_spec_ids = {definition["spec"] for definition in definitions}
+    spec_snapshots = {
+        spec_id: snapshot
+        for spec_id, snapshot in all_spec_snapshots.items()
+        if spec_id in selected_spec_ids
+    }
+
+    template_snapshot = {
+        "template_id": template_id,
+        "name": str(template.get("name") or template_id),
+        "description": str(template.get("description") or ""),
+        "agent_templates": all_definitions,
+        "connections": sorted(full_connections, key=lambda item: item["id"]),
+        "reporting_rule": full_reporting_rule,
+        "agent_specs": {
+            spec_id: {
+                key: value
+                for key, value in snapshot.items()
+                if key != "profile"
+            }
+            for spec_id, snapshot in sorted(all_spec_snapshots.items())
+        },
+    }
+    template_fingerprint = canonical_json_fingerprint(template_snapshot)
+    desired_snapshot = {
+        "group_key": group_key,
+        "template_id": template_id,
+        "template_fingerprint": template_fingerprint,
+        "group_name": group_name,
+        "description": description,
+        "roles": sorted(allowed_roles),
+        "connections": sorted(connections, key=lambda item: item["id"]),
+        "reporting_rule": reporting_rule,
+        "task_template": task_template,
+    }
+    return {
+        "group_key": group_key,
+        "template_id": template_id,
+        "template": template,
+        "template_snapshot": template_snapshot,
+        "template_fingerprint": template_fingerprint,
+        "definition_fingerprint": canonical_json_fingerprint(desired_snapshot),
+        "group_name": group_name,
+        "description": description,
+        "definitions": definitions,
+        "connections": connections,
+        "reporting_rule": reporting_rule,
+        "entrypoint_role": entrypoint,
+        "spec_snapshots": spec_snapshots,
+        "task_template": deepcopy(task_template) if isinstance(task_template, dict) else {},
+    }
+
+
+def group_agent_id(context_key: str, spec_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{context_key}\0{spec_id}".encode("utf-8")
+    ).hexdigest()[:24]
+    return f"agent-group-{digest}"
+
+
+def group_ids_from_agent(agent: dict[str, Any]) -> set[str]:
+    parameters = agent.get("parameters")
+    if not isinstance(parameters, dict):
+        return set()
+    return {
+        value.strip()
+        for value in re.split(r"[,\n;|]+", str(parameters.get("group_ids") or ""))
+        if value.strip()
+    }
+
+
+def is_group_managed_agent(agent: dict[str, Any]) -> bool:
+    parameters = agent.get("parameters")
+    return (
+        isinstance(parameters, dict)
+        and str(parameters.get("managed_by") or "").strip() == "group_api"
+    )
+
+
+def occupied_group_agent_phones(
+    config: dict[str, Any],
+    agents: list[dict[str, Any]],
+) -> set[str]:
+    occupied = {
+        str(agent.get("phone") or "").strip()
+        for agent in agents
+        if str(agent.get("phone") or "").strip()
+    }
+    occupied.update(DEFAULT_AGENT_PHONES.values())
+    occupied.add(PROJECT_MANAGER_PHONE)
+    occupied.update(phone_git_contexts_from_config(config).keys())
+    occupied.update(
+        phone
+        for entry in project_registry_from_config(config).values()
+        if (phone := normalize_project_phone(entry.get("project_phone")))
+    )
+    return occupied
+
+
+def allocate_group_agent_phone(occupied: set[str]) -> str:
+    for number in range(GROUP_AGENT_PHONE_MIN, GROUP_AGENT_PHONE_MAX + 1):
+        phone = str(number)
+        if phone not in occupied:
+            occupied.add(phone)
+            return phone
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "no_free_group_agent_phone",
+            "range": f"{GROUP_AGENT_PHONE_MIN}-{GROUP_AGENT_PHONE_MAX}",
+        },
+    )
+
+
+def ensure_group_agents(
+    config: dict[str, Any],
+    agents: list[dict[str, Any]],
+    project_entry: dict[str, Any],
+    context_key: str,
+    project_phone: str,
+    group_id: str,
+    definitions: list[dict[str, Any]],
+    spec_snapshots: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int, int, bool]:
+    agents_by_id = {
+        str(agent.get("id") or "").strip(): agent
+        for agent in agents
+        if str(agent.get("id") or "").strip()
+    }
+    identity_agents: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    phone_owners: dict[str, list[str]] = {}
+    for agent in agents:
+        agent_id = str(agent.get("id") or "").strip()
+        phone = str(agent.get("phone") or "").strip()
+        if phone:
+            phone_owners.setdefault(phone, []).append(agent_id)
+        if not is_group_managed_agent(agent):
+            continue
+        parameters = agent.get("parameters") if isinstance(agent.get("parameters"), dict) else {}
+        agent_context = normalize_project_context_reference(
+            str(parameters.get("git_context_key") or "").strip()
+        )
+        spec_id = str(parameters.get("group_agent_spec") or "").strip()
+        if agent_context and spec_id:
+            identity_agents.setdefault((agent_context, spec_id), []).append(agent)
+
+    occupied = occupied_group_agent_phones(config, agents)
+    phone_map_raw = config.get(PHONE_GIT_CONTEXTS_KEY)
+    phone_map = dict(phone_map_raw) if isinstance(phone_map_raw, dict) else {}
+    bindings: list[dict[str, Any]] = []
+    resolved_by_spec: dict[str, tuple[dict[str, Any], bool]] = {}
+    created_count = 0
+    reused_count = 0
+    changed = False
+
+    for definition in definitions:
+        role = definition["role"]
+        spec_id = definition["spec"]
+        if spec_id in resolved_by_spec:
+            agent, was_created = resolved_by_spec[spec_id]
+        else:
+            expected_id = group_agent_id(context_key, spec_id)
+            matches = identity_agents.get((context_key, spec_id), [])
+            if len(matches) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_agent_identity_conflict",
+                        "spec": spec_id,
+                        "agent_ids": [match.get("id") for match in matches],
+                    },
+                )
+            by_id = agents_by_id.get(expected_id)
+            if matches:
+                agent = matches[0]
+                if str(agent.get("id") or "").strip() != expected_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_agent_identity_conflict",
+                            "spec": spec_id,
+                            "message": "Managed agent has a non-canonical id",
+                        },
+                    )
+            elif by_id is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_agent_identity_conflict",
+                        "spec": spec_id,
+                        "agent_id": expected_id,
+                    },
+                )
+            else:
+                agent = {}
+
+            snapshot = spec_snapshots[spec_id]
+            stored_parameters = (
+                agent.get("parameters")
+                if isinstance(agent.get("parameters"), dict)
+                else {}
+            )
+            stored_fingerprint = str(
+                stored_parameters.get("group_agent_spec_fingerprint") or ""
+            ).strip()
+            if stored_fingerprint and stored_fingerprint != snapshot["fingerprint"]:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_agent_spec_conflict",
+                        "spec": spec_id,
+                        "stored_fingerprint": stored_fingerprint,
+                        "registry_fingerprint": snapshot["fingerprint"],
+                    },
+                )
+
+            was_created = not bool(agent)
+            if was_created:
+                phone = allocate_group_agent_phone(occupied)
+                agent = {
+                    "id": expected_id,
+                    "name": "",
+                    "phone": phone,
+                    "profile": "",
+                    "parameters": {},
+                    "template_source": "",
+                    "status": "active",
+                }
+                agents.append(agent)
+                agents_by_id[expected_id] = agent
+                created_count += 1
+                changed = True
+            else:
+                phone = str(agent.get("phone") or "").strip()
+                if not (
+                    phone.isdigit()
+                    and GROUP_AGENT_PHONE_MIN <= int(phone) <= GROUP_AGENT_PHONE_MAX
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_agent_phone_invalid",
+                            "agent_id": expected_id,
+                            "phone": phone,
+                        },
+                    )
+                owners = phone_owners.get(phone, [])
+                if owners != [expected_id]:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_agent_phone_conflict",
+                            "agent_id": expected_id,
+                            "phone": phone,
+                            "owners": owners,
+                        },
+                    )
+                reused_count += 1
+
+            membership = group_ids_from_agent(agent)
+            membership.add(group_id)
+            desired_parameters = {
+                **snapshot["parameters"],
+                "managed_by": "group_api",
+                "group_agent_spec": spec_id,
+                "group_agent_spec_fingerprint": snapshot["fingerprint"],
+                "git_context_key": context_key,
+                "git_context_keys": context_key,
+                "project_phone": project_phone,
+                "conversation_phone": project_phone,
+                "agent_phone": phone,
+                "group_ids": ",".join(sorted(membership)),
+                "group_task_endpoint_template": (
+                    "/api/v1/groups/{group_id}/agents/"
+                    f"{expected_id}/tasks"
+                ),
+            }
+            desired_agent = {
+                "id": expected_id,
+                "name": f"{snapshot['name']} [{project_phone}:{spec_id}]",
+                "phone": phone,
+                "profile": snapshot["profile"],
+                "parameters": normalize_agent_parameters(desired_parameters),
+                "template_source": snapshot["template_source"],
+                "status": snapshot["status"],
+            }
+            if agent != desired_agent:
+                agent.clear()
+                agent.update(desired_agent)
+                changed = True
+
+            raw_mapping = phone_map.get(phone)
+            mapping = dict(raw_mapping) if isinstance(raw_mapping, dict) else {}
+            normalized_mapping = normalize_git_context_config_entry(mapping)
+            if (
+                normalized_mapping is not None
+                and normalized_mapping.get("git_context_key") != context_key
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_agent_phone_mapping_conflict",
+                        "phone": phone,
+                    },
+                )
+            desired_mapping = {
+                **mapping,
+                "project_name": normalize_project_name(
+                    project_entry.get("project_name"),
+                    str(project_entry.get("git_address") or ""),
+                ),
+                "git_address": str(project_entry.get("git_address") or "").strip(),
+                "git_context_key": context_key,
+                "phone": phone,
+                "project_phone": project_phone,
+                "managed_by": "group_api",
+                "agent_id": expected_id,
+                "group_agent_spec": spec_id,
+            }
+            if mapping != desired_mapping:
+                phone_map[phone] = desired_mapping
+                changed = True
+
+            resolved_by_spec[spec_id] = (agent, was_created)
+
+        bindings.append(
+            {
+                "role": role,
+                "spec": spec_id,
+                "agent_id": str(agent.get("id") or ""),
+                "agent_phone": str(agent.get("phone") or ""),
+                "is_entrypoint": bool(definition.get("is_entrypoint")),
+            }
+        )
+
+    config[PHONE_GIT_CONTEXTS_KEY] = phone_map
+    return bindings, created_count, reused_count, changed
+
+
+def remove_group_membership_from_agents(
+    agents: list[dict[str, Any]],
+    group_id: str,
+    agent_ids: set[str],
+) -> bool:
+    changed = False
+    for agent in agents:
+        if str(agent.get("id") or "").strip() not in agent_ids:
+            continue
+        parameters = (
+            dict(agent.get("parameters"))
+            if isinstance(agent.get("parameters"), dict)
+            else {}
+        )
+        memberships = group_ids_from_agent(agent)
+        if group_id not in memberships:
+            continue
+        memberships.discard(group_id)
+        parameters["group_ids"] = ",".join(sorted(memberships))
+        agent["parameters"] = normalize_agent_parameters(parameters)
+        changed = True
+    return changed
+
+
+def persist_group_transaction_files(
+    config: dict[str, Any],
+    agents: list[dict[str, Any]],
+    previous_agents: list[dict[str, Any]],
+    *,
+    agents_changed: bool,
+) -> None:
+    if agents_changed:
+        write_agents_file_unlocked(agents)
+    try:
+        write_git_config_file(config)
+    except Exception:
+        if agents_changed:
+            write_agents_file_unlocked(previous_agents)
+        raise
+
+
+def group_instance_from_blueprint(
+    blueprint: dict[str, Any],
+    bindings: list[dict[str, Any]],
+    agents: list[dict[str, Any]],
+    context_key: str,
+    project_phone: str,
+    group_id: str,
+    *,
+    current_group: dict[str, Any] | None = None,
+    status_value: str = "active",
+    revision: int = 1,
+    created_at: str | None = None,
+    updated_at: str | None = None,
+) -> dict[str, Any]:
+    agents_by_id = {
+        str(agent.get("id") or "").strip(): agent
+        for agent in agents
+        if str(agent.get("id") or "").strip()
+    }
+    role_bindings = {
+        binding["role"]: binding["agent_id"]
+        for binding in bindings
+    }
+    connections = expand_group_connections(
+        blueprint["connections"],
+        role_bindings,
+        agents_by_id,
+        project_phone,
+        group_id,
+    )
+    timestamp = updated_at or utc_now()
+    task_template = blueprint.get("task_template", {})
+    return {
+        "group_id": group_id,
+        "group_key": blueprint["group_key"],
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "template_id": blueprint["template_id"],
+        "template_fingerprint": blueprint["template_fingerprint"],
+        "template_snapshot": deepcopy(blueprint["template_snapshot"]),
+        "definition_fingerprint": blueprint["definition_fingerprint"],
+        "group_name": blueprint["group_name"],
+        "description": blueprint["description"],
+        "status": status_value,
+        "revision": revision,
+        "agents": deepcopy(bindings),
+        "agent_ids": sorted({binding["agent_id"] for binding in bindings}),
+        "connections": connections,
+        "reporting_rule": deepcopy(blueprint["reporting_rule"]),
+        "task_template": deepcopy(task_template) if isinstance(task_template, dict) else {},
+        "created_at": created_at or timestamp,
+        "updated_at": timestamp,
+    }
+
+
+def active_project_groups(project_entry: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_groups = project_entry.get("groups")
+    if not isinstance(raw_groups, list):
+        return []
+    return [
+        group
+        for group in raw_groups
+        if isinstance(group, dict)
+        and str(group.get("group_id") or "").strip()
+        and str(group.get("status") or "active").strip() != "archived"
+    ]
+
+
+def group_role_binding(
+    group: dict[str, Any],
+    role: str,
+) -> dict[str, Any] | None:
+    raw_bindings = group.get("agents")
+    if not isinstance(raw_bindings, list):
+        return None
+    for binding in raw_bindings:
+        if (
+            isinstance(binding, dict)
+            and str(binding.get("role") or "").strip() == role
+        ):
+            return binding
+    return None
+
+
+def refresh_project_group_relationships(
+    project_entry: dict[str, Any],
+    registry: dict[str, Any],
+) -> None:
+    groups = active_project_groups(project_entry)
+    groups_by_template: dict[str, list[dict[str, Any]]] = {}
+    for group in groups:
+        template_id = str(group.get("template_id") or "").strip()
+        if template_id:
+            groups_by_template.setdefault(template_id, []).append(group)
+
+    materialized: list[dict[str, Any]] = []
+    topology_states: list[dict[str, Any]] = []
+    reporting_rules: list[dict[str, Any]] = []
+    raw_topologies = registry.get("group_topologies", {})
+    for raw_topology_id, raw_topology in raw_topologies.items():
+        if not isinstance(raw_topology, dict):
+            continue
+        topology_id = str(
+            raw_topology.get("topology_id") or raw_topology_id
+        ).strip()
+        required_templates = [
+            str(template_id or "").strip()
+            for template_id in raw_topology.get("groups", [])
+            if str(template_id or "").strip()
+        ]
+        selected: dict[str, dict[str, Any]] = {}
+        ambiguous: dict[str, list[str]] = {}
+        missing: list[str] = []
+        for template_id in required_templates:
+            candidates = groups_by_template.get(template_id, [])
+            if len(candidates) == 1:
+                selected[template_id] = candidates[0]
+            elif not candidates:
+                missing.append(template_id)
+            else:
+                ambiguous[template_id] = [
+                    str(candidate.get("group_id") or "")
+                    for candidate in candidates
+                ]
+        if missing or ambiguous:
+            topology_states.append(
+                {
+                    "topology_id": topology_id,
+                    "status": "pending_binding" if ambiguous else "waiting_for_groups",
+                    "missing_templates": missing,
+                    "ambiguous_templates": ambiguous,
+                }
+            )
+            continue
+
+        topology_connections: list[dict[str, Any]] = []
+        valid = True
+        for raw_connection in raw_topology.get("connections", []):
+            if not isinstance(raw_connection, dict):
+                valid = False
+                break
+            from_template = str(raw_connection.get("from_group") or "").strip()
+            to_template = str(raw_connection.get("to_group") or "").strip()
+            from_group = selected.get(from_template)
+            to_group = selected.get(to_template)
+            from_role = str(raw_connection.get("from_role") or "").strip()
+            to_role = str(raw_connection.get("to_role") or "").strip()
+            from_binding = group_role_binding(from_group or {}, from_role)
+            to_binding = group_role_binding(to_group or {}, to_role)
+            queue_name = str(raw_connection.get("queue") or "worker-all").strip()
+            if (
+                from_group is None
+                or to_group is None
+                or from_binding is None
+                or to_binding is None
+                or queue_name not in GROUP_QUEUE_NAMES
+            ):
+                valid = False
+                break
+            base_id = normalized_group_id(raw_connection.get("id"))
+            relationship_id = f"{topology_id}.{base_id}"
+            from_group_id = str(from_group.get("group_id") or "")
+            to_group_id = str(to_group.get("group_id") or "")
+            relationship = {
+                "id": relationship_id,
+                "topology_id": topology_id,
+                "from_group_id": from_group_id,
+                "from_template_id": from_template,
+                "from_role": from_role,
+                "from_agent_id": from_binding.get("agent_id"),
+                "from_phone": from_binding.get("agent_phone"),
+                "to_group_id": to_group_id,
+                "to_template_id": to_template,
+                "to_role": to_role,
+                "to_agent_id": to_binding.get("agent_id"),
+                "to_phone": to_binding.get("agent_phone"),
+                "channel_type": "queue",
+                "queue": queue_name,
+                "event": str(raw_connection.get("event") or "task").strip(),
+                "send_endpoint": (
+                    f"/api/v1/groups/{urllib.parse.quote(from_group_id, safe='')}"
+                    f"/connections/{urllib.parse.quote(relationship_id, safe='')}/tasks"
+                ),
+                "receive_endpoint": (
+                    f"/api/v1/groups/{urllib.parse.quote(to_group_id, safe='')}"
+                    f"/agents/{urllib.parse.quote(str(to_binding.get('agent_id') or ''), safe='')}/tasks"
+                ),
+            }
+            topology_connections.append(relationship)
+
+        if not valid:
+            topology_states.append(
+                {
+                    "topology_id": topology_id,
+                    "status": "invalid_for_current_groups",
+                }
+            )
+            continue
+        materialized.extend(topology_connections)
+        topology_states.append(
+            {
+                "topology_id": topology_id,
+                "status": "active",
+                "group_bindings": {
+                    template_id: group.get("group_id")
+                    for template_id, group in selected.items()
+                },
+                "connection_count": len(topology_connections),
+            }
+        )
+
+        raw_reporting = raw_topology.get("customer_reporting")
+        if isinstance(raw_reporting, dict):
+            reporting = deepcopy(raw_reporting)
+            reporter_template = str(reporting.get("reporter_group") or "").strip()
+            reporter_group = selected.get(reporter_template)
+            reporter_binding = group_role_binding(
+                reporter_group or {},
+                str(reporting.get("reporter_role") or "").strip(),
+            )
+            reporting.update(
+                {
+                    "topology_id": topology_id,
+                    "reporter_group_id": (
+                        reporter_group.get("group_id") if reporter_group else None
+                    ),
+                    "reporter_agent_id": (
+                        reporter_binding.get("agent_id") if reporter_binding else None
+                    ),
+                    "reporter_phone": (
+                        reporter_binding.get("agent_phone") if reporter_binding else None
+                    ),
+                    "project_manager_phone": PROJECT_MANAGER_PHONE,
+                }
+            )
+            reporting_rules.append(reporting)
+
+    project_entry["group_relationships"] = materialized
+    project_entry["customer_reporting"] = {
+        "topologies": topology_states,
+        "rules": reporting_rules,
+    }
+
+
+def locate_group_in_config(
+    config: dict[str, Any],
+    group_id: str,
+) -> tuple[str, str, dict[str, Any], list[dict[str, Any]], int, dict[str, Any]]:
+    clean_group_id = normalized_group_id(group_id)
+    raw_projects = config.get(PROJECTS_KEY)
+    if not isinstance(raw_projects, dict):
+        raw_projects = {}
+    found: list[
+        tuple[str, str, dict[str, Any], list[dict[str, Any]], int, dict[str, Any]]
+    ] = []
+    for raw_key, raw_entry in raw_projects.items():
+        if not isinstance(raw_entry, dict):
+            continue
+        candidate = dict(raw_entry)
+        candidate.setdefault("git_context_key", str(raw_key))
+        normalized = normalize_git_context_config_entry(candidate)
+        if normalized is None:
+            continue
+        raw_groups = raw_entry.get("groups")
+        if not isinstance(raw_groups, list):
+            continue
+        groups = [deepcopy(group) for group in raw_groups if isinstance(group, dict)]
+        for index, group in enumerate(groups):
+            if str(group.get("group_id") or "").strip() == clean_group_id:
+                found.append(
+                    (
+                        str(raw_key),
+                        normalized["git_context_key"],
+                        dict(raw_entry),
+                        groups,
+                        index,
+                        group,
+                    )
+                )
+    if not found:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "group_not_found", "group_id": clean_group_id},
+        )
+    if len(found) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Group id '{clean_group_id}' is registered more than once",
+        )
+    return found[0]
+
+
+def group_agents_for_response(
+    agents: list[dict[str, Any]],
+    group: dict[str, Any],
+) -> list[dict[str, Any]]:
+    agent_ids = {
+        str(binding.get("agent_id") or "").strip()
+        for binding in group.get("agents", [])
+        if isinstance(binding, dict)
+    }
+    return [
+        deepcopy(agent)
+        for agent in agents
+        if str(agent.get("id") or "").strip() in agent_ids
+    ]
+
+
+def create_group_transaction(
+    project_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    registry = read_group_templates_file()
+    blueprint = group_blueprint_from_payload(registry, payload)
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            raw_key, context_key, project_entry, _ = project_for_group_api(
+                config,
+                project_id,
+            )
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            groups = [
+                deepcopy(group)
+                for group in project_entry.get("groups", [])
+                if isinstance(group, dict)
+            ]
+            same_key = [
+                group
+                for group in groups
+                if str(group.get("group_key") or "").strip() == blueprint["group_key"]
+            ]
+            if len(same_key) > 1:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Duplicate group_key '{blueprint['group_key']}' in project",
+                )
+            existing_group = same_key[0] if same_key else None
+            group_id = (
+                str(existing_group.get("group_id") or "").strip()
+                if existing_group is not None
+                else stable_group_id(
+                    context_key,
+                    blueprint["template_id"],
+                    blueprint["group_key"],
+                )
+            )
+            if existing_group is not None:
+                if str(existing_group.get("status") or "active") == "archived":
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_archived",
+                            "group_id": group_id,
+                        },
+                    )
+                if existing_group.get("definition_fingerprint") != blueprint["definition_fingerprint"]:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_definition_conflict",
+                            "group_id": group_id,
+                            "message": "Use PUT to update an existing group",
+                        },
+                    )
+            else:
+                for registered in project_registry_from_config(config).values():
+                    for candidate in registered.get("groups", []):
+                        if (
+                            isinstance(candidate, dict)
+                            and candidate.get("group_id") == group_id
+                        ):
+                            raise HTTPException(
+                                status_code=status.HTTP_409_CONFLICT,
+                                detail={
+                                    "error": "group_id_conflict",
+                                    "group_id": group_id,
+                                },
+                            )
+
+            previous_agents = read_agents_file()
+            agents = deepcopy(previous_agents)
+            bindings, created_count, reused_count, agents_changed = ensure_group_agents(
+                config,
+                agents,
+                project_entry,
+                context_key,
+                project_phone,
+                group_id,
+                blueprint["definitions"],
+                blueprint["spec_snapshots"],
+            )
+            timestamp = utc_now()
+            if existing_group is None:
+                group = group_instance_from_blueprint(
+                    blueprint,
+                    bindings,
+                    agents,
+                    context_key,
+                    project_phone,
+                    group_id,
+                    updated_at=timestamp,
+                )
+                groups.append(group)
+                created = True
+            else:
+                group = group_instance_from_blueprint(
+                    blueprint,
+                    bindings,
+                    agents,
+                    context_key,
+                    project_phone,
+                    group_id,
+                    current_group=existing_group,
+                    status_value=str(existing_group.get("status") or "active"),
+                    revision=int(existing_group.get("revision") or 1),
+                    created_at=str(existing_group.get("created_at") or timestamp),
+                    updated_at=str(existing_group.get("updated_at") or timestamp),
+                )
+                existing_index = next(
+                    index
+                    for index, candidate in enumerate(groups)
+                    if candidate.get("group_id") == group_id
+                )
+                groups[existing_index] = group
+                created = False
+
+            project_entry["groups"] = groups
+            project_entry["git_context_key"] = context_key
+            project_entry["project_phone"] = project_phone
+            if created:
+                project_entry["updated_at"] = timestamp
+            refresh_project_group_relationships(project_entry, registry)
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            persist_group_transaction_files(
+                config,
+                agents,
+                previous_agents,
+                agents_changed=agents_changed,
+            )
+            return {
+                "created": created,
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "created_agent_count": created_count,
+                "reused_agent_count": reused_count,
+                "group": deepcopy(group),
+                "agents": group_agents_for_response(agents, group),
+            }
+
+
+def mutable_group_snapshot(group: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "group_name": group.get("group_name"),
+        "description": group.get("description"),
+        "status": group.get("status"),
+        "template_fingerprint": group.get("template_fingerprint"),
+        "definition_fingerprint": group.get("definition_fingerprint"),
+        "agents": group.get("agents"),
+        "connections": group.get("connections"),
+        "reporting_rule": group.get("reporting_rule"),
+        "task_template": group.get("task_template"),
+    }
+
+
+def update_group_transaction(
+    group_id: str,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    registry = read_group_templates_file()
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            (
+                raw_key,
+                context_key,
+                project_entry,
+                groups,
+                group_index,
+                current_group,
+            ) = locate_group_in_config(config, group_id)
+            current_revision = int(current_group.get("revision") or 1)
+            expected_revision = payload.get("expected_revision")
+            if expected_revision is not None:
+                if isinstance(expected_revision, bool):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="expected_revision must be an integer",
+                    )
+                try:
+                    clean_expected_revision = int(expected_revision)
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="expected_revision must be an integer",
+                    ) from exc
+                if clean_expected_revision != current_revision:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "group_revision_conflict",
+                            "expected_revision": clean_expected_revision,
+                            "current_revision": current_revision,
+                        },
+                    )
+
+            for immutable_key in (
+                "group_id",
+                "project_id",
+                "project_phone",
+                "git_context_key",
+                "group_key",
+            ):
+                if immutable_key not in payload:
+                    continue
+                current_value = (
+                    current_group.get(immutable_key)
+                    if immutable_key != "project_id"
+                    else current_group.get("project_id")
+                )
+                if str(payload.get(immutable_key)) != str(current_value):
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"{immutable_key} is server-owned and immutable",
+                    )
+            if "agents" in payload:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=(
+                        "agents is server-owned; select template roles with "
+                        "enabled_roles or task_template.agents"
+                    ),
+                )
+            if str(current_group.get("status") or "active") == "archived":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "group_archived", "group_id": group_id},
+                )
+
+            effective_payload = dict(payload)
+            add_roles = normalize_requested_group_roles(
+                effective_payload.pop("_add_roles", None)
+            )
+            if add_roles is not None:
+                current_roles = [
+                    str(binding.get("role") or "").strip()
+                    for binding in current_group.get("agents", [])
+                    if isinstance(binding, dict)
+                    and str(binding.get("role") or "").strip()
+                ]
+                effective_payload["enabled_roles"] = list(
+                    dict.fromkeys([*current_roles, *add_roles])
+                )
+
+            blueprint = group_blueprint_from_payload(
+                registry,
+                effective_payload,
+                current_group=current_group,
+            )
+            stored_template_fingerprint = str(
+                current_group.get("template_fingerprint") or ""
+            ).strip()
+            if (
+                stored_template_fingerprint
+                and stored_template_fingerprint != blueprint["template_fingerprint"]
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_template_changed",
+                        "message": (
+                            "The versioned template changed after deployment; "
+                            "publish a new template_id"
+                        ),
+                    },
+                )
+
+            requested_status = effective_payload.get(
+                "status",
+                current_group.get("status", "active"),
+            )
+            status_value = str(requested_status or "").strip()
+            if status_value not in {"active", "paused", "completed"}:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="status must be active, paused, or completed",
+                )
+
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            previous_agents = read_agents_file()
+            agents = deepcopy(previous_agents)
+            bindings, created_count, reused_count, agents_changed = ensure_group_agents(
+                config,
+                agents,
+                project_entry,
+                context_key,
+                project_phone,
+                group_id,
+                blueprint["definitions"],
+                blueprint["spec_snapshots"],
+            )
+            previous_agent_ids = {
+                str(binding.get("agent_id") or "").strip()
+                for binding in current_group.get("agents", [])
+                if isinstance(binding, dict)
+            }
+            next_agent_ids = {binding["agent_id"] for binding in bindings}
+            agents_changed = (
+                remove_group_membership_from_agents(
+                    agents,
+                    group_id,
+                    previous_agent_ids - next_agent_ids,
+                )
+                or agents_changed
+            )
+
+            timestamp = utc_now()
+            candidate = group_instance_from_blueprint(
+                blueprint,
+                bindings,
+                agents,
+                context_key,
+                project_phone,
+                group_id,
+                current_group=current_group,
+                status_value=status_value,
+                revision=current_revision,
+                created_at=str(current_group.get("created_at") or timestamp),
+                updated_at=str(current_group.get("updated_at") or timestamp),
+            )
+            group_changed = mutable_group_snapshot(candidate) != mutable_group_snapshot(
+                current_group
+            )
+            if group_changed:
+                candidate["revision"] = current_revision + 1
+                candidate["updated_at"] = timestamp
+                groups[group_index] = candidate
+                project_entry["groups"] = groups
+                project_entry["updated_at"] = timestamp
+            else:
+                candidate = current_group
+
+            if group_changed or agents_changed:
+                refresh_project_group_relationships(project_entry, registry)
+                raw_projects = config.get(PROJECTS_KEY)
+                projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+                projects[raw_key] = project_entry
+                config[PROJECTS_KEY] = projects
+                persist_group_transaction_files(
+                    config,
+                    agents,
+                    previous_agents,
+                    agents_changed=agents_changed,
+                )
+
+            return {
+                "updated": group_changed,
+                "repaired": bool(agents_changed and not group_changed),
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "created_agent_count": created_count,
+                "reused_agent_count": reused_count,
+                "group": deepcopy(candidate),
+                "agents": group_agents_for_response(agents, candidate),
+            }
+
+
+def delete_group_transaction(group_id: str) -> dict[str, Any]:
+    registry = read_group_templates_file()
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            (
+                raw_key,
+                _,
+                project_entry,
+                groups,
+                group_index,
+                current_group,
+            ) = locate_group_in_config(config, group_id)
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            if str(current_group.get("status") or "active") == "archived":
+                return {
+                    "deleted": False,
+                    "archived": True,
+                    "project_id": project_phone,
+                    "group": deepcopy(current_group),
+                }
+
+            previous_agents = read_agents_file()
+            agents = deepcopy(previous_agents)
+            agent_ids = {
+                str(binding.get("agent_id") or "").strip()
+                for binding in current_group.get("agents", [])
+                if isinstance(binding, dict)
+            }
+            agents_changed = remove_group_membership_from_agents(
+                agents,
+                group_id,
+                agent_ids,
+            )
+            timestamp = utc_now()
+            archived_group = deepcopy(current_group)
+            archived_group["status"] = "archived"
+            archived_group["revision"] = int(current_group.get("revision") or 1) + 1
+            archived_group["updated_at"] = timestamp
+            archived_group["archived_at"] = timestamp
+            groups[group_index] = archived_group
+            project_entry["groups"] = groups
+            project_entry["updated_at"] = timestamp
+            refresh_project_group_relationships(project_entry, registry)
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            persist_group_transaction_files(
+                config,
+                agents,
+                previous_agents,
+                agents_changed=agents_changed,
+            )
+            return {
+                "deleted": True,
+                "archived": True,
+                "project_id": project_phone,
+                "group": deepcopy(archived_group),
+            }
+
+
+async def run_group_write_transaction(
+    transaction: Any,
+    *args: Any,
+) -> dict[str, Any]:
+    async with git_config_lock:
+        async with agents_lock:
+            return await asyncio.to_thread(transaction, *args)
+
+
+def read_group_with_agents_file(group_id: str) -> dict[str, Any]:
+    config = read_git_config_file()
+    (
+        _,
+        context_key,
+        project_entry,
+        _,
+        _,
+        group,
+    ) = locate_group_in_config(config, group_id)
+    registry = read_group_templates_file()
+    refresh_project_group_relationships(project_entry, registry)
+    agents = read_agents_file()
+    normalized_context = configured_git_context_for_key(config, context_key) or {
+        **project_entry,
+        "git_context_key": context_key,
+        "phones": [],
+        "ports": [],
+    }
+    normalized_context = {
+        **normalized_context,
+        "groups": deepcopy(project_entry.get("groups", [])),
+        "group_relationships": deepcopy(
+            project_entry.get("group_relationships", [])
+        ),
+        "customer_reporting": deepcopy(
+            project_entry.get("customer_reporting", {})
+        ),
+    }
+    return {
+        "project": public_project_context(normalized_context),
+        "project_entry": project_entry,
+        "group": deepcopy(group),
+        "agents": group_agents_for_response(agents, group),
+    }
+
+
+async def read_group_with_agents(group_id: str) -> dict[str, Any]:
+    async with git_config_lock:
+        async with agents_lock:
+            return await asyncio.to_thread(read_group_with_agents_file, group_id)
+
+
+async def queued_group_tasks(group_id: str) -> list[dict[str, Any]]:
+    tasks: list[dict[str, Any]] = []
+    for queue_name in sorted(GROUP_QUEUE_NAMES):
+        async with locks[queue_name]:
+            matching = [
+                item
+                for item in queues[queue_name]
+                if str(queue_item_metadata(item).get("group_id") or "").strip()
+                == group_id
+            ]
+        for item in matching:
+            metadata = deepcopy(queue_item_metadata(item))
+            tasks.append(
+                {
+                    "queue": queue_name,
+                    "id": queue_item_id(item),
+                    "queued_at": queue_item_queued_at(item),
+                    "message": deepcopy(queue_item_message(item)),
+                    "task_id": metadata.get("task_id"),
+                    "cycle_id": metadata.get("cycle_id"),
+                    "request_id": metadata.get("request_id"),
+                    "connection_id": metadata.get("connection_id"),
+                    "from_agent_id": metadata.get("from_agent_id"),
+                    "to_agent_id": metadata.get("to_agent_id"),
+                    "metadata": metadata,
+                }
+            )
+    return sorted(
+        tasks,
+        key=lambda item: (
+            str(item.get("queued_at") or ""),
+            str(item.get("id") or ""),
+        ),
+    )
+
+
+async def remove_queued_cycle_items(cycle_id: str) -> list[dict[str, Any]]:
+    removed: list[dict[str, Any]] = []
+    removed_items: list[tuple[str, Any]] = []
+    acquired_queue_locks: list[asyncio.Lock] = []
+    try:
+        for queue_name in sorted(GROUP_QUEUE_NAMES):
+            await locks[queue_name].acquire()
+            acquired_queue_locks.append(locks[queue_name])
+        for queue_name in sorted(GROUP_QUEUE_NAMES):
+            kept_items: deque[Any] = deque()
+            while queues[queue_name]:
+                item = queues[queue_name].popleft()
+                metadata = queue_item_metadata(item)
+                if str(metadata.get("cycle_id") or "").strip() == cycle_id:
+                    removed_items.append((queue_name, item))
+                    removed.append(
+                        {
+                            "queue": queue_name,
+                            "queue_item_id": queue_item_id(item),
+                            "task_id": metadata.get("task_id"),
+                            "task_node_id": metadata.get("task_node_id"),
+                            "group_id": metadata.get("group_id"),
+                        }
+                    )
+                    continue
+                kept_items.append(item)
+            queues[queue_name] = kept_items
+    finally:
+        for queue_lock in reversed(acquired_queue_locks):
+            queue_lock.release()
+    for queue_name, item in removed_items:
+        metadata = deepcopy(queue_item_metadata(item))
+        await append_history(
+            f"removed_from_{QUEUE_DEFINITIONS[queue_name]['context']}_queue",
+            queue_name,
+            deepcopy(queue_item_message(item)),
+            {
+                "queue_item_id": queue_item_id(item),
+                **metadata,
+                "action": "cancelled_by_cycle_completion",
+                "scheduled_event": "cycle_completion_cancelled",
+            },
+            git_context={
+                key: metadata.get(key)
+                for key in (
+                    "fastapi_port",
+                    "project_name",
+                    "git_context_key",
+                    "git_address",
+                    "git_commit",
+                    "git_commit_short",
+                    "git_error",
+                )
+                if metadata.get(key) is not None
+            }
+            or None,
+        )
+    return removed
+
+
+def group_git_context_for_queue(
+    group_data: dict[str, Any],
+) -> dict[str, Any]:
+    project_entry = group_data["project_entry"]
+    group = group_data["group"]
+    return {
+        "project_name": normalize_project_name(
+            project_entry.get("project_name"),
+            str(project_entry.get("git_address") or ""),
+        ),
+        "git_address": str(project_entry.get("git_address") or "").strip(),
+        "git_context_key": str(group.get("git_context_key") or "").strip(),
+        "queue_phone": str(group.get("project_phone") or "").strip(),
+        "git_context_phone": str(group.get("project_phone") or "").strip(),
+    }
+
+
+def task_message_from_payload(payload: dict[str, Any]) -> Any:
+    message = payload.get("message")
+    task_template = payload.get("task_template")
+    if message is None and isinstance(task_template, dict):
+        message = task_template.get("task")
+        if message is None:
+            message = task_template.get("message")
+    if message is None:
+        message = payload.get("task")
+    if message is None or (isinstance(message, str) and not message.strip()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="message or task_template.task is required",
+        )
+    return message.strip() if isinstance(message, str) else deepcopy(message)
+
+
+def task_identity_from_payload(payload: dict[str, Any]) -> tuple[str, str]:
+    task_template = payload.get("task_template")
+    if task_template is not None and not isinstance(task_template, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="task_template must be an object",
+        )
+    template_id = (
+        str(task_template.get("id") or "").strip()
+        if isinstance(task_template, dict)
+        else ""
+    )
+    request_id = str(payload.get("request_id") or "").strip()
+    if request_id and len(request_id) > 160:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request_id must contain at most 160 characters",
+        )
+    return request_id or str(uuid4()), template_id
+
+
+def normalized_cycle_id(value: Any, *, required: bool = False) -> str:
+    if value is None:
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cycle_id is required",
+            )
+        return ""
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cycle_id must be a string",
+        )
+    clean_value = value.strip()
+    if not clean_value:
+        if required:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="cycle_id is required",
+            )
+        return ""
+    if not CYCLE_ID_PATTERN.fullmatch(clean_value):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "cycle_id must contain 1-160 letters, digits, '.', '_', ':', "
+                "or '-' and must start with a letter or digit"
+            ),
+        )
+    return clean_value
+
+
+def cycle_identity_from_task_payload(
+    payload: dict[str, Any],
+    *,
+    request_scope: str,
+    message: Any,
+    task_template_id: str,
+) -> tuple[str, str, bool]:
+    explicit_cycle = "cycle_id" in payload and payload.get("cycle_id") is not None
+    cycle_id = normalized_cycle_id(payload.get("cycle_id"))
+    request_id = str(payload.get("request_id") or "").strip()
+    if not cycle_id:
+        stable_seed = (
+            f"{request_scope}:{request_id}"
+            if request_id
+            else f"{request_scope}:{uuid4()}"
+        )
+        suffix = hashlib.sha256(stable_seed.encode("utf-8")).hexdigest()[:12]
+        cycle_id = (
+            f"cycle-{suffix}"
+            if request_id
+            else f"cycle-{datetime.now(timezone.utc):%Y%m%d}-{suffix}"
+        )
+
+    raw_title = payload.get("cycle_title")
+    if raw_title is not None and not isinstance(raw_title, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cycle_title must be a string",
+        )
+    cycle_title = str(raw_title or "").strip()
+    if len(cycle_title) > 300:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cycle_title must contain at most 300 characters",
+        )
+    if not cycle_title:
+        cycle_title = task_template_id or summarize_message(message)
+    return cycle_id, cycle_title, explicit_cycle
+
+
+def cycle_task_node_id(cycle_id: str, request_scope: str, task_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{cycle_id}:{request_scope}:{task_id}".encode("utf-8")
+    ).hexdigest()[:20]
+    return f"cycle-task-{digest}"
+
+
+def persisted_group_task_request(
+    request_scope: str,
+    request_id: str,
+) -> dict[str, Any] | None:
+    if not history_path.exists():
+        return None
+    try:
+        lines = history_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+    for line in reversed(lines):
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        metadata = record.get("metadata")
+        if not isinstance(metadata, dict):
+            continue
+        if (
+            str(metadata.get("task_request_scope") or "").strip() == request_scope
+            and str(metadata.get("request_id") or "").strip() == request_id
+        ):
+            event = str(record.get("event") or "").strip()
+            if event.startswith("queued_to_"):
+                # The queue itself is in memory. If the item is no longer there
+                # after a restart, a retry must restore it instead of treating a
+                # historical enqueue record as a still-pending durable item.
+                return None
+            return {
+                "queue": str(record.get("queue") or "").strip(),
+                "id": str(metadata.get("queue_item_id") or "").strip(),
+                "metadata": metadata,
+                "state": "delivered"
+                if event.startswith("delivered_to_")
+                else "processed",
+            }
+    return None
+
+
+async def find_existing_group_task_request(
+    request_scope: str,
+    request_id: str,
+) -> dict[str, Any] | None:
+    for candidate_queue in sorted(GROUP_QUEUE_NAMES):
+        async with locks[candidate_queue]:
+            for item in queues[candidate_queue]:
+                item_metadata = queue_item_metadata(item)
+                if (
+                    str(item_metadata.get("task_request_scope") or "").strip()
+                    == request_scope
+                    and str(item_metadata.get("request_id") or "").strip()
+                    == request_id
+                ):
+                    return {
+                        "queue": candidate_queue,
+                        "id": queue_item_id(item) or "",
+                        "metadata": deepcopy(item_metadata),
+                        "state": "queued",
+                    }
+    return await asyncio.to_thread(
+        persisted_group_task_request,
+        request_scope,
+        request_id,
+    )
+
+
+def deduplicated_group_task_result(
+    existing: dict[str, Any],
+    fingerprint: str,
+    request_id: str,
+    default_queue: str,
+) -> dict[str, Any]:
+    existing_metadata = existing.get("metadata")
+    existing_fingerprint = (
+        str(existing_metadata.get("task_request_fingerprint") or "").strip()
+        if isinstance(existing_metadata, dict)
+        else ""
+    )
+    if existing_fingerprint != fingerprint:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "task_request_conflict",
+                "request_id": request_id,
+            },
+        )
+    existing_queue = str(existing.get("queue") or default_queue)
+    return {
+        "status": existing.get("state") or "queued",
+        "queue": existing_queue,
+        "id": existing.get("id"),
+        "size": len(queues.get(existing_queue, [])),
+        "deduplicated": True,
+        "metadata": deepcopy(existing_metadata)
+        if isinstance(existing_metadata, dict)
+        else {},
+    }
+
+
+async def enqueue_idempotent_group_task(
+    queue_name: str,
+    conversation_phone: str,
+    message: Any,
+    metadata: dict[str, Any],
+    port: int | None,
+    git_context: dict[str, Any],
+    *,
+    submission_lock_held: bool = False,
+) -> dict[str, Any]:
+    request_id = str(metadata.get("request_id") or "").strip()
+    request_scope = str(metadata.get("task_request_scope") or "").strip()
+    fingerprint = str(metadata.get("task_request_fingerprint") or "").strip()
+    if not request_id:
+        return await enqueue_phone_channel(
+            queue_name,
+            conversation_phone,
+            message,
+            metadata,
+            port,
+            git_context,
+        )
+
+    acquired_submission_lock = False
+    if not submission_lock_held:
+        await group_task_submission_lock.acquire()
+        acquired_submission_lock = True
+    try:
+        existing = await find_existing_group_task_request(
+            request_scope,
+            request_id,
+        )
+        if existing is not None:
+            return deduplicated_group_task_result(
+                existing,
+                fingerprint,
+                request_id,
+                queue_name,
+            )
+
+        queued = await enqueue_phone_channel(
+            queue_name,
+            conversation_phone,
+            message,
+            metadata,
+            port,
+            git_context,
+        )
+        queued["deduplicated"] = False
+        queued["metadata"] = deepcopy(metadata)
+        return queued
+    finally:
+        if acquired_submission_lock:
+            group_task_submission_lock.release()
+
+
+def entrypoint_binding_for_group(group: dict[str, Any]) -> dict[str, Any]:
+    entrypoints = [
+        binding
+        for binding in group.get("agents", [])
+        if isinstance(binding, dict) and binding.get("is_entrypoint")
+    ]
+    if len(entrypoints) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "group_entrypoint_invalid",
+                "group_id": group.get("group_id"),
+            },
+        )
+    return entrypoints[0]
+
+
+def ensure_group_accepts_tasks(group: dict[str, Any]) -> None:
+    group_status = str(group.get("status") or "active").strip()
+    if group_status != "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "group_not_active",
+                "group_id": group.get("group_id"),
+                "status": group_status,
+            },
+        )
+
+
+def external_group_task_components(
+    group_data: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    group = group_data["group"]
+    group_id = str(group.get("group_id") or "").strip()
+    ensure_group_accepts_tasks(group)
+    entrypoint = entrypoint_binding_for_group(group)
+    task_template = payload.get("task_template")
+    message = task_message_from_payload(payload)
+    task_id, task_template_id = task_identity_from_payload(payload)
+    request_id = str(payload.get("request_id") or "").strip()
+    project_phone = str(group.get("project_phone") or "").strip()
+    to_phone = str(entrypoint.get("agent_phone") or "").strip()
+    fingerprint_template = deepcopy(task_template) if isinstance(task_template, dict) else {}
+    if isinstance(fingerprint_template.get("agents"), list):
+        fingerprint_template["agents"] = sorted(
+            normalize_requested_group_roles(fingerprint_template["agents"]) or []
+        )
+    request_scope = f"{group_id}:external"
+    cycle_id, cycle_title, cycle_explicit = cycle_identity_from_task_payload(
+        payload,
+        request_scope=request_scope,
+        message=message,
+        task_template_id=task_template_id,
+    )
+    task_node_id = cycle_task_node_id(cycle_id, request_scope, task_id)
+    request_fingerprint = canonical_json_fingerprint(
+        {
+            "message": message,
+            "task_template": fingerprint_template,
+            "cycle_id": cycle_id,
+            "cycle_title": cycle_title,
+            "from_agent_id": PROJECT_MANAGER_AGENT_ID,
+            "to_agent_id": entrypoint.get("agent_id"),
+        }
+    )
+    metadata = {
+        "submitted_via": "group_api",
+        "sender": "Project Manager",
+        "receiver": entrypoint.get("role"),
+        "group_id": group_id,
+        "task_id": task_id,
+        "task_node_id": task_node_id,
+        "parent_task_id": None,
+        "parent_task_node_id": None,
+        "cycle_id": cycle_id,
+        "cycle_title": cycle_title,
+        "cycle_origin": "external_task",
+        "request_id": request_id or None,
+        "task_request_scope": request_scope if request_id else None,
+        "task_request_fingerprint": request_fingerprint if request_id else None,
+        "task_template_id": task_template_id or None,
+        "event": "external_task",
+        "send_endpoint": f"/api/v1/groups/{urllib.parse.quote(group_id, safe='')}/tasks",
+        "receive_endpoint": (
+            f"/api/v1/groups/{urllib.parse.quote(group_id, safe='')}/agents/"
+            f"{urllib.parse.quote(str(entrypoint.get('agent_id') or ''), safe='')}/tasks"
+        ),
+        "project_phone": project_phone,
+        "git_context_key": group.get("git_context_key"),
+        "from_phone": PROJECT_MANAGER_PHONE,
+        "from_agent_id": PROJECT_MANAGER_AGENT_ID,
+        "to_phone": to_phone,
+        "to_agent_id": entrypoint.get("agent_id"),
+        "to_role": entrypoint.get("role"),
+    }
+    return {
+        "group": group,
+        "entrypoint": entrypoint,
+        "message": message,
+        "task_id": task_id,
+        "task_node_id": task_node_id,
+        "task_template_id": task_template_id,
+        "request_id": request_id,
+        "request_scope": request_scope,
+        "request_fingerprint": request_fingerprint,
+        "cycle_id": cycle_id,
+        "cycle_title": cycle_title,
+        "cycle_explicit": cycle_explicit,
+        "project_phone": project_phone,
+        "to_phone": to_phone,
+        "metadata": metadata,
+    }
+
+
+def external_group_task_response(
+    group_id: str,
+    components: dict[str, Any],
+    queued: dict[str, Any],
+) -> dict[str, Any]:
+    stored_metadata = queued.get("metadata")
+    effective_metadata = (
+        stored_metadata if isinstance(stored_metadata, dict) else components["metadata"]
+    )
+    entrypoint = components["entrypoint"]
+    return {
+        "status": queued.get("status") or "queued",
+        "group_id": str(effective_metadata.get("group_id") or group_id),
+        "task_id": str(effective_metadata.get("task_id") or components["task_id"]),
+        "task_node_id": str(
+            effective_metadata.get("task_node_id") or components["task_node_id"]
+        ),
+        "cycle_id": str(
+            effective_metadata.get("cycle_id") or components["cycle_id"]
+        ),
+        "task_template_id": str(
+            effective_metadata.get("task_template_id")
+            or components["task_template_id"]
+        ),
+        "queue": queued.get("queue") or "worker-all",
+        "queue_item_id": queued["id"],
+        "deduplicated": bool(queued.get("deduplicated")),
+        "from_agent_id": effective_metadata.get("from_agent_id")
+        or PROJECT_MANAGER_AGENT_ID,
+        "from_phone": effective_metadata.get("from_phone") or PROJECT_MANAGER_PHONE,
+        "to_agent_id": effective_metadata.get("to_agent_id")
+        or entrypoint.get("agent_id"),
+        "to_phone": effective_metadata.get("to_phone")
+        or components["to_phone"],
+        "entrypoint": deepcopy(entrypoint),
+    }
+
+
+async def enqueue_external_group_task_from_data(
+    group_id: str,
+    group_data: dict[str, Any],
+    payload: dict[str, Any],
+    port: int | None,
+) -> dict[str, Any]:
+    components = external_group_task_components(group_data, payload)
+    queued = await enqueue_idempotent_group_task(
+        "worker-all",
+        components["project_phone"],
+        components["message"],
+        components["metadata"],
+        port,
+        group_git_context_for_queue(group_data),
+        submission_lock_held=True,
+    )
+    return external_group_task_response(group_id, components, queued)
+
+
+async def enqueue_external_group_task(
+    group_id: str,
+    payload: dict[str, Any],
+    port: int | None,
+) -> dict[str, Any]:
+    task_template = payload.get("task_template")
+    task_roles = (
+        normalize_requested_group_roles(task_template.get("agents"))
+        if isinstance(task_template, dict) and "agents" in task_template
+        else None
+    )
+    async with group_task_submission_lock:
+        initial_group_data = await read_group_with_agents(group_id)
+        initial_components = external_group_task_components(
+            initial_group_data,
+            payload,
+        )
+        effective_payload = deepcopy(payload)
+        effective_payload["cycle_id"] = initial_components["cycle_id"]
+        effective_payload["cycle_title"] = initial_components["cycle_title"]
+        if initial_components["request_id"]:
+            existing = await find_existing_group_task_request(
+                initial_components["request_scope"],
+                initial_components["request_id"],
+            )
+            if existing is not None:
+                queued = deduplicated_group_task_result(
+                    existing,
+                    initial_components["request_fingerprint"],
+                    initial_components["request_id"],
+                    "worker-all",
+                )
+                return external_group_task_response(
+                    group_id,
+                    initial_components,
+                    queued,
+                )
+
+        await ensure_cycle_can_receive_task(
+            initial_components["cycle_id"],
+            initial_components["project_phone"],
+            allow_create=True,
+            request_scope=initial_components["request_scope"],
+            request_id=initial_components["request_id"],
+        )
+
+        if task_roles:
+            await run_group_write_transaction(
+                update_group_transaction,
+                group_id,
+                {"_add_roles": task_roles},
+            )
+
+        # Keep the project mutation lock through the final status check and
+        # enqueue so DELETE/PUT cannot commit between them.
+        async with git_config_lock:
+            async with agents_lock:
+                group_data = await asyncio.to_thread(
+                    read_group_with_agents_file,
+                    group_id,
+                )
+            return await enqueue_external_group_task_from_data(
+                group_id,
+                group_data,
+                effective_payload,
+                port,
+            )
+
+
+def connection_for_group_task(
+    group_data: dict[str, Any],
+    connection_id: str,
+) -> dict[str, Any]:
+    group = group_data["group"]
+    clean_connection_id = normalized_group_id(connection_id)
+    candidates = [
+        connection
+        for connection in group.get("connections", [])
+        if isinstance(connection, dict)
+        and str(connection.get("id") or "").strip() == clean_connection_id
+    ]
+    project_entry = group_data["project_entry"]
+    candidates.extend(
+        connection
+        for connection in project_entry.get("group_relationships", [])
+        if isinstance(connection, dict)
+        and str(connection.get("id") or "").strip() == clean_connection_id
+        and str(connection.get("from_group_id") or "").strip()
+        == str(group.get("group_id") or "").strip()
+    )
+    if not candidates:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "group_connection_not_found",
+                "connection_id": clean_connection_id,
+            },
+        )
+    if len(candidates) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Connection id '{clean_connection_id}' is ambiguous",
+        )
+    return candidates[0]
+
+
+async def enqueue_group_connection_task_from_data(
+    group_data: dict[str, Any],
+    target_group_data: dict[str, Any],
+    connection_id: str,
+    payload: dict[str, Any],
+    port: int | None,
+) -> dict[str, Any]:
+    group = group_data["group"]
+    group_id = str(group.get("group_id") or "").strip()
+    ensure_group_accepts_tasks(group)
+    target_group = target_group_data["group"]
+    ensure_group_accepts_tasks(target_group)
+    connection = connection_for_group_task(group_data, connection_id)
+    source_project_phone = str(group.get("project_phone") or "").strip()
+    target_project_phone = str(target_group.get("project_phone") or "").strip()
+    target_group_id = str(connection.get("to_group_id") or group_id).strip()
+    expected_source_group_id = str(
+        connection.get("from_group_id")
+        or connection.get("group_id")
+        or group_id
+    ).strip()
+    if (
+        source_project_phone != target_project_phone
+        or expected_source_group_id != group_id
+        or target_group_id != str(target_group.get("group_id") or "").strip()
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "group_connection_project_binding_invalid",
+                "connection_id": connection.get("id"),
+                "source_group_id": group_id,
+                "target_group_id": target_group_id,
+            },
+        )
+
+    expected_from_agent_id = str(connection.get("from_agent_id") or "").strip()
+    expected_to_agent_id = str(connection.get("to_agent_id") or "").strip()
+    source_bindings = [
+        binding
+        for binding in group.get("agents", [])
+        if isinstance(binding, dict)
+        and str(binding.get("agent_id") or "").strip() == expected_from_agent_id
+        and str(binding.get("role") or "").strip()
+        == str(connection.get("from_role") or "").strip()
+        and str(binding.get("agent_phone") or "").strip()
+        == str(connection.get("from_phone") or "").strip()
+    ]
+    target_bindings = [
+        binding
+        for binding in target_group.get("agents", [])
+        if isinstance(binding, dict)
+        and str(binding.get("agent_id") or "").strip() == expected_to_agent_id
+        and str(binding.get("role") or "").strip()
+        == str(connection.get("to_role") or "").strip()
+        and str(binding.get("agent_phone") or "").strip()
+        == str(connection.get("to_phone") or "").strip()
+    ]
+    if len(source_bindings) != 1 or len(target_bindings) != 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "group_connection_agent_binding_invalid",
+                "connection_id": connection.get("id"),
+            },
+        )
+    from_agent_id = str(payload.get("from_agent_id") or "").strip()
+    if not from_agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="from_agent_id is required",
+        )
+    if from_agent_id != expected_from_agent_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "group_connection_forbidden",
+                "connection_id": connection.get("id"),
+                "expected_from_agent_id": expected_from_agent_id,
+            },
+        )
+    submitted_from_phone = str(payload.get("from_phone") or "").strip()
+    expected_from_phone = str(connection.get("from_phone") or "").strip()
+    if submitted_from_phone and submitted_from_phone != expected_from_phone:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="from_phone does not belong to the connection source agent",
+        )
+
+    message = task_message_from_payload(payload)
+    task_id, task_template_id = task_identity_from_payload(payload)
+    request_id = str(payload.get("request_id") or "").strip()
+    project_phone = str(group.get("project_phone") or "").strip()
+    queue_name = str(connection.get("queue") or "worker-all").strip()
+    request_scope = f"{group_id}:connection:{connection.get('id')}"
+    cycle_id, cycle_title, cycle_explicit = cycle_identity_from_task_payload(
+        payload,
+        request_scope=request_scope,
+        message=message,
+        task_template_id=task_template_id,
+    )
+    task_node_id = cycle_task_node_id(cycle_id, request_scope, task_id)
+    parent_task_id = str(payload.get("parent_task_id") or "").strip()
+    parent_task_node_id = str(payload.get("parent_task_node_id") or "").strip()
+    if cycle_explicit and not parent_task_id and not parent_task_node_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "parent_task_id or parent_task_node_id is required when a "
+                "connection continues an explicit cycle_id"
+            ),
+        )
+    if not cycle_explicit and (parent_task_id or parent_task_node_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="parent task reference requires an explicit cycle_id",
+        )
+    parent_task_id, parent_task_node_id = await ensure_cycle_can_receive_task(
+        cycle_id,
+        project_phone,
+        allow_create=not cycle_explicit,
+        request_scope=request_scope,
+        request_id=request_id,
+        parent_task_id=parent_task_id,
+        parent_task_node_id=parent_task_node_id,
+        parent_group_id=group_id,
+        parent_agent_id=expected_from_agent_id,
+    )
+    fingerprint_template = payload.get("task_template")
+    request_fingerprint = canonical_json_fingerprint(
+        {
+            "message": message,
+            "task_template": fingerprint_template
+            if isinstance(fingerprint_template, dict)
+            else {},
+            "connection_id": connection.get("id"),
+            "from_agent_id": expected_from_agent_id,
+            "to_agent_id": connection.get("to_agent_id"),
+            "from_phone": expected_from_phone,
+            "to_phone": connection.get("to_phone"),
+            "source_group_id": group_id,
+            "target_group_id": target_group_id,
+            "cycle_id": cycle_id,
+            "cycle_title": cycle_title,
+            "parent_task_id": parent_task_id,
+            "parent_task_node_id": parent_task_node_id,
+            "queue": queue_name,
+            "event": connection.get("event"),
+        }
+    )
+    metadata = {
+        "submitted_via": "group_connection_api",
+        "sender": connection.get("from_role"),
+        "receiver": connection.get("to_role"),
+        "group_id": target_group_id,
+        "source_group_id": group_id,
+        "source_group_revision": group.get("revision"),
+        "target_group_revision": target_group_data["group"].get("revision"),
+        "task_id": task_id,
+        "task_node_id": task_node_id,
+        "parent_task_id": parent_task_id or None,
+        "parent_task_node_id": parent_task_node_id or None,
+        "cycle_id": cycle_id,
+        "cycle_title": cycle_title,
+        "cycle_origin": "connection_task" if not cycle_explicit else "handoff",
+        "request_id": request_id or None,
+        "task_request_scope": request_scope if request_id else None,
+        "task_request_fingerprint": request_fingerprint if request_id else None,
+        "task_template_id": task_template_id or None,
+        "connection_id": connection.get("id"),
+        "event": connection.get("event"),
+        "send_endpoint": connection.get("send_endpoint"),
+        "receive_endpoint": connection.get("receive_endpoint"),
+        "project_phone": project_phone,
+        "git_context_key": group.get("git_context_key"),
+        "from_phone": expected_from_phone,
+        "from_agent_id": expected_from_agent_id,
+        "from_role": connection.get("from_role"),
+        "to_phone": str(connection.get("to_phone") or "").strip(),
+        "to_agent_id": connection.get("to_agent_id"),
+        "to_role": connection.get("to_role"),
+        "target_group_id": target_group_id,
+    }
+    queued = await enqueue_idempotent_group_task(
+        queue_name,
+        project_phone,
+        message,
+        metadata,
+        port,
+        group_git_context_for_queue(group_data),
+        submission_lock_held=True,
+    )
+    stored_metadata = queued.get("metadata")
+    effective_metadata = (
+        stored_metadata if isinstance(stored_metadata, dict) else metadata
+    )
+    return {
+        "status": queued.get("status") or "queued",
+        "group_id": effective_metadata.get("group_id") or target_group_id,
+        "source_group_id": effective_metadata.get("source_group_id") or group_id,
+        "task_id": effective_metadata.get("task_id") or task_id,
+        "task_node_id": effective_metadata.get("task_node_id") or task_node_id,
+        "parent_task_id": effective_metadata.get("parent_task_id"),
+        "parent_task_node_id": effective_metadata.get("parent_task_node_id"),
+        "cycle_id": effective_metadata.get("cycle_id") or cycle_id,
+        "task_template_id": effective_metadata.get("task_template_id")
+        or task_template_id,
+        "connection_id": effective_metadata.get("connection_id")
+        or connection.get("id"),
+        "queue": queued.get("queue") or queue_name,
+        "queue_item_id": queued["id"],
+        "deduplicated": bool(queued.get("deduplicated")),
+        "from_agent_id": effective_metadata.get("from_agent_id")
+        or expected_from_agent_id,
+        "from_phone": effective_metadata.get("from_phone") or expected_from_phone,
+        "to_agent_id": effective_metadata.get("to_agent_id")
+        or connection.get("to_agent_id"),
+        "to_phone": effective_metadata.get("to_phone")
+        or connection.get("to_phone"),
+    }
+
+
+async def enqueue_group_connection_task(
+    group_id: str,
+    connection_id: str,
+    payload: dict[str, Any],
+    port: int | None,
+) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        # Keep the project mutation lock until the queue item is committed.
+        async with git_config_lock:
+            async with agents_lock:
+                group_data = await asyncio.to_thread(
+                    read_group_with_agents_file,
+                    group_id,
+                )
+                connection = connection_for_group_task(group_data, connection_id)
+                target_group_id = str(
+                    connection.get("to_group_id") or group_id
+                ).strip()
+                target_group_data = (
+                    group_data
+                    if target_group_id == group_id
+                    else await asyncio.to_thread(
+                        read_group_with_agents_file,
+                        target_group_id,
+                    )
+                )
+            return await enqueue_group_connection_task_from_data(
+                group_data,
+                target_group_data,
+                connection_id,
+                payload,
+                port,
+            )
+
+
+async def dequeue_group_agent_task(
+    group_id: str,
+    agent_id: str,
+    port: int | None,
+) -> dict[str, Any]:
+    group_data = await read_group_with_agents(group_id)
+    group = group_data["group"]
+    ensure_group_accepts_tasks(group)
+    bindings = [
+        binding
+        for binding in group.get("agents", [])
+        if isinstance(binding, dict)
+        and str(binding.get("agent_id") or "").strip() == agent_id
+    ]
+    if not bindings:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={
+                "error": "agent_not_in_group",
+                "group_id": group_id,
+                "agent_id": agent_id,
+            },
+        )
+
+    # The same barrier is used by request-id submission. Keep it until the
+    # delivered history record is durable so a concurrent retry cannot mistake
+    # the short queue-to-history transition for a lost task.
+    async with group_task_submission_lock:
+        delivered_item: Any | None = None
+        delivered_queue = ""
+        queue_names = sorted(GROUP_QUEUE_NAMES)
+        acquired_queue_locks: list[asyncio.Lock] = []
+        try:
+            for queue_name in queue_names:
+                await locks[queue_name].acquire()
+                acquired_queue_locks.append(locks[queue_name])
+
+            candidates: list[tuple[str, str, str, Any]] = []
+            for queue_name in queue_names:
+                for item in queues[queue_name]:
+                    metadata = queue_item_metadata(item)
+                    if (
+                        str(metadata.get("group_id") or "").strip() == group_id
+                        and str(metadata.get("to_agent_id") or "").strip() == agent_id
+                    ):
+                        candidates.append(
+                            (
+                                str(queue_item_queued_at(item) or ""),
+                                str(queue_item_id(item) or ""),
+                                queue_name,
+                                item,
+                            )
+                        )
+            if candidates:
+                _, selected_id, delivered_queue, delivered_item = min(
+                    candidates,
+                    key=lambda candidate: (candidate[0], candidate[1]),
+                )
+                removed = False
+                kept_items: deque[Any] = deque()
+                while queues[delivered_queue]:
+                    item = queues[delivered_queue].popleft()
+                    if not removed and str(queue_item_id(item) or "") == selected_id:
+                        removed = True
+                        continue
+                    kept_items.append(item)
+                queues[delivered_queue] = kept_items
+        finally:
+            for queue_lock in reversed(acquired_queue_locks):
+                queue_lock.release()
+
+        if delivered_item is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No queued group task for this agent",
+            )
+        metadata = deepcopy(queue_item_metadata(delivered_item))
+        item_id = queue_item_id(delivered_item)
+        message = deepcopy(queue_item_message(delivered_item))
+        await append_history(
+            QUEUE_DEFINITIONS[delivered_queue]["get_event"],
+            delivered_queue,
+            message,
+            {"queue_item_id": item_id, **metadata},
+            port,
+            group_git_context_for_queue(group_data),
+        )
+        return {
+            "message": message,
+            "id": item_id,
+            "queue": delivered_queue,
+            "group_id": group_id,
+            "agent_id": agent_id,
+            "cycle_id": metadata.get("cycle_id"),
+            "task_id": metadata.get("task_id"),
+            "task_node_id": metadata.get("task_node_id"),
+            "parent_task_id": metadata.get("parent_task_id"),
+            "parent_task_node_id": metadata.get("parent_task_node_id"),
+            "metadata": metadata,
+        }
 
 
 def git_context_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -2033,11 +6044,11 @@ def git_context_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
 def git_context_key_from_metadata(metadata: dict[str, Any]) -> str:
     explicit_key = str(metadata.get("git_context_key") or "").strip()
     if explicit_key:
-        return normalize_git_context_key(explicit_key)
+        return normalize_project_context_reference(explicit_key)
 
     git_address = metadata.get("git_address")
     if isinstance(git_address, str) and git_address.strip():
-        return normalize_git_context_key(git_address)
+        return normalize_project_context_reference(git_address)
 
     return ""
 
@@ -2200,9 +6211,11 @@ async def git_context_for_port(port: int | None) -> dict[str, Any]:
         return {"fastapi_port": port}
 
     project_name = normalize_project_name(entry.get("project_name"), git_address)
-    git_context_key = str(entry.get("git_context_key") or "").strip()
+    git_context_key = normalize_project_context_reference(
+        str(entry.get("git_context_key") or "").strip()
+    )
     if not git_context_key:
-        git_context_key = normalize_git_context_key(git_address)
+        git_context_key = normalize_project_context_reference(git_address)
     git_context = await asyncio.to_thread(resolve_git_reference, git_address)
     return {
         "fastapi_port": port,
@@ -2793,43 +6806,1191 @@ async def read_history(
         )
 
 
-def delete_removed_backend_history_record_file(record_id: str) -> dict[str, Any]:
+def cycle_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
+    metadata = record.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def cycle_id_from_record(record: dict[str, Any]) -> str:
+    metadata = cycle_metadata_from_record(record)
+    return str(metadata.get("cycle_id") or record.get("cycle_id") or "").strip()
+
+
+def project_phone_from_cycle_record(record: dict[str, Any]) -> str:
+    metadata = cycle_metadata_from_record(record)
+    return normalize_project_phone(
+        metadata.get("project_phone")
+        or metadata.get("project_id")
+        or record.get("project_id")
+    )
+
+
+def _read_cycle_records_file_unlocked(
+    *,
+    cycle_id: str = "",
+    project_phone: str = "",
+) -> list[dict[str, Any]]:
     if not history_path.exists():
-        return {"deleted": False, "remaining": 0, "reason": "not_found"}
+        return []
+    clean_cycle_id = normalized_cycle_id(cycle_id) if cycle_id else ""
+    clean_project_phone = normalize_project_phone(project_phone)
+    records: list[dict[str, Any]] = []
+    try:
+        with history_path.open("r", encoding="utf-8") as file:
+            for line_number, line in enumerate(file, start=1):
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                record_cycle_id = cycle_id_from_record(record)
+                if not record_cycle_id:
+                    continue
+                if clean_cycle_id and record_cycle_id != clean_cycle_id:
+                    continue
+                if (
+                    clean_project_phone
+                    and project_phone_from_cycle_record(record)
+                    != clean_project_phone
+                ):
+                    continue
+                stored = deepcopy(record)
+                stored["_cycle_log_sequence"] = line_number
+                records.append(stored)
+    except OSError:
+        return []
+    return records
 
-    with history_path.open("r", encoding="utf-8") as file:
-        lines = file.readlines()
 
-    kept_lines: list[str] = []
-    deleted = False
-    found_protected = False
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
+def read_cycle_records_file(
+    *,
+    cycle_id: str = "",
+    project_phone: str = "",
+) -> list[dict[str, Any]]:
+    lock_path = history_path.with_name(f"{history_path.name}.lock")
+    with interprocess_file_lock(lock_path):
+        return _read_cycle_records_file_unlocked(
+            cycle_id=cycle_id,
+            project_phone=project_phone,
+        )
+
+
+async def read_cycle_records(
+    *,
+    cycle_id: str = "",
+    project_phone: str = "",
+) -> list[dict[str, Any]]:
+    async with history_lock:
+        return await asyncio.to_thread(
+            read_cycle_records_file,
+            cycle_id=cycle_id,
+            project_phone=project_phone,
+        )
+
+
+def cycle_agent_snapshot(
+    metadata: dict[str, Any],
+    prefix: str,
+) -> dict[str, Any] | None:
+    agent_id = str(metadata.get(f"{prefix}_agent_id") or "").strip()
+    role = str(
+        metadata.get(f"{prefix}_role")
+        or metadata.get("sender" if prefix == "from" else "receiver")
+        or ""
+    ).strip()
+    phone = str(metadata.get(f"{prefix}_phone") or "").strip()
+    if not agent_id and not role and not phone:
+        return None
+    return {
+        "id": agent_id or None,
+        "role": role or None,
+        "phone": phone or None,
+    }
+
+
+def cycle_group_ids_from_metadata(metadata: dict[str, Any]) -> list[str]:
+    values = [
+        str(metadata.get("source_group_id") or "").strip(),
+        str(metadata.get("group_id") or "").strip(),
+        str(metadata.get("target_group_id") or "").strip(),
+    ]
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def cycle_event_record(
+    *,
+    event_id: str,
+    timestamp: str,
+    cycle_id: str,
+    project_id: str,
+    event_type: str,
+    metadata: dict[str, Any],
+    source_record_id: str,
+    payload: dict[str, Any],
+    group_id: str = "",
+    source_group_id: str = "",
+    target_group_id: str = "",
+) -> dict[str, Any]:
+    from_agent = cycle_agent_snapshot(metadata, "from")
+    to_agent = cycle_agent_snapshot(metadata, "to")
+    return {
+        "event_id": event_id,
+        "timestamp": timestamp,
+        "cycle_id": cycle_id,
+        "project_id": project_id,
+        "group_id": group_id or None,
+        "source_group_id": source_group_id or None,
+        "target_group_id": target_group_id or group_id or None,
+        "event_type": event_type,
+        "task_id": metadata.get("task_id"),
+        "task_node_id": metadata.get("task_node_id"),
+        "parent_task_id": metadata.get("parent_task_id"),
+        "parent_task_node_id": metadata.get("parent_task_node_id"),
+        "request_id": metadata.get("request_id")
+        or metadata.get("cycle_event_request_id"),
+        "connection_id": metadata.get("connection_id"),
+        "queue": metadata.get("phone_channel"),
+        "queue_item_id": metadata.get("queue_item_id"),
+        "channel": metadata.get("route"),
+        "send_endpoint": metadata.get("send_endpoint"),
+        "receive_endpoint": metadata.get("receive_endpoint"),
+        "from_agent": from_agent,
+        "to_agent": to_agent,
+        "from_agent_id": from_agent.get("id") if from_agent else None,
+        "to_agent_id": to_agent.get("id") if to_agent else None,
+        "source_record_id": source_record_id,
+        "payload": payload,
+    }
+
+
+def cycle_events_from_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not records:
+        return []
+    ordered_records = sorted(
+        records,
+        key=lambda record: int(record.get("_cycle_log_sequence") or 0),
+    )
+    events: list[dict[str, Any]] = []
+    started_cycles: set[str] = set()
+    deployed_groups: set[tuple[str, str]] = set()
+    for record in ordered_records:
+        metadata = cycle_metadata_from_record(record)
+        cycle_id = cycle_id_from_record(record)
+        if not cycle_id:
             continue
+        project_id = project_phone_from_cycle_record(record)
+        timestamp = str(record.get("timestamp") or "")
+        source_record_id = str(record.get("id") or uuid4())
+        group_ids = cycle_group_ids_from_metadata(metadata)
+        group_id = str(metadata.get("group_id") or "").strip()
+        source_group_id = str(metadata.get("source_group_id") or "").strip()
+        target_group_id = str(
+            metadata.get("target_group_id") or group_id
+        ).strip()
 
-        try:
-            record = json.loads(stripped)
-        except json.JSONDecodeError:
-            kept_lines.append(line)
-            continue
+        if cycle_id not in started_cycles:
+            started_cycles.add(cycle_id)
+            events.append(
+                cycle_event_record(
+                    event_id=f"{source_record_id}:cycle-started",
+                    timestamp=timestamp,
+                    cycle_id=cycle_id,
+                    project_id=project_id,
+                    event_type="CYCLE_STARTED",
+                    metadata=metadata,
+                    source_record_id=source_record_id,
+                    group_id=group_id,
+                    source_group_id=source_group_id,
+                    target_group_id=target_group_id,
+                    payload={
+                        "cycle_title": metadata.get("cycle_title"),
+                        "cycle_origin": metadata.get("cycle_origin"),
+                        "root_task_id": metadata.get("task_id"),
+                        "root_task_node_id": metadata.get("task_node_id"),
+                    },
+                )
+            )
 
-        if record.get("id") == record_id:
-            if record.get("event") == "removed_from_backend_queue":
-                deleted = True
+        for deployed_group_id in group_ids:
+            deployed_key = (cycle_id, deployed_group_id)
+            if deployed_key in deployed_groups:
                 continue
-            found_protected = True
+            deployed_groups.add(deployed_key)
+            events.append(
+                cycle_event_record(
+                    event_id=f"{source_record_id}:group:{deployed_group_id}",
+                    timestamp=timestamp,
+                    cycle_id=cycle_id,
+                    project_id=project_id,
+                    event_type="GROUP_DEPLOYED",
+                    metadata=metadata,
+                    source_record_id=source_record_id,
+                    group_id=deployed_group_id,
+                    source_group_id=source_group_id,
+                    target_group_id=target_group_id,
+                    payload={
+                        "binding": "bound_to_cycle",
+                        "group_id": deployed_group_id,
+                    },
+                )
+            )
 
-        kept_lines.append(line if line.endswith("\n") else f"{line}\n")
+        lifecycle_event_type = str(
+            metadata.get("cycle_event_type") or ""
+        ).strip().upper()
+        if lifecycle_event_type:
+            raw_payload = metadata.get("cycle_event_payload")
+            lifecycle_payload = (
+                deepcopy(raw_payload) if isinstance(raw_payload, dict) else {}
+            )
+            if record.get("message") is not None:
+                lifecycle_payload.setdefault("message", deepcopy(record.get("message")))
+            events.append(
+                cycle_event_record(
+                    event_id=source_record_id,
+                    timestamp=timestamp,
+                    cycle_id=cycle_id,
+                    project_id=project_id,
+                    event_type=lifecycle_event_type,
+                    metadata=metadata,
+                    source_record_id=source_record_id,
+                    group_id=group_id,
+                    source_group_id=source_group_id,
+                    target_group_id=target_group_id,
+                    payload=lifecycle_payload,
+                )
+            )
+            continue
 
-    if deleted:
-        temp_path = history_path.with_suffix(".jsonl.tmp")
-        with temp_path.open("w", encoding="utf-8") as file:
-            file.writelines(kept_lines)
-        temp_path.replace(history_path)
+        raw_event = str(record.get("event") or "").strip()
+        if raw_event.startswith("queued_to_"):
+            if str(metadata.get("submitted_via") or "").strip() == (
+                "group_connection_api"
+            ):
+                events.append(
+                    cycle_event_record(
+                        event_id=f"{source_record_id}:handoff",
+                        timestamp=timestamp,
+                        cycle_id=cycle_id,
+                        project_id=project_id,
+                        event_type="HANDOFF_TRIGGERED",
+                        metadata=metadata,
+                        source_record_id=source_record_id,
+                        group_id=source_group_id or group_id,
+                        source_group_id=source_group_id,
+                        target_group_id=target_group_id,
+                        payload={
+                            "event": metadata.get("event"),
+                            "message": deepcopy(record.get("message")),
+                        },
+                    )
+                )
+            event_type = "MESSAGE_QUEUED"
+        elif raw_event.startswith("delivered_to_"):
+            event_type = "TASK_STARTED"
+        elif raw_event.startswith("removed_from_"):
+            event_type = "MESSAGE_REMOVED"
+        else:
+            continue
+        events.append(
+            cycle_event_record(
+                event_id=source_record_id,
+                timestamp=timestamp,
+                cycle_id=cycle_id,
+                project_id=project_id,
+                event_type=event_type,
+                metadata=metadata,
+                source_record_id=source_record_id,
+                group_id=group_id,
+                source_group_id=source_group_id,
+                target_group_id=target_group_id,
+                payload={
+                    "message": deepcopy(record.get("message")),
+                    "transport_event": raw_event,
+                    "transport_metadata": deepcopy(metadata),
+                },
+            )
+        )
 
-    reason = "protected_event" if found_protected else "not_found"
-    return {"deleted": deleted, "remaining": len(kept_lines), "reason": reason}
+    for sequence, event in enumerate(events, start=1):
+        event["sequence"] = sequence
+    return events
+
+
+def cycle_summary_from_records(
+    records: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    events = cycle_events_from_records(records)
+    if not events:
+        return None
+    cycle_id = str(events[0]["cycle_id"])
+    project_id = str(events[0].get("project_id") or "")
+    event_types = [str(event.get("event_type") or "") for event in events]
+    completed_events = [
+        event for event in events if event.get("event_type") == "CYCLE_COMPLETED"
+    ]
+    if completed_events:
+        cycle_status = "completed"
+    elif any(
+        event_type
+        in {
+            "TASK_STARTED",
+            "HANDOFF_TRIGGERED",
+            "ARTIFACT_CREATED",
+            "GROUP_REPORT_SUBMITTED",
+        }
+        for event_type in event_types
+    ):
+        cycle_status = "in_progress"
+    else:
+        cycle_status = "queued"
+
+    group_ids = list(
+        dict.fromkeys(
+            str(group_id)
+            for event in events
+            for group_id in (
+                event.get("source_group_id"),
+                event.get("target_group_id"),
+                event.get("group_id"),
+            )
+            if group_id
+        )
+    )
+    task_keys: list[str] = []
+    task_ids: list[str] = []
+    for event in events:
+        task_id = str(event.get("task_id") or "").strip()
+        task_node = str(event.get("task_node_id") or "").strip()
+        if task_id and task_id not in task_ids:
+            task_ids.append(task_id)
+        key = task_node or task_id
+        if key and key not in task_keys:
+            task_keys.append(key)
+
+    first_record_metadata = cycle_metadata_from_record(records[0])
+    started_event = next(
+        (event for event in events if event.get("event_type") == "CYCLE_STARTED"),
+        events[0],
+    )
+    root_task_id = started_event.get("task_id") or first_record_metadata.get("task_id")
+    root_task_node_id = (
+        started_event.get("task_node_id")
+        or first_record_metadata.get("task_node_id")
+    )
+    return {
+        "cycle_id": cycle_id,
+        "project_id": project_id,
+        "project_phone": project_id,
+        "git_context_key": first_record_metadata.get("git_context_key"),
+        "title": first_record_metadata.get("cycle_title")
+        or started_event.get("payload", {}).get("cycle_title")
+        or root_task_id
+        or cycle_id,
+        "status": cycle_status,
+        "root_task_id": root_task_id,
+        "root_task_node_id": root_task_node_id,
+        "root_group_id": started_event.get("target_group_id")
+        or started_event.get("group_id"),
+        "request_id": started_event.get("request_id"),
+        "group_ids": group_ids,
+        "task_ids": task_ids,
+        "task_count": len(task_keys),
+        "event_count": len(events),
+        "handoff_count": event_types.count("HANDOFF_TRIGGERED"),
+        "artifact_count": event_types.count("ARTIFACT_CREATED"),
+        "report_count": event_types.count("GROUP_REPORT_SUBMITTED"),
+        "cancelled_task_count": sum(
+            1
+            for event in events
+            if event.get("event_type") == "MESSAGE_REMOVED"
+            and isinstance(event.get("payload"), dict)
+            and isinstance(event["payload"].get("transport_metadata"), dict)
+            and event["payload"]["transport_metadata"].get("action")
+            == "cancelled_by_cycle_completion"
+        ),
+        "started_at": events[0].get("timestamp"),
+        "updated_at": events[-1].get("timestamp"),
+        "completed_at": completed_events[-1].get("timestamp")
+        if completed_events
+        else None,
+        "last_event_type": events[-1].get("event_type"),
+    }
+
+
+def cycle_summaries_from_records(
+    records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for record in records:
+        cycle_id = cycle_id_from_record(record)
+        if cycle_id:
+            grouped.setdefault(cycle_id, []).append(record)
+    summaries = [
+        summary
+        for cycle_records in grouped.values()
+        if (summary := cycle_summary_from_records(cycle_records)) is not None
+    ]
+    return sorted(
+        summaries,
+        key=lambda summary: (
+            str(summary.get("started_at") or ""),
+            str(summary.get("cycle_id") or ""),
+        ),
+        reverse=True,
+    )
+
+
+def cycle_not_found(cycle_id: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail={"error": "cycle_not_found", "cycle_id": cycle_id},
+    )
+
+
+async def cycle_records_and_summary(
+    cycle_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    clean_cycle_id = normalized_cycle_id(cycle_id, required=True)
+    records = await read_cycle_records(cycle_id=clean_cycle_id)
+    summary = cycle_summary_from_records(records)
+    if summary is None:
+        raise cycle_not_found(clean_cycle_id)
+    return records, summary
+
+
+def matching_cycle_task_records(
+    records: list[dict[str, Any]],
+    *,
+    task_id: str = "",
+    task_node_id: str = "",
+    group_id: str = "",
+    to_agent_id: str = "",
+) -> list[dict[str, Any]]:
+    matches: list[dict[str, Any]] = []
+    for record in records:
+        metadata = cycle_metadata_from_record(record)
+        if task_node_id and str(metadata.get("task_node_id") or "") != task_node_id:
+            continue
+        if task_id and str(metadata.get("task_id") or "") != task_id:
+            continue
+        if group_id and str(metadata.get("group_id") or "") != group_id:
+            continue
+        if to_agent_id and str(metadata.get("to_agent_id") or "") != to_agent_id:
+            continue
+        if task_id or task_node_id:
+            matches.append(record)
+    return matches
+
+
+def task_belongs_to_cycle(
+    records: list[dict[str, Any]],
+    *,
+    task_id: str = "",
+    task_node_id: str = "",
+    group_id: str = "",
+    to_agent_id: str = "",
+) -> bool:
+    return bool(
+        matching_cycle_task_records(
+            records,
+            task_id=task_id,
+            task_node_id=task_node_id,
+            group_id=group_id,
+            to_agent_id=to_agent_id,
+        )
+    )
+
+
+def canonicalize_cycle_task_reference(
+    records: list[dict[str, Any]],
+    normalized_payload: dict[str, Any],
+) -> None:
+    task_id = str(normalized_payload.get("task_id") or "").strip()
+    task_node_id = str(normalized_payload.get("task_node_id") or "").strip()
+    if not task_id and not task_node_id:
+        return
+    group_id = str(normalized_payload.get("group_id") or "").strip()
+    matches = matching_cycle_task_records(
+        records,
+        task_id=task_id,
+        task_node_id=task_node_id,
+        group_id=group_id,
+    )
+    if not matches:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "task_not_in_cycle",
+                "cycle_id": cycle_id_from_record(records[0]) if records else None,
+                "group_id": group_id or None,
+                "task_id": task_id or None,
+                "task_node_id": task_node_id or None,
+            },
+        )
+    canonical_nodes = {
+        str(cycle_metadata_from_record(record).get("task_node_id") or "")
+        for record in matches
+    }
+    canonical_nodes.discard("")
+    if not task_node_id and len(canonical_nodes) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "task_reference_ambiguous",
+                "task_id": task_id,
+                "candidate_task_node_ids": sorted(canonical_nodes),
+            },
+        )
+    canonical_task_ids = {
+        str(cycle_metadata_from_record(record).get("task_id") or "")
+        for record in matches
+    }
+    canonical_task_ids.discard("")
+    if not task_id and len(canonical_task_ids) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "task_reference_ambiguous",
+                "task_node_id": task_node_id,
+                "candidate_task_ids": sorted(canonical_task_ids),
+            },
+        )
+    if not task_node_id and canonical_nodes:
+        normalized_payload["task_node_id"] = next(iter(canonical_nodes))
+    if not task_id and canonical_task_ids:
+        normalized_payload["task_id"] = next(iter(canonical_task_ids))
+
+
+async def ensure_cycle_can_receive_task(
+    cycle_id: str,
+    project_phone: str,
+    *,
+    allow_create: bool,
+    request_scope: str = "",
+    request_id: str = "",
+    parent_task_id: str = "",
+    parent_task_node_id: str = "",
+    parent_group_id: str = "",
+    parent_agent_id: str = "",
+) -> tuple[str, str]:
+    clean_cycle_id = normalized_cycle_id(cycle_id, required=True)
+    clean_project_phone = normalize_project_phone(project_phone)
+    records = await read_cycle_records(cycle_id=clean_cycle_id)
+    summary = cycle_summary_from_records(records)
+    if summary is None:
+        if allow_create:
+            return parent_task_id, parent_task_node_id
+        raise cycle_not_found(clean_cycle_id)
+    if str(summary.get("project_id") or "") != clean_project_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "cycle_project_conflict",
+                "cycle_id": clean_cycle_id,
+                "expected_project_id": summary.get("project_id"),
+                "received_project_id": clean_project_phone,
+            },
+        )
+    if parent_task_id or parent_task_node_id:
+        parent_matches = matching_cycle_task_records(
+            records,
+            task_id=parent_task_id,
+            task_node_id=parent_task_node_id,
+            group_id=parent_group_id,
+            to_agent_id=parent_agent_id,
+        )
+        if not parent_matches:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "parent_task_not_in_cycle",
+                    "cycle_id": clean_cycle_id,
+                    "parent_task_id": parent_task_id or None,
+                    "parent_task_node_id": parent_task_node_id or None,
+                    "expected_group_id": parent_group_id or None,
+                    "expected_agent_id": parent_agent_id or None,
+                },
+            )
+        if parent_agent_id and not any(
+            str(record.get("event") or "").startswith("delivered_to_")
+            for record in parent_matches
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "parent_task_not_started",
+                    "cycle_id": clean_cycle_id,
+                    "parent_task_id": parent_task_id or None,
+                    "parent_task_node_id": parent_task_node_id or None,
+                },
+            )
+        matching_nodes = {
+            str(cycle_metadata_from_record(record).get("task_node_id") or "")
+            for record in parent_matches
+        }
+        matching_nodes.discard("")
+        if not parent_task_node_id and len(matching_nodes) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "parent_task_ambiguous",
+                    "cycle_id": clean_cycle_id,
+                    "parent_task_id": parent_task_id,
+                    "candidate_task_node_ids": sorted(matching_nodes),
+                },
+            )
+        if not parent_task_node_id and matching_nodes:
+            parent_task_node_id = next(iter(matching_nodes))
+        matching_task_ids = {
+            str(cycle_metadata_from_record(record).get("task_id") or "")
+            for record in parent_matches
+        }
+        matching_task_ids.discard("")
+        if not parent_task_id and len(matching_task_ids) > 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "parent_task_ambiguous",
+                    "cycle_id": clean_cycle_id,
+                    "parent_task_node_id": parent_task_node_id,
+                    "candidate_task_ids": sorted(matching_task_ids),
+                },
+            )
+        if not parent_task_id and matching_task_ids:
+            parent_task_id = next(iter(matching_task_ids))
+    if summary.get("status") == "completed":
+        if request_scope and request_id:
+            existing = await find_existing_group_task_request(
+                request_scope,
+                request_id,
+            )
+            if existing is not None:
+                return parent_task_id, parent_task_node_id
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "cycle_completed",
+                "cycle_id": clean_cycle_id,
+            },
+        )
+    return parent_task_id, parent_task_node_id
+
+
+def cycle_graph_from_events(
+    summary: dict[str, Any],
+    events: list[dict[str, Any]],
+) -> dict[str, Any]:
+    participants: dict[str, dict[str, Any]] = {}
+    task_nodes: dict[str, dict[str, Any]] = {}
+    lineage_edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+    communication_edges: dict[tuple[str, str, str], dict[str, Any]] = {}
+
+    for event in events:
+        for actor_name in ("from_agent", "to_agent"):
+            actor = event.get(actor_name)
+            if not isinstance(actor, dict):
+                continue
+            actor_id = str(actor.get("id") or actor.get("phone") or "").strip()
+            if not actor_id:
+                continue
+            participant = participants.setdefault(
+                actor_id,
+                {
+                    "id": actor_id,
+                    "role": actor.get("role"),
+                    "phone": actor.get("phone"),
+                    "group_ids": [],
+                },
+            )
+            if actor_id == PROJECT_MANAGER_AGENT_ID:
+                actor_group_ids: list[Any] = []
+            elif actor_name == "from_agent":
+                actor_group_ids = [
+                    event.get("source_group_id") or event.get("group_id")
+                ]
+            else:
+                actor_group_ids = [
+                    event.get("target_group_id") or event.get("group_id")
+                ]
+            for group_id in actor_group_ids:
+                if group_id and group_id not in participant["group_ids"]:
+                    participant["group_ids"].append(group_id)
+
+        task_id = str(event.get("task_id") or "").strip()
+        task_node_id = str(event.get("task_node_id") or task_id).strip()
+        if task_node_id:
+            task_node = task_nodes.setdefault(
+                task_node_id,
+                {
+                    "id": task_node_id,
+                    "task_id": task_id or None,
+                    "parent_task_id": event.get("parent_task_id"),
+                    "parent_task_node_id": event.get("parent_task_node_id"),
+                    "group_id": event.get("target_group_id")
+                    or event.get("group_id"),
+                    "first_event_at": event.get("timestamp"),
+                    "last_event_at": event.get("timestamp"),
+                    "event_types": [],
+                },
+            )
+            task_node["last_event_at"] = event.get("timestamp")
+            event_type = event.get("event_type")
+            if event_type and event_type not in task_node["event_types"]:
+                task_node["event_types"].append(event_type)
+            parent_node_id = str(event.get("parent_task_node_id") or "").strip()
+            parent_task_id = str(event.get("parent_task_id") or "").strip()
+            parent_key = parent_node_id
+            if not parent_key and parent_task_id:
+                parent_key = next(
+                    (
+                        str(candidate.get("id") or "")
+                        for candidate in task_nodes.values()
+                        if str(candidate.get("task_id") or "") == parent_task_id
+                    ),
+                    parent_task_id,
+                )
+            if parent_key:
+                edge_key = (parent_key, task_node_id, "HANDOFF")
+                lineage_edges.setdefault(
+                    edge_key,
+                    {
+                        "id": "edge-" + hashlib.sha256(
+                            ":".join(edge_key).encode("utf-8")
+                        ).hexdigest()[:16],
+                        "from": parent_key,
+                        "to": task_node_id,
+                        "type": "HANDOFF",
+                        "connection_id": event.get("connection_id"),
+                    },
+                )
+
+        if event.get("event_type") == "MESSAGE_QUEUED":
+            from_agent_id = str(event.get("from_agent_id") or "").strip()
+            to_agent_id = str(event.get("to_agent_id") or "").strip()
+            if from_agent_id and to_agent_id:
+                connection_id = str(event.get("connection_id") or "external")
+                edge_key = (from_agent_id, to_agent_id, connection_id)
+                edge = communication_edges.setdefault(
+                    edge_key,
+                    {
+                        "id": "comm-" + hashlib.sha256(
+                            ":".join(edge_key).encode("utf-8")
+                        ).hexdigest()[:16],
+                        "from": from_agent_id,
+                        "to": to_agent_id,
+                        "connection_id": event.get("connection_id"),
+                        "count": 0,
+                        "task_node_ids": [],
+                    },
+                )
+                edge["count"] += 1
+                if task_node_id and task_node_id not in edge["task_node_ids"]:
+                    edge["task_node_ids"].append(task_node_id)
+
+    resolved_lineage_edges = [
+        edge
+        for edge in lineage_edges.values()
+        if edge.get("from") in task_nodes and edge.get("to") in task_nodes
+    ]
+    return {
+        "cycle": summary,
+        "graph_type": "task_lineage_with_agent_communications",
+        "nodes": {
+            "tasks": sorted(task_nodes.values(), key=lambda node: node["id"]),
+            "agents": sorted(participants.values(), key=lambda node: node["id"]),
+        },
+        "edges": {
+            "task_lineage": sorted(
+                resolved_lineage_edges, key=lambda edge: edge["id"]
+            ),
+            "communications": sorted(
+                communication_edges.values(), key=lambda edge: edge["id"]
+            ),
+        },
+        "event_count": len(events),
+    }
+
+
+def normalize_cycle_lifecycle_payload(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    event_type = str(payload.get("event_type") or "").strip().upper()
+    if event_type not in CYCLE_LIFECYCLE_EVENT_TYPES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "unsupported_cycle_event_type",
+                "allowed": sorted(CYCLE_LIFECYCLE_EVENT_TYPES),
+            },
+        )
+    for server_owned_field in ("event_id", "timestamp", "project_id"):
+        if server_owned_field in payload:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{server_owned_field} is server-owned",
+            )
+    request_id = str(payload.get("request_id") or "").strip()
+    if len(request_id) > 160:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="request_id must contain at most 160 characters",
+        )
+    group_id = str(payload.get("group_id") or "").strip()
+    from_agent_id = str(payload.get("from_agent_id") or "").strip()
+    task_id = str(payload.get("task_id") or "").strip()
+    task_node_id = str(payload.get("task_node_id") or "").strip()
+    event_payload = payload.get("payload")
+    if event_payload is not None and not isinstance(event_payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="payload must be an object",
+        )
+    normalized_payload = deepcopy(event_payload) if isinstance(event_payload, dict) else {}
+    message = payload.get("message")
+
+    if event_type == "ARTIFACT_CREATED":
+        artifact = payload.get("artifact")
+        if not isinstance(artifact, dict) or not artifact:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="artifact must be a non-empty object",
+            )
+        normalized_payload["artifact"] = deepcopy(artifact)
+    elif event_type == "GROUP_REPORT_SUBMITTED":
+        report = payload.get("report")
+        if report is not None and not isinstance(report, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="report must be an object",
+            )
+        if isinstance(report, dict):
+            normalized_payload["report"] = deepcopy(report)
+        if not normalized_payload and message is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="report, payload, or message is required",
+            )
+    elif event_type == "CYCLE_COMPLETED":
+        decision = payload.get("decision")
+        if not isinstance(decision, dict) or not decision:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="decision must be a non-empty object",
+            )
+        normalized_payload["decision"] = deepcopy(decision)
+
+    if event_type != "CYCLE_COMPLETED":
+        if not group_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="group_id is required for this cycle event",
+            )
+        if not from_agent_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="from_agent_id is required for this cycle event",
+            )
+        if from_agent_id == PROJECT_MANAGER_AGENT_ID:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    "Project Manager cannot submit agent artifact or group "
+                    "report events"
+                ),
+            )
+    elif from_agent_id and from_agent_id != PROJECT_MANAGER_AGENT_ID:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Project Manager can complete a development cycle",
+        )
+
+    return {
+        "event_type": event_type,
+        "request_id": request_id,
+        "group_id": group_id,
+        "from_agent_id": from_agent_id or PROJECT_MANAGER_AGENT_ID,
+        "task_id": task_id,
+        "task_node_id": task_node_id,
+        "message": deepcopy(message),
+        "payload": normalized_payload,
+    }
+
+
+def cycle_lifecycle_actor(
+    normalized_payload: dict[str, Any],
+    group_data: dict[str, Any] | None,
+) -> dict[str, Any]:
+    from_agent_id = normalized_payload["from_agent_id"]
+    if from_agent_id == PROJECT_MANAGER_AGENT_ID:
+        return {
+            "from_agent_id": PROJECT_MANAGER_AGENT_ID,
+            "from_role": "project_manager",
+            "from_phone": PROJECT_MANAGER_PHONE,
+            "sender": PROJECT_MANAGER_AGENT_NAME,
+        }
+    if group_data is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="group_id is required for the selected agent",
+        )
+    bindings = [
+        binding
+        for binding in group_data["group"].get("agents", [])
+        if isinstance(binding, dict)
+        and str(binding.get("agent_id") or "").strip() == from_agent_id
+    ]
+    if not bindings:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "cycle_event_agent_not_in_group",
+                "group_id": normalized_payload["group_id"],
+                "from_agent_id": from_agent_id,
+            },
+        )
+    binding = bindings[0]
+    return {
+        "from_agent_id": from_agent_id,
+        "from_role": binding.get("role"),
+        "from_phone": binding.get("agent_phone"),
+        "sender": binding.get("role"),
+    }
+
+
+def cycle_lifecycle_request_details(
+    cycle_id: str,
+    normalized_payload: dict[str, Any],
+) -> tuple[str, str]:
+    event_type = normalized_payload["event_type"]
+    request_scope = f"{cycle_id}:event"
+    fingerprint = canonical_json_fingerprint(
+        {
+            "event_type": event_type,
+            "group_id": normalized_payload["group_id"],
+            "from_agent_id": normalized_payload["from_agent_id"],
+            "task_id": normalized_payload["task_id"],
+            "task_node_id": normalized_payload["task_node_id"],
+            "message": normalized_payload["message"],
+            "payload": normalized_payload["payload"],
+        }
+    )
+    return request_scope, fingerprint
+
+
+def deduplicated_cycle_lifecycle_result(
+    records: list[dict[str, Any]],
+    summary: dict[str, Any],
+    normalized_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    request_id = normalized_payload["request_id"]
+    if not request_id:
+        return None
+    cycle_id = str(summary.get("cycle_id") or "")
+    event_type = normalized_payload["event_type"]
+    request_scope, fingerprint = cycle_lifecycle_request_details(
+        cycle_id,
+        normalized_payload,
+    )
+    for record in records:
+        metadata = cycle_metadata_from_record(record)
+        if (
+            str(metadata.get("cycle_event_request_scope") or "")
+            != request_scope
+            or str(metadata.get("cycle_event_request_id") or "") != request_id
+        ):
+            continue
+        existing_fingerprint = str(metadata.get("cycle_event_fingerprint") or "")
+        if existing_fingerprint != fingerprint:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "cycle_event_request_conflict",
+                    "request_id": request_id,
+                },
+            )
+        all_events = cycle_events_from_records(records)
+        existing_event = next(
+            event
+            for event in all_events
+            if event.get("source_record_id") == record.get("id")
+            and event.get("event_type") == event_type
+        )
+        return {
+            "created": False,
+            "deduplicated": True,
+            "cycle": cycle_summary_from_records(records) or summary,
+            "event": existing_event,
+        }
+    return None
+
+
+def append_cycle_lifecycle_event_file(
+    cycle_id: str,
+    summary: dict[str, Any],
+    normalized_payload: dict[str, Any],
+    actor: dict[str, Any],
+    git_context: dict[str, Any],
+) -> dict[str, Any]:
+    event_type = normalized_payload["event_type"]
+    request_id = normalized_payload["request_id"]
+    request_scope, fingerprint = cycle_lifecycle_request_details(
+        cycle_id,
+        normalized_payload,
+    )
+    lock_path = history_path.with_name(f"{history_path.name}.lock")
+    with interprocess_file_lock(lock_path):
+        records = _read_cycle_records_file_unlocked(
+            cycle_id=cycle_id,
+        )
+        deduplicated = deduplicated_cycle_lifecycle_result(
+            records,
+            summary,
+            normalized_payload,
+        )
+        if deduplicated is not None:
+            return deduplicated
+
+        current_summary = cycle_summary_from_records(records) or summary
+        if current_summary.get("status") == "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "cycle_completed", "cycle_id": cycle_id},
+            )
+        if event_type == "CYCLE_COMPLETED" and any(
+            cycle_metadata_from_record(record).get("cycle_event_type")
+            == "CYCLE_COMPLETED"
+            for record in records
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "cycle_completed", "cycle_id": cycle_id},
+            )
+
+        record = {
+            "id": str(uuid4()),
+            "timestamp": utc_now(),
+            "event": "cycle_lifecycle_event",
+            "context": "development_cycle",
+            "queue": "cycle-events",
+            "route": f"/api/v1/cycles/{cycle_id}/events",
+            "message": normalized_payload["message"],
+            "metadata": {
+                "route": f"/api/v1/cycles/{cycle_id}/events",
+                "context": "development_cycle",
+                "context_label": "Development Cycle Audit Trail",
+                "cycle_id": cycle_id,
+                "cycle_title": summary.get("title"),
+                "project_phone": summary.get("project_id"),
+                "git_context_key": summary.get("git_context_key"),
+                "group_id": normalized_payload["group_id"] or None,
+                "task_id": normalized_payload["task_id"] or None,
+                "task_node_id": normalized_payload["task_node_id"] or None,
+                "cycle_event_type": event_type,
+                "cycle_event_payload": deepcopy(normalized_payload["payload"]),
+                "cycle_event_request_scope": request_scope if request_id else None,
+                "cycle_event_request_id": request_id or None,
+                "cycle_event_fingerprint": fingerprint if request_id else None,
+                **actor,
+                **{
+                    key: value
+                    for key, value in git_context.items()
+                    if value is not None
+                },
+            },
+        }
+        record["metadata"] = {
+            key: value
+            for key, value in record["metadata"].items()
+            if value is not None
+        }
+        _write_history_line_unlocked(record)
+        records = _read_cycle_records_file_unlocked(
+            cycle_id=cycle_id,
+        )
+        events = cycle_events_from_records(records)
+        created_event = next(
+            event
+            for event in events
+            if event.get("source_record_id") == record["id"]
+            and event.get("event_type") == event_type
+        )
+        return {
+            "created": True,
+            "deduplicated": False,
+            "cycle": cycle_summary_from_records(records),
+            "event": created_event,
+        }
+
+
+async def append_cycle_lifecycle_event(
+    cycle_id: str,
+    summary: dict[str, Any],
+    normalized_payload: dict[str, Any],
+    actor: dict[str, Any],
+    git_context: dict[str, Any],
+) -> dict[str, Any]:
+    async with history_lock:
+        return await asyncio.to_thread(
+            append_cycle_lifecycle_event_file,
+            cycle_id,
+            deepcopy(summary),
+            deepcopy(normalized_payload),
+            deepcopy(actor),
+            deepcopy(git_context),
+        )
+
+
+def delete_removed_backend_history_record_file(record_id: str) -> dict[str, Any]:
+    lock_path = history_path.with_name(f"{history_path.name}.lock")
+    with interprocess_file_lock(lock_path):
+        if not history_path.exists():
+            return {"deleted": False, "remaining": 0, "reason": "not_found"}
+
+        with history_path.open("r", encoding="utf-8") as file:
+            lines = file.readlines()
+
+        kept_lines: list[str] = []
+        deleted = False
+        found_protected = False
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            try:
+                record = json.loads(stripped)
+            except json.JSONDecodeError:
+                kept_lines.append(line)
+                continue
+
+            if record.get("id") == record_id:
+                if (
+                    record.get("event") == "removed_from_backend_queue"
+                    and not cycle_id_from_record(record)
+                ):
+                    deleted = True
+                    continue
+                found_protected = True
+
+            kept_lines.append(line if line.endswith("\n") else f"{line}\n")
+
+        if deleted:
+            temp_path = history_path.with_suffix(".jsonl.tmp")
+            with temp_path.open("w", encoding="utf-8") as file:
+                file.writelines(kept_lines)
+                file.flush()
+                os.fsync(file.fileno())
+            temp_path.replace(history_path)
+
+        reason = "protected_event" if found_protected else "not_found"
+        return {"deleted": deleted, "remaining": len(kept_lines), "reason": reason}
 
 
 async def delete_removed_backend_history_record(record_id: str) -> dict[str, Any]:
@@ -4265,6 +9426,83 @@ def render_index_v2() -> str:
       flex-wrap: wrap;
       justify-content: flex-end;
     }
+    .agent-project-manager {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+      padding: 12px;
+    }
+    .agent-project-grid {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto;
+      gap: 12px;
+      align-items: end;
+    }
+    .agent-project-grid label {
+      margin-top: 0;
+    }
+    .agent-project-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .agent-project-meta {
+      margin-top: 8px;
+    }
+    .agent-project-lists {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }
+    .agent-project-list {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+      min-width: 0;
+    }
+    .agent-project-list h3 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .agent-project-items {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .agent-project-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+    .agent-project-item:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .agent-project-item-name {
+      min-width: 0;
+      overflow-wrap: anywhere;
+      font-weight: 650;
+    }
+    .agent-project-item-meta {
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .agent-project-item-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
     .agent-editor {
       margin-top: 12px;
     }
@@ -4394,6 +9632,80 @@ def render_index_v2() -> str:
     }
     .agent-status-list li {
       margin: 4px 0;
+      overflow-wrap: anywhere;
+    }
+    .git-context-projects {
+      margin-bottom: 16px;
+    }
+    .git-context-list-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .git-context-list-head h3 {
+      margin: 0;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+    .git-context-list {
+      display: grid;
+      gap: 8px;
+    }
+    .git-context-apply-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .git-context-apply-row select {
+      min-height: 38px;
+    }
+    .git-context-card {
+      width: 100%;
+      min-height: 72px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .git-context-card:hover {
+      border-color: var(--accent);
+      background: #f7fbff;
+    }
+    .git-context-card.active {
+      border-color: var(--accent);
+      background: var(--blue-bg);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .git-context-card-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: center;
+      font-weight: 650;
+    }
+    .git-context-card-badge {
+      flex: 0 0 auto;
+      border: 1px solid #b7d7f7;
+      border-radius: 999px;
+      background: #f7fbff;
+      color: var(--blue-text);
+      padding: 2px 8px;
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .git-context-card-meta {
+      display: grid;
+      gap: 3px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
       overflow-wrap: anywhere;
     }
     .agent-state-notice {
@@ -4556,6 +9868,312 @@ def render_index_v2() -> str:
       overflow: auto;
       padding-right: 4px;
     }
+    main.cycle-graph-view {
+      grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
+      align-items: start;
+    }
+    .cycle-graph-sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .cycle-graph-project {
+      margin-bottom: 12px;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f6f8fa;
+      overflow-wrap: anywhere;
+    }
+    .cycle-graph-controls {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .cycle-graph-controls label {
+      margin-top: 0;
+    }
+    .cycle-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: calc(100vh - 330px);
+      overflow: auto;
+      margin-top: 12px;
+      padding-right: 3px;
+    }
+    .cycle-list-card {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      color: var(--text);
+      padding: 10px 12px;
+      text-align: left;
+      cursor: pointer;
+    }
+    .cycle-list-card:hover {
+      border-color: var(--accent);
+      background: #f7fbff;
+    }
+    .cycle-list-card.active {
+      border-color: var(--accent);
+      background: var(--blue-bg);
+      box-shadow: inset 3px 0 0 var(--accent);
+    }
+    .cycle-list-card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+    }
+    .cycle-list-card-title {
+      min-width: 0;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+    .cycle-list-card-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .cycle-status-chip {
+      flex: 0 0 auto;
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 8px;
+      background: var(--orange-bg);
+      color: var(--orange-text);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .cycle-status-chip.completed {
+      background: var(--green-bg);
+      color: var(--green-text);
+    }
+    .cycle-status-chip.queued {
+      background: #eef2f6;
+      color: #30363d;
+    }
+    .cycle-graph-toolbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+    .cycle-graph-toolbar h2 {
+      margin-bottom: 3px;
+    }
+    .cycle-graph-metrics {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+    .cycle-graph-legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .cycle-graph-legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .cycle-legend-swatch {
+      width: 22px;
+      height: 4px;
+      border-radius: 999px;
+      background: var(--accent);
+    }
+    .cycle-legend-swatch.active {
+      height: 10px;
+      background: var(--ok);
+      box-shadow: 0 0 0 4px rgba(6, 118, 71, 0.13);
+    }
+    .cycle-legend-swatch.handoff {
+      background: #d97706;
+      background-image: linear-gradient(90deg, #d97706 55%, transparent 55%);
+      background-size: 8px 4px;
+    }
+    .cycle-legend-swatch.task {
+      background: #7c3aed;
+    }
+    .cycle-graph-canvas {
+      min-height: 410px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background:
+        linear-gradient(#eef2f6 1px, transparent 1px),
+        linear-gradient(90deg, #eef2f6 1px, transparent 1px),
+        #fbfcfd;
+      background-size: 24px 24px;
+      overflow: auto;
+    }
+    .cycle-graph-canvas svg {
+      display: block;
+      min-width: 100%;
+      font-family: "Segoe UI", Arial, sans-serif;
+    }
+    .cycle-communication-edge,
+    .cycle-task-edge {
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .cycle-communication-edge {
+      stroke: #6b8eb5;
+      stroke-width: 2.5;
+    }
+    .cycle-communication-edge.handoff-active {
+      stroke: #d97706;
+      stroke-width: 4;
+      stroke-dasharray: 11 7;
+      animation: cycle-handoff-flow 0.8s linear infinite;
+    }
+    .cycle-task-edge {
+      stroke: #7c3aed;
+      stroke-width: 2;
+      stroke-dasharray: 5 5;
+    }
+    .cycle-agent-node .cycle-agent-body {
+      fill: #ffffff;
+      stroke: #6b8eb5;
+      stroke-width: 2;
+    }
+    .cycle-agent-node .cycle-agent-halo {
+      fill: rgba(6, 118, 71, 0.1);
+      stroke: rgba(6, 118, 71, 0.34);
+      stroke-width: 2;
+      opacity: 0;
+      transform-box: fill-box;
+      transform-origin: center;
+    }
+    .cycle-agent-node.active .cycle-agent-body {
+      fill: #ecfdf3;
+      stroke: var(--ok);
+      stroke-width: 3;
+    }
+    .cycle-agent-node.active .cycle-agent-halo {
+      opacity: 1;
+      animation: cycle-agent-pulse 1.6s ease-out infinite;
+    }
+    .cycle-agent-role {
+      fill: var(--text);
+      font-size: 13px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+    .cycle-agent-meta {
+      fill: var(--muted);
+      font-size: 11px;
+      text-anchor: middle;
+    }
+    .cycle-task-node rect {
+      fill: #f5f3ff;
+      stroke: #7c3aed;
+      stroke-width: 1.5;
+    }
+    .cycle-task-node.active rect {
+      fill: #ecfdf3;
+      stroke: var(--ok);
+      stroke-width: 2.5;
+    }
+    .cycle-task-title {
+      fill: #3b2763;
+      font-size: 11px;
+      font-weight: 700;
+      text-anchor: middle;
+    }
+    .cycle-task-meta {
+      fill: var(--muted);
+      font-size: 10px;
+      text-anchor: middle;
+    }
+    .cycle-graph-empty {
+      display: grid;
+      min-height: 408px;
+      place-items: center;
+      padding: 24px;
+      color: var(--muted);
+      text-align: center;
+    }
+    .cycle-lineage-summary {
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    .cycle-event-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      max-height: 360px;
+      overflow: auto;
+    }
+    .cycle-event {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 9px;
+      align-items: start;
+      padding: 9px 0;
+      border-top: 1px solid var(--line);
+    }
+    .cycle-event:first-child {
+      border-top: 0;
+      padding-top: 0;
+    }
+    .cycle-event-sequence {
+      display: grid;
+      width: 28px;
+      height: 28px;
+      place-items: center;
+      border-radius: 50%;
+      background: #eef2f6;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .cycle-event.handoff .cycle-event-sequence {
+      background: var(--orange-bg);
+      color: var(--orange-text);
+    }
+    .cycle-event.started .cycle-event-sequence {
+      background: var(--green-bg);
+      color: var(--green-text);
+    }
+    .cycle-event-title {
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+    .cycle-event-meta {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
+    @keyframes cycle-agent-pulse {
+      0% { transform: scale(0.88); opacity: 0.75; }
+      75%, 100% { transform: scale(1.18); opacity: 0; }
+    }
+    @keyframes cycle-handoff-flow {
+      to { stroke-dashoffset: -18; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .cycle-agent-node.active .cycle-agent-halo,
+      .cycle-communication-edge.handoff-active {
+        animation: none;
+      }
+    }
     .entry {
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -4652,6 +10270,15 @@ def render_index_v2() -> str:
       .history-list {
         max-height: none;
       }
+      .cycle-list {
+        max-height: none;
+      }
+      .cycle-graph-toolbar {
+        flex-direction: column;
+      }
+      .cycle-graph-metrics {
+        justify-content: flex-start;
+      }
       .email-route-row {
         grid-template-columns: 1fr;
       }
@@ -4680,10 +10307,21 @@ def render_index_v2() -> str:
       .agent-toolbar {
         grid-template-columns: 1fr;
       }
+      .agent-project-grid {
+        grid-template-columns: 1fr;
+      }
+      .agent-project-lists,
+      .agent-project-item {
+        grid-template-columns: 1fr;
+      }
+      .agent-project-item-actions {
+        justify-content: flex-start;
+      }
       .agent-row-head {
         grid-template-columns: 1fr;
       }
-      .agent-toolbar-actions {
+      .agent-toolbar-actions,
+      .agent-project-actions {
         justify-content: flex-start;
       }
       .agent-param-row {
@@ -4719,6 +10357,8 @@ def render_index_v2() -> str:
       <button class="help-button" data-help-topic="page:messages" type="button" title="Что это?" aria-label="Подсказка: Сообщения">?</button>
       <button class="page-tab" data-view="git-context" type="button">Git context</button>
       <button class="help-button" data-help-topic="page:git-context" type="button" title="Что это?" aria-label="Подсказка: Git context">?</button>
+      <button class="page-tab" data-view="cycles" type="button">Граф группы и циклы</button>
+      <button class="help-button" data-help-topic="page:cycles" type="button" title="Что это?" aria-label="Подсказка: Граф группы и циклы">?</button>
       <button class="page-tab" data-view="screenshots" type="button">Скриншоты</button>
       <button class="help-button" data-help-topic="page:screenshots" type="button" title="Что это?" aria-label="Подсказка: Скриншоты">?</button>
       <button class="page-tab" data-view="evidence" type="button">Доказательства</button>
@@ -4904,9 +10544,19 @@ def render_index_v2() -> str:
     <section>
       <div class="panel">
         <h2>Git context</h2>
+        <div class="git-context-projects">
+          <div class="git-context-list-head">
+            <h3>Активный проект</h3>
+            <span class="subtle" id="gitContextListCount"></span>
+          </div>
+          <div class="git-context-apply-row">
+            <select id="gitContextList"></select>
+            <button class="primary" id="applyGitContextProjectButton" type="button">Применить</button>
+          </div>
+        </div>
         <div class="grid">
           <div>
-            <label for="gitPhone">Активный проект / телефон</label>
+            <label for="gitPhone">Телефон привязки для редактирования</label>
             <select id="gitPhone"></select>
           </div>
           <div>
@@ -4922,6 +10572,8 @@ def render_index_v2() -> str:
         <input id="gitAddress" placeholder="D:\\nginx или https://github.com/org/repo.git">
         <label for="gitProjectName">Project name</label>
         <input id="gitProjectName" placeholder="LLM Extractor">
+        <label for="gitContextKey">Git context key</label>
+        <input id="gitContextKey" placeholder="github.com/org/repo#project">
         <div class="actions">
           <button class="primary" id="saveGitButton" type="button">Сохранить привязку телефона</button>
           <button class="secondary" id="checkGitButton" type="button">Проверить commit</button>
@@ -4945,6 +10597,55 @@ def render_index_v2() -> str:
             <span class="subtle">Commit</span>
             <strong id="activeGitContextCommit">не задан</strong>
           </div>
+        </div>
+      </div>
+    </section>
+  </main>
+  <main class="view cycle-graph-view" data-view="cycles" data-state="empty">
+    <section class="cycle-graph-sidebar">
+      <div class="panel">
+        <h2>Циклы разработки</h2>
+        <div class="cycle-graph-project" id="cycleGraphProjectSummary">Выберите проект во вкладке Git context.</div>
+        <div class="cycle-graph-controls">
+          <div>
+            <label for="cycleGraphCycleSelect">Цикл</label>
+            <select id="cycleGraphCycleSelect" disabled>
+              <option value="">Нет доступных циклов</option>
+            </select>
+          </div>
+          <button class="secondary" id="refreshCycleGraphButton" type="button">Обновить</button>
+        </div>
+        <div class="status" id="cycleGraphStatus"></div>
+        <div class="cycle-list" id="cycleGraphCycleList"></div>
+      </div>
+    </section>
+    <section>
+      <div class="panel">
+        <div class="cycle-graph-toolbar">
+          <div>
+            <h2 id="cycleGraphTitle">Граф группы</h2>
+            <div class="subtle" id="cycleGraphSubtitle">Выберите цикл, чтобы увидеть движение задач.</div>
+          </div>
+          <div class="cycle-graph-metrics" id="cycleGraphMetrics"></div>
+        </div>
+        <div class="cycle-graph-legend" aria-label="Легенда графа">
+          <span class="cycle-graph-legend-item"><span class="cycle-legend-swatch active"></span>активный агент</span>
+          <span class="cycle-graph-legend-item"><span class="cycle-legend-swatch handoff"></span>последний handoff</span>
+          <span class="cycle-graph-legend-item"><span class="cycle-legend-swatch"></span>связь агентов</span>
+          <span class="cycle-graph-legend-item"><span class="cycle-legend-swatch task"></span>lineage задач</span>
+        </div>
+        <div class="cycle-graph-canvas" id="cycleGraphCanvas">
+          <div class="cycle-graph-empty">Граф появится после выбора проекта и цикла.</div>
+        </div>
+        <div class="cycle-lineage-summary" id="cycleGraphTaskLineage"></div>
+      </div>
+      <div class="panel">
+        <div class="history-toolbar">
+          <h2>Хронология переходов</h2>
+          <span class="subtle" id="cycleGraphEventCount"></span>
+        </div>
+        <div class="cycle-event-list" id="cycleGraphHistory">
+          <div class="subtle">Событий пока нет.</div>
         </div>
       </div>
     </section>
@@ -5101,6 +10802,29 @@ def render_index_v2() -> str:
             <button class="secondary" id="addAgentButton" type="button">Добавить агента</button>
             <button class="secondary" id="cloneAgentButton" type="button">Скопировать агента</button>
             <button class="secondary" id="removeSelectedAgentButton" type="button">Удалить агента</button>
+          </div>
+        </div>
+        <div class="agent-project-manager" id="agentProjectManager">
+          <div class="agent-project-grid">
+            <div>
+              <label for="projectAgentAttachSelect">Скопировать существующего агента в активный проект</label>
+              <select id="projectAgentAttachSelect"></select>
+            </div>
+            <div class="agent-project-actions">
+              <button class="secondary" id="attachAgentToProjectButton" type="button">Создать копию в проекте</button>
+              <button class="secondary" id="detachSelectedAgentFromProjectButton" type="button">Снять выбранного с проекта</button>
+            </div>
+          </div>
+          <div class="subtle agent-project-meta" id="agentProjectStatus"></div>
+          <div class="agent-project-lists">
+            <div class="agent-project-list">
+              <h3>Доступные агенты</h3>
+              <div class="agent-project-items" id="projectAvailableAgents"></div>
+            </div>
+            <div class="agent-project-list">
+              <h3>Агенты проекта</h3>
+              <div class="agent-project-items" id="projectAttachedAgents"></div>
+            </div>
           </div>
         </div>
         <div class="agent-status-summary" id="agentStatusSummary">
@@ -5320,6 +11044,11 @@ def render_index_v2() -> str:
         title: "Git context",
         purpose: "Здесь выбирают активный проект/телефон и управляют связями phone -> Git repository.",
         logic: "После выбора активного номера остальные вкладки показывают очереди, историю и файлы только этого Git context."
+      },
+      "page:cycles": {
+        title: "Граф группы и циклы",
+        purpose: "Показывает, какие агенты участвуют в цикле разработки, кто сейчас активен и как задача передается между ними.",
+        logic: "Интерфейс читает журнал Groups & Cycles API. TASK_STARTED подсвечивает активного агента, а HANDOFF_TRIGGERED выделяет фактический переход задачи."
       },
       "page:screenshots": {
         title: "Скриншоты",
@@ -6156,6 +11885,18 @@ def render_index_v2() -> str:
     const consultantQuestionEl = document.getElementById("consultantQuestion");
     const consultantReplyEl = document.getElementById("consultantReply");
     const consultantStatusEl = document.getElementById("consultantStatus");
+    const cycleGraphViewEl = document.querySelector('main[data-view="cycles"]');
+    const cycleGraphProjectSummaryEl = document.getElementById("cycleGraphProjectSummary");
+    const cycleGraphCycleSelectEl = document.getElementById("cycleGraphCycleSelect");
+    const cycleGraphCycleListEl = document.getElementById("cycleGraphCycleList");
+    const cycleGraphStatusEl = document.getElementById("cycleGraphStatus");
+    const cycleGraphTitleEl = document.getElementById("cycleGraphTitle");
+    const cycleGraphSubtitleEl = document.getElementById("cycleGraphSubtitle");
+    const cycleGraphMetricsEl = document.getElementById("cycleGraphMetrics");
+    const cycleGraphCanvasEl = document.getElementById("cycleGraphCanvas");
+    const cycleGraphTaskLineageEl = document.getElementById("cycleGraphTaskLineage");
+    const cycleGraphEventCountEl = document.getElementById("cycleGraphEventCount");
+    const cycleGraphHistoryEl = document.getElementById("cycleGraphHistory");
     const historyEl = document.getElementById("history");
     const historyCountEl = document.getElementById("historyCount");
     const historyGitContextEl = document.getElementById("historyGitContext");
@@ -6170,7 +11911,12 @@ def render_index_v2() -> str:
     const gitNewPhoneEl = document.getElementById("gitNewPhone");
     const gitAddressEl = document.getElementById("gitAddress");
     const gitProjectNameEl = document.getElementById("gitProjectName");
+    const gitContextKeyEl = document.getElementById("gitContextKey");
     const gitStatusEl = document.getElementById("gitStatus");
+    const gitContextListEl = document.getElementById("gitContextList");
+    const gitContextListCountEl = document.getElementById("gitContextListCount");
+    const applyGitContextProjectButtonEl = document.getElementById("applyGitContextProjectButton");
+    const activeGitContextSummaryEl = document.getElementById("activeGitContextSummary");
     const activeGitContextPhoneEl = document.getElementById("activeGitContextPhone");
     const activeGitContextProjectEl = document.getElementById("activeGitContextProject");
     const activeGitContextCommitEl = document.getElementById("activeGitContextCommit");
@@ -6178,6 +11924,13 @@ def render_index_v2() -> str:
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
     const agentSelectorEl = document.getElementById("agentSelector");
+    const agentProjectManagerEl = document.getElementById("agentProjectManager");
+    const projectAgentAttachSelectEl = document.getElementById("projectAgentAttachSelect");
+    const attachAgentToProjectButtonEl = document.getElementById("attachAgentToProjectButton");
+    const detachSelectedAgentFromProjectButtonEl = document.getElementById("detachSelectedAgentFromProjectButton");
+    const agentProjectStatusEl = document.getElementById("agentProjectStatus");
+    const projectAvailableAgentsEl = document.getElementById("projectAvailableAgents");
+    const projectAttachedAgentsEl = document.getElementById("projectAttachedAgents");
     const agentsEl = document.getElementById("agents");
     const agentsStatusEl = document.getElementById("agentsStatus");
     const specializedAgentsCountEl = document.getElementById("specializedAgentsCount");
@@ -6242,11 +11995,21 @@ def render_index_v2() -> str:
     let dragCandidateEvidence = null;
     let draggedEvidence = null;
     let agents = [];
+    let allAgents = [];
     let pendingSpecializations = {};
     let selectedAgentId = "";
+    let pendingGitContextKey = "";
+    let activeUnmappedGitContextKey = "";
+    let agentEditorDirty = false;
     let cloneCandidateAgent = null;
     let messageCursor = {start: 0, end: 0};
     let helpRenderScheduled = false;
+    let cycleGraphCycles = [];
+    let cycleGraphSelectedCycleId = "";
+    let cycleGraphProjectId = "";
+    let cycleGraphRequestVersion = 0;
+    let cycleGraphAbortController = null;
+    let cycleGraphRefreshInFlight = false;
 
     function setStatus(text, state = "") {
       sendStatusEl.textContent = text;
@@ -6331,6 +12094,18 @@ def render_index_v2() -> str:
     function setAgentsStatus(text, state = "") {
       agentsStatusEl.textContent = text;
       agentsStatusEl.className = "status" + (state ? " " + state : "");
+    }
+
+    function markAgentEditorDirty() {
+      agentEditorDirty = true;
+    }
+
+    function clearAgentEditorDirty() {
+      agentEditorDirty = false;
+    }
+
+    function shouldHoldAgentRefresh() {
+      return agentEditorDirty;
     }
 
     function setCloneAgentStatus(text, state = "") {
@@ -6603,11 +12378,18 @@ def render_index_v2() -> str:
     }
 
     function activeMappedQueuePhone() {
+      if (activeUnmappedGitContextKey) {
+        return "";
+      }
       const phone = activeQueuePhone();
       return phone && phoneContextByPhone(phone) ? phone : "";
     }
 
     function activeGitContextRequiredMessage() {
+      const unmappedContext = projectContextByKey(activeUnmappedGitContextKey);
+      if (unmappedContext) {
+        return `Проект ${unmappedContext.project_name || unmappedContext.git_context_key} пока не имеет номера. Повторите запрос к Project Manager или сохраните привязку.`;
+      }
       const phone = activeQueuePhone();
       return phone
         ? `Номер ${phone} не привязан к Git context. Сохраните привязку во вкладке Git context.`
@@ -6619,9 +12401,101 @@ def render_index_v2() -> str:
       return phoneGitContexts.find((context) => String(context.phone || "").trim() === phoneValue) || null;
     }
 
+    function projectContextByKey(gitContextKey) {
+      const key = String(gitContextKey || "").trim();
+      return gitContexts.find((context) => String(context.git_context_key || "").trim() === key) || null;
+    }
+
+    function activeProjectContext() {
+      return phoneContextByPhone(activeQueuePhone())
+        || projectContextByKey(activeUnmappedGitContextKey);
+    }
+
+    function activeGitContextKey() {
+      const context = activeProjectContext();
+      return context ? String(context.git_context_key || "").trim() : "";
+    }
+
+    function contextKeyList(rawValue) {
+      if (Array.isArray(rawValue)) {
+        return uniqueList(rawValue.map((value) => String(value || "").trim()).filter(Boolean));
+      }
+      return uniqueList(String(rawValue || "")
+        .split(/[,\\n;|]+/)
+        .map((value) => value.trim())
+        .filter(Boolean));
+    }
+
+    function agentPhoneGitContextKey(agent) {
+      const phone = String((agent && agent.phone) || "").trim();
+      const context = phoneContextByPhone(phone);
+      if (context && context.git_context_key) {
+        return String(context.git_context_key).trim();
+      }
+      return "";
+    }
+
+    function agentIncludedGitContextKeys(agent) {
+      const parameters = agent && agent.parameters ? agent.parameters : {};
+      return new Set([
+        agentPhoneGitContextKey(agent),
+        String(parameters.git_context_key || "").trim(),
+        ...contextKeyList(parameters.git_context_keys)
+      ].filter(Boolean));
+    }
+
+    function agentExcludedGitContextKeys(agent) {
+      const parameters = agent && agent.parameters ? agent.parameters : {};
+      return new Set(contextKeyList(parameters.git_context_excluded_keys));
+    }
+
+    function agentMatchesActiveGitContext(agent) {
+      const activeKey = activeGitContextKey();
+      if (!activeKey) {
+        return false;
+      }
+      if (agentExcludedGitContextKeys(agent).has(activeKey)) {
+        return false;
+      }
+      return agentIncludedGitContextKeys(agent).has(activeKey);
+    }
+
+    function filteredAgentsForActiveContext(agentList = allAgents) {
+      return (agentList || []).filter(agentMatchesActiveGitContext);
+    }
+
+    function refreshContextScopedViews() {
+      refreshQueues().catch((error) => setStatus(error.message, "error"));
+      refreshScheduledTasks().catch((error) => setScheduledTasksStatus(error.message, "error"));
+      refreshHistory().catch((error) => setHistoryStatus(error.message, "error"));
+      refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
+      refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
+      refreshEvidenceFolders().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
+      renderAgentsForActiveContext(selectedAgentId);
+      if (cycleGraphViewIsActive()) {
+        refreshCycleGraph({force: true}).catch((error) => setCycleGraphStatus(error.message, "error"));
+      }
+    }
+
     function updateActiveGitContextDisplay() {
       const phone = activeQueuePhone();
-      const context = phoneContextByPhone(phone);
+      const mappedPhone = activeMappedQueuePhone();
+      const context = activeProjectContext();
+      if (context) {
+        const project = context.project_name || "Project";
+        const commit = context.git_commit_short || context.git_commit || "commit не получен";
+        const key = context.git_context_key || context.git_address || "";
+        if (mappedPhone) {
+          activeGitContextSummaryEl.textContent = `Активный Git context: ${project} · phone ${mappedPhone} · ${key}`;
+          activeGitContextPhoneEl.textContent = mappedPhone;
+        } else {
+          activeGitContextSummaryEl.textContent = `Активный чистый проект: ${project} · без phone · ${key}`;
+          activeGitContextPhoneEl.textContent = "не привязан";
+        }
+        activeGitContextProjectEl.textContent = project;
+        activeGitContextCommitEl.textContent = commit;
+        return;
+      }
       if (!phone) {
         activeGitContextSummaryEl.textContent = "Git context не выбран";
         activeGitContextPhoneEl.textContent = "не выбран";
@@ -6636,29 +12510,114 @@ def render_index_v2() -> str:
         activeGitContextCommitEl.textContent = "не задан";
         return;
       }
-      const project = context.project_name || "Project";
-      const commit = context.git_commit_short || context.git_commit || "commit не получен";
-      activeGitContextSummaryEl.textContent = `Активный Git context: ${project} · phone ${phone} · ${context.git_context_key || context.git_address || ""}`;
-      activeGitContextPhoneEl.textContent = phone;
-      activeGitContextProjectEl.textContent = project;
-      activeGitContextCommitEl.textContent = commit;
+    }
+
+    function renderGitContextProjectList() {
+      const activeKey = activeGitContextKey();
+      const mappedCount = gitContexts.filter((context) => Array.isArray(context.phones) && context.phones.length).length;
+      gitContextListCountEl.textContent = gitContexts.length
+        ? `${gitContexts.length} проектов · ${mappedCount} с phone`
+        : "нет проектов";
+      if (!gitContexts.length) {
+        gitContextListEl.innerHTML = `<option value="">Нет зарегистрированных проектов</option>`;
+        gitContextListEl.disabled = true;
+        applyGitContextProjectButtonEl.disabled = true;
+        return;
+      }
+
+      gitContextListEl.disabled = false;
+      applyGitContextProjectButtonEl.disabled = false;
+      const pendingKey = projectContextByKey(pendingGitContextKey)
+        ? pendingGitContextKey
+        : "";
+      const selectedKey = pendingKey
+        || (projectContextByKey(activeKey) ? activeKey : "")
+        || String((gitContexts[0] && gitContexts[0].git_context_key) || "").trim();
+      gitContextListEl.innerHTML = gitContexts.map((context) => {
+        const key = String(context.git_context_key || "").trim();
+        const selected = key === selectedKey ? " selected" : "";
+        const project = context.project_name || "Project";
+        const phones = Array.isArray(context.phones)
+          ? context.phones.map((phone) => String(phone || "").trim()).filter(Boolean)
+          : [];
+        const phoneText = phones.length ? `phone ${phones.join(", ")}` : "без phone";
+        const portText = Array.isArray(context.ports) && context.ports.length
+          ? ` · port ${context.ports.join(", ")}`
+          : "";
+        const label = `${project} · ${phoneText}${portText} · ${key}`;
+        return `<option value="${escapeHtml(key)}"${selected}>${escapeHtml(label)}</option>`;
+      }).join("");
+    }
+
+    function applySelectedGitPhone(phone, refreshViews = false) {
+      activeUnmappedGitContextKey = "";
+      const phoneValue = String(phone || "").trim();
+      if (phoneValue) {
+        const hasOption = Array.from(gitPhoneEl.options).some((option) => option.value === phoneValue);
+        if (!hasOption) {
+          renderGitPhoneOptions(phoneValue);
+        }
+        gitPhoneEl.value = phoneValue;
+      }
+      pendingGitContextKey = "";
+      const context = phoneContextByPhone(activeQueuePhone());
+      updateActiveGitContextDisplay();
+      if (context) {
+        gitAddressEl.value = context.git_address || "";
+        gitProjectNameEl.value = context.project_name || "";
+        gitContextKeyEl.value = context.git_context_key || "";
+        currentGitContext = context;
+        renderGitContextOptions(context.git_context_key || "");
+      } else {
+        gitAddressEl.value = "";
+        gitProjectNameEl.value = "";
+        gitContextKeyEl.value = "";
+        currentGitContext = null;
+        renderGitContextOptions("");
+      }
+      renderGitContextProjectList();
+      if (refreshViews) {
+        refreshContextScopedViews();
+      }
+    }
+
+    function applySelectedGitContext(gitContextKey, refreshViews = false) {
+      const context = projectContextByKey(gitContextKey);
+      if (!context) {
+        setGitStatus("Выбранный проект больше не зарегистрирован.", "error");
+        return;
+      }
+      const phones = Array.isArray(context.phones)
+        ? context.phones.map((phone) => String(phone || "").trim()).filter(Boolean)
+        : [];
+      const mappedPhone = phones.find((phone) => phoneContextByPhone(phone))
+        || String((phoneGitContexts.find((item) => item.git_context_key === context.git_context_key) || {}).phone || "").trim();
+      pendingGitContextKey = "";
+      if (mappedPhone) {
+        applySelectedGitPhone(mappedPhone, refreshViews);
+        return;
+      }
+
+      activeUnmappedGitContextKey = String(context.git_context_key || "").trim();
+      renderGitPhoneOptions("");
+      gitPhoneEl.value = "";
+      gitAddressEl.value = context.git_address || "";
+      gitProjectNameEl.value = context.project_name || "";
+      gitContextKeyEl.value = context.git_context_key || "";
+      currentGitContext = context;
+      renderGitContextOptions(context.git_context_key || "");
+      updateActiveGitContextDisplay();
+      renderGitContextProjectList();
+      setGitStatus(`Проект ${context.project_name || context.git_context_key} зарегистрирован без phone. Укажите новый номер и сохраните привязку.`, "ok");
+      if (refreshViews) {
+        refreshContextScopedViews();
+      }
     }
 
     function renderGitPhoneOptions(preferredPhone = activeQueuePhone()) {
       const seen = new Set();
       const options = [];
       const preferred = String(preferredPhone || "").trim();
-      agents.forEach((agent) => {
-        const phone = String(agent.phone || "").trim();
-        if (!phone || seen.has(phone)) {
-          return;
-        }
-        seen.add(phone);
-        options.push({
-          phone,
-          label: `${agent.name || "Agent"} · ${phone}`
-        });
-      });
       phoneGitContexts.forEach((context) => {
         const phone = String(context.phone || "").trim();
         if (!phone || seen.has(phone)) {
@@ -6670,6 +12629,17 @@ def render_index_v2() -> str:
           label: `${context.project_name || "Project"} · ${phone}`
         });
       });
+      agents.forEach((agent) => {
+        const phone = String(agent.phone || "").trim();
+        if (!phone || seen.has(phone)) {
+          return;
+        }
+        seen.add(phone);
+        options.push({
+          phone,
+          label: `${agent.name || "Agent"} · ${phone}`
+        });
+      });
       if (preferred && !seen.has(preferred)) {
         seen.add(preferred);
         options.unshift({
@@ -6677,11 +12647,20 @@ def render_index_v2() -> str:
           label: `Новый Git context · ${preferred}`
         });
       }
-      const selectedPhone = options.some((option) => option.phone === preferred)
-        ? preferred
-        : (options[0] && options[0].phone) || "";
-      gitPhoneEl.innerHTML = options.length
-        ? options.map((option) => {
+      const mappedDefaultPhone = (phoneGitContexts[0] && phoneGitContexts[0].phone) || "";
+      const preserveUnmappedProject = Boolean(activeUnmappedGitContextKey && !preferred);
+      const selectedPhone = preserveUnmappedProject
+        ? ""
+        : options.some((option) => option.phone === preferred)
+          ? preferred
+          : mappedDefaultPhone && options.some((option) => option.phone === mappedDefaultPhone)
+            ? mappedDefaultPhone
+            : (options[0] && options[0].phone) || "";
+      const unmappedOption = preserveUnmappedProject
+        ? `<option value="" selected>Зарегистрированный проект без phone</option>`
+        : "";
+      gitPhoneEl.innerHTML = options.length || preserveUnmappedProject
+        ? unmappedOption + options.map((option) => {
           const selected = option.phone === selectedPhone ? " selected" : "";
           const mapped = phoneContextByPhone(option.phone);
           const suffix = mapped ? ` · ${mapped.project_name || mapped.git_context_key}` : " · не привязан";
@@ -6690,6 +12669,7 @@ def render_index_v2() -> str:
         : `<option value="">Нет телефонов агентов</option>`;
       gitPhoneEl.value = selectedPhone;
       updateActiveGitContextDisplay();
+      renderGitContextProjectList();
     }
 
     function renderPhoneAgentOptions(selectEl, preferredName = "") {
@@ -7149,12 +13129,16 @@ def render_index_v2() -> str:
       if (index >= 0) {
         agents[index] = edited;
       }
+      const allIndex = allAgents.findIndex((agent) => agent.id === selectedAgentId);
+      if (allIndex >= 0) {
+        allAgents[allIndex] = edited;
+      }
     }
 
     function renderAgentSelector(preferredId = selectedAgentId) {
       if (!agents.length) {
         selectedAgentId = "";
-        agentSelectorEl.innerHTML = `<option value="">Нет агентов</option>`;
+        agentSelectorEl.innerHTML = `<option value="">Нет агентов для выбранного Git context</option>`;
         agentSelectorEl.value = "";
         return;
       }
@@ -7164,7 +13148,8 @@ def render_index_v2() -> str:
       }
       selectedAgentId = preferredId;
       agentSelectorEl.innerHTML = agents.map((agent, index) => {
-        const label = agent.name || `Agent ${index + 1}`;
+        const phoneText = agent.phone ? ` · ${agent.phone}` : "";
+        const label = `${agent.name || `Agent ${index + 1}`}${phoneText}`;
         const selected = agent.id === selectedAgentId ? " selected" : "";
         return `<option value="${escapeHtml(agent.id)}"${selected}>${escapeHtml(label)}</option>`;
       }).join("");
@@ -7175,8 +13160,222 @@ def render_index_v2() -> str:
       const agent = agents.find((item) => item.id === selectedAgentId);
       agentsEl.innerHTML = agent
         ? agentRow(agent)
-        : `<div class="subtle">Список агентов пока пуст.</div>`;
+        : `<div class="subtle">Для выбранного Git context нет прикрепленных агентов.</div>`;
       updateAgentPreview();
+    }
+
+    function activeProjectLabel() {
+      const context = activeProjectContext();
+      if (!context) {
+        return "активный проект";
+      }
+      return context.project_name || context.git_context_key || "активный проект";
+    }
+
+    function agentProjectCloneSourceId(agent) {
+      const parameters = agent && agent.parameters ? agent.parameters : {};
+      return String(parameters.project_clone_source_agent_id || "").trim();
+    }
+
+    function agentProjectCloneSourceName(agent) {
+      const parameters = agent && agent.parameters ? agent.parameters : {};
+      return String(parameters.project_clone_source_name || "").trim();
+    }
+
+    function projectCloneExistsForSource(sourceAgent) {
+      const sourceId = String((sourceAgent && sourceAgent.id) || "").trim();
+      const sourceName = String((sourceAgent && sourceAgent.name) || "").trim();
+      return allAgents.some((agent) => {
+        if (!agentMatchesActiveGitContext(agent)) {
+          return false;
+        }
+        if (sourceId && agentProjectCloneSourceId(agent) === sourceId) {
+          return true;
+        }
+        return Boolean(sourceName && agentProjectCloneSourceName(agent) === sourceName);
+      });
+    }
+
+    function projectCloneName(sourceAgent, projectLabel) {
+      const baseName = String((sourceAgent && sourceAgent.name) || "Agent").trim() || "Agent";
+      const cleanProject = String(projectLabel || "Project").trim() || "Project";
+      const names = new Set(allAgents.map((agent) => String(agent.name || "").trim().toLowerCase()).filter(Boolean));
+      let candidate = `${baseName} (${cleanProject})`;
+      let index = 2;
+      while (names.has(candidate.toLowerCase())) {
+        candidate = `${baseName} (${cleanProject} ${index})`;
+        index += 1;
+      }
+      return candidate;
+    }
+
+    function projectCloneParameters(sourceAgent, context) {
+      const phone = String((context && context.phone) || activeMappedQueuePhone()).trim();
+      const parameters = parametersForProfileCopy(sourceAgent, phone);
+      parameters.project_phone = phone;
+      parameters.project_name = String((context && context.project_name) || activeProjectLabel()).trim();
+      parameters.git_context_key = String((context && context.git_context_key) || activeGitContextKey()).trim();
+      parameters.project_clone_source_agent_id = String((sourceAgent && sourceAgent.id) || "").trim();
+      parameters.project_clone_source_name = String((sourceAgent && sourceAgent.name) || "").trim();
+      delete parameters.git_context_excluded_keys;
+      return parameters;
+    }
+
+    function agentProjectItemHtml(agent, actions) {
+      const phone = String((agent && agent.phone) || "").trim();
+      const sourceName = agentProjectCloneSourceName(agent);
+      const sourceText = sourceName ? ` · исходный: ${sourceName}` : "";
+      const meta = `${phone ? `phone ${phone}` : "phone не задан"}${sourceText}`;
+      const actionButtons = (actions || []).map((action) => {
+        return `<button class="secondary" data-action="${escapeHtml(action.action)}" data-agent-id="${escapeHtml((agent && agent.id) || "")}" type="button">${escapeHtml(action.label)}</button>`;
+      }).join("");
+      return `<div class="agent-project-item">
+        <div>
+          <div class="agent-project-item-name">${escapeHtml((agent && agent.name) || "Agent")}</div>
+          <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
+        </div>
+        <div class="agent-project-item-actions">${actionButtons}</div>
+      </div>`;
+    }
+
+    function renderAgentProjectControls() {
+      const activeKey = activeGitContextKey();
+      const projectLabel = activeProjectLabel();
+      const activePhone = activeMappedQueuePhone();
+      const availableAgents = activeKey
+        ? allAgents.filter((agent) => (
+          agentStatus(agent) !== "system"
+          && !agentMatchesActiveGitContext(agent)
+          && !projectCloneExistsForSource(agent)
+        ))
+        : [];
+      const attachedAgents = activeKey ? agents : [];
+
+      projectAgentAttachSelectEl.innerHTML = availableAgents.length
+        ? availableAgents.map((agent) => {
+          const phone = agent.phone ? ` · ${agent.phone}` : "";
+          return `<option value="${escapeHtml(agent.id)}">${escapeHtml((agent.name || "Agent") + phone)}</option>`;
+        }).join("")
+        : `<option value="">Нет агентов для добавления</option>`;
+
+      projectAgentAttachSelectEl.disabled = !activeKey || !activePhone || !availableAgents.length;
+      attachAgentToProjectButtonEl.disabled = !activeKey || !activePhone || !availableAgents.length;
+      detachSelectedAgentFromProjectButtonEl.disabled = !activeKey || !selectedAgentId;
+      projectAvailableAgentsEl.innerHTML = activeKey
+        ? availableAgents.length
+          ? availableAgents.map((agent) => agentProjectItemHtml(agent, [
+            {action: "copy-agent-to-project", label: "В проект"}
+          ])).join("")
+          : `<div class="subtle">Нет агентов для копирования.</div>`
+        : `<div class="subtle">Сначала выберите активный проект.</div>`;
+      projectAttachedAgentsEl.innerHTML = activeKey
+        ? attachedAgents.length
+          ? attachedAgents.map((agent) => agentProjectItemHtml(agent, [
+            {action: "edit-project-agent", label: "Редактировать"},
+            {action: "detach-agent-from-project", label: "Снять"}
+          ])).join("")
+          : `<div class="subtle">В проекте нет агентов.</div>`
+        : `<div class="subtle">Сначала выберите активный проект.</div>`;
+
+      if (!activeKey) {
+        agentProjectStatusEl.textContent = "Выберите активный проект во вкладке Git context.";
+      } else if (!activePhone) {
+        agentProjectStatusEl.textContent = "У активного проекта нет телефона для проектной копии агента.";
+      } else {
+        agentProjectStatusEl.textContent = `Проект: ${projectLabel} · phone ${activePhone}. В проекте ${agents.length} из ${allAgents.length} агентов.`;
+      }
+    }
+
+    async function attachAgentToProjectById(sourceAgentId) {
+      captureCurrentAgent();
+      const context = phoneContextByPhone(activeQueuePhone());
+      const activePhone = activeMappedQueuePhone();
+      if (!context || !activeGitContextKey() || !activePhone) {
+        setAgentsStatus("Сначала выберите активный Git context с телефоном проекта.", "error");
+        return;
+      }
+      const sourceAgent = allAgents.find((agent) => agent.id === sourceAgentId);
+      if (!sourceAgent) {
+        setAgentsStatus("Выберите агента для копирования в проект.", "error");
+        return;
+      }
+      if (projectCloneExistsForSource(sourceAgent) || agentMatchesActiveGitContext(sourceAgent)) {
+        setAgentsStatus("У этого агента уже есть копия или запись в активном проекте.", "error");
+        return;
+      }
+
+      const clone = {
+        id: agentId(),
+        name: projectCloneName(sourceAgent, context.project_name || context.git_context_key || "Project"),
+        phone: activePhone,
+        profile: String(sourceAgent.profile || ""),
+        parameters: projectCloneParameters(sourceAgent, context),
+        status: sourceAgent.status || "",
+        template_source: sourceAgent.template_source
+          ? `project-clone:${sourceAgent.template_source}`
+          : `project-clone:${sourceAgent.name || sourceAgent.id || "agent"}`
+      };
+      allAgents.push(clone);
+      renderAgents(allAgents, clone.id);
+      syncActorsFromAgents(allAgents);
+      await saveAgents(`Создана и сохранена проектная копия: ${clone.name} · phone ${activePhone}.`);
+    }
+
+    function attachExistingAgentToProject() {
+      return attachAgentToProjectById(projectAgentAttachSelectEl.value);
+    }
+
+    async function detachAgentFromProjectById(agentIdValue) {
+      captureCurrentAgent();
+      const targetAgentId = String(agentIdValue || "").trim();
+      if (!targetAgentId) {
+        setAgentsStatus("Агент не выбран.", "error");
+        return;
+      }
+      const selectedAgent = allAgents.find((agent) => agent.id === targetAgentId);
+      if (!selectedAgent || !agentMatchesActiveGitContext(selectedAgent)) {
+        setAgentsStatus("Выбранный агент не относится к активному проекту.", "error");
+        return;
+      }
+      const projectLabel = activeProjectLabel();
+      const selectedName = selectedAgent.name || "Agent";
+      const confirmed = window.confirm(`Снять агента «${selectedName}» с проекта «${projectLabel}»?`);
+      if (!confirmed) {
+        setAgentsStatus("Снятие агента с проекта отменено.");
+        return;
+      }
+      const currentIndex = agents.findIndex((agent) => agent.id === targetAgentId);
+      const removedName = selectedName;
+      allAgents = allAgents.filter((agent) => agent.id !== targetAgentId);
+      agents = filteredAgentsForActiveContext(allAgents);
+      const nextAgent = agents[Math.min(currentIndex, agents.length - 1)];
+      renderAgents(allAgents, nextAgent ? nextAgent.id : "");
+      syncActorsFromAgents(allAgents);
+      await saveAgents(`Агент снят с проекта и сохранен: ${removedName}.`);
+    }
+
+    function detachSelectedAgentFromProject() {
+      return detachAgentFromProjectById(selectedAgentId);
+    }
+
+    function selectAgentForEdit(agentIdValue) {
+      captureCurrentAgent();
+      const targetAgentId = String(agentIdValue || "").trim();
+      const targetAgent = agents.find((agent) => agent.id === targetAgentId);
+      if (!targetAgent) {
+        setAgentsStatus("Этот агент не относится к активному проекту.", "error");
+        return;
+      }
+      selectedAgentId = targetAgentId;
+      renderAgentSelector(selectedAgentId);
+      renderSelectedAgent();
+      renderAgentProjectControls();
+      setAgentsStatus(`Редактирование агента: ${targetAgent.name || "Agent"}. После правок нажмите «Сохранить агентов».`, "ok");
+      agentsEl.scrollIntoView({behavior: "smooth", block: "start"});
+      const nameInput = agentsEl.querySelector('[data-field="name"]');
+      if (nameInput) {
+        nameInput.focus();
+      }
     }
 
     function updateSpecializationPanel() {
@@ -7200,8 +13399,8 @@ def render_index_v2() -> str:
       updateSpecializeAgentState();
     }
 
-    function renderAgents(agentList, preferredId = selectedAgentId) {
-      agents = (agentList || []).map((agent) => ({
+    function normalizeAgentForClient(agent) {
+      return {
         id: agent.id || agentId(),
         name: agent.name || "",
         phone: agent.phone || "",
@@ -7209,18 +13408,41 @@ def render_index_v2() -> str:
         parameters: agent.parameters || {},
         status: agent.status || (agent.parameters && agent.parameters.status) || "",
         template_source: agent.template_source || ""
-      }));
-      renderAgentSelector(preferredId);
+      };
+    }
+
+    function renderAgentsForActiveContext(preferredId = selectedAgentId) {
+      const previousSelectedId = preferredId || selectedAgentId;
+      agents = filteredAgentsForActiveContext(allAgents);
+      const nextPreferredId = agents.some((agent) => agent.id === previousSelectedId)
+        ? previousSelectedId
+        : (agents[0] && agents[0].id) || "";
+      renderAgentSelector(nextPreferredId);
       renderSelectedAgent();
       updateSpecializationPanel();
       renderAgentStatusSummary();
+      renderAgentProjectControls();
+      setAgentsStatus(`Показано агентов для выбранного Git context: ${agents.length} из ${allAgents.length}.`);
+    }
+
+    function renderAgents(agentList, preferredId = selectedAgentId) {
+      allAgents = (agentList || []).map(normalizeAgentForClient);
+      agents = filteredAgentsForActiveContext(allAgents);
+      const nextPreferredId = agents.some((agent) => agent.id === preferredId)
+        ? preferredId
+        : (agents[0] && agents[0].id) || "";
+      renderAgentSelector(nextPreferredId);
+      renderSelectedAgent();
+      updateSpecializationPanel();
+      renderAgentStatusSummary();
+      renderAgentProjectControls();
     }
 
     function collectAgents() {
       captureCurrentAgent();
       const cleanAgents = [];
       const seen = new Set();
-      agents.forEach((agent) => {
+      allAgents.forEach((agent) => {
         const name = String(agent.name || "").trim();
         const key = name.toLowerCase();
         if (!name || seen.has(key)) {
@@ -7250,17 +13472,18 @@ def render_index_v2() -> str:
 
     function addAgent(agent = null) {
       captureCurrentAgent();
+      markAgentEditorDirty();
       const nextAgent = agent || {
         id: agentId(),
         name: nextAgentName(),
-        phone: "",
+        phone: activeMappedQueuePhone() || "",
         profile: "",
         parameters: {},
         template_source: ""
       };
-      agents.push(nextAgent);
-      renderAgents(agents, nextAgent.id);
-      syncActorsFromAgents(agents);
+      allAgents.push(nextAgent);
+      renderAgents(allAgents, nextAgent.id);
+      syncActorsFromAgents(allAgents);
       setAgentsStatus("");
     }
 
@@ -7269,6 +13492,7 @@ def render_index_v2() -> str:
       if (!paramsEl) {
         return;
       }
+      markAgentEditorDirty();
       if (!paramsEl.querySelector(".agent-param-row")) {
         paramsEl.innerHTML = "";
       }
@@ -7281,11 +13505,13 @@ def render_index_v2() -> str:
       if (!selectedAgentId) {
         return;
       }
+      markAgentEditorDirty();
       const currentIndex = agents.findIndex((agent) => agent.id === selectedAgentId);
-      agents = agents.filter((agent) => agent.id !== selectedAgentId);
+      allAgents = allAgents.filter((agent) => agent.id !== selectedAgentId);
+      agents = filteredAgentsForActiveContext(allAgents);
       const nextAgent = agents[Math.min(currentIndex, agents.length - 1)];
-      renderAgents(agents, nextAgent ? nextAgent.id : "");
-      syncActorsFromAgents(agents);
+      renderAgents(allAgents, nextAgent ? nextAgent.id : "");
+      syncActorsFromAgents(allAgents);
       setAgentsStatus("Агент удален из списка. Нажмите «Сохранить агентов», чтобы записать изменение.", "ok");
     }
 
@@ -7590,7 +13816,11 @@ def render_index_v2() -> str:
       setAgentsStatus(`Клон «${nextAgent.name}» добавлен в список. Нажмите «Сохранить агентов», чтобы записать изменение.`, "ok");
     }
 
-    async function refreshAgents() {
+    async function refreshAgents(options = {}) {
+      if (!options.force && shouldHoldAgentRefresh()) {
+        setAgentsStatus("Автообновление агентов приостановлено: есть несохраненные изменения. Нажмите «Сохранить агентов», чтобы продолжить обновление.", "ok");
+        return;
+      }
       const response = await fetch("/agents");
       const data = await response.json();
       if (!response.ok) {
@@ -7600,10 +13830,10 @@ def render_index_v2() -> str:
       renderAgents(data.agents || [], selectedAgentId);
       syncActorsFromAgents(data.agents || []);
       renderGitPhoneOptions();
-      setAgentsStatus(`Загружено агентов: ${(data.agents || []).length}. Файл: ${data.config_path}`);
+      setAgentsStatus(`Показано агентов для выбранного Git context: ${agents.length} из ${(data.agents || []).length}. Файл: ${data.config_path}`);
     }
 
-    async function saveAgents() {
+    async function saveAgents(successMessage = "") {
       const nextAgents = collectAgents();
       setAgentsStatus("Сохраняю...");
       const response = await fetch("/agents", {
@@ -7620,7 +13850,8 @@ def render_index_v2() -> str:
       renderAgents(data.agents || [], selectedAgentId);
       syncActorsFromAgents(data.agents || []);
       renderGitPhoneOptions();
-      setAgentsStatus(`Сохранено агентов: ${(data.agents || []).length}.`, "ok");
+      clearAgentEditorDirty();
+      setAgentsStatus(successMessage || `Сохранено агентов: ${(data.agents || []).length}.`, "ok");
     }
 
     function applyQueueDefaults() {
@@ -9176,8 +15407,11 @@ ${question}`;
       const response = await fetch("/git-config");
       const data = await response.json();
       phoneGitContexts = data.phone_contexts || [];
+      gitContexts = data.contexts || [];
       phoneGitContexts = phoneGitContexts.map((context) => {
-        if (context.git_context_key && context.git_context_key === data.git_context_key) {
+        const sameGitContextKey = context.git_context_key && context.git_context_key === data.git_context_key;
+        const sameGitAddress = context.git_address && data.git_address && context.git_address === data.git_address;
+        if (sameGitContextKey || sameGitAddress) {
           return Object.assign({}, context, {
             git_commit: data.git_commit || context.git_commit || "",
             git_commit_short: data.git_commit_short || context.git_commit_short || "",
@@ -9186,18 +15420,42 @@ ${question}`;
         }
         return context;
       });
-      renderGitPhoneOptions(activeQueuePhone() || (phoneGitContexts[0] && phoneGitContexts[0].phone) || "");
-      const activePhoneContext = phoneContextByPhone(activeQueuePhone());
-      const displayGitAddress = (activePhoneContext && activePhoneContext.git_address) || data.git_address || "";
-      const displayProjectName = (activePhoneContext && activePhoneContext.project_name) || data.project_name || "";
+      let newlyAssignedPhone = "";
+      const previouslyUnmappedContext = projectContextByKey(activeUnmappedGitContextKey);
+      if (previouslyUnmappedContext) {
+        const contextPhones = Array.isArray(previouslyUnmappedContext.phones)
+          ? previouslyUnmappedContext.phones.map((phone) => String(phone || "").trim()).filter(Boolean)
+          : [];
+        newlyAssignedPhone = contextPhones.find((phone) => phoneContextByPhone(phone)) || "";
+        if (newlyAssignedPhone) {
+          activeUnmappedGitContextKey = "";
+        }
+      } else if (activeUnmappedGitContextKey) {
+        activeUnmappedGitContextKey = "";
+      }
+      const activePhone = newlyAssignedPhone || activeQueuePhone();
+      const activePhoneHasContext = Boolean(phoneContextByPhone(activePhone));
+      const editingGitContext = [gitPhoneEl, gitNewPhoneEl, gitAddressEl, gitProjectNameEl, gitContextKeyEl].includes(document.activeElement);
+      const preferredPhone = activeUnmappedGitContextKey
+        ? ""
+        : activePhone && (activePhoneHasContext || editingGitContext || !phoneGitContexts.length)
+          ? activePhone
+          : (phoneGitContexts[0] && phoneGitContexts[0].phone) || activePhone || "";
+      renderGitPhoneOptions(preferredPhone);
+      const activeContext = activeProjectContext();
+      const displayGitAddress = (activeContext && activeContext.git_address) || data.git_address || "";
+      const displayProjectName = (activeContext && activeContext.project_name) || data.project_name || "";
+      const displayGitContextKey = (activeContext && activeContext.git_context_key) || data.git_context_key || "";
       if (document.activeElement !== gitAddressEl) {
         gitAddressEl.value = displayGitAddress;
       }
       if (document.activeElement !== gitProjectNameEl) {
         gitProjectNameEl.value = displayProjectName;
       }
-      gitContexts = data.contexts || [];
-      currentGitContext = activePhoneContext
+      if (document.activeElement !== gitContextKeyEl) {
+        gitContextKeyEl.value = displayGitContextKey;
+      }
+      currentGitContext = activeContext
         || gitContexts.find((context) => context.is_current_port)
         || (data.git_context_key ? {
           project_name: data.project_name || "LLM Extractor",
@@ -9208,9 +15466,13 @@ ${question}`;
           is_current_port: true
         } : null);
       renderGitContextOptions(historyGitContextEl.value || (currentGitContext && currentGitContext.git_context_key) || "");
+      updateActiveGitContextDisplay();
+      renderGitContextProjectList();
       commitValueEl.textContent = data.git_commit_short || "не задан";
-      if (activePhoneContext) {
-        setGitStatus(`Телефон ${activePhoneContext.phone}: ${activePhoneContext.project_name || "project"} · ${activePhoneContext.git_context_key}`, "ok");
+      if (activeUnmappedGitContextKey && activeContext) {
+        setGitStatus(`Проект ${activeContext.project_name || activeContext.git_context_key} зарегистрирован без phone.`, "ok");
+      } else if (activeContext && activeMappedQueuePhone()) {
+        setGitStatus(`Телефон ${activeMappedQueuePhone()}: ${activeContext.project_name || "project"} · ${activeContext.git_context_key}`, "ok");
       } else if (data.git_commit_short) {
         setGitStatus(`Порт ${data.port}: ${data.project_name || "project"} · commit ${data.git_commit_short}. Выберите телефон и сохраните привязку.`, "ok");
       } else if (data.git_error) {
@@ -9223,7 +15485,9 @@ ${question}`;
     function renderGitContextOptions(preferredKey = "") {
       const activePhone = activeQueuePhone();
       const activePhoneContext = phoneContextByPhone(activePhone);
-      const selectedKey = activePhone && !activePhoneContext
+      const selectedKey = activeUnmappedGitContextKey && projectContextByKey(activeUnmappedGitContextKey)
+        ? activeUnmappedGitContextKey
+        : activePhone && !activePhoneContext
         ? ""
         : gitContexts.some((context) => context.git_context_key === preferredKey)
           ? preferredKey
@@ -9247,6 +15511,7 @@ ${question}`;
     async function saveGitConfig() {
       const gitAddress = gitAddressEl.value.trim();
       const projectName = gitProjectNameEl.value.trim();
+      const gitContextKey = gitContextKeyEl.value.trim();
       const phone = activeQueuePhone();
       if (!phone) {
         setGitStatus("Выберите телефон для Git context.", "error");
@@ -9260,7 +15525,7 @@ ${question}`;
       const response = await fetch("/git-config", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({phone, git_address: gitAddress, project_name: projectName})
+        body: JSON.stringify({phone, git_address: gitAddress, project_name: projectName, git_context_key: gitContextKey})
       });
       const data = await response.json();
       if (!response.ok) {
@@ -9280,6 +15545,8 @@ ${question}`;
         }
         return context;
       });
+      activeUnmappedGitContextKey = "";
+      pendingGitContextKey = "";
       renderGitPhoneOptions(phone);
       currentGitContext = phoneContextByPhone(phone) || gitContexts.find((context) => context.is_current_port) || currentGitContext;
       renderGitContextOptions(data.git_context_key || (currentGitContext && currentGitContext.git_context_key) || "");
@@ -9306,21 +15573,31 @@ ${question}`;
         setGitStatus("Введите новый номер Git context.", "error");
         return;
       }
+      const draftContext = activeProjectContext();
+      const draftGitAddress = gitAddressEl.value;
+      const draftProjectName = gitProjectNameEl.value;
+      const draftGitContextKey = gitContextKeyEl.value;
+      activeUnmappedGitContextKey = "";
       renderGitPhoneOptions(phone);
       gitPhoneEl.value = phone;
       const existing = phoneContextByPhone(phone);
       if (existing) {
         gitAddressEl.value = existing.git_address || "";
         gitProjectNameEl.value = existing.project_name || "";
+        gitContextKeyEl.value = existing.git_context_key || "";
         currentGitContext = existing;
         renderGitContextOptions(existing.git_context_key || "");
         setGitStatus(`Номер ${phone} уже сохранен. Можно изменить Git address и сохранить заново.`, "ok");
       } else {
-        gitAddressEl.value = "";
-        gitProjectNameEl.value = "";
-        currentGitContext = null;
-        renderGitContextOptions("");
-        setGitStatus(`Новый Git context ${phone}: заполните Git address и сохраните привязку.`);
+        gitAddressEl.value = draftGitAddress;
+        gitProjectNameEl.value = draftProjectName;
+        gitContextKeyEl.value = draftGitContextKey;
+        currentGitContext = draftContext;
+        renderGitContextOptions(draftGitContextKey);
+        const instruction = draftGitAddress
+          ? "проверьте данные и сохраните привязку"
+          : "заполните Git address и сохраните привязку";
+        setGitStatus(`Новый Git context ${phone}: ${instruction}.`);
       }
       gitNewPhoneEl.value = "";
       gitAddressEl.focus();
@@ -9353,11 +15630,14 @@ ${question}`;
       }
       phoneGitContexts = data.phone_contexts || [];
       gitContexts = data.contexts || [];
+      activeUnmappedGitContextKey = "";
+      pendingGitContextKey = "";
       const nextPhone = (phoneGitContexts[0] && phoneGitContexts[0].phone) || "";
       renderGitPhoneOptions(nextPhone);
       const nextContext = phoneContextByPhone(activeQueuePhone());
       gitAddressEl.value = nextContext ? nextContext.git_address || "" : "";
       gitProjectNameEl.value = nextContext ? nextContext.project_name || "" : "";
+      gitContextKeyEl.value = nextContext ? nextContext.git_context_key || "" : "";
       currentGitContext = nextContext || null;
       renderGitContextOptions(nextContext ? nextContext.git_context_key || "" : "");
       setGitStatus(`Git context для номера ${phone} удален.`, "ok");
@@ -9613,6 +15893,436 @@ ${data.patch || ""}
       await refresh();
     }
 
+    function cycleGraphViewIsActive() {
+      return Boolean(cycleGraphViewEl && cycleGraphViewEl.classList.contains("active"));
+    }
+
+    function setCycleGraphStatus(text, state = "") {
+      cycleGraphStatusEl.textContent = text;
+      cycleGraphStatusEl.className = "status" + (state ? " " + state : "");
+    }
+
+    function cycleGraphProjectPhone(context = activeProjectContext()) {
+      return String((context && context.project_phone) || "").trim();
+    }
+
+    function cycleGraphStatusLabel(statusValue) {
+      const labels = {
+        queued: "в очереди",
+        in_progress: "в работе",
+        completed: "завершён"
+      };
+      const value = String(statusValue || "").trim();
+      return labels[value] || value || "неизвестно";
+    }
+
+    function cycleGraphRoleLabel(roleValue) {
+      const value = String(roleValue || "").trim();
+      const labels = {
+        "Project Manager": "Project Manager",
+        project_manager: "Project Manager",
+        system_analyst: "Системный аналитик",
+        backend_developer: "Backend-разработчик",
+        frontend_developer: "Frontend-разработчик",
+        ux_designer: "UX/UI дизайнер",
+        qa_engineer: "QA-инженер",
+        project_coordinator: "Координатор"
+      };
+      return labels[value] || value.replaceAll("_", " ") || "Агент";
+    }
+
+    function cycleGraphEventLabel(eventTypeValue) {
+      const value = String(eventTypeValue || "").trim();
+      const labels = {
+        CYCLE_STARTED: "Цикл открыт",
+        GROUP_DEPLOYED: "Группа подключена",
+        MESSAGE_QUEUED: "Задача поставлена в очередь",
+        TASK_STARTED: "Агент начал задачу",
+        HANDOFF_TRIGGERED: "Задача передана дальше",
+        ARTIFACT_CREATED: "Артефакт создан",
+        GROUP_REPORT_SUBMITTED: "Отчёт группы отправлен",
+        CYCLE_COMPLETED: "Цикл завершён",
+        MESSAGE_REMOVED: "Задача удалена из очереди"
+      };
+      return labels[value] || value.replaceAll("_", " ") || "Событие";
+    }
+
+    function cycleGraphFormatDate(value) {
+      if (!value) {
+        return "";
+      }
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? String(value) : parsed.toLocaleString("ru-RU");
+    }
+
+    function cycleGraphShortId(value, maxLength = 24) {
+      const text = String(value || "");
+      if (text.length <= maxLength) {
+        return text;
+      }
+      return text.slice(0, Math.max(6, maxLength - 1)) + "…";
+    }
+
+    function cycleGraphCountLabel(value, one, few, many) {
+      const count = Number(value || 0);
+      const lastTwo = Math.abs(count) % 100;
+      const last = lastTwo % 10;
+      const form = lastTwo >= 11 && lastTwo <= 14
+        ? many
+        : (last === 1 ? one : (last >= 2 && last <= 4 ? few : many));
+      return `${count} ${form}`;
+    }
+
+    async function cycleGraphFetchJson(url, signal) {
+      const response = await fetch(url, {signal});
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (_error) {
+        data = null;
+      }
+      if (!response.ok) {
+        const detail = data && data.detail;
+        throw new Error(typeof detail === "string" ? detail : `HTTP ${response.status}`);
+      }
+      return data || {};
+    }
+
+    function resetCycleGraphDetail(message) {
+      cycleGraphTitleEl.textContent = "Граф группы";
+      cycleGraphSubtitleEl.textContent = "Выберите цикл, чтобы увидеть движение задач.";
+      cycleGraphMetricsEl.innerHTML = "";
+      cycleGraphCanvasEl.innerHTML = `<div class="cycle-graph-empty">${escapeHtml(message)}</div>`;
+      cycleGraphTaskLineageEl.textContent = "";
+      cycleGraphEventCountEl.textContent = "";
+      cycleGraphHistoryEl.innerHTML = `<div class="subtle">Событий пока нет.</div>`;
+    }
+
+    function renderCycleGraphCycleList() {
+      const selectedId = cycleGraphSelectedCycleId;
+      cycleGraphCycleSelectEl.disabled = !cycleGraphCycles.length;
+      cycleGraphCycleSelectEl.innerHTML = cycleGraphCycles.length
+        ? cycleGraphCycles.map((cycle) => {
+          const cycleId = String(cycle.cycle_id || "");
+          const title = cycle.title || cycleId;
+          return `<option value="${escapeHtml(cycleId)}"${cycleId === selectedId ? " selected" : ""}>${escapeHtml(title)} · ${escapeHtml(cycleGraphStatusLabel(cycle.status))}</option>`;
+        }).join("")
+        : `<option value="">Нет доступных циклов</option>`;
+      cycleGraphCycleListEl.innerHTML = cycleGraphCycles.map((cycle) => {
+        const cycleId = String(cycle.cycle_id || "");
+        const statusValue = String(cycle.status || "queued");
+        const statusClass = ["queued", "in_progress", "completed"].includes(statusValue) ? statusValue : "queued";
+        return `<button class="cycle-list-card${cycleId === selectedId ? " active" : ""}" data-cycle-id="${escapeHtml(cycleId)}" type="button"${cycleId === selectedId ? ' aria-current="true"' : ""}>
+          <span class="cycle-list-card-head">
+            <span class="cycle-list-card-title">${escapeHtml(cycle.title || cycleId)}</span>
+            <span class="cycle-status-chip ${escapeHtml(statusClass)}">${escapeHtml(cycleGraphStatusLabel(statusValue))}</span>
+          </span>
+          <span class="cycle-list-card-meta">
+            <span>${escapeHtml(cycleGraphCountLabel(cycle.task_count, "задача", "задачи", "задач"))}</span>
+            <span>·</span>
+            <span>${Number(cycle.handoff_count || 0)} handoff</span>
+            <span>·</span>
+            <span>${escapeHtml(cycleGraphFormatDate(cycle.updated_at))}</span>
+          </span>
+        </button>`;
+      }).join("");
+    }
+
+    function deriveCycleGraphActivity(events, cycleStatus) {
+      const activeByTask = new Map();
+      (events || []).forEach((event) => {
+        const eventType = String(event.event_type || "");
+        const taskNodeId = String(event.task_node_id || "");
+        const parentTaskNodeId = String(event.parent_task_node_id || "");
+        const fromAgentId = String(event.from_agent_id || "");
+        const toAgentId = String(event.to_agent_id || "");
+        if (eventType === "TASK_STARTED" && taskNodeId && toAgentId) {
+          activeByTask.set(taskNodeId, toAgentId);
+          return;
+        }
+        if (eventType === "HANDOFF_TRIGGERED") {
+          if (parentTaskNodeId) {
+            activeByTask.delete(parentTaskNodeId);
+          } else if (fromAgentId) {
+            const fallbackEntry = Array.from(activeByTask.entries()).reverse().find(([, agentId]) => agentId === fromAgentId);
+            if (fallbackEntry) {
+              activeByTask.delete(fallbackEntry[0]);
+            }
+          }
+          return;
+        }
+        if (["GROUP_REPORT_SUBMITTED", "MESSAGE_REMOVED"].includes(eventType)) {
+          if (taskNodeId) {
+            activeByTask.delete(taskNodeId);
+          } else if (fromAgentId && eventType === "GROUP_REPORT_SUBMITTED") {
+            const fallbackEntry = Array.from(activeByTask.entries()).reverse().find(([, agentId]) => agentId === fromAgentId);
+            if (fallbackEntry) {
+              activeByTask.delete(fallbackEntry[0]);
+            }
+          }
+        }
+        if (eventType === "CYCLE_COMPLETED") {
+          activeByTask.clear();
+        }
+      });
+      if (String(cycleStatus || "") === "completed") {
+        activeByTask.clear();
+      }
+      return {
+        agentIds: new Set(activeByTask.values()),
+        taskNodeIds: new Set(activeByTask.keys())
+      };
+    }
+
+    function renderCycleGraphHistory(historyData) {
+      const events = Array.isArray(historyData.events) ? historyData.events : [];
+      cycleGraphEventCountEl.textContent = cycleGraphCountLabel(events.length, "событие", "события", "событий");
+      cycleGraphHistoryEl.innerHTML = events.slice().reverse().slice(0, 18).map((event) => {
+        const eventType = String(event.event_type || "");
+        const eventClass = eventType === "HANDOFF_TRIGGERED" ? " handoff" : (eventType === "TASK_STARTED" ? " started" : "");
+        const fromRole = cycleGraphRoleLabel((event.from_agent || {}).role || event.from_agent_id);
+        const toRole = cycleGraphRoleLabel((event.to_agent || {}).role || event.to_agent_id);
+        const actorText = [event.from_agent_id ? fromRole : "", event.to_agent_id ? toRole : ""].filter(Boolean).join(" → ");
+        const detail = [
+          actorText,
+          event.connection_id ? `связь ${event.connection_id}` : "",
+          event.task_id ? `задача ${cycleGraphShortId(event.task_id, 30)}` : ""
+        ].filter(Boolean).join(" · ");
+        return `<article class="cycle-event${eventClass}" data-event-id="${escapeHtml(event.event_id || "")}" data-event-type="${escapeHtml(eventType)}">
+          <span class="cycle-event-sequence">${Number(event.sequence || 0)}</span>
+          <span>
+            <span class="cycle-event-title">${escapeHtml(cycleGraphEventLabel(eventType))}</span>
+            <span class="cycle-event-meta">${escapeHtml(detail)}</span>
+          </span>
+          <time class="subtle">${escapeHtml(cycleGraphFormatDate(event.timestamp))}</time>
+        </article>`;
+      }).join("") || `<div class="subtle">Событий пока нет.</div>`;
+    }
+
+    function renderCycleGraphSvg(graphData, historyData) {
+      const cycle = graphData.cycle || historyData.cycle || {};
+      const nodes = graphData.nodes || {};
+      const edges = graphData.edges || {};
+      const agents = Array.isArray(nodes.agents) ? nodes.agents.slice() : [];
+      const tasks = Array.isArray(nodes.tasks) ? nodes.tasks.slice() : [];
+      const communications = Array.isArray(edges.communications) ? edges.communications : [];
+      const taskLineage = Array.isArray(edges.task_lineage) ? edges.task_lineage : [];
+      const events = Array.isArray(historyData.events) ? historyData.events : [];
+      const agentFirstSeen = new Map();
+      events.forEach((event) => {
+        [event.from_agent_id, event.to_agent_id].filter(Boolean).forEach((agentId) => {
+          if (!agentFirstSeen.has(agentId)) {
+            agentFirstSeen.set(agentId, agentFirstSeen.size);
+          }
+        });
+      });
+      agents.sort((left, right) => (agentFirstSeen.get(left.id) ?? Number.MAX_SAFE_INTEGER) - (agentFirstSeen.get(right.id) ?? Number.MAX_SAFE_INTEGER));
+      tasks.sort((left, right) => String(left.first_event_at || "").localeCompare(String(right.first_event_at || "")));
+      const activity = deriveCycleGraphActivity(events, cycle.status);
+      const handoffs = events.filter((event) => event.event_type === "HANDOFF_TRIGGERED");
+      const lastHandoff = handoffs.length ? handoffs[handoffs.length - 1] : null;
+
+      cycleGraphTitleEl.textContent = cycle.title || "Граф группы";
+      cycleGraphSubtitleEl.textContent = [cycle.cycle_id, cycleGraphStatusLabel(cycle.status), cycle.group_ids && cycle.group_ids.length ? cycleGraphCountLabel(cycle.group_ids.length, "группа", "группы", "групп") : ""].filter(Boolean).join(" · ");
+      cycleGraphMetricsEl.innerHTML = [
+        `<span class="badge">${escapeHtml(cycleGraphCountLabel(agents.length, "агент", "агента", "агентов"))}</span>`,
+        `<span class="badge">${escapeHtml(cycleGraphCountLabel(tasks.length, "задача", "задачи", "задач"))}</span>`,
+        `<span class="badge event">${handoffs.length} handoff</span>`,
+        `<span class="badge common">${escapeHtml(cycleGraphCountLabel(activity.agentIds.size, "активный", "активных", "активных"))}</span>`
+      ].join("");
+
+      if (!agents.length && !tasks.length) {
+        cycleGraphCanvasEl.innerHTML = `<div class="cycle-graph-empty">В выбранном цикле пока нет узлов графа.</div>`;
+        cycleGraphTaskLineageEl.textContent = "Граф заполнится после постановки и получения первой задачи.";
+        return;
+      }
+
+      const width = Math.max(760, agents.length * 190 + 80, tasks.length * 180 + 80);
+      const height = tasks.length ? 390 : 215;
+      const agentY = 96;
+      const taskY = 292;
+      const agentPositions = new Map();
+      const taskPositions = new Map();
+      const spreadX = (index, total, margin) => total <= 1 ? width / 2 : margin + index * ((width - margin * 2) / (total - 1));
+      agents.forEach((agent, index) => agentPositions.set(String(agent.id || ""), {x: spreadX(index, agents.length, 112), y: agentY}));
+      tasks.forEach((task, index) => taskPositions.set(String(task.id || ""), {x: spreadX(index, tasks.length, 105), y: taskY}));
+
+      const communicationMarkup = communications.map((edge, index) => {
+        const from = agentPositions.get(String(edge.from || ""));
+        const to = agentPositions.get(String(edge.to || ""));
+        if (!from || !to) {
+          return "";
+        }
+        const isLatest = Boolean(lastHandoff && edge.from === lastHandoff.from_agent_id && edge.to === lastHandoff.to_agent_id);
+        const bendY = agentY + 78 + (index % 3) * 16;
+        const path = from.x === to.x
+          ? `M ${from.x + 72} ${from.y} C ${from.x + 135} ${from.y - 75}, ${to.x + 135} ${to.y + 75}, ${to.x + 72} ${to.y}`
+          : `M ${from.x} ${from.y + 38} C ${from.x} ${bendY}, ${to.x} ${bendY}, ${to.x} ${to.y + 38}`;
+        return `<path class="cycle-communication-edge${isLatest ? " handoff-active" : ""}" data-edge-type="communication" data-edge-id="${escapeHtml(edge.id || "")}" d="${path}" marker-end="url(#${isLatest ? "cycleHandoffArrow" : "cycleAgentArrow"})"><title>${escapeHtml(`${cycleGraphRoleLabel((agents.find((item) => item.id === edge.from) || {}).role)} → ${cycleGraphRoleLabel((agents.find((item) => item.id === edge.to) || {}).role)} · ${Number(edge.count || 0)} передач`)}</title></path>`;
+      }).join("");
+
+      const lineageMarkup = taskLineage.map((edge) => {
+        const from = taskPositions.get(String(edge.from || ""));
+        const to = taskPositions.get(String(edge.to || ""));
+        if (!from || !to) {
+          return "";
+        }
+        const direction = to.x >= from.x ? 1 : -1;
+        const startX = from.x + direction * 82;
+        const endX = to.x - direction * 82;
+        const curveY = taskY - 55;
+        const path = `M ${startX} ${taskY} C ${startX + direction * 28} ${curveY}, ${endX - direction * 28} ${curveY}, ${endX} ${taskY}`;
+        return `<path class="cycle-task-edge" data-edge-type="task-lineage" data-edge-id="${escapeHtml(edge.id || "")}" d="${path}" marker-end="url(#cycleTaskArrow)"><title>${escapeHtml(`${cycleGraphShortId(edge.from)} → ${cycleGraphShortId(edge.to)}`)}</title></path>`;
+      }).join("");
+
+      const agentMarkup = agents.map((agent) => {
+        const id = String(agent.id || "");
+        const position = agentPositions.get(id);
+        const isActive = activity.agentIds.has(id);
+        return `<g class="cycle-agent-node${isActive ? " active" : ""}" data-node-type="agent" data-node-id="${escapeHtml(id)}">
+          <rect class="cycle-agent-halo" x="${position.x - 88}" y="${position.y - 47}" width="176" height="94" rx="18"></rect>
+          <rect class="cycle-agent-body" x="${position.x - 80}" y="${position.y - 38}" width="160" height="76" rx="14"></rect>
+          <text class="cycle-agent-role" x="${position.x}" y="${position.y - 8}">${escapeHtml(cycleGraphRoleLabel(agent.role))}</text>
+          <text class="cycle-agent-meta" x="${position.x}" y="${position.y + 13}">${escapeHtml(agent.phone ? `телефон ${agent.phone}` : cycleGraphShortId(id, 20))}</text>
+          <text class="cycle-agent-meta" x="${position.x}" y="${position.y + 29}">${isActive ? "TASK_STARTED · активен" : "ожидает / передал"}</text>
+          <title>${escapeHtml(id)}</title>
+        </g>`;
+      }).join("");
+
+      const taskMarkup = tasks.map((task) => {
+        const id = String(task.id || "");
+        const position = taskPositions.get(id);
+        const isActive = activity.taskNodeIds.has(id);
+        const eventTypes = Array.isArray(task.event_types) ? task.event_types : [];
+        const lastEventType = eventTypes.length ? eventTypes[eventTypes.length - 1] : "";
+        return `<g class="cycle-task-node${isActive ? " active" : ""}" data-node-type="task" data-node-id="${escapeHtml(id)}">
+          <rect x="${position.x - 82}" y="${position.y - 35}" width="164" height="70" rx="11"></rect>
+          <text class="cycle-task-title" x="${position.x}" y="${position.y - 9}">${escapeHtml(cycleGraphShortId(task.task_id || id, 24))}</text>
+          <text class="cycle-task-meta" x="${position.x}" y="${position.y + 10}">${escapeHtml(cycleGraphEventLabel(lastEventType))}</text>
+          <text class="cycle-task-meta" x="${position.x}" y="${position.y + 26}">${isActive ? "в работе" : (task.parent_task_node_id ? "дочерняя задача" : "корневая задача")}</text>
+          <title>${escapeHtml(id)}</title>
+        </g>`;
+      }).join("");
+
+      cycleGraphCanvasEl.innerHTML = `<svg id="cycleGraphSvg" role="img" aria-label="Граф агентов и задач цикла" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">
+        <title>${escapeHtml(cycle.title || "Граф цикла разработки")}</title>
+        <desc>${escapeHtml(`Фактические связи ${agents.length} агентов и lineage ${tasks.length} задач. Активных агентов: ${activity.agentIds.size}.`)}</desc>
+        <defs>
+          <marker id="cycleAgentArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#6b8eb5"></path></marker>
+          <marker id="cycleHandoffArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"></path></marker>
+          <marker id="cycleTaskArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#7c3aed"></path></marker>
+        </defs>
+        <text x="22" y="24" fill="#606975" font-size="11" font-weight="700">АГЕНТЫ И ФАКТИЧЕСКИЕ ПЕРЕДАЧИ</text>
+        ${communicationMarkup}
+        ${agentMarkup}
+        ${tasks.length ? `<line x1="22" y1="218" x2="${width - 22}" y2="218" stroke="#d7dce2"></line><text x="22" y="242" fill="#606975" font-size="11" font-weight="700">LINEAGE ЗАДАЧ</text>${lineageMarkup}${taskMarkup}` : ""}
+      </svg>`;
+
+      const activeRoles = agents.filter((agent) => activity.agentIds.has(String(agent.id || ""))).map((agent) => cycleGraphRoleLabel(agent.role));
+      const handoffText = lastHandoff
+        ? `Последний handoff: ${cycleGraphRoleLabel((lastHandoff.from_agent || {}).role || lastHandoff.from_agent_id)} → ${cycleGraphRoleLabel((lastHandoff.to_agent || {}).role || lastHandoff.to_agent_id)}.`
+        : "Handoff-событий пока нет.";
+      cycleGraphTaskLineageEl.textContent = `${taskLineage.length} связей lineage · ${communications.length} коммуникационных маршрутов. ${activeRoles.length ? `Активны: ${activeRoles.join(", ")}.` : "Активных агентов нет."} ${handoffText}`;
+    }
+
+    function renderCycleGraphDetail(graphData, historyData) {
+      renderCycleGraphSvg(graphData, historyData);
+      renderCycleGraphHistory(historyData);
+    }
+
+    async function refreshCycleGraph(options = {}) {
+      if (!cycleGraphViewIsActive() && !options.force) {
+        return;
+      }
+      if (cycleGraphRefreshInFlight && !options.force) {
+        return;
+      }
+      const context = activeProjectContext();
+      const projectId = cycleGraphProjectPhone(context);
+      const projectName = String((context && (context.project_name || context.git_context_key)) || "").trim();
+      if (!projectId) {
+        if (cycleGraphAbortController) {
+          cycleGraphAbortController.abort();
+        }
+        cycleGraphCycles = [];
+        cycleGraphProjectId = "";
+        cycleGraphSelectedCycleId = "";
+        cycleGraphViewEl.dataset.state = "empty";
+        cycleGraphProjectSummaryEl.textContent = "У активного Git context нет канонического project_phone. Сначала зарегистрируйте проект через Project Manager 0001.";
+        renderCycleGraphCycleList();
+        resetCycleGraphDetail("Выберите зарегистрированный проект с project_phone.");
+        setCycleGraphStatus("");
+        return;
+      }
+
+      if (cycleGraphRefreshInFlight && options.force && cycleGraphAbortController) {
+        cycleGraphAbortController.abort();
+      }
+      const controller = new AbortController();
+      cycleGraphAbortController = controller;
+      cycleGraphRefreshInFlight = true;
+      const requestVersion = ++cycleGraphRequestVersion;
+      const projectChanged = projectId !== cycleGraphProjectId;
+      if (projectChanged) {
+        cycleGraphSelectedCycleId = "";
+      }
+      cycleGraphProjectId = projectId;
+      cycleGraphProjectSummaryEl.innerHTML = `<strong>${escapeHtml(projectName || "Проект")}</strong><br><span class="subtle">project_phone ${escapeHtml(projectId)} · ${escapeHtml((context && context.git_context_key) || "")}</span>`;
+      if (!options.silent) {
+        cycleGraphViewEl.dataset.state = "loading";
+        setCycleGraphStatus("Загружаю циклы и историю...");
+      }
+
+      try {
+        const cycleData = await cycleGraphFetchJson(`/api/v1/projects/${encodeURIComponent(projectId)}/cycles?limit=100`, controller.signal);
+        if (requestVersion !== cycleGraphRequestVersion || projectId !== cycleGraphProjectPhone()) {
+          return;
+        }
+        cycleGraphCycles = Array.isArray(cycleData.cycles) ? cycleData.cycles : [];
+        const preferredCycleId = String(options.cycleId || cycleGraphSelectedCycleId || "");
+        const preferredExists = cycleGraphCycles.some((cycle) => String(cycle.cycle_id || "") === preferredCycleId);
+        const preferredActive = cycleGraphCycles.find((cycle) => cycle.status !== "completed");
+        cycleGraphSelectedCycleId = preferredExists
+          ? preferredCycleId
+          : String(((preferredActive || cycleGraphCycles[0] || {}).cycle_id) || "");
+        renderCycleGraphCycleList();
+
+        if (!cycleGraphSelectedCycleId) {
+          cycleGraphViewEl.dataset.state = "empty";
+          resetCycleGraphDetail("В проекте пока нет циклов разработки.");
+          setCycleGraphStatus("Циклов пока нет.");
+          return;
+        }
+
+        const cycleId = cycleGraphSelectedCycleId;
+        const [graphData, historyData] = await Promise.all([
+          cycleGraphFetchJson(`/api/v1/cycles/${encodeURIComponent(cycleId)}/graph`, controller.signal),
+          cycleGraphFetchJson(`/api/v1/cycles/${encodeURIComponent(cycleId)}/history`, controller.signal)
+        ]);
+        if (requestVersion !== cycleGraphRequestVersion || projectId !== cycleGraphProjectPhone() || cycleId !== cycleGraphSelectedCycleId) {
+          return;
+        }
+        renderCycleGraphDetail(graphData, historyData);
+        cycleGraphViewEl.dataset.state = "ready";
+        setCycleGraphStatus(`Обновлено: ${new Date().toLocaleTimeString("ru-RU")}`, "ok");
+      } catch (error) {
+        if (error.name === "AbortError") {
+          return;
+        }
+        if (requestVersion === cycleGraphRequestVersion) {
+          cycleGraphViewEl.dataset.state = "error";
+          setCycleGraphStatus(error.message || "Не удалось загрузить граф цикла.", "error");
+          if (!cycleGraphCycles.length) {
+            resetCycleGraphDetail("Не удалось загрузить данные цикла.");
+          }
+        }
+      } finally {
+        if (requestVersion === cycleGraphRequestVersion) {
+          cycleGraphRefreshInFlight = false;
+        }
+      }
+    }
+
     async function refreshHistory() {
       if (!activeMappedQueuePhone()) {
         currentHistoryRecords = [];
@@ -9671,7 +16381,12 @@ ${data.patch || ""}
 
     async function refresh() {
       await refreshGitConfig();
-      await Promise.all([refreshQueues(), refreshScheduledTasks(), refreshHistory()]);
+      await refreshAgents();
+      const refreshTasks = [refreshQueues(), refreshScheduledTasks(), refreshHistory()];
+      if (cycleGraphViewIsActive()) {
+        refreshTasks.push(refreshCycleGraph({silent: true}));
+      }
+      await Promise.all(refreshTasks);
     }
 
     function setActiveView(view) {
@@ -9690,6 +16405,13 @@ ${data.patch || ""}
       if (view === "evidence") {
         refreshEvidenceFolders().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
       }
+      if (view === "cycles") {
+        refreshCycleGraph({force: true}).catch((error) => setCycleGraphStatus(error.message, "error"));
+      } else if (cycleGraphAbortController) {
+        cycleGraphAbortController.abort();
+        cycleGraphAbortController = null;
+        cycleGraphRefreshInFlight = false;
+      }
     }
 
     queueEl.addEventListener("change", applyQueueDefaults);
@@ -9697,6 +16419,21 @@ ${data.patch || ""}
     scheduleDelayMinutesEl.addEventListener("input", () => setStatus(""));
     document.querySelectorAll(".page-tab").forEach((button) => {
       button.addEventListener("click", () => setActiveView(button.dataset.view));
+    });
+    cycleGraphCycleSelectEl.addEventListener("change", () => {
+      cycleGraphSelectedCycleId = cycleGraphCycleSelectEl.value;
+      refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
+    });
+    cycleGraphCycleListEl.addEventListener("click", (event) => {
+      const card = event.target.closest("[data-cycle-id]");
+      if (!card) {
+        return;
+      }
+      cycleGraphSelectedCycleId = String(card.dataset.cycleId || "");
+      refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
+    });
+    document.getElementById("refreshCycleGraphButton").addEventListener("click", () => {
+      refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
     });
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => setActiveContext(button.dataset.context));
@@ -10184,27 +16921,37 @@ ${data.patch || ""}
     document.getElementById("saveEmailRoutesButton").addEventListener("click", () => {
       saveEmailRoutes().catch((error) => setEmailRoutesStatus(error.message, "error"));
     });
+    applyGitContextProjectButtonEl.addEventListener("click", () => {
+      applySelectedGitContext(gitContextListEl.value || "", true);
+    });
+    gitContextListEl.addEventListener("change", () => {
+      pendingGitContextKey = gitContextListEl.value || "";
+    });
     gitPhoneEl.addEventListener("change", () => {
-      const context = phoneContextByPhone(activeQueuePhone());
-      updateActiveGitContextDisplay();
-      if (context) {
-        gitAddressEl.value = context.git_address || "";
-        gitProjectNameEl.value = context.project_name || "";
-        currentGitContext = context;
-        renderGitContextOptions(context.git_context_key || "");
-      } else {
-        gitAddressEl.value = "";
-        gitProjectNameEl.value = "";
-        currentGitContext = null;
-      }
-      refreshQueues().catch((error) => setStatus(error.message, "error"));
-      refreshScheduledTasks().catch((error) => setScheduledTasksStatus(error.message, "error"));
-      refreshHistory().catch((error) => setHistoryStatus(error.message, "error"));
-      refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
-      refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
-      refreshEvidenceFolders().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
+      applySelectedGitPhone(activeQueuePhone(), true);
     });
     document.getElementById("addAgentButton").addEventListener("click", () => addAgent());
+    attachAgentToProjectButtonEl.addEventListener("click", () => {
+      attachExistingAgentToProject().catch((error) => setAgentsStatus(error.message, "error"));
+    });
+    detachSelectedAgentFromProjectButtonEl.addEventListener("click", () => {
+      detachSelectedAgentFromProject().catch((error) => setAgentsStatus(error.message, "error"));
+    });
+    agentProjectManagerEl.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!target || !target.dataset) {
+        return;
+      }
+      if (target.dataset.action === "copy-agent-to-project") {
+        attachAgentToProjectById(target.dataset.agentId).catch((error) => setAgentsStatus(error.message, "error"));
+      }
+      if (target.dataset.action === "edit-project-agent") {
+        selectAgentForEdit(target.dataset.agentId);
+      }
+      if (target.dataset.action === "detach-agent-from-project") {
+        detachAgentFromProjectById(target.dataset.agentId).catch((error) => setAgentsStatus(error.message, "error"));
+      }
+    });
     document.getElementById("cloneAgentButton").addEventListener("click", openCloneAgentModal);
     document.getElementById("removeSelectedAgentButton").addEventListener("click", removeSelectedAgent);
     document.getElementById("copyAgentProfileButton").addEventListener("click", openCopyProfilePhoneModal);
@@ -10371,14 +17118,17 @@ ${data.patch || ""}
       captureCurrentAgent();
       selectedAgentId = agentSelectorEl.value;
       renderSelectedAgent();
+      renderAgentProjectControls();
       setAgentsStatus("");
     });
     agentsEl.addEventListener("input", () => {
+      markAgentEditorDirty();
       captureCurrentAgent();
       renderAgentSelector(selectedAgentId);
       syncActorsFromAgents(agents);
       updateSpecializationPanel();
       renderAgentStatusSummary();
+      renderAgentProjectControls();
       updateAgentPreview();
       setAgentsStatus("");
     });
@@ -10389,6 +17139,7 @@ ${data.patch || ""}
         updateAgentPreview();
       }
       if (target && target.dataset && target.dataset.action === "remove-agent-param") {
+        markAgentEditorDirty();
         target.closest(".agent-param-row").remove();
         const paramsEl = agentsEl.querySelector(".agent-params");
         if (paramsEl && !paramsEl.querySelector(".agent-param-row")) {
@@ -10621,7 +17372,7 @@ async def enqueue_phone_channel(
     return await enqueue(queue_name, message, phone_metadata, port, git_context)
 
 
-async def dequeue_phone_channel(
+async def _dequeue_phone_channel_unlocked(
     queue_name: str,
     conversation_phone: str,
     to_phone: str,
@@ -10681,10 +17432,33 @@ async def dequeue_phone_channel(
         "from_phone": metadata.get("from_phone"),
         "to_phone": metadata.get("to_phone"),
         "queue": queue_name,
+        "cycle_id": metadata.get("cycle_id"),
+        "task_id": metadata.get("task_id"),
+        "task_node_id": metadata.get("task_node_id"),
+        "parent_task_id": metadata.get("parent_task_id"),
+        "parent_task_node_id": metadata.get("parent_task_node_id"),
+        "metadata": deepcopy(metadata),
     }
 
 
-async def delete_queued_item(
+async def dequeue_phone_channel(
+    queue_name: str,
+    conversation_phone: str,
+    to_phone: str,
+    port: int | None = None,
+    git_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        return await _dequeue_phone_channel_unlocked(
+            queue_name,
+            conversation_phone,
+            to_phone,
+            port,
+            git_context,
+        )
+
+
+async def _delete_queued_item_unlocked(
     queue_name: str,
     item_id: str,
     port: int | None = None,
@@ -10753,9 +17527,30 @@ async def delete_queued_item(
     return {"status": "deleted", "queue": queue_name, "id": item_id, "size": size}
 
 
+async def delete_queued_item(
+    queue_name: str,
+    item_id: str,
+    port: int | None = None,
+    git_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        return await _delete_queued_item_unlocked(
+            queue_name,
+            item_id,
+            port,
+            git_context,
+        )
+
+
 @app.get("/", response_class=HTMLResponse)
-async def index() -> str:
-    return render_index_v2()
+async def index() -> HTMLResponse:
+    return HTMLResponse(
+        render_index_v2(),
+        headers={
+            "Cache-Control": "no-store, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @app.get("/queues")
@@ -10899,14 +17694,15 @@ async def restore_history_record_to_queue(
             detail="Original queue is unknown",
         )
 
+    record_metadata = git_context_metadata_from_record(record)
     metadata = {
+        **record_metadata,
         "sender": "Owner",
         "receiver": queue_definition(queue_name)["default_receiver"],
         "action": "restored_to_original_queue",
         "restored_from_history_id": record_id,
     }
     phone_git_context = await git_context_for_phone(phone) if phone else None
-    record_metadata = git_context_metadata_from_record(record)
     record_git_context = {
         key: record_metadata.get(key)
         for key in (
@@ -10937,6 +17733,479 @@ async def restore_history_record_to_queue(
     )
 
 
+@app.get("/api/v1/group-templates")
+async def get_group_templates() -> dict[str, Any]:
+    registry = await asyncio.to_thread(read_group_templates_file)
+    validated_templates: dict[str, dict[str, Any]] = {}
+    for template_id in registry["group_templates"]:
+        blueprint = await asyncio.to_thread(
+            group_blueprint_from_payload,
+            registry,
+            {
+                "template_id": template_id,
+                "group_key": template_id,
+            },
+        )
+        validated_templates[template_id] = {
+            **deepcopy(registry["group_templates"][template_id]),
+            "template_fingerprint": blueprint["template_fingerprint"],
+        }
+    return {
+        "schema_version": registry.get("schema_version", 1),
+        "registry_path": str(group_templates_path),
+        "agent_specs": deepcopy(registry["agent_specs"]),
+        "group_templates": validated_templates,
+        "group_topologies": deepcopy(registry.get("group_topologies", {})),
+    }
+
+
+@app.get("/api/v1/group-templates/{template_id}")
+async def get_group_template(template_id: str) -> dict[str, Any]:
+    registry = await asyncio.to_thread(read_group_templates_file)
+    clean_template_id, template = group_template_for_id(registry, template_id)
+    blueprint = await asyncio.to_thread(
+        group_blueprint_from_payload,
+        registry,
+        {
+            "template_id": clean_template_id,
+            "group_key": clean_template_id,
+        },
+    )
+    referenced_specs = {
+        definition["spec"]: deepcopy(registry["agent_specs"][definition["spec"]])
+        for definition in blueprint["definitions"]
+    }
+    return {
+        "template": {
+            **template,
+            "template_fingerprint": blueprint["template_fingerprint"],
+        },
+        "agent_specs": referenced_specs,
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/groups")
+async def get_project_groups(
+    project_id: str,
+    include_archived: bool = True,
+) -> dict[str, Any]:
+    config = await read_git_config()
+    _, context_key, project_entry, context = project_for_group_api(config, project_id)
+    registry = await asyncio.to_thread(read_group_templates_file)
+    refresh_project_group_relationships(project_entry, registry)
+    raw_groups = project_entry.get("groups")
+    groups = [
+        deepcopy(group)
+        for group in raw_groups
+        if isinstance(group, dict)
+        and (
+            include_archived
+            or str(group.get("status") or "active").strip() != "archived"
+        )
+    ] if isinstance(raw_groups, list) else []
+    public_context = {
+        **context,
+        "groups": deepcopy(project_entry.get("groups", [])),
+        "group_relationships": deepcopy(
+            project_entry.get("group_relationships", [])
+        ),
+        "customer_reporting": deepcopy(
+            project_entry.get("customer_reporting", {})
+        ),
+    }
+    return {
+        "project_id": normalize_project_phone(project_entry.get("project_phone")),
+        "project": public_project_context(public_context),
+        "group_count": len(groups),
+        "groups": groups,
+        "group_relationships": deepcopy(
+            project_entry.get("group_relationships", [])
+        ),
+        "customer_reporting": deepcopy(
+            project_entry.get("customer_reporting", {})
+        ),
+        "git_context_key": context_key,
+    }
+
+
+@app.post("/api/v1/projects/{project_id}/groups")
+async def post_project_group(
+    project_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    return await run_group_write_transaction(
+        create_group_transaction,
+        project_id,
+        payload,
+    )
+
+
+@app.get("/api/v1/groups/{group_id}")
+async def get_group(group_id: str) -> dict[str, Any]:
+    group_data = await read_group_with_agents(group_id)
+    queue_tasks = await queued_group_tasks(group_id)
+    return {
+        "project": group_data["project"],
+        "group": group_data["group"],
+        "agent_profiles": group_data["agents"],
+        "queue_size": len(queue_tasks),
+        "queue_tasks": queue_tasks,
+    }
+
+
+@app.put("/api/v1/groups/{group_id}")
+async def put_group(group_id: str, request: Request) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    return await run_group_write_transaction(
+        update_group_transaction,
+        group_id,
+        payload,
+    )
+
+
+@app.delete("/api/v1/groups/{group_id}")
+async def delete_group(group_id: str) -> dict[str, Any]:
+    return await run_group_write_transaction(
+        delete_group_transaction,
+        group_id,
+    )
+
+
+@app.post(
+    "/api/v1/groups/{group_id}/tasks",
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_group_task(
+    group_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    return await enqueue_external_group_task(
+        normalized_group_id(group_id),
+        payload,
+        request_port(request),
+    )
+
+
+@app.post(
+    "/api/v1/groups/{group_id}/connections/{connection_id}/tasks",
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_group_connection_task(
+    group_id: str,
+    connection_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    return await enqueue_group_connection_task(
+        normalized_group_id(group_id),
+        normalized_group_id(connection_id),
+        payload,
+        request_port(request),
+    )
+
+
+@app.get("/api/v1/groups/{group_id}/agents/{agent_id}/tasks")
+async def get_group_agent_task(
+    group_id: str,
+    agent_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    return await dequeue_group_agent_task(
+        normalized_group_id(group_id),
+        str(agent_id or "").strip(),
+        request_port(request),
+    )
+
+
+@app.get("/api/v1/projects/{project_id}/cycles")
+async def get_project_cycles(
+    project_id: str,
+    cycle_status: str | None = None,
+    group_id: str | None = None,
+    limit: int = 200,
+) -> dict[str, Any]:
+    config = await read_git_config()
+    _, context_key, project_entry, _ = project_for_group_api(config, project_id)
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    clean_status = str(cycle_status or "").strip().lower()
+    if clean_status and clean_status not in {"queued", "in_progress", "completed"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cycle_status must be queued, in_progress, or completed",
+        )
+    clean_group_id = str(group_id or "").strip()
+    safe_limit = max(1, min(limit, 10000))
+    records = await read_cycle_records(project_phone=project_phone)
+    summaries = cycle_summaries_from_records(records)
+    if clean_status:
+        summaries = [
+            summary
+            for summary in summaries
+            if summary.get("status") == clean_status
+        ]
+    if clean_group_id:
+        summaries = [
+            summary
+            for summary in summaries
+            if clean_group_id in summary.get("group_ids", [])
+        ]
+    summaries = summaries[:safe_limit]
+    return {
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "cycle_count": len(summaries),
+        "cycles": summaries,
+    }
+
+
+@app.get("/api/v1/cycles/{cycle_id}/history")
+async def get_cycle_history(
+    cycle_id: str,
+    event_type: str | None = None,
+    limit: int = 10000,
+) -> dict[str, Any]:
+    records, summary = await cycle_records_and_summary(cycle_id)
+    events = cycle_events_from_records(records)
+    clean_event_type = str(event_type or "").strip().upper()
+    if clean_event_type:
+        events = [
+            event
+            for event in events
+            if event.get("event_type") == clean_event_type
+        ]
+    safe_limit = max(1, min(limit, 50000))
+    events = events[-safe_limit:]
+    return {
+        "cycle": summary,
+        "event_count": len(events),
+        "events": events,
+    }
+
+
+@app.get("/api/v1/cycles/{cycle_id}/graph")
+async def get_cycle_graph(cycle_id: str) -> dict[str, Any]:
+    records, summary = await cycle_records_and_summary(cycle_id)
+    events = cycle_events_from_records(records)
+    return cycle_graph_from_events(summary, events)
+
+
+@app.post(
+    "/api/v1/cycles/{cycle_id}/events",
+    status_code=status.HTTP_201_CREATED,
+)
+async def post_cycle_event(
+    cycle_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    clean_cycle_id = normalized_cycle_id(cycle_id, required=True)
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    normalized_payload = normalize_cycle_lifecycle_payload(payload)
+    async with group_task_submission_lock:
+        records, summary = await cycle_records_and_summary(clean_cycle_id)
+        canonicalize_cycle_task_reference(records, normalized_payload)
+        deduplicated = deduplicated_cycle_lifecycle_result(
+            records,
+            summary,
+            normalized_payload,
+        )
+        if deduplicated is not None:
+            if normalized_payload["event_type"] == "CYCLE_COMPLETED":
+                cancelled_tasks = await remove_queued_cycle_items(clean_cycle_id)
+                refreshed_records = await read_cycle_records(
+                    cycle_id=clean_cycle_id
+                )
+                deduplicated["cycle"] = cycle_summary_from_records(
+                    refreshed_records
+                )
+                deduplicated["cancelled_queue_task_count"] = int(
+                    (deduplicated["cycle"] or {}).get("cancelled_task_count") or 0
+                )
+                deduplicated["newly_cancelled_queue_task_count"] = len(
+                    cancelled_tasks
+                )
+            return deduplicated
+        group_data: dict[str, Any] | None = None
+        group_id = normalized_payload["group_id"]
+        if group_id:
+            group_data = await read_group_with_agents(group_id)
+            group_project_phone = str(
+                group_data["group"].get("project_phone") or ""
+            ).strip()
+            if group_project_phone != str(summary.get("project_id") or ""):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "cycle_group_project_conflict",
+                        "cycle_id": clean_cycle_id,
+                        "group_id": group_id,
+                    },
+                )
+            if group_id not in summary.get("group_ids", []):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "group_not_in_cycle",
+                        "cycle_id": clean_cycle_id,
+                        "group_id": group_id,
+                    },
+                )
+
+        actor = cycle_lifecycle_actor(normalized_payload, group_data)
+        if normalized_payload["event_type"] == "GROUP_REPORT_SUBMITTED":
+            reporting_rule = (
+                group_data["group"].get("reporting_rule", {})
+                if group_data is not None
+                else {}
+            )
+            expected_reporter_role = str(
+                reporting_rule.get("report_from") or ""
+            ).strip()
+            if (
+                expected_reporter_role
+                and actor.get("from_role") != expected_reporter_role
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "cycle_reporter_role_forbidden",
+                        "expected_role": expected_reporter_role,
+                        "received_role": actor.get("from_role"),
+                    },
+                )
+            report_to = str(
+                reporting_rule.get("report_to") or "project_manager"
+            ).strip()
+            if report_to == "project_manager":
+                actor.update(
+                    {
+                        "to_agent_id": PROJECT_MANAGER_AGENT_ID,
+                        "to_role": "project_manager",
+                        "to_phone": PROJECT_MANAGER_PHONE,
+                        "receiver": PROJECT_MANAGER_AGENT_NAME,
+                    }
+                )
+            else:
+                actor.update(
+                    {
+                        "to_role": report_to or "customer",
+                        "receiver": report_to or "Customer",
+                    }
+                )
+        elif normalized_payload["event_type"] == "CYCLE_COMPLETED":
+            actor.update({"receiver": "Customer"})
+        git_context = (
+            group_git_context_for_queue(group_data)
+            if group_data is not None
+            else {
+                "git_context_key": summary.get("git_context_key"),
+                "project_phone": summary.get("project_id"),
+            }
+        )
+        result = await append_cycle_lifecycle_event(
+            clean_cycle_id,
+            summary,
+            normalized_payload,
+            actor,
+            git_context,
+        )
+        if (
+            normalized_payload["event_type"] == "CYCLE_COMPLETED"
+        ):
+            cancelled_tasks = await remove_queued_cycle_items(clean_cycle_id)
+            refreshed_records = await read_cycle_records(cycle_id=clean_cycle_id)
+            result["cycle"] = cycle_summary_from_records(refreshed_records)
+            result["cancelled_queue_task_count"] = int(
+                (result["cycle"] or {}).get("cancelled_task_count") or 0
+            )
+            result["newly_cancelled_queue_task_count"] = len(cancelled_tasks)
+        return result
+
+
+@app.post("/project-manager/0001")
+async def post_project_manager_0001(request: Request) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+
+    git_address, repository_key = normalize_project_git_address(
+        payload.get("git_address")
+    )
+    requested_context_key = normalize_requested_project_context_key(
+        payload.get("git_context_key"),
+        repository_key,
+    )
+
+    project_name = payload.get("project_name")
+    if project_name is not None and not isinstance(project_name, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="project_name must be a string",
+        )
+
+    created, project_context, project_phone, phone_assigned = await resolve_or_create_project(
+        git_address,
+        repository_key,
+        requested_context_key,
+        project_name,
+        request_port(request),
+    )
+    config, agents, cycle_records = await asyncio.gather(
+        read_git_config(),
+        read_agents(),
+        read_cycle_records(project_phone=project_phone),
+    )
+    target_context_key = str(project_context.get("git_context_key") or "").strip()
+    project_agents = full_agents_for_project(
+        agents,
+        target_context_key,
+        phone_git_contexts_from_config(config),
+    )
+    return {
+        "project_manager_phone": PROJECT_MANAGER_PHONE,
+        "project_phone": project_phone,
+        "phone_assigned": phone_assigned,
+        "created": created,
+        "project": public_project_context(project_context),
+        "agent_count": len(project_agents),
+        "agents": project_agents,
+        "group_count": len(project_context.get("groups", []))
+        if isinstance(project_context.get("groups"), list)
+        else 0,
+        "cycle_count": len(cycle_summaries_from_records(cycle_records)),
+    }
+
+
 @app.get("/git-config")
 async def get_git_config(request: Request) -> dict[str, Any]:
     port = request_port(request)
@@ -10949,12 +18218,14 @@ async def get_git_config(request: Request) -> dict[str, Any]:
         git_address if isinstance(git_address, str) else "",
     ) if git_address else ""
     git_context_key = (
-        str(entry.get("git_context_key") or "").strip()
+        normalize_project_context_reference(
+            str(entry.get("git_context_key") or "").strip()
+        )
         if isinstance(entry, dict)
         else ""
     )
     if not git_context_key and isinstance(git_address, str) and git_address.strip():
-        git_context_key = normalize_git_context_key(git_address)
+        git_context_key = normalize_project_context_reference(git_address)
     git_context = await git_context_for_port(port)
     return {
         "port": port,
@@ -11008,7 +18279,20 @@ async def post_git_config(request: Request) -> dict[str, Any]:
             detail="phone must be a string",
         )
 
-    entry = await save_git_address(port, git_address.strip(), project_name, phone)
+    git_context_key = payload.get("git_context_key")
+    if git_context_key is not None and not isinstance(git_context_key, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_context_key must be a string",
+        )
+
+    entry = await save_git_address(
+        port,
+        git_address.strip(),
+        project_name,
+        phone,
+        git_context_key,
+    )
     git_context = await git_context_for_port(port)
     config = await read_git_config()
     phone_contexts = phone_git_contexts_from_config(config)
@@ -11293,12 +18577,9 @@ async def copy_evidence_file(folder_id: str, filename: str, request: Request) ->
         )
 
 
-@app.post("/agents/create-empty", status_code=status.HTTP_201_CREATED)
-async def create_empty_agent(request: Request) -> dict[str, Any]:
-    base_url = str(request.base_url).rstrip("/")
-
-    async with agents_lock:
-        agents = await asyncio.to_thread(read_agents_file)
+def create_empty_agent_transaction(base_url: str) -> dict[str, Any]:
+    with agents_file_lock():
+        agents = read_agents_file()
         phone = unique_random_phone_for_agents(agents)
         agent_id = f"agent-empty-{phone}"
         name = f"Empty Agent {phone}"
@@ -11324,7 +18605,7 @@ async def create_empty_agent(request: Request) -> dict[str, Any]:
             "template_source": "system:empty_agent",
         }
         agents.append(new_agent)
-        await asyncio.to_thread(write_agents_file, normalize_agents(agents))
+        write_agents_file_unlocked(normalize_agents(agents))
 
     return {
         "id": agent_id,
@@ -11332,6 +18613,13 @@ async def create_empty_agent(request: Request) -> dict[str, Any]:
         "name": name,
         "prompt_text": prompt_text,
     }
+
+
+@app.post("/agents/create-empty", status_code=status.HTTP_201_CREATED)
+async def create_empty_agent(request: Request) -> dict[str, Any]:
+    base_url = str(request.base_url).rstrip("/")
+    async with agents_lock:
+        return await asyncio.to_thread(create_empty_agent_transaction, base_url)
 
 
 @app.get("/agents/poll/{phone}")
