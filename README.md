@@ -73,11 +73,25 @@ POST /api/v1/telegram/actors
 ```
 
 Send the same JSON either as message text or as a `.json` document. The JSON
-must include `project_id` (or `project_phone`). Set `TELEGRAM_BOT_TOKEN` so the
-service can download documents and send an import summary. Optionally set
-`TELEGRAM_WEBHOOK_SECRET` and pass the same value to Telegram's webhook
-`secret_token`; when configured, requests without the matching
-`X-Telegram-Bot-Api-Secret-Token` header are rejected.
+must include `project_id` (or `project_phone`). Copy `.env.example` to `.env`
+and configure the local file; `.env` is intentionally ignored by Git.
+
+- `TELEGRAM_BOT_TOKEN` downloads documents and sends import confirmations.
+- `TELEGRAM_WEBHOOK_SECRET` protects the webhook request header.
+- `TELEGRAM_WEBHOOK_URL` is the public HTTPS URL ending in
+  `/api/v1/telegram/actors`.
+- `TELEGRAM_WEBHOOK_AUTO_REGISTER=1` makes `run.bat` call `setWebhook` before
+  starting the application.
+- `TELEGRAM_DROP_PENDING_UPDATES=1` discards old pending messages during
+  webhook registration; leave it disabled unless that is intentional.
+- `TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_ALLOWED_USER_IDS` are optional
+  comma-separated allowlists. Configure at least one for a bot that can mutate
+  project data.
+
+`run.bat` and `run_8026.bat` load `.env` without printing its values. Never put
+a real bot token directly in either tracked launcher. If a token has appeared
+in chat or Git history, revoke it with BotFather before saving its replacement
+in `.env`.
 
 Run one application process per runtime directory. `run_8026.bat` is an
 alternative port launcher, not a second concurrent worker for the same local

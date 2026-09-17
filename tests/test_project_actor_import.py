@@ -66,6 +66,15 @@ async def asgi_request(
 class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
     PROJECT_PHONE = "9008"
     PROJECT_CONTEXT = "github.com/example/actor-import"
+    TELEGRAM_ENV_NAMES = (
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "TELEGRAM_WEBHOOK_URL",
+        "TELEGRAM_WEBHOOK_AUTO_REGISTER",
+        "TELEGRAM_DROP_PENDING_UPDATES",
+        "TELEGRAM_ALLOWED_CHAT_IDS",
+        "TELEGRAM_ALLOWED_USER_IDS",
+    )
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -90,22 +99,23 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.group_task_submission_lock = asyncio.Lock()
         main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
         main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
-        self.original_telegram_token = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
-        self.original_telegram_secret = os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+        self.original_telegram_env = {
+            name: os.environ.get(name)
+            for name in self.TELEGRAM_ENV_NAMES
+        }
+        for name in self.TELEGRAM_ENV_NAMES:
+            os.environ.pop(name, None)
         self.write_project()
         self.write_agents()
 
     def tearDown(self) -> None:
         for name, value in self.original_values.items():
             setattr(main, name, value)
-        if self.original_telegram_token is not None:
-            os.environ["TELEGRAM_BOT_TOKEN"] = self.original_telegram_token
-        else:
-            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
-        if self.original_telegram_secret is not None:
-            os.environ["TELEGRAM_WEBHOOK_SECRET"] = self.original_telegram_secret
-        else:
-            os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+        for name, value in self.original_telegram_env.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
         self.temp_dir.cleanup()
 
     def write_project(self) -> None:
@@ -412,6 +422,58 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["source"], "telegram")
         self.assertEqual(body["imported_actor_count"], 1)
         self.assertEqual(body["queued_task_count"], 1)
+
+    async def test_telegram_webhook_enforces_secret_and_chat_allowlist(self) -> None:
+        os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
+        os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = "99,-100123"
+        actor_json = {
+            "project_id": self.PROJECT_PHONE,
+            "actors": {
+                "overwrite": True,
+                "items": [{"name": "Allowed Telegram Actor", "tasks": []}],
+            },
+        }
+
+        missing_secret_status, _ = await asgi_request(
+            "/api/v1/telegram/actors",
+            method="POST",
+            payload={
+                "message": {
+                    "chat": {"id": 99},
+                    "text": json.dumps(actor_json),
+                }
+            },
+        )
+        self.assertEqual(missing_secret_status, 403)
+
+        denied_chat_status, _ = await asgi_request(
+            "/api/v1/telegram/actors",
+            method="POST",
+            payload={
+                "message": {
+                    "chat": {"id": 3},
+                    "text": json.dumps(actor_json),
+                }
+            },
+            headers=[(b"x-telegram-bot-api-secret-token", b"test-secret")],
+        )
+        self.assertEqual(denied_chat_status, 403)
+
+        allowed_status, allowed_body = await asgi_request(
+            "/api/v1/telegram/actors",
+            method="POST",
+            payload={
+                "message": {
+                    "chat": {"id": 99},
+                    "text": json.dumps(actor_json),
+                }
+            },
+            headers=[(b"x-telegram-bot-api-secret-token", b"test-secret")],
+        )
+        self.assertEqual(allowed_status, 200)
+        self.assertIsInstance(allowed_body, dict)
+        assert isinstance(allowed_body, dict)
+        self.assertEqual(allowed_body["imported_actor_count"], 1)
 
     def test_ui_exposes_actor_import_and_bulk_delete_controls(self) -> None:
         html = main.render_index_v2()

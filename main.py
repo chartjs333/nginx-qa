@@ -18584,6 +18584,33 @@ def actor_payload_from_telegram_update(update: Any) -> tuple[dict[str, Any], dic
     return payload, message
 
 
+def telegram_id_allowlist(variable_name: str) -> set[str]:
+    return {
+        value.strip()
+        for value in os.getenv(variable_name, "").split(",")
+        if value.strip()
+    }
+
+
+def ensure_telegram_sender_allowed(message: dict[str, Any]) -> None:
+    allowed_chat_ids = telegram_id_allowlist("TELEGRAM_ALLOWED_CHAT_IDS")
+    allowed_user_ids = telegram_id_allowlist("TELEGRAM_ALLOWED_USER_IDS")
+    chat = message.get("chat") if isinstance(message, dict) else None
+    sender = message.get("from") if isinstance(message, dict) else None
+    chat_id = str(chat.get("id") if isinstance(chat, dict) else "").strip()
+    user_id = str(sender.get("id") if isinstance(sender, dict) else "").strip()
+    if allowed_chat_ids and chat_id not in allowed_chat_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Telegram chat is not allowed to import project actors",
+        )
+    if allowed_user_ids and user_id not in allowed_user_ids:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Telegram user is not allowed to import project actors",
+        )
+
+
 def send_telegram_import_reply(message: dict[str, Any], result: dict[str, Any]) -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat = message.get("chat") if isinstance(message, dict) else None
@@ -18855,6 +18882,7 @@ async def telegram_actor_import(request: Request) -> dict[str, Any]:
         )
     update = await read_message(request)
     payload, message = await asyncio.to_thread(actor_payload_from_telegram_update, update)
+    ensure_telegram_sender_allowed(message)
     project_id = str(
         payload.get("project_id")
         or payload.get("project_phone")
