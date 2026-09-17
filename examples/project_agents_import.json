@@ -1,13 +1,14 @@
 {
   "project_id": "9008",
-  "actors": {
+  "agents": {
     "overwrite": true,
     "include_managed": false,
     "items": [
       {
-        "id": "actor-requirements-analyst",
+        "id": "agent-requirements-analyst",
         "name": "Requirements Analyst",
         "phone": "2021",
+        "git_branch": "agent/requirements-analyst",
         "profile": "Analyze requirements and prepare implementation-ready specifications.",
         "parameters": {
           "role": "analyst"
@@ -21,9 +22,10 @@
         ]
       },
       {
-        "id": "actor-backend-developer",
+        "id": "agent-backend-developer",
         "name": "Backend Developer",
         "phone": "2022",
+        "git_branch": "agent/backend-developer",
         "profile": "Implement approved backend tasks and report verification results.",
         "parameters": {
           "role": "backend_developer"
@@ -33,7 +35,7 @@
           {
             "task_id": "DEV-002",
             "queue": "worker-all",
-            "message": "Implement the approved actor import API."
+            "message": "Implement the approved agent import API."
           }
         ]
       }

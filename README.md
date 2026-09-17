@@ -41,35 +41,51 @@ The default app URL is:
 http://localhost:8025
 ```
 
-## Project actors JSON import
+## Project agents JSON import
 
-Actors and their initial task lists can be imported for a project by its
+Agents and their initial task lists can be imported for a project by its
 canonical four-digit project phone:
 
 ```text
-POST /api/v1/projects/{project_phone}/actors/import
+POST /api/v1/projects/{project_phone}/agents/import
 ```
 
-Use `actors.overwrite: true` to replace the project's existing non-group
-actors before importing. Set `actors.include_managed: true` as well only when
-group-managed actors should be removed and their active groups archived.
-Every imported task is stored with its actor and immediately queued for that
-actor's phone. See [`examples/project_actors_import.json`](examples/project_actors_import.json).
+Use `agents.overwrite: true` to replace the project's existing non-group
+agents before importing. Set `agents.include_managed: true` as well only when
+group-managed agents should be removed and their active groups archived.
+Every imported task is stored with its agent and immediately queued for that
+agent's phone. See [`examples/project_agents_import.json`](examples/project_agents_import.json).
 
-All project actors and their pending phone-addressed tasks can be removed with:
+Each item may set `git_branch`, for example `agent/backend-developer`. When it
+is omitted, the server creates a stable `agent/<agent-id>` branch name. The
+branch is stored both as `agent.git_branch` and in `agent.parameters.git_branch`.
+
+At import time the server appends a generated communication section to every
+imported profile. It contains the agent's own phone and branch, all three
+receive/send endpoints, a ready JSON message body, and the names, phones, IDs,
+and branches of the other imported project agents. Re-importing replaces this
+generated section instead of duplicating it. An agent can retrieve its current
+complete card with:
 
 ```text
-DELETE /api/v1/projects/{project_phone}/actors?include_managed=true
+GET /api/v1/projects/{project_phone}/agents/{agent_phone}
 ```
 
-The UI exposes both operations in the Agents tab.
+All project agents and their pending phone-addressed tasks can be removed with:
+
+```text
+DELETE /api/v1/projects/{project_phone}/agents?include_managed=true
+```
+
+The previous `/actors` routes and `actors` JSON key remain accepted for
+backward compatibility. The UI exposes both operations in the Agents tab.
 
 ### Telegram webhook
 
 Configure a Telegram bot webhook to point to:
 
 ```text
-POST /api/v1/telegram/actors
+POST /api/v1/telegram/agents
 ```
 
 Send the same JSON either as message text or as a `.json` document. The JSON
@@ -79,7 +95,7 @@ and configure the local file; `.env` is intentionally ignored by Git.
 - `TELEGRAM_BOT_TOKEN` downloads documents and sends import confirmations.
 - `TELEGRAM_WEBHOOK_SECRET` protects the webhook request header.
 - `TELEGRAM_WEBHOOK_URL` is the public HTTPS URL ending in
-  `/api/v1/telegram/actors`.
+  `/api/v1/telegram/agents`.
 - `TELEGRAM_WEBHOOK_AUTO_REGISTER=1` makes `run.bat` call `setWebhook` before
   starting the application.
 - `TELEGRAM_DROP_PENDING_UPDATES=1` discards old pending messages during

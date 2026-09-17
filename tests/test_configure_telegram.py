@@ -46,7 +46,7 @@ class ConfigureTelegramTests(unittest.TestCase):
             {
                 "TELEGRAM_BOT_TOKEN": "123:new-token",
                 "TELEGRAM_WEBHOOK_AUTO_REGISTER": "true",
-                "TELEGRAM_WEBHOOK_URL": "https://example.com/api/v1/telegram/actors",
+                "TELEGRAM_WEBHOOK_URL": "https://example.com/api/v1/telegram/agents",
                 "TELEGRAM_WEBHOOK_SECRET": "secure_webhook-secret",
                 "TELEGRAM_DROP_PENDING_UPDATES": "1",
                 "TELEGRAM_ALLOWED_CHAT_IDS": "99,-100123",

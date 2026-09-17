@@ -167,6 +167,9 @@ IMPORTED_ACTOR_PHONE_MIN = 2000
 IMPORTED_ACTOR_PHONE_MAX = 2999
 MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
+AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
+AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
+AGENT_COMMUNICATION_VERSION = "1"
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 CYCLE_LIFECYCLE_EVENT_TYPES = {
     "ARTIFACT_CREATED",
@@ -505,14 +508,22 @@ def normalize_agent(raw_agent: Any) -> dict[str, Any] | None:
     agent_id = str(raw_agent.get("id", "")).strip() or str(uuid4())
     phone = str(raw_agent.get("phone", "")).strip() or DEFAULT_AGENT_PHONES.get(name, "")
     template_source = str(raw_agent.get("template_source", "")).strip()
+    parameters = normalize_agent_parameters(raw_agent.get("parameters"))
+    git_branch = str(
+        raw_agent.get("git_branch") or parameters.get("git_branch") or ""
+    ).strip()
+    if git_branch:
+        parameters["git_branch"] = git_branch
     agent = {
         "id": agent_id,
         "name": name,
         "phone": phone,
         "profile": profile,
-        "parameters": normalize_agent_parameters(raw_agent.get("parameters")),
+        "parameters": parameters,
         "template_source": template_source,
     }
+    if git_branch:
+        agent["git_branch"] = git_branch
     agent_status = normalize_agent_status(raw_agent)
     if agent_status:
         agent["status"] = agent_status
@@ -3176,6 +3187,153 @@ def full_agents_for_project(
     )
 
 
+def normalized_agent_git_branch(value: Any, field_name: str = "git_branch") -> str:
+    branch = str(value or "").strip()
+    if not branch:
+        return ""
+    invalid = (
+        len(branch) > 240
+        or branch == "@"
+        or branch.startswith(("/", ".", "-"))
+        or branch.endswith(("/", ".", ".lock"))
+        or ".." in branch
+        or "//" in branch
+        or "@{" in branch
+        or any(character.isspace() or ord(character) < 32 for character in branch)
+        or any(character in "~^:?*[\\" for character in branch)
+        or any(part.startswith(".") or part.endswith(".lock") for part in branch.split("/"))
+    )
+    if invalid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} is not a valid Git branch name",
+        )
+    return branch
+
+
+def default_imported_agent_branch(agent_id: str, name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", agent_id or name).strip("-._").lower()
+    if not slug:
+        slug = hashlib.sha256(f"{agent_id}\0{name}".encode("utf-8")).hexdigest()[:12]
+    return f"agent/{slug[:120]}"
+
+
+def profile_without_agent_communication_block(profile: Any) -> str:
+    text = str(profile or "").strip()
+    start = text.find(AGENT_COMMUNICATION_BLOCK_START)
+    while start >= 0:
+        end = text.find(AGENT_COMMUNICATION_BLOCK_END, start)
+        if end < 0:
+            text = text[:start].rstrip()
+            break
+        end += len(AGENT_COMMUNICATION_BLOCK_END)
+        text = (text[:start].rstrip() + "\n\n" + text[end:].lstrip()).strip()
+        start = text.find(AGENT_COMMUNICATION_BLOCK_START)
+    return text
+
+
+def agent_communication_profile(
+    profile: Any,
+    agent: dict[str, Any],
+    project_phone: str,
+    project: dict[str, Any],
+    project_agents: list[dict[str, Any]],
+) -> str:
+    authored_profile = profile_without_agent_communication_block(profile)
+    agent_name = str(agent.get("name") or "").strip()
+    agent_id = str(agent.get("id") or "").strip()
+    agent_phone = str(agent.get("phone") or "").strip()
+    parameters = agent.get("parameters") if isinstance(agent.get("parameters"), dict) else {}
+    git_branch = str(agent.get("git_branch") or parameters.get("git_branch") or "").strip()
+    project_name = str(project.get("project_name") or project_phone).strip()
+    git_address = str(project.get("git_address") or "").strip()
+
+    peer_lines: list[str] = []
+    for peer in sorted(
+        project_agents,
+        key=lambda item: (
+            str(item.get("name") or "").casefold(),
+            str(item.get("phone") or ""),
+        ),
+    ):
+        peer_phone = str(peer.get("phone") or "").strip()
+        if not peer_phone or peer_phone == agent_phone:
+            continue
+        peer_parameters = (
+            peer.get("parameters") if isinstance(peer.get("parameters"), dict) else {}
+        )
+        peer_branch = str(
+            peer.get("git_branch") or peer_parameters.get("git_branch") or ""
+        ).strip()
+        peer_description = (
+            f"- {str(peer.get('name') or peer.get('id') or peer_phone).strip()}: "
+            f"phone={peer_phone}, id={str(peer.get('id') or '').strip()}"
+        )
+        if peer_branch:
+            peer_description += f", git_branch={peer_branch}"
+        peer_lines.append(peer_description)
+    if not peer_lines:
+        peer_lines.append("- Других агентов в проекте пока нет.")
+
+    example_payload = json.dumps(
+        {
+            "from_phone": agent_phone,
+            "to_phone": "<PHONE_ДРУГОГО_АГЕНТА>",
+            "sender": agent_name,
+            "receiver": "<ИМЯ_ДРУГОГО_АГЕНТА>",
+            "message": "<ТЕКСТ_СООБЩЕНИЯ>",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    lines = [
+        AGENT_COMMUNICATION_BLOCK_START,
+        f"Версия инструкции: {AGENT_COMMUNICATION_VERSION}.",
+        f"Проект: {project_name}; project_phone={project_phone}.",
+    ]
+    if git_address:
+        lines.append(f"Git-репозиторий: {git_address}.")
+    lines.extend(
+        [
+            f"Вы: {agent_name}; agent_id={agent_id}; agent_phone={agent_phone}.",
+            f"Ваша рабочая Git-ветка: {git_branch}.",
+            (
+                "Работайте, коммитьте и отправляйте изменения только в эту ветку. "
+                "Не переключайтесь на ветки других агентов и не изменяйте их без явного задания."
+            ),
+            (
+                "Перед началом выполните git fetch origin. Если ветка уже существует, "
+                f"переключитесь на {git_branch}; если нет — создайте её командой "
+                f"git switch -c {git_branch} от базовой ветки проекта и опубликуйте "
+                f"git push -u origin {git_branch}."
+            ),
+            "",
+            "Получить свою актуальную карточку (включая этот профиль и ветку):",
+            f"GET /api/v1/projects/{project_phone}/agents/{agent_phone}",
+            "",
+            "Получать адресованные вам сообщения (опрашивайте все три очереди):",
+            f"GET /worker/all/{project_phone}?to_phone={agent_phone}",
+            f"GET /tester/all/{project_phone}?to_phone={agent_phone}",
+            f"GET /consultant/all/{project_phone}?to_phone={agent_phone}",
+            "Ответ 404 означает, что в этой очереди сейчас нет сообщения; повторите опрос позже.",
+            "",
+            "Отправить сообщение другому агенту этого проекта:",
+            f"POST /worker/all/{project_phone} — рабочие задачи и передача результата;",
+            f"POST /tester/all/{project_phone} — проверка и результаты тестирования;",
+            f"POST /consultant/all/{project_phone} — вопросы и консультации.",
+            "Content-Type: application/json",
+            example_payload,
+            "Всегда берите to_phone из адресной книги ниже; from_phone должен быть вашим телефоном.",
+            "",
+            "Другие агенты этого проекта:",
+            *peer_lines,
+            AGENT_COMMUNICATION_BLOCK_END,
+        ]
+    )
+    communication_block = "\n".join(lines)
+    return f"{authored_profile}\n\n{communication_block}" if authored_profile else communication_block
+
+
 def normalize_actor_import_task(raw_task: Any, index: int) -> dict[str, Any]:
     if isinstance(raw_task, str):
         message = raw_task.strip()
@@ -3229,7 +3387,8 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Expected JSON object",
         )
-    raw_section = payload.get("actors")
+    section_name = "agents" if "agents" in payload else "actors"
+    raw_section = payload.get(section_name)
     if isinstance(raw_section, list):
         raw_items = raw_section
         overwrite = payload.get("overwrite", False)
@@ -3237,7 +3396,7 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
     elif isinstance(raw_section, dict):
         raw_items = raw_section.get("items")
         if raw_items is None:
-            raw_items = raw_section.get("actors")
+            raw_items = raw_section.get(section_name)
         overwrite = raw_section.get("overwrite", payload.get("overwrite", False))
         include_managed = raw_section.get(
             "include_managed",
@@ -3246,17 +3405,17 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="actors must be an object with items or an array",
+            detail="agents (or legacy actors) must be an object with items or an array",
         )
     if not isinstance(overwrite, bool) or not isinstance(include_managed, bool):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="actors.overwrite and actors.include_managed must be booleans",
+            detail=f"{section_name}.overwrite and {section_name}.include_managed must be booleans",
         )
     if not isinstance(raw_items, list):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="actors.items must be an array",
+            detail=f"{section_name}.items must be an array",
         )
     if len(raw_items) > 200:
         raise HTTPException(
@@ -3268,6 +3427,7 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
     seen_names: set[str] = set()
     seen_ids: set[str] = set()
     seen_phones: set[str] = set()
+    seen_branches: set[str] = set()
     task_count = 0
     for actor_index, raw_actor in enumerate(raw_items):
         if not isinstance(raw_actor, dict):
@@ -3336,13 +3496,27 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="An actor import can contain at most 1000 tasks",
             )
+        raw_parameters = normalize_agent_parameters(raw_actor.get("parameters"))
+        git_branch = normalized_agent_git_branch(
+            raw_actor.get("git_branch") or raw_parameters.get("git_branch"),
+            f"{section_name}.items[{actor_index}].git_branch",
+        )
+        if git_branch:
+            branch_key = git_branch.casefold()
+            if branch_key in seen_branches:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "duplicate_agent_git_branch", "git_branch": git_branch},
+                )
+            seen_branches.add(branch_key)
         actors.append(
             {
                 "id": actor_id,
                 "name": name,
                 "phone": phone,
                 "profile": str(raw_actor.get("profile") or "").strip(),
-                "parameters": normalize_agent_parameters(raw_actor.get("parameters")),
+                "parameters": raw_parameters,
+                "git_branch": git_branch,
                 "template_source": str(
                     raw_actor.get("template_source") or "json-import"
                 ).strip(),
@@ -3534,6 +3708,29 @@ def project_actor_mutation_transaction(
             occupied_phones.update(DEFAULT_AGENT_PHONES.values())
             occupied_phones.add(PROJECT_MANAGER_PHONE)
 
+            retained_project_branches = {
+                str(
+                    agent.get("git_branch")
+                    or (
+                        agent.get("parameters", {}).get("git_branch")
+                        if isinstance(agent.get("parameters"), dict)
+                        else ""
+                    )
+                    or ""
+                ).strip().casefold(): str(agent.get("id") or "").strip()
+                for agent in project_agents
+                if str(agent.get("id") or "").strip() not in replacement_ids
+                and str(
+                    agent.get("git_branch")
+                    or (
+                        agent.get("parameters", {}).get("git_branch")
+                        if isinstance(agent.get("parameters"), dict)
+                        else ""
+                    )
+                    or ""
+                ).strip()
+            }
+
             imported_agents: list[dict[str, Any]] = []
             for index, spec in enumerate(imported_specs):
                 matched = matched_by_spec.get(index)
@@ -3569,6 +3766,30 @@ def project_actor_mutation_transaction(
                     occupied_phones.add(phone)
 
                 parameters = dict(spec.get("parameters") or {})
+                matched_parameters = (
+                    matched.get("parameters")
+                    if matched is not None and isinstance(matched.get("parameters"), dict)
+                    else {}
+                )
+                git_branch = normalized_agent_git_branch(
+                    spec.get("git_branch")
+                    or parameters.get("git_branch")
+                    or (matched or {}).get("git_branch")
+                    or matched_parameters.get("git_branch")
+                    or default_imported_agent_branch(actor_id, name),
+                    f"agents.items[{index}].git_branch",
+                )
+                branch_owner = retained_project_branches.get(git_branch.casefold())
+                if branch_owner and branch_owner != actor_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "agent_git_branch_conflict",
+                            "git_branch": git_branch,
+                            "agent_id": branch_owner,
+                        },
+                    )
+                retained_project_branches[git_branch.casefold()] = actor_id
                 parameters.update(
                     {
                         "git_context_key": context_key,
@@ -3576,6 +3797,23 @@ def project_actor_mutation_transaction(
                         "project_phone": project_phone,
                         "conversation_phone": project_phone,
                         "agent_phone": phone,
+                        "git_branch": git_branch,
+                        "profile_endpoint": (
+                            f"/api/v1/projects/{project_phone}/agents/{phone}"
+                        ),
+                        "worker_receive_endpoint": (
+                            f"/worker/all/{project_phone}?to_phone={phone}"
+                        ),
+                        "worker_send_endpoint": f"/worker/all/{project_phone}",
+                        "tester_receive_endpoint": (
+                            f"/tester/all/{project_phone}?to_phone={phone}"
+                        ),
+                        "tester_send_endpoint": f"/tester/all/{project_phone}",
+                        "consultant_receive_endpoint": (
+                            f"/consultant/all/{project_phone}?to_phone={phone}"
+                        ),
+                        "consultant_send_endpoint": f"/consultant/all/{project_phone}",
+                        "communication_instructions_version": AGENT_COMMUNICATION_VERSION,
                         "imported_from": str(options.get("source") or "json"),
                     }
                 )
@@ -3583,7 +3821,10 @@ def project_actor_mutation_transaction(
                     "id": actor_id,
                     "name": name,
                     "phone": phone,
-                    "profile": str(spec.get("profile") or "").strip(),
+                    "profile": profile_without_agent_communication_block(
+                        spec.get("profile")
+                    ),
+                    "git_branch": git_branch,
                     "parameters": normalize_agent_parameters(parameters),
                     "template_source": str(
                         spec.get("template_source") or "json-import"
@@ -3601,6 +3842,20 @@ def project_actor_mutation_transaction(
                 occupied_ids.add(actor_id)
                 occupied_names.add(name_key)
 
+            final_agents = normalize_agents(retained_agents + imported_agents)
+            project_agents_for_profiles = full_agents_for_project(
+                final_agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            for imported_agent in imported_agents:
+                imported_agent["profile"] = agent_communication_profile(
+                    imported_agent.get("profile"),
+                    imported_agent,
+                    project_phone,
+                    project_entry,
+                    project_agents_for_profiles,
+                )
             final_agents = normalize_agents(retained_agents + imported_agents)
             write_agents_file_unlocked(final_agents)
             if config_changed:
@@ -11336,15 +11591,15 @@ def render_index_v2() -> str:
           </div>
           <div class="agent-project-grid">
             <div>
-              <label for="projectActorsJsonFile">Импорт акторов и их задач из JSON</label>
+              <label for="projectActorsJsonFile">Импорт агентов и их задач из JSON</label>
               <input id="projectActorsJsonFile" type="file" accept="application/json,.json">
             </div>
             <div class="agent-project-actions">
               <button class="secondary" id="importProjectActorsButton" type="button">Загрузить JSON</button>
-              <button class="danger" id="deleteAllProjectActorsButton" type="button">Удалить всех акторов</button>
+              <button class="danger" id="deleteAllProjectActorsButton" type="button">Удалить всех агентов</button>
             </div>
           </div>
-          <div class="subtle">Для полной замены укажите в JSON <code>actors.overwrite: true</code>. Импортированные задачи сразу ставятся в телефонные очереди акторов.</div>
+          <div class="subtle">Для полной замены укажите в JSON <code>agents.overwrite: true</code>. Каждому агенту автоматически добавляются его Git-ветка, адресная книга проекта и инструкция обмена сообщениями.</div>
           <div class="subtle agent-project-meta" id="agentProjectStatus"></div>
           <div class="agent-project-lists">
             <div class="agent-project-list">
@@ -14022,7 +14277,7 @@ def render_index_v2() -> str:
         return;
       }
       if (!file) {
-        setAgentsStatus("Выберите JSON-файл с акторами и задачами.", "error");
+        setAgentsStatus("Выберите JSON-файл с агентами и задачами.", "error");
         return;
       }
       let payload;
@@ -14032,15 +14287,15 @@ def render_index_v2() -> str:
         setAgentsStatus(`Файл не является корректным JSON: ${error.message}`, "error");
         return;
       }
-      setAgentsStatus("Импортирую акторов и задачи...");
-      const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectPhone)}/actors/import`, {
+      setAgentsStatus("Импортирую агентов и задачи...");
+      const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectPhone)}/agents/import`, {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify(payload)
       });
       const data = await response.json();
       if (!response.ok) {
-        setAgentsStatus(formatMessage(data.detail || "Ошибка импорта акторов."), "error");
+        setAgentsStatus(formatMessage(data.detail || "Ошибка импорта агентов."), "error");
         return;
       }
       projectActorsJsonFileEl.value = "";
@@ -14048,7 +14303,7 @@ def render_index_v2() -> str:
       await refreshAgents({force: true});
       await refreshQueues();
       setAgentsStatus(
-        `Импорт завершен: акторов ${data.imported_actor_count}, удалено ${data.removed_actor_count}, задач поставлено ${data.queued_task_count}.`,
+        `Импорт завершен: агентов ${data.imported_agent_count ?? data.imported_actor_count}, удалено ${data.removed_agent_count ?? data.removed_actor_count}, задач поставлено ${data.queued_task_count}.`,
         "ok"
       );
     }
@@ -14061,27 +14316,27 @@ def render_index_v2() -> str:
       }
       const projectLabel = activeProjectLabel();
       const confirmed = window.confirm(
-        `Удалить всех акторов проекта «${projectLabel}», их ожидающие задачи и архивировать управляемые группы? История сообщений останется.`
+        `Удалить всех агентов проекта «${projectLabel}», их ожидающие задачи и архивировать управляемые группы? История сообщений останется.`
       );
       if (!confirmed) {
         setAgentsStatus("Массовое удаление отменено.");
         return;
       }
-      setAgentsStatus("Удаляю всех акторов проекта...");
+      setAgentsStatus("Удаляю всех агентов проекта...");
       const response = await fetch(
-        `/api/v1/projects/${encodeURIComponent(projectPhone)}/actors?include_managed=true`,
+        `/api/v1/projects/${encodeURIComponent(projectPhone)}/agents?include_managed=true`,
         {method: "DELETE"}
       );
       const data = await response.json();
       if (!response.ok) {
-        setAgentsStatus(formatMessage(data.detail || "Ошибка удаления акторов."), "error");
+        setAgentsStatus(formatMessage(data.detail || "Ошибка удаления агентов."), "error");
         return;
       }
       clearAgentEditorDirty();
       await refreshAgents({force: true});
       await refreshQueues();
       setAgentsStatus(
-        `Удалено акторов: ${data.deleted_actor_count}; снято ожидающих задач: ${data.removed_task_count}.`,
+        `Удалено агентов: ${data.deleted_agent_count ?? data.deleted_actor_count}; снято ожидающих задач: ${data.removed_task_count}.`,
         "ok"
       );
     }
@@ -18370,6 +18625,11 @@ async def import_project_actors_data(
             actor_id = str(actor.get("id") or "").strip()
             actor_name = str(actor.get("name") or "").strip()
             actor_phone = str(actor.get("phone") or "").strip()
+            actor_git_branch = str(
+                actor.get("git_branch")
+                or actor.get("parameters", {}).get("git_branch")
+                or ""
+            ).strip()
             for task in actor.get("tasks", []):
                 metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
                 task_id = str(task.get("task_id") or "").strip()
@@ -18386,6 +18646,10 @@ async def import_project_actors_data(
                         "to_phone": actor_phone,
                         "from_agent_id": PROJECT_MANAGER_AGENT_ID,
                         "to_agent_id": actor_id,
+                        "to_agent_git_branch": actor_git_branch,
+                        "to_agent_profile_endpoint": (
+                            f"/api/v1/projects/{result['project_phone']}/agents/{actor_phone}"
+                        ),
                         "task_id": task_id,
                         "request_id": task.get("request_id"),
                         "status": task.get("status") or "QUEUED",
@@ -18395,6 +18659,10 @@ async def import_project_actors_data(
                 )
                 queued_tasks.append(
                     {
+                        "agent_id": actor_id,
+                        "agent_name": actor_name,
+                        "agent_phone": actor_phone,
+                        "agent_git_branch": actor_git_branch,
                         "actor_id": actor_id,
                         "actor_name": actor_name,
                         "actor_phone": actor_phone,
@@ -18409,6 +18677,8 @@ async def import_project_actors_data(
         if key not in {"queue_context", "removed_actor_ids", "removed_actor_phones"}
     } | {
         "source": source,
+        "removed_agent_count": len(result["removed_agents"]),
+        "imported_agent_count": len(result["imported_agents"]),
         "removed_actor_count": len(result["removed_agents"]),
         "imported_actor_count": len(result["imported_agents"]),
         "removed_task_count": len(removed_tasks),
@@ -18447,6 +18717,7 @@ async def delete_project_actors_data(
         for key, value in result.items()
         if key not in {"queue_context", "removed_actor_ids", "removed_actor_phones"}
     } | {
+        "deleted_agent_count": len(result["removed_agents"]),
         "deleted_actor_count": len(result["removed_agents"]),
         "removed_task_count": len(removed_tasks),
         "removed_tasks": removed_tasks,
@@ -18461,7 +18732,7 @@ def json_object_from_text(raw_text: str) -> dict[str, Any]:
     if len(text.encode("utf-8")) > MAX_ACTOR_IMPORT_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Actor import JSON is larger than 1 MB",
+            detail="Agent import JSON is larger than 1 MB",
         )
     try:
         payload = json.loads(text)
@@ -18473,7 +18744,7 @@ def json_object_from_text(raw_text: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Actor import JSON must contain an object",
+            detail="Agent import JSON must contain an object",
         )
     return payload
 
@@ -18515,7 +18786,7 @@ def telegram_api_json(token: str, method: str, data: dict[str, Any]) -> dict[str
 
 def telegram_document_payload(document: dict[str, Any]) -> dict[str, Any]:
     file_id = str(document.get("file_id") or "").strip()
-    filename = str(document.get("file_name") or "actors.json").strip()
+    filename = str(document.get("file_name") or "agents.json").strip()
     if not file_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -18563,7 +18834,7 @@ def actor_payload_from_telegram_update(update: Any) -> tuple[dict[str, Any], dic
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Telegram update must be a JSON object",
         )
-    if "actors" in update:
+    if "agents" in update or "actors" in update:
         return update, {}
     message = update.get("message") or update.get("channel_post")
     if not isinstance(message, dict):
@@ -18579,7 +18850,7 @@ def actor_payload_from_telegram_update(update: Any) -> tuple[dict[str, Any], dic
     else:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Send actor JSON as message text or as a .json document",
+            detail="Send agent JSON as message text or as a .json document",
         )
     return payload, message
 
@@ -18602,12 +18873,12 @@ def ensure_telegram_sender_allowed(message: dict[str, Any]) -> None:
     if allowed_chat_ids and chat_id not in allowed_chat_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Telegram chat is not allowed to import project actors",
+            detail="Telegram chat is not allowed to import project agents",
         )
     if allowed_user_ids and user_id not in allowed_user_ids:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Telegram user is not allowed to import project actors",
+            detail="Telegram user is not allowed to import project agents",
         )
 
 
@@ -18618,8 +18889,8 @@ def send_telegram_import_reply(message: dict[str, Any], result: dict[str, Any]) 
     if not token or chat_id is None:
         return
     reply = (
-        f"Actors imported: {result['imported_actor_count']}; "
-        f"removed: {result['removed_actor_count']}; "
+        f"Agents imported: {result['imported_agent_count']}; "
+        f"removed: {result['removed_agent_count']}; "
         f"tasks queued: {result['queued_task_count']}."
     )
     try:
@@ -18819,6 +19090,7 @@ async def restore_history_record_to_queue(
     )
 
 
+@app.get("/api/v1/projects/{project_id}/agents")
 @app.get("/api/v1/projects/{project_id}/actors")
 async def get_project_actors(project_id: str) -> dict[str, Any]:
     async with git_config_lock:
@@ -18838,11 +19110,17 @@ async def get_project_actors(project_id: str) -> dict[str, Any]:
         "project_id": normalize_project_phone(project_entry.get("project_phone")),
         "project_phone": normalize_project_phone(project_entry.get("project_phone")),
         "project": public_project_context(context),
+        "agents": project_agents,
+        "agent_count": len(project_agents),
         "actors": project_agents,
         "actor_count": len(project_agents),
     }
 
 
+@app.post(
+    "/api/v1/projects/{project_id}/agents/import",
+    status_code=status.HTTP_201_CREATED,
+)
 @app.post(
     "/api/v1/projects/{project_id}/actors/import",
     status_code=status.HTTP_201_CREATED,
@@ -18860,6 +19138,7 @@ async def import_project_actors(
     )
 
 
+@app.delete("/api/v1/projects/{project_id}/agents")
 @app.delete("/api/v1/projects/{project_id}/actors")
 async def delete_project_actors(
     project_id: str,
@@ -18871,6 +19150,50 @@ async def delete_project_actors(
     )
 
 
+@app.get("/api/v1/projects/{project_id}/agents/{agent_phone}")
+async def get_project_agent(
+    project_id: str,
+    agent_phone: str,
+) -> dict[str, Any]:
+    async with git_config_lock:
+        async with agents_lock:
+            config = await asyncio.to_thread(read_git_config_file)
+            _, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            agents = await asyncio.to_thread(read_agents_file)
+    project_agents = full_agents_for_project(
+        agents,
+        context_key,
+        phone_git_contexts_from_config(config),
+    )
+    clean_phone = agent_phone.strip()
+    target_agent = next(
+        (
+            agent
+            for agent in project_agents
+            if str(agent.get("phone") or "").strip() == clean_phone
+        ),
+        None,
+    )
+    if target_agent is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Agent phone was not found in this project",
+        )
+    return {
+        "project_id": normalize_project_phone(project_entry.get("project_phone")),
+        "project_phone": normalize_project_phone(project_entry.get("project_phone")),
+        "project": public_project_context(context),
+        "agent": target_agent,
+        "profile": target_agent.get("profile"),
+        "git_branch": target_agent.get("git_branch")
+        or target_agent.get("parameters", {}).get("git_branch"),
+    }
+
+
+@app.post("/api/v1/telegram/agents")
 @app.post("/api/v1/telegram/actors")
 async def telegram_actor_import(request: Request) -> dict[str, Any]:
     expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
@@ -18886,6 +19209,11 @@ async def telegram_actor_import(request: Request) -> dict[str, Any]:
     project_id = str(
         payload.get("project_id")
         or payload.get("project_phone")
+        or (
+            payload.get("agents", {}).get("project_id")
+            if isinstance(payload.get("agents"), dict)
+            else ""
+        )
         or (
             payload.get("actors", {}).get("project_id")
             if isinstance(payload.get("actors"), dict)

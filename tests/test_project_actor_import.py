@@ -225,6 +225,14 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(poll_body, dict)
         self.assertEqual(poll_body["message"], "Prepare requirements.")
         self.assertEqual(poll_body["metadata"]["to_agent_id"], "new-analyst")
+        self.assertEqual(
+            poll_body["metadata"]["to_agent_git_branch"],
+            "agent/new-analyst",
+        )
+        self.assertEqual(
+            poll_body["metadata"]["to_agent_profile_endpoint"],
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2021",
+        )
 
         second_status, second_body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
@@ -387,6 +395,136 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
         self.assertTrue(all(not queue for queue in main.queues.values()))
 
+    async def test_agent_profiles_include_project_communication_and_git_branches(self) -> None:
+        payload = {
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "programmer-a",
+                        "name": "Programmer A",
+                        "phone": "2101",
+                        "git_branch": "agent/programmer-a-contracts",
+                        "profile": "Implement API contracts.",
+                        "tasks": [],
+                    },
+                    {
+                        "id": "programmer-b",
+                        "name": "Programmer B",
+                        "phone": "2102",
+                        "profile": "Implement the controller.",
+                        "tasks": [],
+                    },
+                ],
+            }
+        }
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+
+        self.assertEqual(status_code, 201)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        imported = {agent["phone"]: agent for agent in body["imported_agents"]}
+        first = imported["2101"]
+        second = imported["2102"]
+
+        self.assertEqual(first["git_branch"], "agent/programmer-a-contracts")
+        self.assertEqual(second["git_branch"], "agent/programmer-b")
+        self.assertEqual(
+            first["parameters"]["git_branch"],
+            "agent/programmer-a-contracts",
+        )
+        self.assertEqual(
+            first["parameters"]["profile_endpoint"],
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2101",
+        )
+        self.assertTrue(first["profile"].startswith("Implement API contracts."))
+        self.assertEqual(
+            first["profile"].count(main.AGENT_COMMUNICATION_BLOCK_START),
+            1,
+        )
+        for expected in (
+            f"GET /worker/all/{self.PROJECT_PHONE}?to_phone=2101",
+            f"POST /worker/all/{self.PROJECT_PHONE}",
+            "Programmer B: phone=2102, id=programmer-b, git_branch=agent/programmer-b",
+            "Работайте, коммитьте и отправляйте изменения только в эту ветку.",
+        ):
+            self.assertIn(expected, first["profile"])
+        self.assertIn("Programmer A: phone=2101", second["profile"])
+
+        profile_status, profile_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2101"
+        )
+        self.assertEqual(profile_status, 200)
+        self.assertIsInstance(profile_body, dict)
+        assert isinstance(profile_body, dict)
+        self.assertEqual(profile_body["agent"]["id"], "programmer-a")
+        self.assertEqual(profile_body["git_branch"], "agent/programmer-a-contracts")
+        self.assertEqual(profile_body["profile"], first["profile"])
+
+        send_status, _ = await asgi_request(
+            f"/worker/all/{self.PROJECT_PHONE}",
+            method="POST",
+            payload={
+                "from_phone": "2101",
+                "to_phone": "2102",
+                "sender": "Programmer A",
+                "receiver": "Programmer B",
+                "message": "The API contract is ready.",
+            },
+        )
+        self.assertEqual(send_status, 201)
+        receive_status, receive_body = await asgi_request(
+            f"/worker/all/{self.PROJECT_PHONE}?to_phone=2102"
+        )
+        self.assertEqual(receive_status, 200)
+        self.assertIsInstance(receive_body, dict)
+        assert isinstance(receive_body, dict)
+        self.assertEqual(receive_body["from_phone"], "2101")
+        self.assertEqual(receive_body["message"], "The API contract is ready.")
+
+        repeated_payload = json.loads(json.dumps(payload))
+        repeated_payload["agents"]["items"][0]["profile"] = first["profile"]
+        repeat_status, repeat_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=repeated_payload,
+        )
+        self.assertEqual(repeat_status, 201)
+        self.assertIsInstance(repeat_body, dict)
+        assert isinstance(repeat_body, dict)
+        repeated_first = next(
+            agent
+            for agent in repeat_body["imported_agents"]
+            if agent["phone"] == "2101"
+        )
+        self.assertEqual(
+            repeated_first["profile"].count(main.AGENT_COMMUNICATION_BLOCK_START),
+            1,
+        )
+
+    async def test_duplicate_agent_git_branch_is_rejected(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {"name": "Agent One", "git_branch": "agent/shared"},
+                        {"name": "Agent Two", "git_branch": "agent/shared"},
+                    ],
+                }
+            },
+        )
+        self.assertEqual(status_code, 409)
+        self.assertIsInstance(body, dict)
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
         actor_json = {
             "project_id": self.PROJECT_PHONE,
@@ -483,7 +621,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             'id="deleteAllProjectActorsButton"',
             "async function importProjectActorsFromJson()",
             "async function deleteAllProjectActors()",
-            "actors.overwrite: true",
+            "agents.overwrite: true",
+            "/agents/import",
         ):
             self.assertIn(marker, html)
 
