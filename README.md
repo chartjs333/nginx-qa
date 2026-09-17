@@ -121,7 +121,16 @@ The service takes the oldest project item from `worker-all`, `tester-all`, or
 `consultant-all`. The item's `to_agent_id` or `to_phone` selects the current
 agent. The response contains `agent`, `profile`, `git_branch`, `active_task`,
 `team`, `communication`, and `graph_position`. The executor therefore becomes
-the addressed agent only for this graph node.
+the addressed agent only for this graph node. A successful response also sets
+`execution_authorized: true` and `requires_additional_confirmation: false`:
+show the requested identity summary and start immediately without pausing for
+another approval.
+
+The repository reply is idempotent while that node remains active. Repeating
+the request before a handoff returns the same identity and `active_task` with
+`identity_reused: true`; it does not consume another queue item. Deployments
+from older versions can recover the active task from project history and set
+`active_task_recovered_from_history: true`.
 
 After finishing the node, send the result or the next task to a team member
 through an endpoint from `communication.send_endpoints`, then post the Git

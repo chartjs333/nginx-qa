@@ -169,7 +169,7 @@ MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
-AGENT_COMMUNICATION_VERSION = "4"
+AGENT_COMMUNICATION_VERSION = "5"
 AGENT_HEARTBEAT_INTERVAL_SECONDS = 300
 AGENT_HEARTBEAT_TTL_SECONDS = 900
 PROJECT_AGENT_ASSIGNMENT_KEY = "agent_assignment"
@@ -3358,11 +3358,20 @@ def agent_communication_profile(
                     "GET или POST /api/v1/agents/whoami",
                     (
                         "Он спросит Git-репозиторий и вернёт reply_url. Отправьте на "
-                        "reply_url git_address проекта. Система извлечёт следующий "
+                        "reply_url git_address проекта один раз и сохраните весь ответ. "
+                        "Система извлечёт следующий "
                         "элемент очереди; его адресат определит новые agent.profile, "
                         "agent.phone и git_branch."
                     ),
                     "Не закрепляйте исполнителя за ролью: на следующем узле графа роль может измениться.",
+                    (
+                        "Если ответ содержит agent и active_task, сразу покажите требуемую "
+                        "сводку и приступайте к работе: не ждите отдельного подтверждения."
+                    ),
+                    (
+                        "Повторный запрос до handoff безопасно вернёт ту же активную "
+                        "identity/task и не заберёт новый элемент очереди."
+                    ),
                 ]
                 if assignment_mode == "sequential"
                 else []
@@ -3375,6 +3384,7 @@ def agent_communication_profile(
                 [
                     "Получить следующую личность и задачу нужно только через общий queue-graph flow:",
                     "GET или POST /api/v1/agents/whoami, затем POST выданного reply_url с git_address.",
+                    "После получения agent и active_task начинайте работу сразу, без запроса дополнительного разрешения.",
                     "Не используйте phone-specific whoami для перехода между узлами графа.",
                 ]
                 if assignment_mode == "sequential"
@@ -20548,6 +20558,7 @@ def conditional_graph_assignment_transaction_locked(
         outcome: str = "",
         feedback: str = "",
     ) -> dict[str, Any] | None:
+        state["active_task"] = None
         assignment_id = str(state.get("current_assignment_id") or "").strip()
         for assignment in assignments:
             if str(assignment.get("assignment_id") or "") != assignment_id:
@@ -20596,6 +20607,7 @@ def conditional_graph_assignment_transaction_locked(
         state["current_agent_id"] = agent_id
         state["current_assignment_id"] = assignment_id
         state["current_started_at"] = seen_at
+        state["active_task"] = None
         state["status"] = "active"
         if phase == "node":
             visit_counts[node_id] = visit_counts.get(node_id, 0) + 1
@@ -21768,6 +21780,126 @@ def sequential_runtime_target_agent(
     )
 
 
+def sequential_runtime_task_snapshot(
+    queue_name: str,
+    queue_item: Any,
+) -> dict[str, Any]:
+    return {
+        "id": str(queue_item_id(queue_item) or ""),
+        "queue": queue_name,
+        "queued_at": queue_item_queued_at(queue_item),
+        "message": deepcopy(queue_item_message(queue_item)),
+        "metadata": deepcopy(queue_item_metadata(queue_item)),
+    }
+
+
+def sequential_runtime_from_active_task(
+    snapshot: dict[str, Any],
+    task: Any,
+    *,
+    recovered_from_history: bool = False,
+) -> dict[str, Any] | None:
+    assignment = snapshot.get("assignment")
+    if not isinstance(assignment, dict) or assignment.get("status") != "active":
+        return None
+    if not isinstance(task, dict) or not isinstance(task.get("metadata"), dict):
+        return None
+    metadata = task["metadata"]
+    if str(metadata.get("identity_kind") or "") == "reviewer_bootstrap":
+        return None
+
+    current_agent_id = str(assignment.get("current_agent_id") or "").strip()
+    current_assignment_id = str(
+        assignment.get("current_assignment_id") or ""
+    ).strip()
+    task_assignment_id = str(metadata.get("assignment_id") or "").strip()
+    if current_assignment_id and task_assignment_id != current_assignment_id:
+        return None
+    agent = next(
+        (
+            candidate
+            for candidate in snapshot.get("agents", [])
+            if str(candidate.get("id") or "").strip() == current_agent_id
+        ),
+        None,
+    )
+    if not isinstance(agent, dict):
+        return None
+    return {
+        **snapshot,
+        "agent": deepcopy(agent),
+        "task": deepcopy(task),
+        "identity_reused": True,
+        "active_task_recovered_from_history": recovered_from_history,
+    }
+
+
+async def recover_sequential_runtime_identity(
+    snapshot: dict[str, Any],
+) -> dict[str, Any] | None:
+    assignment = snapshot.get("assignment")
+    if not isinstance(assignment, dict):
+        return None
+    cached = sequential_runtime_from_active_task(
+        snapshot,
+        assignment.get("active_task"),
+    )
+    if cached is not None:
+        return cached
+
+    current_assignment_id = str(
+        assignment.get("current_assignment_id") or ""
+    ).strip()
+    current_agent_id = str(assignment.get("current_agent_id") or "").strip()
+    if (
+        assignment.get("status") != "active"
+        or not current_assignment_id
+        or not current_agent_id
+    ):
+        return None
+    records = await read_history(
+        limit=10000,
+        date_from="1970-01-01",
+        git_context=snapshot.get("context_key"),
+    )
+    for record in reversed(records):
+        metadata = (
+            record.get("metadata")
+            if isinstance(record.get("metadata"), dict)
+            else {}
+        )
+        if metadata.get("action") != "sequential_graph_node_delivered":
+            continue
+        if str(metadata.get("assignment_id") or "").strip() != current_assignment_id:
+            continue
+        target_agent_id = str(
+            metadata.get("to_agent_id")
+            or (
+                metadata.get("agent", {}).get("id")
+                if isinstance(metadata.get("agent"), dict)
+                else ""
+            )
+            or ""
+        ).strip()
+        if target_agent_id and target_agent_id != current_agent_id:
+            continue
+        task = {
+            "id": str(metadata.get("queue_item_id") or record.get("id") or ""),
+            "queue": str(record.get("queue") or "worker-all"),
+            "queued_at": metadata.get("queued_at") or record.get("timestamp"),
+            "message": deepcopy(record.get("message")),
+            "metadata": deepcopy(metadata),
+        }
+        recovered = sequential_runtime_from_active_task(
+            snapshot,
+            task,
+            recovered_from_history=True,
+        )
+        if recovered is not None:
+            return recovered
+    return None
+
+
 def record_conditional_graph_identity_delivery_transaction(
     project_id: str,
     agent: dict[str, Any],
@@ -21840,6 +21972,10 @@ def record_conditional_graph_identity_delivery_transaction(
                 key=lambda item: int(item.get("reviewer_index") or 0),
             )
         else:
+            state["active_task"] = sequential_runtime_task_snapshot(
+                queue_name,
+                queue_item,
+            )
             assignment_id = str(metadata.get("assignment_id") or "").strip()
             for assignment in state.get("assignments", []):
                 if not isinstance(assignment, dict):
@@ -21910,6 +22046,8 @@ def record_sequential_runtime_identity_transaction(
         assignment_id = str(metadata.get("assignment_id") or uuid4()).strip()
         agent_id = str(agent.get("id") or "").strip()
         agent_phone = str(agent.get("phone") or "").strip()
+        active_task = sequential_runtime_task_snapshot(queue_name, queue_item)
+        active_task["metadata"]["assignment_id"] = assignment_id
         assignments.append(
             {
                 "assignment_id": assignment_id,
@@ -21934,6 +22072,7 @@ def record_sequential_runtime_identity_transaction(
                 "current_agent_id": agent_id,
                 "current_assignment_id": assignment_id,
                 "current_started_at": seen_at,
+                "active_task": active_task,
                 "assignments": assignments,
                 "updated_at": seen_at,
                 "revision": int(state.get("revision") or 0) + 1,
@@ -22024,62 +22163,61 @@ async def dequeue_sequential_runtime_task(
                         )
                     )
 
-            if not candidates:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={
-                        "error": "sequential_graph_queue_empty",
-                        "message": (
-                            "There is no next graph node in the project queues yet. "
-                            "Send the current result or task and ask again."
-                        ),
-                        "project_phone": snapshot["project_phone"],
-                    },
+            if candidates:
+                _, _, selected_id, selected_queue, selected_item = min(
+                    candidates,
+                    key=lambda candidate: (candidate[0], candidate[1], candidate[2]),
                 )
-
-            _, _, selected_id, selected_queue, selected_item = min(
-                candidates,
-                key=lambda candidate: (candidate[0], candidate[1], candidate[2]),
-            )
-            selected_metadata = queue_item_metadata(selected_item)
-            target_agent = sequential_runtime_target_agent(
-                selected_metadata,
-                snapshot["agents"],
-                snapshot["project_phone"],
-            )
-            if target_agent is None:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail={
-                        "error": "queued_target_agent_not_found",
-                        "message": (
-                            "The next queue item is not addressed to an agent "
-                            "from the imported project team"
-                        ),
-                        "queue_item_id": selected_id,
-                        "to_agent_id": selected_metadata.get("to_agent_id"),
-                        "to_phone": selected_metadata.get("logical_to_phone")
-                        or selected_metadata.get("to_phone"),
-                    },
+                selected_metadata = queue_item_metadata(selected_item)
+                target_agent = sequential_runtime_target_agent(
+                    selected_metadata,
+                    snapshot["agents"],
+                    snapshot["project_phone"],
                 )
+                if target_agent is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "queued_target_agent_not_found",
+                            "message": (
+                                "The next queue item is not addressed to an agent "
+                                "from the imported project team"
+                            ),
+                            "queue_item_id": selected_id,
+                            "to_agent_id": selected_metadata.get("to_agent_id"),
+                            "to_phone": selected_metadata.get("logical_to_phone")
+                            or selected_metadata.get("to_phone"),
+                        },
+                    )
 
-            kept: deque[Any] = deque()
-            removed = False
-            while queues[selected_queue]:
-                item = queues[selected_queue].popleft()
-                if not removed and str(queue_item_id(item) or "") == selected_id:
-                    removed = True
-                    continue
-                kept.append(item)
-            queues[selected_queue] = kept
+                kept: deque[Any] = deque()
+                removed = False
+                while queues[selected_queue]:
+                    item = queues[selected_queue].popleft()
+                    if not removed and str(queue_item_id(item) or "") == selected_id:
+                        removed = True
+                        continue
+                    kept.append(item)
+                queues[selected_queue] = kept
         finally:
             for queue_lock in reversed(acquired):
                 queue_lock.release()
 
         if selected_item is None:
+            recovered = await recover_sequential_runtime_identity(snapshot)
+            if recovered is not None:
+                return recovered
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="The selected sequential queue item disappeared",
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "sequential_graph_queue_empty",
+                    "message": (
+                        "There is no active identity and no next graph node in "
+                        "the project queues yet. Send the current result or task "
+                        "and ask again."
+                    ),
+                    "project_phone": snapshot["project_phone"],
+                },
             )
 
         metadata = deepcopy(queue_item_metadata(selected_item))
@@ -22130,13 +22268,12 @@ async def dequeue_sequential_runtime_task(
         return {
             **snapshot,
             "agent": deepcopy(target_agent),
-            "task": {
-                "id": item_id,
-                "queue": selected_queue,
-                "queued_at": queue_item_queued_at(selected_item),
-                "message": message,
-                "metadata": metadata,
-            },
+            "task": sequential_runtime_task_snapshot(
+                selected_queue,
+                selected_item,
+            ),
+            "identity_reused": False,
+            "active_task_recovered_from_history": False,
         }
 
 
@@ -22225,8 +22362,14 @@ def sequential_runtime_response(
         ),
         "assignment_mode": "sequential",
         "assignment_strategy": assignment_strategy,
+        "identity_reused": bool(runtime.get("identity_reused")),
+        "active_task_recovered_from_history": bool(
+            runtime.get("active_task_recovered_from_history")
+        ),
         "identity_kind": identity_kind,
         "identity_persistent": reviewer_bootstrap,
+        "execution_authorized": True,
+        "requires_additional_confirmation": False,
         "reviewer_index": metadata.get("reviewer_index"),
         "phase": metadata.get("phase") or assignment.get("phase") or "node",
         "project_id": project_phone,
@@ -22273,7 +22416,10 @@ def sequential_runtime_response(
                 if assignment_strategy == "conditional_graph"
                 else (
                     "Отправьте результат или новое задание нужному агенту из team, "
-                    "затем снова запросите следующую личность."
+                    "затем снова запросите следующую личность. После получения "
+                    "agent и active_task сразу начинайте работу и не ждите "
+                    "дополнительного подтверждения. Повторный запрос до handoff "
+                    "вернёт эту же активную identity/task."
                 )
             ),
         },
@@ -22297,6 +22443,11 @@ async def begin_sequential_agent_identity(request: Request) -> dict[str, Any]:
     return {
         "status": "repository_required",
         "question": "Из какого Git-репозитория вы пришли?",
+        "instructions": (
+            "Отправьте git_address на reply_url один раз и сохраните ответ. "
+            "Если ответ содержит agent и active_task, покажите требуемую сводку "
+            "и сразу приступайте к работе без дополнительного подтверждения."
+        ),
         "reply": {
             "method": "POST",
             "url": reply_url,

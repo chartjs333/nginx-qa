@@ -729,6 +729,30 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_body["graph_position"]["queue"], "worker-all")
         self.assertEqual(len(first_body["team"]), 2)
         self.assertIn("send_endpoints", first_body["communication"])
+        self.assertFalse(first_body["identity_reused"])
+        self.assertTrue(first_body["execution_authorized"])
+        self.assertFalse(first_body["requires_additional_confirmation"])
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+
+        repeated_first_status, repeated_first_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(repeated_first_status, 200)
+        self.assertIsInstance(repeated_first_body, dict)
+        assert isinstance(repeated_first_body, dict)
+        self.assertTrue(repeated_first_body["identity_reused"])
+        self.assertEqual(
+            repeated_first_body["active_task"]["id"],
+            first_body["active_task"]["id"],
+        )
+        self.assertEqual(
+            repeated_first_body["agent"]["id"],
+            "sequential-role-a",
+        )
         self.assertEqual(len(main.queues["worker-all"]), 0)
 
         handoff_status, _ = await asgi_request(
@@ -789,19 +813,24 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "use_sequential_queue_graph_identity",
         )
 
-        empty_status, empty_body = await asgi_request(
+        repeated_second_status, repeated_second_body = await asgi_request(
             "/api/v1/agents/whoami/repository",
             method="POST",
             payload={
                 "git_address": "https://github.com/example/actor-import.git",
             },
         )
-        self.assertEqual(empty_status, 404)
-        self.assertIsInstance(empty_body, dict)
-        assert isinstance(empty_body, dict)
+        self.assertEqual(repeated_second_status, 200)
+        self.assertIsInstance(repeated_second_body, dict)
+        assert isinstance(repeated_second_body, dict)
+        self.assertTrue(repeated_second_body["identity_reused"])
         self.assertEqual(
-            empty_body["detail"]["error"],
-            "sequential_graph_queue_empty",
+            repeated_second_body["active_task"]["id"],
+            second_body["active_task"]["id"],
+        )
+        self.assertEqual(
+            repeated_second_body["agent"]["id"],
+            "sequential-role-b",
         )
 
     async def _test_legacy_sequential_whoami_moves_to_next_role_without_parallel_work(self) -> None:
