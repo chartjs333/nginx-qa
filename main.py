@@ -12332,10 +12332,111 @@ def render_index_v2() -> str:
     }
 
     function formatMessage(message) {
+      if (message === null || message === undefined) {
+        return "";
+      }
       if (typeof message === "string") {
         return message;
       }
-      return JSON.stringify(message, null, 2);
+      const serialized = JSON.stringify(message, null, 2);
+      return serialized === undefined ? String(message) : serialized;
+    }
+
+    function lifecycleEventStatus(eventType, payload) {
+      const artifact = payload && typeof payload.artifact === "object" ? payload.artifact : {};
+      const report = payload && typeof payload.report === "object" ? payload.report : {};
+      const decision = payload && typeof payload.decision === "object" ? payload.decision : {};
+      let value = "";
+      if (eventType === "ARTIFACT_CREATED") {
+        value = artifact.status
+          || artifact.release_status
+          || artifact.clinical_status
+          || artifact.verification_status
+          || "RECORDED";
+      } else if (eventType === "GROUP_REPORT_SUBMITTED") {
+        value = report.status || "";
+        if (!value && typeof report.RESULT === "string") {
+          const resultStatus = report.RESULT.match(/^\\s*(PASS|FAIL|ACCEPT(?:ED)?|BLOCKED|DONE)\\b/i);
+          value = resultStatus ? resultStatus[1] : "SUBMITTED";
+        }
+        value = value || "SUBMITTED";
+      } else if (eventType === "CYCLE_COMPLETED") {
+        value = decision.status || "COMPLETED";
+      } else {
+        value = eventType || "RECORDED";
+      }
+      return String(value).trim().replace(/\\s+/g, "_").toUpperCase();
+    }
+
+    function lifecycleEventSummary(eventType, payload) {
+      const artifact = payload && typeof payload.artifact === "object" ? payload.artifact : {};
+      const report = payload && typeof payload.report === "object" ? payload.report : {};
+      const decision = payload && typeof payload.decision === "object" ? payload.decision : {};
+      if (eventType === "ARTIFACT_CREATED") {
+        return artifact.summary || artifact.path || artifact.ref || artifact.type || "Артефакт зафиксирован";
+      }
+      if (eventType === "GROUP_REPORT_SUBMITTED") {
+        return report.RESULT || report.summary || "Отчёт группы зафиксирован";
+      }
+      if (eventType === "CYCLE_COMPLETED") {
+        return decision.summary || "Цикл разработки завершён";
+      }
+      return "Событие цикла разработки зафиксировано";
+    }
+
+    function formatHistoryRecordMessage(record) {
+      const directMessage = formatMessage(record && record.message);
+      if (directMessage.trim()) {
+        return directMessage;
+      }
+      const meta = record && record.metadata && typeof record.metadata === "object" ? record.metadata : {};
+      if (!record || record.event !== "cycle_lifecycle_event") {
+        return directMessage;
+      }
+      const eventType = String(meta.cycle_event_type || "CYCLE_EVENT").trim().toUpperCase();
+      const payload = meta.cycle_event_payload && typeof meta.cycle_event_payload === "object"
+        ? meta.cycle_event_payload
+        : {};
+      return [
+        `STATUS: ${lifecycleEventStatus(eventType, payload)}`,
+        `SUMMARY: ${lifecycleEventSummary(eventType, payload)}`,
+        `EVENT: ${eventType}`,
+        "",
+        "PAYLOAD:",
+        formatMessage(payload) || "{}"
+      ].join("\\n");
+    }
+
+    function historyRecordRevision(record) {
+      const meta = record && record.metadata && typeof record.metadata === "object" ? record.metadata : {};
+      const commit = String(meta.git_commit_short || meta.git_commit || "").trim();
+      if (commit) {
+        return {label: "Commit", value: commit};
+      }
+      const payload = meta.cycle_event_payload && typeof meta.cycle_event_payload === "object"
+        ? meta.cycle_event_payload
+        : {};
+      const artifact = payload.artifact && typeof payload.artifact === "object" ? payload.artifact : {};
+      const artifactRef = String(artifact.ref || "").trim();
+      if (artifactRef) {
+        return {label: "Ref", value: artifactRef};
+      }
+      const artifactLocatorCandidates = [
+        artifact.artifact_id,
+        artifact.path,
+        ...(Array.isArray(artifact.paths) ? artifact.paths : [])
+      ];
+      const artifactLocator = artifactLocatorCandidates.find((value) => {
+        return (typeof value === "string" || typeof value === "number") && String(value).trim();
+      });
+      if (artifactLocator !== undefined) {
+        return {label: "Artifact", value: String(artifactLocator).trim()};
+      }
+      const cycleId = String(meta.cycle_id || "").trim();
+      if (record && record.event === "cycle_lifecycle_event" && cycleId) {
+        return {label: "Cycle", value: cycleId};
+      }
+      return {label: "Commit", value: "no-commit"};
     }
 
     function queuesForContext(context) {
@@ -15676,11 +15777,12 @@ ${question}`;
     function formatRecordForClipboard(record) {
       const meta = record.metadata || {};
       const timestamp = new Date(record.timestamp).toLocaleString("ru-RU");
-      const commit = meta.git_commit_short || "no-commit";
+      const revision = historyRecordRevision(record);
       const project = meta.project_name || "no-project";
       const actor = [meta.sender, meta.receiver].filter(Boolean).join(" -> ") || meta.direction || record.route || record.queue;
-      const message = formatMessage(record.message);
-      return `[${timestamp}] [Project: ${project}] [Commit: ${commit}] [${actor}] [${record.event}]
+      const message = formatHistoryRecordMessage(record);
+      const eventLabel = meta.cycle_event_type || record.event;
+      return `[${timestamp}] [Project: ${project}] [${revision.label}: ${revision.value}] [${actor}] [${eventLabel}]
 ${message}`;
     }
 
@@ -16341,12 +16443,13 @@ ${data.patch || ""}
         const meta = record.metadata || {};
         const context = record.context || meta.context || "unknown";
         const timestamp = new Date(record.timestamp).toLocaleString("ru-RU");
-        const commit = meta.git_commit_short || "no-commit";
+        const revision = historyRecordRevision(record);
         const project = meta.project_name || "no-project";
         const actor = [meta.sender, meta.receiver].filter(Boolean).join(" -> ") || meta.direction || record.route || record.queue;
-        const message = formatMessage(record.message);
+        const message = formatHistoryRecordMessage(record);
         const statusText = extractStatus(message);
         const summary = extractSummary(message);
+        const eventLabel = meta.cycle_event_type || record.event;
         const queueItemId = meta.queue_item_id || "";
         const canDeleteFromQueue = queueItemId && activeQueueItemIds.has(`${record.queue}:${queueItemId}`);
         const canDeleteHistoryRecord = record.event === "removed_from_backend_queue";
@@ -16357,8 +16460,8 @@ ${data.patch || ""}
                 <span class="dot ${escapeHtml(context)}"></span>
                 <span class="badge ${escapeHtml(context)}">${escapeHtml(context)}</span>
                 <span class="badge">${escapeHtml(project)}</span>
-                <span class="badge">Commit: ${escapeHtml(commit)}</span>
-                <span class="badge event">${escapeHtml(record.event)}</span>
+                <span class="badge">${escapeHtml(revision.label)}: ${escapeHtml(revision.value)}</span>
+                <span class="badge event">${escapeHtml(eventLabel)}</span>
               </div>
               <p class="entry-summary"><strong>${escapeHtml(actor)}:</strong> STATUS: ${escapeHtml(statusText)}${summary ? ". " + escapeHtml(summary) : ""}</p>
             </div>
