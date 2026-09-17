@@ -1,0 +1,42 @@
+{
+  "project_id": "9008",
+  "actors": {
+    "overwrite": true,
+    "include_managed": false,
+    "items": [
+      {
+        "id": "actor-requirements-analyst",
+        "name": "Requirements Analyst",
+        "phone": "2021",
+        "profile": "Analyze requirements and prepare implementation-ready specifications.",
+        "parameters": {
+          "role": "analyst"
+        },
+        "tasks": [
+          {
+            "task_id": "REQ-001",
+            "queue": "worker-all",
+            "message": "Analyze the new requirements and publish acceptance criteria."
+          }
+        ]
+      },
+      {
+        "id": "actor-backend-developer",
+        "name": "Backend Developer",
+        "phone": "2022",
+        "profile": "Implement approved backend tasks and report verification results.",
+        "parameters": {
+          "role": "backend_developer"
+        },
+        "tasks": [
+          "Review the current API and prepare an implementation plan.",
+          {
+            "task_id": "DEV-002",
+            "queue": "worker-all",
+            "message": "Implement the approved actor import API."
+          }
+        ]
+      }
+    ]
+  }
+}

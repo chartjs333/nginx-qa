@@ -1,0 +1,430 @@
+import asyncio
+import json
+import os
+import tempfile
+import unittest
+import urllib.parse
+from collections import deque
+from pathlib import Path
+
+import main
+
+
+async def asgi_request(
+    target: str,
+    *,
+    method: str = "GET",
+    payload: object | None = None,
+    headers: list[tuple[bytes, bytes]] | None = None,
+) -> tuple[int, object]:
+    parsed = urllib.parse.urlsplit(target)
+    body = json.dumps(payload).encode("utf-8") if payload is not None else b""
+    delivered = False
+    messages: list[dict[str, object]] = []
+
+    async def receive() -> dict[str, object]:
+        nonlocal delivered
+        if delivered:
+            return {"type": "http.disconnect"}
+        delivered = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        messages.append(message)
+
+    request_headers = [(b"host", b"testserver:8025")]
+    if payload is not None:
+        request_headers.append((b"content-type", b"application/json"))
+    request_headers.extend(headers or [])
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": method,
+        "scheme": "http",
+        "path": parsed.path,
+        "raw_path": parsed.path.encode("ascii"),
+        "query_string": parsed.query.encode("ascii"),
+        "root_path": "",
+        "headers": request_headers,
+        "client": ("127.0.0.1", 12345),
+        "server": ("testserver", 8025),
+    }
+    await main.app(scope, receive, send)
+    response_start = next(
+        message for message in messages if message["type"] == "http.response.start"
+    )
+    response_body = b"".join(
+        message.get("body", b"")
+        for message in messages
+        if message["type"] == "http.response.body"
+    )
+    decoded: object = json.loads(response_body) if response_body else None
+    return int(response_start["status"]), decoded
+
+
+class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
+    PROJECT_PHONE = "9008"
+    PROJECT_CONTEXT = "github.com/example/actor-import"
+
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        temp_path = Path(self.temp_dir.name)
+        self.original_values = {
+            "git_config_path": main.git_config_path,
+            "agents_path": main.agents_path,
+            "history_path": main.history_path,
+            "git_config_lock": main.git_config_lock,
+            "agents_lock": main.agents_lock,
+            "history_lock": main.history_lock,
+            "group_task_submission_lock": main.group_task_submission_lock,
+            "queues": main.queues,
+            "locks": main.locks,
+        }
+        main.git_config_path = temp_path / "port_git_map.json"
+        main.agents_path = temp_path / "agents.json"
+        main.history_path = temp_path / "conversation_log.jsonl"
+        main.git_config_lock = asyncio.Lock()
+        main.agents_lock = asyncio.Lock()
+        main.history_lock = asyncio.Lock()
+        main.group_task_submission_lock = asyncio.Lock()
+        main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
+        main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
+        self.original_telegram_token = os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        self.original_telegram_secret = os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+        self.write_project()
+        self.write_agents()
+
+    def tearDown(self) -> None:
+        for name, value in self.original_values.items():
+            setattr(main, name, value)
+        if self.original_telegram_token is not None:
+            os.environ["TELEGRAM_BOT_TOKEN"] = self.original_telegram_token
+        else:
+            os.environ.pop("TELEGRAM_BOT_TOKEN", None)
+        if self.original_telegram_secret is not None:
+            os.environ["TELEGRAM_WEBHOOK_SECRET"] = self.original_telegram_secret
+        else:
+            os.environ.pop("TELEGRAM_WEBHOOK_SECRET", None)
+        self.temp_dir.cleanup()
+
+    def write_project(self) -> None:
+        project = {
+            "project_name": "Actor Import Project",
+            "git_address": "https://github.com/example/actor-import.git",
+            "git_context_key": self.PROJECT_CONTEXT,
+            "project_phone": self.PROJECT_PHONE,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config = {
+            main.PROJECTS_KEY: {self.PROJECT_CONTEXT: project},
+            main.PHONE_GIT_CONTEXTS_KEY: {
+                self.PROJECT_PHONE: {
+                    **project,
+                    "phone": self.PROJECT_PHONE,
+                }
+            },
+        }
+        main.git_config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def write_agents(self) -> None:
+        agents = [
+            {
+                "id": "old-project-actor",
+                "name": "Old Project Actor",
+                "phone": "2010",
+                "profile": "Old profile",
+                "parameters": {
+                    "git_context_key": self.PROJECT_CONTEXT,
+                    "project_phone": self.PROJECT_PHONE,
+                },
+            },
+            {
+                "id": "outside-actor",
+                "name": "Outside Actor",
+                "phone": "2011",
+                "profile": "Must be preserved",
+                "parameters": {"git_context_key": "github.com/example/outside"},
+            },
+        ]
+        main.agents_path.write_text(
+            json.dumps({"agents": agents}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    async def test_overwrite_import_replaces_project_actors_and_queues_tasks(self) -> None:
+        payload = {
+            "actors": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "new-analyst",
+                        "name": "New Analyst",
+                        "phone": "2021",
+                        "profile": "Analyze tasks.",
+                        "tasks": [
+                            "Prepare requirements.",
+                            {
+                                "task_id": "QA-1",
+                                "queue": "tester-all",
+                                "message": "Verify the requirements.",
+                            },
+                        ],
+                    }
+                ],
+            }
+        }
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
+            method="POST",
+            payload=payload,
+        )
+
+        self.assertEqual(status_code, 201)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["removed_actor_count"], 1)
+        self.assertEqual(body["imported_actor_count"], 1)
+        self.assertEqual(body["queued_task_count"], 2)
+        imported = body["imported_agents"][0]
+        self.assertEqual(imported["name"], "New Analyst")
+        self.assertEqual(len(imported["tasks"]), 2)
+        self.assertEqual(
+            imported["parameters"]["git_context_key"],
+            self.PROJECT_CONTEXT,
+        )
+
+        stored = main.read_agents_file()
+        self.assertEqual(
+            {agent["id"] for agent in stored},
+            {main.PROJECT_MANAGER_AGENT_ID, "outside-actor", "new-analyst"},
+        )
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(len(main.queues["tester-all"]), 1)
+
+        poll_status, poll_body = await asgi_request(
+            f"/worker/all/{self.PROJECT_PHONE}?to_phone=2021"
+        )
+        self.assertEqual(poll_status, 200)
+        self.assertIsInstance(poll_body, dict)
+        assert isinstance(poll_body, dict)
+        self.assertEqual(poll_body["message"], "Prepare requirements.")
+        self.assertEqual(poll_body["metadata"]["to_agent_id"], "new-analyst")
+
+        second_status, second_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
+            method="POST",
+            payload={
+                "actors": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "new-developer",
+                            "name": "New Developer",
+                            "tasks": ["Implement the approved requirements."],
+                        }
+                    ],
+                }
+            },
+        )
+        self.assertEqual(second_status, 201)
+        self.assertIsInstance(second_body, dict)
+        assert isinstance(second_body, dict)
+        self.assertEqual(second_body["removed_actor_count"], 1)
+        self.assertEqual(second_body["removed_task_count"], 1)
+        self.assertEqual(second_body["imported_agents"][0]["phone"], "2000")
+        self.assertEqual(len(main.queues["tester-all"]), 0)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
+    async def test_delete_all_removes_project_actors_and_pending_tasks_only(self) -> None:
+        import_status, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
+            method="POST",
+            payload={
+                "actors": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "name": "Temporary Actor",
+                            "phone": "2025",
+                            "tasks": ["Temporary task"],
+                        }
+                    ],
+                }
+            },
+        )
+        self.assertEqual(import_status, 201)
+
+        delete_status, delete_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors?include_managed=true",
+            method="DELETE",
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertIsInstance(delete_body, dict)
+        assert isinstance(delete_body, dict)
+        self.assertEqual(delete_body["deleted_actor_count"], 1)
+        self.assertEqual(delete_body["removed_task_count"], 1)
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+        self.assertEqual(
+            {agent["id"] for agent in main.read_agents_file()},
+            {main.PROJECT_MANAGER_AGENT_ID, "outside-actor"},
+        )
+
+        get_status, get_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors"
+        )
+        self.assertEqual(get_status, 200)
+        self.assertIsInstance(get_body, dict)
+        assert isinstance(get_body, dict)
+        self.assertEqual(get_body["actor_count"], 0)
+
+    async def test_delete_all_can_archive_groups_and_remove_managed_actors(self) -> None:
+        config = json.loads(main.git_config_path.read_text(encoding="utf-8"))
+        project = config[main.PROJECTS_KEY][self.PROJECT_CONTEXT]
+        project["groups"] = [
+            {
+                "group_id": "group-managed-test",
+                "group_key": "managed-test",
+                "template_id": "backend_dev_team_v1",
+                "status": "active",
+                "revision": 1,
+                "agents": [
+                    {
+                        "role": "backend_developer",
+                        "agent_id": "managed-actor",
+                        "agent_phone": "4022",
+                    }
+                ],
+            }
+        ]
+        config[main.PHONE_GIT_CONTEXTS_KEY]["4022"] = {
+            "project_name": project["project_name"],
+            "git_address": project["git_address"],
+            "git_context_key": self.PROJECT_CONTEXT,
+            "phone": "4022",
+            "project_phone": self.PROJECT_PHONE,
+            "managed_by": "group_api",
+            "agent_id": "managed-actor",
+        }
+        main.git_config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        stored = json.loads(main.agents_path.read_text(encoding="utf-8"))["agents"]
+        stored.append(
+            {
+                "id": "managed-actor",
+                "name": "Managed Actor",
+                "phone": "4022",
+                "profile": "Managed by the group API",
+                "parameters": {
+                    "managed_by": "group_api",
+                    "group_ids": "group-managed-test",
+                    "git_context_key": self.PROJECT_CONTEXT,
+                    "project_phone": self.PROJECT_PHONE,
+                },
+            }
+        )
+        main.agents_path.write_text(
+            json.dumps({"agents": stored}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        delete_status, delete_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors?include_managed=true",
+            method="DELETE",
+        )
+        self.assertEqual(delete_status, 200)
+        self.assertIsInstance(delete_body, dict)
+        assert isinstance(delete_body, dict)
+        self.assertEqual(delete_body["deleted_actor_count"], 2)
+        updated_config = json.loads(main.git_config_path.read_text(encoding="utf-8"))
+        self.assertNotIn("4022", updated_config[main.PHONE_GIT_CONTEXTS_KEY])
+        updated_group = updated_config[main.PROJECTS_KEY][self.PROJECT_CONTEXT]["groups"][0]
+        self.assertEqual(updated_group["status"], "archived")
+        self.assertEqual(updated_group["revision"], 2)
+        self.assertNotIn(
+            "managed-actor",
+            {agent["id"] for agent in main.read_agents_file()},
+        )
+
+    async def test_invalid_import_is_atomic(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
+            method="POST",
+            payload={
+                "actors": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "name": "Broken Actor",
+                            "tasks": [
+                                {"queue": "unknown", "message": "Do not queue"}
+                            ],
+                        }
+                    ],
+                }
+            },
+        )
+        self.assertEqual(status_code, 400)
+        self.assertIsInstance(body, dict)
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
+        actor_json = {
+            "project_id": self.PROJECT_PHONE,
+            "actors": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "name": "Telegram Actor",
+                        "phone": "2030",
+                        "tasks": ["Task received from Telegram."],
+                    }
+                ],
+            },
+        }
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/actors",
+            method="POST",
+            payload={
+                "update_id": 1,
+                "message": {
+                    "message_id": 2,
+                    "chat": {"id": 3},
+                    "text": "```json\n"
+                    + json.dumps(actor_json, ensure_ascii=False)
+                    + "\n```",
+                },
+            },
+        )
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["source"], "telegram")
+        self.assertEqual(body["imported_actor_count"], 1)
+        self.assertEqual(body["queued_task_count"], 1)
+
+    def test_ui_exposes_actor_import_and_bulk_delete_controls(self) -> None:
+        html = main.render_index_v2()
+        for marker in (
+            'id="projectActorsJsonFile"',
+            'id="importProjectActorsButton"',
+            'id="deleteAllProjectActorsButton"',
+            "async function importProjectActorsFromJson()",
+            "async function deleteAllProjectActors()",
+            "actors.overwrite: true",
+        ):
+            self.assertIn(marker, html)
+
+
+if __name__ == "__main__":
+    unittest.main()

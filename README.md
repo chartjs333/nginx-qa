@@ -41,6 +41,44 @@ The default app URL is:
 http://localhost:8025
 ```
 
+## Project actors JSON import
+
+Actors and their initial task lists can be imported for a project by its
+canonical four-digit project phone:
+
+```text
+POST /api/v1/projects/{project_phone}/actors/import
+```
+
+Use `actors.overwrite: true` to replace the project's existing non-group
+actors before importing. Set `actors.include_managed: true` as well only when
+group-managed actors should be removed and their active groups archived.
+Every imported task is stored with its actor and immediately queued for that
+actor's phone. See [`examples/project_actors_import.json`](examples/project_actors_import.json).
+
+All project actors and their pending phone-addressed tasks can be removed with:
+
+```text
+DELETE /api/v1/projects/{project_phone}/actors?include_managed=true
+```
+
+The UI exposes both operations in the Agents tab.
+
+### Telegram webhook
+
+Configure a Telegram bot webhook to point to:
+
+```text
+POST /api/v1/telegram/actors
+```
+
+Send the same JSON either as message text or as a `.json` document. The JSON
+must include `project_id` (or `project_phone`). Set `TELEGRAM_BOT_TOKEN` so the
+service can download documents and send an import summary. Optionally set
+`TELEGRAM_WEBHOOK_SECRET` and pass the same value to Telegram's webhook
+`secret_token`; when configured, requests without the matching
+`X-Telegram-Bot-Api-Secret-Token` header are rejected.
+
 Run one application process per runtime directory. `run_8026.bat` is an
 alternative port launcher, not a second concurrent worker for the same local
 queue state.
