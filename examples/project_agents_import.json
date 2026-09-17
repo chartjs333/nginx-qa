@@ -1,5 +1,5 @@
 {
-  "project_id": "9008",
+  "git_address": "https://github.com/example/project.git",
   "agents": {
     "overwrite": true,
     "include_managed": false,

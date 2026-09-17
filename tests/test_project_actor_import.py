@@ -691,6 +691,127 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(body["imported_actor_count"], 1)
         self.assertEqual(body["queued_task_count"], 1)
 
+    async def test_telegram_agents_json_resolves_project_from_git_address(self) -> None:
+        agent_json = {
+            "git_address": "git@github.com:example/actor-import.git",
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "repository-agent",
+                        "name": "Repository Agent",
+                        "tasks": ["Task routed by repository."],
+                    }
+                ],
+            },
+        }
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": 11,
+                "message": {
+                    "message_id": 12,
+                    "chat": {"id": 13},
+                    "text": json.dumps(agent_json),
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["project_phone"], self.PROJECT_PHONE)
+        self.assertEqual(body["project"]["git_context_key"], self.PROJECT_CONTEXT)
+        self.assertEqual(body["imported_agent_count"], 1)
+        self.assertEqual(body["queued_task_count"], 1)
+
+    async def test_telegram_unknown_git_repository_does_not_mutate_agents(self) -> None:
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/not-registered.git",
+                "agents": {
+                    "overwrite": True,
+                    "items": [{"name": "Must Not Be Imported", "tasks": []}],
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 404)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["detail"]["error"], "project_not_found")
+        agent_ids = {agent["id"] for agent in main.read_agents_file()}
+        self.assertIn("old-project-actor", agent_ids)
+        self.assertNotIn("must-not-be-imported", agent_ids)
+
+    async def test_telegram_ambiguous_repository_uses_git_context_key(self) -> None:
+        git_address = "https://github.com/example/shared-import.git"
+        backend_context = "github.com/example/shared-import#backend"
+        frontend_context = "github.com/example/shared-import#frontend"
+
+        def project(context_key: str, phone: str) -> dict[str, object]:
+            return {
+                "project_name": context_key.rsplit("#", 1)[-1].title(),
+                "git_address": git_address,
+                "git_context_key": context_key,
+                "project_phone": phone,
+                "groups": [],
+                "group_relationships": [],
+                "customer_reporting": {},
+            }
+
+        backend = project(backend_context, self.PROJECT_PHONE)
+        frontend = project(frontend_context, "9009")
+        config = {
+            main.PROJECTS_KEY: {
+                backend_context: backend,
+                frontend_context: frontend,
+            },
+            main.PHONE_GIT_CONTEXTS_KEY: {
+                self.PROJECT_PHONE: {**backend, "phone": self.PROJECT_PHONE},
+                "9009": {**frontend, "phone": "9009"},
+            },
+        }
+        main.git_config_path.write_text(
+            json.dumps(config, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        import_section = {
+            "overwrite": True,
+            "items": [{"id": "frontend-agent", "name": "Frontend Agent"}],
+        }
+
+        ambiguous_status, ambiguous_body = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={"git_address": git_address, "agents": import_section},
+        )
+        self.assertEqual(ambiguous_status, 409)
+        self.assertIsInstance(ambiguous_body, dict)
+        assert isinstance(ambiguous_body, dict)
+        self.assertEqual(ambiguous_body["detail"]["error"], "ambiguous_project")
+
+        selected_status, selected_body = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "git_address": git_address,
+                "git_context_key": frontend_context,
+                "agents": import_section,
+            },
+        )
+        self.assertEqual(selected_status, 200)
+        self.assertIsInstance(selected_body, dict)
+        assert isinstance(selected_body, dict)
+        self.assertEqual(selected_body["project_phone"], "9009")
+        self.assertEqual(
+            selected_body["project"]["git_context_key"],
+            frontend_context,
+        )
+
     async def test_telegram_webhook_enforces_secret_and_chat_allowlist(self) -> None:
         os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
         os.environ["TELEGRAM_ALLOWED_CHAT_IDS"] = "99,-100123"

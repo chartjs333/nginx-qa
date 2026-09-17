@@ -19047,6 +19047,108 @@ def actor_payload_from_telegram_update(update: Any) -> tuple[dict[str, Any], dic
     return payload, message
 
 
+def actor_import_reference_value(payload: dict[str, Any], key: str) -> Any:
+    if key in payload:
+        return payload.get(key)
+    for section_name in ("agents", "actors"):
+        section = payload.get(section_name)
+        if isinstance(section, dict) and key in section:
+            return section.get(key)
+    return None
+
+
+async def project_phone_for_actor_import(
+    payload: dict[str, Any],
+    current_port: int | None = None,
+) -> str:
+    raw_project_id = (
+        actor_import_reference_value(payload, "project_id")
+        or actor_import_reference_value(payload, "project_phone")
+    )
+    raw_git_address = actor_import_reference_value(payload, "git_address")
+    raw_context_key = actor_import_reference_value(payload, "git_context_key")
+
+    context: dict[str, Any] | None = None
+    if raw_git_address is not None:
+        _, repository_key = normalize_project_git_address(raw_git_address)
+        requested_context_key = normalize_requested_project_context_key(
+            raw_context_key,
+            repository_key,
+        )
+        config = await read_git_config()
+        context = resolve_project_context_from_config(
+            config,
+            repository_key,
+            requested_context_key,
+            current_port,
+        )
+    elif raw_context_key is not None:
+        if not isinstance(raw_context_key, str):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_context_key must be a string",
+            )
+        requested_context_key = normalize_project_context_reference(raw_context_key)
+        if not requested_context_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="git_context_key must not be blank when provided",
+            )
+        config = await read_git_config()
+        context = configured_git_context_for_key(
+            config,
+            requested_context_key,
+            current_port,
+        )
+
+    if raw_git_address is not None or raw_context_key is not None:
+        if context is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "project_not_found",
+                    "message": (
+                        "No registered project matches git_address/git_context_key; "
+                        "resolve the project through Project Manager 0001 first"
+                    ),
+                },
+            )
+        project_phone = normalize_project_phone(context.get("project_phone"))
+        if not project_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "project_phone_required",
+                    "message": "Resolve the project through Project Manager 0001 first",
+                },
+            )
+        if raw_project_id is not None:
+            supplied_project_phone = normalize_project_phone(raw_project_id)
+            if supplied_project_phone != project_phone:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "project_reference_mismatch",
+                        "message": (
+                            "project_id/project_phone does not match the project "
+                            "registered for git_address/git_context_key"
+                        ),
+                    },
+                )
+        return project_phone
+
+    project_phone = str(raw_project_id or "").strip()
+    if not project_phone:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "git_address (optionally git_context_key) or legacy "
+                "project_id/project_phone is required in Telegram agent JSON"
+            ),
+        )
+    return project_phone
+
+
 def telegram_id_allowlist(variable_name: str) -> set[str]:
     return {
         value.strip()
@@ -19713,25 +19815,10 @@ async def telegram_actor_import(request: Request) -> dict[str, Any]:
     update = await read_message(request)
     payload, message = await asyncio.to_thread(actor_payload_from_telegram_update, update)
     ensure_telegram_sender_allowed(message)
-    project_id = str(
-        payload.get("project_id")
-        or payload.get("project_phone")
-        or (
-            payload.get("agents", {}).get("project_id")
-            if isinstance(payload.get("agents"), dict)
-            else ""
-        )
-        or (
-            payload.get("actors", {}).get("project_id")
-            if isinstance(payload.get("actors"), dict)
-            else ""
-        )
-    ).strip()
-    if not project_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="project_id or project_phone is required in Telegram actor JSON",
-        )
+    project_id = await project_phone_for_actor_import(
+        payload,
+        request_port(request),
+    )
     result = await import_project_actors_data(
         project_id,
         payload,

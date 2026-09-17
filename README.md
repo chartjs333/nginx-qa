@@ -111,7 +111,16 @@ POST /api/v1/telegram/agents
 ```
 
 Send the same JSON either as message text or as a `.json` document. The JSON
-must include `project_id` (or `project_phone`). Copy `.env.example` to `.env`
+should include `git_address`; the service finds the already registered project
+and its internal project phone automatically. If several registered project
+contexts use the same repository, also include the exact `git_context_key`
+returned by Project Manager 0001. The legacy `project_id`/`project_phone`
+fields remain accepted when no Git reference is supplied. Unknown repositories
+are rejected and are not created by the Telegram import.
+
+The programmer can therefore send a file shaped like
+[`examples/project_agents_import.json`](examples/project_agents_import.json)
+without knowing the project's internal phone. Copy `.env.example` to `.env`
 and configure the local file; `.env` is intentionally ignored by Git.
 
 - `TELEGRAM_BOT_TOKEN` downloads documents and sends import confirmations.
