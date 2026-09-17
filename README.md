@@ -12,6 +12,7 @@ FastAPI service for coordinating QA and development queues between project roles
 - `group_templates.json` - declarative agent specs, group templates, queue links, cross-group topologies, and customer reporting rules.
 - [Project Manager 0001 agent contract](prompts/project_management_client_0001.md) - resolves or creates a project by Git address and returns its assigned project phone.
 - [Declarative Groups and Development Cycles API agent contract](prompts/group_management_api.md) - creates idempotent project groups, routes tasks through declared connections, and exposes the cycle audit trail and lineage graph.
+- [Sequential sprint team JSON architect contract](prompts/architect_sequential_team_json.md) - defines the once-per-sprint team file and queue-driven identity transitions.
 - helper scripts for posting and polling queue messages.
 
 Runtime files such as queue history, agent state, email routes, screenshots,
@@ -53,8 +54,10 @@ POST /api/v1/projects/{project_phone}/agents/import
 Use `agents.overwrite: true` to replace the project's existing non-group
 agents before importing. Set `agents.include_managed: true` as well only when
 group-managed agents should be removed and their active groups archived.
-Every imported task is stored with its agent and immediately queued for that
-agent's phone. See [`examples/project_agents_import.json`](examples/project_agents_import.json).
+Every imported task is stored with its agent. In parallel mode all tasks are
+immediately queued to their agents' phones; in sequential mode the entry node
+is queued first and later nodes are reached through graph handoffs. See
+[`examples/project_agents_import.json`](examples/project_agents_import.json).
 
 Each item may set `git_branch`, for example `agent/backend-developer`. When it
 is omitted, the server creates a stable `agent/<agent-id>` branch name. The
@@ -99,19 +102,90 @@ For a strictly non-parallel project, set this inside the `agents` object:
 "assignment_mode": "sequential"
 ```
 
-In sequential mode imported tasks are deferred instead of all being queued at
-once. The first `whoami` activates the first imported role and queues only its
-tasks. Normal heartbeat calls keep returning that role. After all tasks for the
-role are finished, the active agent advances the project with:
+This is a queue-driven graph, not a permanent assignment of several executors.
+The first item in `agents.items` is only the entry node. The single executor
+starts discovery at the common URL:
 
-```json
-{"message":"Задание выполнено. Кто я?","completed":true}
+```text
+GET or POST /api/v1/agents/whoami
 ```
 
-The response contains the next role, profile, branch, tasks, and
-`next_whoami_endpoint`. A call made through another role phone while work is
-active receives HTTP 409, so two roles cannot run in parallel. After the final
-role the response has `all_completed: true`.
+The response asks for the Git repository and supplies an absolute `reply_url`.
+Send the answer to that URL:
+
+```json
+{"git_address":"https://github.com/owner/repository.git"}
+```
+
+The service takes the oldest project item from `worker-all`, `tester-all`, or
+`consultant-all`. The item's `to_agent_id` or `to_phone` selects the current
+agent. The response contains `agent`, `profile`, `git_branch`, `active_task`,
+`team`, `communication`, and `graph_position`. The executor therefore becomes
+the addressed agent only for this graph node.
+
+After finishing the node, send the result or the next task to a team member
+through an endpoint from `communication.send_endpoints`, then post the Git
+address to the same `reply_url` again. The next queue item can select any role,
+including a previous one, so cycles and conditional graph paths are supported.
+JSON order does not control later transitions.
+
+An architect can also declare the complete graph with top-level `execution`
+and `nodes`; see
+[`examples/project_sequential_graph_import.json`](examples/project_sequential_graph_import.json).
+Every declared transition is checked by the two reviewers from
+`execution.reviewers`. With `execution.initialize_reviewers: true`, the common
+identity queue first returns both persistent reviewer cards and then the graph
+entry node. Omit the flag (or set it to `false`) to start directly from the
+entry node and activate reviewers only when a transition needs approval.
+
+### Sequential graph with two transition reviewers
+
+For a declared conditional graph use `execution` and `nodes` instead of
+`agents.items`. See
+[`examples/project_sequential_graph_import.json`](examples/project_sequential_graph_import.json).
+`agents.overwrite: true` still controls replacement of the project's existing
+agents.
+
+`execution.reviewers` must contain exactly two different reviewers. Both are
+created during import with normal agent cards, project Git context, the complete
+team directory, and a profile containing the full graph. The live, restart-safe
+project snapshot is also available to them at:
+
+```text
+GET /api/v1/projects/{project_phone}/state.json
+```
+
+When a graph-node agent submits an outcome, the requested transition does not
+happen immediately. The common identity queue first returns reviewer 1 and then
+reviewer 2. Both must independently send `APPROVE`. A single `REJECT` cancels
+the proposed transition and returns the source node for rework with the review
+feedback. This gate also applies to transitions into terminal nodes.
+
+Submit a node result to the `whoami_endpoint` from the active queue item:
+
+```json
+{
+  "assignment_id": "value-from-active-task-metadata",
+  "status": "DONE",
+  "result": "Implementation and verification evidence"
+}
+```
+
+The allowed status values are the keys from that node's `transitions`, for
+example `DONE`, `PASS`, or `FAIL`. Each reviewer uses the same endpoint shape:
+
+```json
+{
+  "assignment_id": "value-from-active-task-metadata",
+  "status": "APPROVE",
+  "feedback": "Transition checked"
+}
+```
+
+The other decision is `REJECT`; it requires non-empty `feedback` so the source
+agent receives an actionable rework instruction. A confirmed backward/`FAIL`
+transition increments `rework_cycle_count`. When `max_rework_cycles` is
+exceeded, the run ends with status `blocked` instead of looping forever.
 
 All project agents and their pending phone-addressed tasks can be removed with:
 
@@ -124,11 +198,32 @@ backward compatibility. The UI exposes both operations in the Agents tab.
 
 ### Telegram webhook
 
-Configure a Telegram bot webhook to point to:
+There are two fixed Telegram import URLs. The URL determines the execution
+model; an `assignment_mode` value inside the JSON cannot switch it.
+
+Sequential graph traversal with one executor that changes identity at each
+node:
 
 ```text
-POST /api/v1/telegram/agents
+POST /api/v1/telegram/agents/sequential
 ```
+
+The first graph node is queued immediately. Use the common
+`/api/v1/agents/whoami` flow above to receive it together with the resolved
+identity and team JSON. The legacy shared queue URL
+`/worker/all/{project_phone}?to_phone={project_phone}` remains available for a
+low-level client, but it does not enrich arbitrary handoffs with the full agent
+card.
+
+Parallel execution with permanent roles and no identity switching:
+
+```text
+POST /api/v1/telegram/agents/parallel
+```
+
+All agents' tasks are queued immediately to their own phones. The legacy
+`/api/v1/telegram/agents` and `/api/v1/telegram/actors` endpoints remain
+parallel aliases for compatibility.
 
 Send the same JSON either as message text or as a `.json` document. The JSON
 should include `git_address`; the service finds the already registered project
@@ -145,8 +240,9 @@ and configure the local file; `.env` is intentionally ignored by Git.
 
 - `TELEGRAM_BOT_TOKEN` downloads documents and sends import confirmations.
 - `TELEGRAM_WEBHOOK_SECRET` protects the webhook request header.
-- `TELEGRAM_WEBHOOK_URL` is the public HTTPS URL ending in
-  `/api/v1/telegram/agents`.
+- `TELEGRAM_WEBHOOK_URL` is one of the two public HTTPS URLs above. A Telegram
+  bot can have only one active webhook, so choose one mode per bot; use a second
+  bot when both modes must be active simultaneously.
 - `TELEGRAM_WEBHOOK_AUTO_REGISTER=1` makes `run.bat` call `setWebhook` before
   starting the application.
 - `TELEGRAM_DROP_PENDING_UPDATES=1` discards old pending messages during

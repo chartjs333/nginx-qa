@@ -169,7 +169,7 @@ MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
-AGENT_COMMUNICATION_VERSION = "3"
+AGENT_COMMUNICATION_VERSION = "4"
 AGENT_HEARTBEAT_INTERVAL_SECONDS = 300
 AGENT_HEARTBEAT_TTL_SECONDS = 900
 PROJECT_AGENT_ASSIGNMENT_KEY = "agent_assignment"
@@ -3351,17 +3351,18 @@ def agent_communication_profile(
             ),
             *(
                 [
-                    "Проект работает в последовательном режиме: одновременно активна только одна роль.",
+                    "Проект работает в последовательном режиме обхода графа: один исполнитель меняет роль по адресату следующего задания в очереди.",
                     (
-                        "После выполнения ВСЕХ задач текущей роли отправьте на текущий "
-                        "whoami endpoint:"
+                        "Чтобы узнать следующую роль, вызовите общий endpoint:"
                     ),
-                    '{"message":"Задание выполнено. Кто я?","completed":true}',
+                    "GET или POST /api/v1/agents/whoami",
                     (
-                        "Система закроет текущую роль и вернёт следующую. Примите новый "
-                        "agent.profile, agent.phone, git_branch, assigned_tasks и "
-                        "next_whoami_endpoint. Не начинайте следующую роль заранее."
+                        "Он спросит Git-репозиторий и вернёт reply_url. Отправьте на "
+                        "reply_url git_address проекта. Система извлечёт следующий "
+                        "элемент очереди; его адресат определит новые agent.profile, "
+                        "agent.phone и git_branch."
                     ),
+                    "Не закрепляйте исполнителя за ролью: на следующем узле графа роль может измениться.",
                 ]
                 if assignment_mode == "sequential"
                 else []
@@ -3370,13 +3371,23 @@ def agent_communication_profile(
             "Получить свою актуальную карточку (включая этот профиль и ветку):",
             f"GET /api/v1/projects/{project_phone}/agents/{agent_phone}",
             "",
-            "Представиться системе, спросить «Кто я?» и отметить себя живым:",
-            f"POST /api/v1/projects/{project_phone}/agents/{agent_phone}/whoami",
-            'Content-Type: application/json; body: {"message":"Кто я?"}',
-            (
-                "При первом запуске ответ содержит вашу полную карточку, назначенные задачи "
-                "и всю историю работы с момента создания. Повторяйте heartbeat не реже "
-                f"чем раз в {AGENT_HEARTBEAT_INTERVAL_SECONDS // 60} минут."
+            *(
+                [
+                    "Получить следующую личность и задачу нужно только через общий queue-graph flow:",
+                    "GET или POST /api/v1/agents/whoami, затем POST выданного reply_url с git_address.",
+                    "Не используйте phone-specific whoami для перехода между узлами графа.",
+                ]
+                if assignment_mode == "sequential"
+                else [
+                    "Представиться системе, спросить «Кто я?» и отметить себя живым:",
+                    f"POST /api/v1/projects/{project_phone}/agents/{agent_phone}/whoami",
+                    'Content-Type: application/json; body: {"message":"Кто я?"}',
+                    (
+                        "При первом запуске ответ содержит вашу полную карточку, назначенные задачи "
+                        "и всю историю работы с момента создания. Повторяйте heartbeat не реже "
+                        f"чем раз в {AGENT_HEARTBEAT_INTERVAL_SECONDS // 60} минут."
+                    ),
+                ]
             ),
             "",
             "Получать адресованные вам сообщения (опрашивайте все три очереди):",
@@ -3449,15 +3460,357 @@ def normalize_actor_import_task(raw_task: Any, index: int) -> dict[str, Any]:
     return task
 
 
+GRAPH_NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
+GRAPH_OUTCOME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
+SEQUENTIAL_REVIEW_DECISIONS = {"APPROVE", "REJECT"}
+
+
+def normalize_graph_node_id(value: Any, field_name: str) -> str:
+    node_id = str(value or "").strip()
+    if not GRAPH_NODE_ID_PATTERN.fullmatch(node_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must match {GRAPH_NODE_ID_PATTERN.pattern}",
+        )
+    return node_id
+
+
+def normalize_graph_outcome(value: Any, field_name: str) -> str:
+    outcome = str(value or "").strip().upper()
+    if not GRAPH_OUTCOME_PATTERN.fullmatch(outcome):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must match {GRAPH_OUTCOME_PATTERN.pattern}",
+        )
+    return outcome
+
+
+def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any] | None:
+    raw_execution = payload.get("execution")
+    raw_nodes = payload.get("nodes")
+    if raw_execution is None and raw_nodes is None:
+        return None
+    if not isinstance(raw_execution, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution must be an object when nodes are supplied",
+        )
+    if str(raw_execution.get("mode") or "sequential").strip().lower() != "sequential":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution.mode must be sequential for a graph import",
+        )
+    if not isinstance(raw_nodes, list) or not raw_nodes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="nodes must be a non-empty array",
+        )
+
+    try:
+        max_rework_cycles = int(raw_execution.get("max_rework_cycles", 5))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution.max_rework_cycles must be an integer",
+        ) from exc
+    if not 0 <= max_rework_cycles <= 100:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution.max_rework_cycles must be between 0 and 100",
+        )
+
+    try:
+        required_approvals = int(raw_execution.get("required_approvals", 2))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution.required_approvals must be 2",
+        ) from exc
+    if required_approvals != 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Every graph transition requires exactly two reviewer approvals",
+        )
+
+    raw_reviewers = raw_execution.get("reviewers")
+    if not isinstance(raw_reviewers, list) or len(raw_reviewers) != 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="execution.reviewers must contain exactly two reviewers",
+        )
+
+    actor_items: list[dict[str, Any]] = []
+    reviewer_agent_ids: list[str] = []
+    reviewer_names: list[str] = []
+    for index, raw_reviewer in enumerate(raw_reviewers):
+        if isinstance(raw_reviewer, str):
+            reviewer = {"name": raw_reviewer}
+        elif isinstance(raw_reviewer, dict):
+            reviewer = deepcopy(raw_reviewer)
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"execution.reviewers[{index}] must be a string or object",
+            )
+        reviewer_name = str(
+            reviewer.get("name") or reviewer.get("agent") or ""
+        ).strip()
+        if not reviewer_name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"execution.reviewers[{index}].name is required",
+            )
+        reviewer_id = normalize_graph_node_id(
+            reviewer.get("id") or f"transition-reviewer-{index + 1}",
+            f"execution.reviewers[{index}].id",
+        )
+        parameters = (
+            deepcopy(reviewer.get("parameters"))
+            if isinstance(reviewer.get("parameters"), dict)
+            else {}
+        )
+        parameters.update(
+            {
+                "workflow_role": "transition_reviewer",
+                "reviewer_order": str(index + 1),
+            }
+        )
+        actor_items.append(
+            {
+                **reviewer,
+                "id": reviewer_id,
+                "name": reviewer_name,
+                "parameters": parameters,
+                "tasks": [],
+            }
+        )
+        reviewer_agent_ids.append(reviewer_id)
+        reviewer_names.append(reviewer_name.casefold())
+    if len(set(reviewer_agent_ids)) != 2 or len(set(reviewer_names)) != 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The two transition reviewers must be different agents",
+        )
+
+    graph_nodes: list[dict[str, Any]] = []
+    terminal_nodes: dict[str, dict[str, Any]] = {}
+    seen_node_ids: set[str] = set()
+    for index, raw_node in enumerate(raw_nodes):
+        if not isinstance(raw_node, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"nodes[{index}] must be an object",
+            )
+        node_id = normalize_graph_node_id(raw_node.get("id"), f"nodes[{index}].id")
+        if node_id in seen_node_ids:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "duplicate_graph_node_id", "node_id": node_id},
+            )
+        seen_node_ids.add(node_id)
+        node_type = str(raw_node.get("type") or "task").strip().lower()
+        if node_type == "terminal":
+            terminal_nodes[node_id] = {
+                "id": node_id,
+                "type": "terminal",
+                "status": str(raw_node.get("status") or "DONE").strip().upper(),
+                "message": str(raw_node.get("message") or "Workflow completed").strip(),
+            }
+            continue
+        if node_type not in {"task", "agent"}:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"nodes[{index}].type must be task, agent, or terminal",
+            )
+
+        raw_agent = raw_node.get("agent")
+        if isinstance(raw_agent, str):
+            agent = {"name": raw_agent}
+        elif isinstance(raw_agent, dict):
+            agent = deepcopy(raw_agent)
+        elif raw_agent is None:
+            agent = {}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"nodes[{index}].agent must be a string or object",
+            )
+        agent_id = normalize_graph_node_id(
+            agent.get("id") or raw_node.get("agent_id") or node_id,
+            f"nodes[{index}].agent.id",
+        )
+        agent_name = str(
+            agent.get("name") or raw_node.get("name") or raw_agent or node_id
+        ).strip()
+        raw_tasks = raw_node.get("tasks")
+        if raw_tasks is None and "task" in raw_node:
+            raw_tasks = [raw_node.get("task")]
+        if raw_tasks is None:
+            raw_tasks = agent.get("tasks", [])
+        if not isinstance(raw_tasks, list):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"nodes[{index}].tasks must be an array",
+            )
+        raw_transitions = raw_node.get("transitions")
+        if not isinstance(raw_transitions, dict) or not raw_transitions:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"nodes[{index}].transitions must be a non-empty object",
+            )
+        transitions: dict[str, str] = {}
+        for raw_outcome, raw_target in raw_transitions.items():
+            outcome = normalize_graph_outcome(
+                raw_outcome,
+                f"nodes[{index}].transitions outcome",
+            )
+            target = normalize_graph_node_id(
+                raw_target,
+                f"nodes[{index}].transitions.{outcome}",
+            )
+            transitions[outcome] = target
+        parameters = (
+            deepcopy(agent.get("parameters"))
+            if isinstance(agent.get("parameters"), dict)
+            else {}
+        )
+        parameters.update({"workflow_role": "graph_node", "workflow_node_id": node_id})
+        actor_items.append(
+            {
+                **agent,
+                "id": agent_id,
+                "name": agent_name,
+                "profile": agent.get("profile") or raw_node.get("profile"),
+                "phone": agent.get("phone") or raw_node.get("phone"),
+                "git_branch": agent.get("git_branch") or raw_node.get("git_branch"),
+                "parameters": parameters,
+                "tasks": raw_tasks,
+            }
+        )
+        graph_nodes.append(
+            {
+                "id": node_id,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "transitions": transitions,
+            }
+        )
+
+    if not graph_nodes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="nodes must contain at least one non-terminal node",
+        )
+    active_node_ids = {node["id"] for node in graph_nodes}
+    start_node_id = normalize_graph_node_id(
+        raw_execution.get("start_node") or graph_nodes[0]["id"],
+        "execution.start_node",
+    )
+    if start_node_id not in active_node_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "unknown_graph_start_node", "node_id": start_node_id},
+        )
+    for node in graph_nodes:
+        for outcome, target in node["transitions"].items():
+            if target not in active_node_ids and target not in terminal_nodes:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "unknown_graph_transition_target",
+                        "node_id": node["id"],
+                        "outcome": outcome,
+                        "target": target,
+                    },
+                )
+
+    reachable = {start_node_id}
+    pending = [start_node_id]
+    nodes_by_id = {node["id"]: node for node in graph_nodes}
+    while pending:
+        current_id = pending.pop()
+        for target in nodes_by_id[current_id]["transitions"].values():
+            if target in active_node_ids and target not in reachable:
+                reachable.add(target)
+                pending.append(target)
+    unreachable = sorted(active_node_ids - reachable)
+    if unreachable:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "unreachable_graph_nodes", "nodes": unreachable},
+        )
+
+    graph_overview_lines = [
+        "Вы — один из двух обязательных ревьюверов каждого перехода проекта.",
+        "Переход выполняется только после двух независимых решений APPROVE.",
+        "Любой REJECT возвращает исходный узел на доработку с замечанием.",
+        "Полный граф проекта:",
+    ]
+    for node in graph_nodes:
+        transition_text = ", ".join(
+            f"{outcome} -> {target}"
+            for outcome, target in node["transitions"].items()
+        )
+        graph_overview_lines.append(
+            f"- {node['id']} ({node['agent_name']}): {transition_text}"
+        )
+    for terminal in terminal_nodes.values():
+        graph_overview_lines.append(
+            f"- {terminal['id']} (terminal, status={terminal['status']}): "
+            f"{terminal['message']}"
+        )
+    graph_overview = "\n".join(graph_overview_lines)
+    for item in actor_items:
+        if item.get("id") not in reviewer_agent_ids:
+            continue
+        authored_profile = str(item.get("profile") or "").strip()
+        item["profile"] = (
+            f"{authored_profile}\n\n{graph_overview}"
+            if authored_profile
+            else graph_overview
+        )
+
+    return {
+        "actor_items": actor_items,
+        "workflow": {
+            "enabled": True,
+            "initialize_reviewers": bool(
+                raw_execution.get("initialize_reviewers", False)
+            ),
+            "start_node_id": start_node_id,
+            "max_rework_cycles": max_rework_cycles,
+            "required_approvals": required_approvals,
+            "reviewer_agent_ids": reviewer_agent_ids,
+            "nodes": graph_nodes,
+            "terminal_nodes": terminal_nodes,
+        },
+    }
+
+
 def actor_import_options(payload: Any) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Expected JSON object",
         )
-    section_name = "agents" if "agents" in payload else "actors"
+    graph_definition = sequential_graph_import_definition(payload)
+    section_name = "agents" if "agents" in payload or graph_definition else "actors"
     raw_section = payload.get(section_name)
-    if isinstance(raw_section, list):
+    if graph_definition is not None:
+        if raw_section is None:
+            raw_section = {}
+        if not isinstance(raw_section, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="agents must be an object for a graph import",
+            )
+        raw_items = graph_definition["actor_items"]
+        overwrite = raw_section.get("overwrite", payload.get("overwrite", False))
+        include_managed = raw_section.get(
+            "include_managed", payload.get("include_managed", False)
+        )
+        assignment_mode = "sequential"
+    elif isinstance(raw_section, list):
         raw_items = raw_section
         overwrite = payload.get("overwrite", False)
         include_managed = payload.get("include_managed", False)
@@ -3618,6 +3971,7 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
         "assignment_mode": assignment_mode,
         "actors": actors,
         "task_count": task_count,
+        "workflow": deepcopy(graph_definition["workflow"]) if graph_definition else None,
     }
 
 
@@ -3994,8 +4348,23 @@ def project_actor_mutation_transaction(
                 )
             final_agents = normalize_agents(retained_agents + imported_agents)
             assignment_timestamp = utc_now()
+            workflow = (
+                deepcopy(options.get("workflow"))
+                if isinstance(options.get("workflow"), dict)
+                else None
+            )
+            graph_role_agent_ids = [
+                str(node.get("agent_id") or "").strip()
+                for node in (workflow or {}).get("nodes", [])
+                if isinstance(node, dict) and str(node.get("agent_id") or "").strip()
+            ]
             assignment_state = {
                 "mode": assignment_mode,
+                "strategy": (
+                    "conditional_graph"
+                    if workflow
+                    else ("queue_graph" if assignment_mode == "sequential" else "parallel")
+                ),
                 "status": (
                     "ready"
                     if assignment_mode == "sequential" and imported_agents
@@ -4005,13 +4374,18 @@ def project_actor_mutation_transaction(
                 "created_at": assignment_timestamp,
                 "updated_at": assignment_timestamp,
                 "current_agent_id": None,
+                "current_node_id": None,
+                "phase": "node",
                 "current_started_at": None,
                 "completed_agent_ids": [],
                 "assignments": [],
-                "role_agent_ids": [
-                    str(agent.get("id") or "").strip()
-                    for agent in imported_agents
+                "role_agent_ids": graph_role_agent_ids or [
+                    str(agent.get("id") or "").strip() for agent in imported_agents
                 ],
+                "workflow": workflow,
+                "pending_transition": None,
+                "rework_cycle_count": 0,
+                "visit_counts": {},
             }
             project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = assignment_state
             project_entry["updated_at"] = assignment_timestamp
@@ -18884,70 +19258,6 @@ async def remove_project_actor_queue_items(
     return removed
 
 
-async def enqueue_stored_agent_tasks(
-    agent: dict[str, Any],
-    project_phone: str,
-    queue_context: dict[str, Any],
-    *,
-    source: str,
-    port: int | None = None,
-    assignment_id: str | None = None,
-) -> list[dict[str, Any]]:
-    agent_id = str(agent.get("id") or "").strip()
-    agent_name = str(agent.get("name") or "").strip()
-    agent_phone = str(agent.get("phone") or "").strip()
-    agent_git_branch = str(
-        agent.get("git_branch")
-        or agent.get("parameters", {}).get("git_branch")
-        or ""
-    ).strip()
-    queued_tasks: list[dict[str, Any]] = []
-    for task in agent.get("tasks", []):
-        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-        task_id = str(task.get("task_id") or "").strip()
-        queued = await enqueue_phone_channel(
-            str(task.get("queue") or "worker-all"),
-            project_phone,
-            str(task.get("message") or "").strip(),
-            {
-                **metadata,
-                "submitted_via": source,
-                "sender": "Project Manager",
-                "receiver": agent_name,
-                "from_phone": PROJECT_MANAGER_PHONE,
-                "to_phone": agent_phone,
-                "from_agent_id": PROJECT_MANAGER_AGENT_ID,
-                "to_agent_id": agent_id,
-                "to_agent_git_branch": agent_git_branch,
-                "to_agent_profile_endpoint": (
-                    f"/api/v1/projects/{project_phone}/agents/{agent_phone}"
-                ),
-                "assignment_id": assignment_id,
-                "task_id": task_id,
-                "request_id": task.get("request_id"),
-                "status": task.get("status") or "QUEUED",
-            },
-            port,
-            queue_context,
-        )
-        queued_tasks.append(
-            {
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "agent_phone": agent_phone,
-                "agent_git_branch": agent_git_branch,
-                "actor_id": agent_id,
-                "actor_name": agent_name,
-                "actor_phone": agent_phone,
-                "task_id": task_id,
-                "assignment_id": assignment_id,
-                "queue": queued["queue"],
-                "queue_item_id": queued["id"],
-            }
-        )
-    return queued_tasks
-
-
 async def enqueue_sequential_agent_node(
     agent: dict[str, Any],
     project_phone: str,
@@ -18989,37 +19299,201 @@ async def enqueue_sequential_agent_node(
     if not task_lines:
         task_lines = ["Заданий для этого узла нет."]
     profile = str(agent.get("profile") or "").strip()
-    message = "\n".join(
-        [
-            "ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ: НОВЫЙ УЗЕЛ ГРАФА",
-            (
-                f"Сейчас вы агент {agent_name} "
-                f"(id={agent_id}, logical_phone={logical_agent_phone})."
-            ),
-            f"Узел графа: {node_index} из {node_count}.",
-            f"Рабочая Git-ветка: {git_branch or 'не назначена'}.",
-            "Профиль текущей роли:",
-            profile or "Профиль не задан.",
-            "Задания текущего узла:",
-            *task_lines,
-            (
-                "После завершения вызовите "
-                f"POST /api/v1/projects/{project_phone}/agents/"
-                f"{logical_agent_phone}/whoami с JSON "
-                '{"completed":true,"message":"Задание выполнено"}. '
-                "Затем снова прочитайте эту последовательную очередь: система "
-                "сообщит, каким агентом вы стали на следующем узле."
-            ),
-        ]
+    workflow = (
+        assignment.get("workflow")
+        if isinstance(assignment.get("workflow"), dict)
+        else {}
     )
+    phase = str(assignment.get("phase") or "node")
+    current_node_id = str(assignment.get("current_node_id") or "").strip()
+    pending_transition = (
+        assignment.get("pending_transition")
+        if isinstance(assignment.get("pending_transition"), dict)
+        else {}
+    )
+    graph_nodes = [
+        node for node in workflow.get("nodes", []) if isinstance(node, dict)
+    ]
+    if graph_nodes and current_node_id:
+        node_count = len(graph_nodes)
+        node_index = next(
+            (
+                index
+                for index, node in enumerate(graph_nodes, start=1)
+                if str(node.get("id") or "") == current_node_id
+            ),
+            node_index,
+        )
+    graph_node = next(
+        (
+            node
+            for node in graph_nodes
+            if str(node.get("id") or "") == current_node_id
+        ),
+        {},
+    )
+    if phase == "review":
+        reviews = [
+            review
+            for review in pending_transition.get("reviews", [])
+            if isinstance(review, dict)
+        ]
+        review_number = len(reviews) + 1
+        source_task_lines = [
+            f"{index}. [{str(task.get('queue') or 'worker-all')}] "
+            f"{str(task.get('message') or '').strip()}"
+            for index, task in enumerate(
+                pending_transition.get("source_tasks", []), start=1
+            )
+            if isinstance(task, dict)
+        ] or ["Задачи исходного узла не указаны."]
+        previous_review_lines = [
+            f"- {review.get('reviewer_name')}: {review.get('decision')}"
+            + (
+                f" — {review.get('feedback')}"
+                if str(review.get("feedback") or "").strip()
+                else ""
+            )
+            for review in reviews
+        ] or ["- Предыдущих решений нет."]
+        graph_lines = [
+            f"- {node.get('id')} ({node.get('agent_name') or node.get('agent_id')}): "
+            + ", ".join(
+                f"{outcome} -> {target}"
+                for outcome, target in (node.get("transitions") or {}).items()
+            )
+            for node in graph_nodes
+        ]
+        decision_example = json.dumps(
+            {
+                "assignment_id": assignment_id,
+                "status": "APPROVE",
+                "feedback": "Переход проверен",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        message = "\n".join(
+            [
+                f"ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ: РЕВЬЮ ПЕРЕХОДА {review_number} ИЗ 2",
+                (
+                    f"Сейчас вы агент {agent_name} "
+                    f"(id={agent_id}, logical_phone={logical_agent_phone})."
+                ),
+                f"Проект: {queue_context.get('project_name') or project_phone}.",
+                f"Git: {queue_context.get('git_address') or 'не указан'}.",
+                f"Git context: {queue_context.get('git_context_key') or 'не указан'}.",
+                f"Телефон проекта: {project_phone}.",
+                "Профиль ревьювера:",
+                profile or "Профиль не задан.",
+                "Предлагаемый переход:",
+                (
+                    f"{pending_transition.get('source_node_id')} --"
+                    f"{pending_transition.get('outcome')}--> "
+                    f"{pending_transition.get('target_node_id')}"
+                ),
+                f"Исходный агент: {pending_transition.get('source_agent_name')}.",
+                f"Ветка исходного агента: {pending_transition.get('source_git_branch') or 'не указана'}.",
+                "Профиль исходного агента:",
+                str(pending_transition.get("source_agent_profile") or "Профиль не задан."),
+                "Задачи исходного узла:",
+                *source_task_lines,
+                "Результат исходного агента:",
+                str(pending_transition.get("result") or "Результат не приложен."),
+                "Полный граф проекта:",
+                *graph_lines,
+                "Решения предыдущих ревьюверов:",
+                *previous_review_lines,
+                (
+                    "Отправьте решение в текущий whoami endpoint. Допустимы только "
+                    "APPROVE или REJECT; при REJECT поле feedback обязательно."
+                ),
+                f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
+                decision_example,
+            ]
+        )
+    else:
+        allowed_outcomes = sorted(
+            str(outcome).upper()
+            for outcome in (graph_node.get("transitions") or {})
+        )
+        last_transition = (
+            assignment.get("last_transition")
+            if isinstance(assignment.get("last_transition"), dict)
+            else {}
+        )
+        transition_context: list[str] = []
+        if last_transition and str(
+            last_transition.get("applied_target_node_id") or ""
+        ) == current_node_id:
+            transition_context = [
+                "Контекст предыдущего перехода/доработки:",
+                f"Исходный узел: {last_transition.get('source_node_id')}.",
+                f"Результат: {last_transition.get('result') or 'не приложен'}.",
+                f"Замечание: {last_transition.get('feedback') or 'нет'}.",
+                "Решения ревьюверов: "
+                + "; ".join(
+                    f"{review.get('reviewer_name')}={review.get('decision')}"
+                    + (
+                        f" ({review.get('feedback')})"
+                        if str(review.get("feedback") or "").strip()
+                        else ""
+                    )
+                    for review in last_transition.get("reviews", [])
+                    if isinstance(review, dict)
+                ),
+            ]
+        completion_example = json.dumps(
+            {
+                "assignment_id": assignment_id,
+                "status": allowed_outcomes[0] if allowed_outcomes else "DONE",
+                "result": "Описание выполненной работы и проверок",
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        message = "\n".join(
+            [
+                "ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ: НОВЫЙ УЗЕЛ ГРАФА",
+                (
+                    f"Сейчас вы агент {agent_name} "
+                    f"(id={agent_id}, logical_phone={logical_agent_phone})."
+                ),
+                f"Проект: {queue_context.get('project_name') or project_phone}.",
+                f"Git: {queue_context.get('git_address') or 'не указан'}.",
+                f"Узел графа: {current_node_id or node_index} ({node_index} из {node_count}).",
+                f"Рабочая Git-ветка: {git_branch or 'не назначена'}.",
+                "Профиль текущей роли:",
+                profile or "Профиль не задан.",
+                "Задания текущего узла:",
+                *task_lines,
+                *transition_context,
+                "Допустимые результаты: " + ", ".join(allowed_outcomes or ["DONE"]),
+                (
+                    "После выполнения отправьте результат в текущий whoami endpoint. "
+                    "Система выдаст две последовательные роли ревьюверов и применит "
+                    "переход только после двух APPROVE."
+                ),
+                f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
+                completion_example,
+            ]
+        )
     queued = await enqueue_phone_channel(
         "worker-all",
         project_phone,
         message,
         {
             "submitted_via": source,
-            "action": "sequential_agent_node_assigned",
+            "action": (
+                "sequential_transition_review_assigned"
+                if phase == "review"
+                else "sequential_agent_node_assigned"
+            ),
             "assignment_mode": "sequential",
+            "sequential_identity_queue": True,
+            "identity_kind": (
+                "transition_review" if phase == "review" else "graph_node"
+            ),
             "assignment_id": assignment_id,
             "sender": PROJECT_MANAGER_AGENT_NAME,
             "receiver": agent_name,
@@ -19030,6 +19504,14 @@ async def enqueue_sequential_agent_node(
             "to_agent_git_branch": git_branch,
             "graph_node_index": node_index,
             "graph_node_count": node_count,
+            "graph_node_id": current_node_id,
+            "phase": phase,
+            "workflow": deepcopy(workflow),
+            "pending_transition": deepcopy(pending_transition) or None,
+            "allowed_outcomes": sorted(
+                str(outcome).upper()
+                for outcome in (graph_node.get("transitions") or {})
+            ),
             "task_ids": [
                 str(task.get("task_id") or "").strip()
                 for task in tasks
@@ -19055,6 +19537,24 @@ async def enqueue_sequential_agent_node(
         port,
         queue_context,
     )
+    if isinstance(workflow, dict) and workflow.get("enabled"):
+        # The active graph node/review must be consumed before one-time reviewer
+        # bootstrap cards that may already be waiting in the shared queue.
+        async with locks["worker-all"]:
+            promoted_item: Any | None = None
+            remaining: deque[Any] = deque()
+            while queues["worker-all"]:
+                queue_item = queues["worker-all"].popleft()
+                if (
+                    promoted_item is None
+                    and str(queue_item_id(queue_item) or "") == str(queued["id"])
+                ):
+                    promoted_item = queue_item
+                else:
+                    remaining.append(queue_item)
+            if promoted_item is not None:
+                remaining.appendleft(promoted_item)
+            queues["worker-all"] = remaining
     return {
         "agent_id": agent_id,
         "agent_name": agent_name,
@@ -19063,6 +19563,8 @@ async def enqueue_sequential_agent_node(
         "assignment_id": assignment_id,
         "graph_node_index": node_index,
         "graph_node_count": node_count,
+        "graph_node_id": current_node_id,
+        "phase": phase,
         "task_count": len(tasks),
         "task_ids": [
             str(task.get("task_id") or "").strip()
@@ -19075,12 +19577,110 @@ async def enqueue_sequential_agent_node(
     }
 
 
+async def enqueue_sequential_reviewer_bootstrap(
+    reviewer: dict[str, Any],
+    project_phone: str,
+    queue_context: dict[str, Any],
+    assignment: dict[str, Any],
+    *,
+    reviewer_index: int,
+    source: str,
+    port: int | None = None,
+) -> dict[str, Any]:
+    reviewer_id = str(reviewer.get("id") or "").strip()
+    reviewer_name = str(reviewer.get("name") or "").strip()
+    reviewer_phone = str(reviewer.get("phone") or "").strip()
+    reviewer_parameters = (
+        reviewer.get("parameters")
+        if isinstance(reviewer.get("parameters"), dict)
+        else {}
+    )
+    git_branch = str(
+        reviewer.get("git_branch")
+        or reviewer_parameters.get("git_branch")
+        or ""
+    ).strip()
+    state_endpoint = f"/api/v1/projects/{project_phone}/state.json"
+    review_endpoint = (
+        f"/api/v1/projects/{project_phone}/agents/{reviewer_phone}/whoami"
+    )
+    message = "\n".join(
+        [
+            "ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ: ИНИЦИАЛИЗАЦИЯ РЕВЬЮВЕРА",
+            (
+                f"Сейчас вы ревьювер {reviewer_name} "
+                f"(ревьювер {reviewer_index} из 2, id={reviewer_id}, "
+                f"logical_phone={reviewer_phone})."
+            ),
+            "Вы сохраняете роль ревьювера на всё время проекта.",
+            (
+                f"Полный актуальный JSON проекта: GET {state_endpoint}. "
+                "Он содержит граф, всех агентов, выполненную работу, решения "
+                "ревьюверов, очереди и последние события."
+            ),
+            (
+                "Новые переходы проверяйте по своему logical_phone. "
+                f"Решение APPROVE или REJECT отправляйте в POST {review_endpoint}."
+            ),
+            "Профиль ревьювера:",
+            str(reviewer.get("profile") or "Профиль не задан.").strip(),
+        ]
+    )
+    queued = await enqueue_phone_channel(
+        "worker-all",
+        project_phone,
+        message,
+        {
+            "submitted_via": source,
+            "action": "sequential_reviewer_bootstrap",
+            "assignment_mode": "sequential",
+            "sequential_identity_queue": True,
+            "identity_kind": "reviewer_bootstrap",
+            "reviewer_index": reviewer_index,
+            "sender": PROJECT_MANAGER_AGENT_NAME,
+            "receiver": reviewer_name,
+            "from_phone": PROJECT_MANAGER_PHONE,
+            "to_phone": project_phone,
+            "to_agent_id": reviewer_id,
+            "logical_to_phone": reviewer_phone,
+            "to_agent_git_branch": git_branch,
+            "project_state_endpoint": state_endpoint,
+            "review_endpoint": review_endpoint,
+            "agent": {
+                "id": reviewer_id,
+                "name": reviewer_name,
+                "phone": reviewer_phone,
+                "git_branch": git_branch,
+                "profile": reviewer.get("profile"),
+            },
+            "workflow": deepcopy(assignment.get("workflow")),
+            "status": "READY",
+        },
+        port,
+        queue_context,
+    )
+    return {
+        "agent_id": reviewer_id,
+        "agent_name": reviewer_name,
+        "logical_agent_phone": reviewer_phone,
+        "delivery_phone": project_phone,
+        "identity_kind": "reviewer_bootstrap",
+        "reviewer_index": reviewer_index,
+        "task_count": 0,
+        "queue": queued["queue"],
+        "queue_item_id": queued["id"],
+        "project_state_endpoint": state_endpoint,
+        "review_endpoint": review_endpoint,
+    }
+
+
 async def import_project_actors_data(
     project_id: str,
     payload: Any,
     *,
     source: str = "api",
     port: int | None = None,
+    activate_sequential: bool = True,
 ) -> dict[str, Any]:
     options = actor_import_options(payload)
     options["source"] = source
@@ -19097,6 +19697,101 @@ async def import_project_actors_data(
             action="removed_by_actor_import_overwrite",
         )
         queued_tasks: list[dict[str, Any]] = []
+        if (
+            activate_sequential
+            and result.get("assignment_mode") == "sequential"
+            and result["imported_agents"]
+        ):
+            initial_state = result.get("assignment") or {}
+            initial_workflow = initial_state.get("workflow")
+            first_agent_id = ""
+            if isinstance(initial_workflow, dict) and initial_workflow.get("enabled"):
+                start_node_id = str(
+                    initial_workflow.get("start_node_id") or ""
+                ).strip()
+                start_node = next(
+                    (
+                        node
+                        for node in initial_workflow.get("nodes", [])
+                        if isinstance(node, dict)
+                        and str(node.get("id") or "").strip() == start_node_id
+                    ),
+                    None,
+                )
+                first_agent_id = str((start_node or {}).get("agent_id") or "").strip()
+            if not first_agent_id:
+                first_agent_id = next(
+                    (
+                        str(agent_id).strip()
+                        for agent_id in initial_state.get("role_agent_ids", [])
+                        if str(agent_id).strip()
+                    ),
+                    "",
+                )
+            first_agent = next(
+                (
+                    agent
+                    for agent in result["imported_agents"]
+                    if str(agent.get("id") or "").strip() == first_agent_id
+                ),
+                result["imported_agents"][0],
+            )
+            activated = await run_group_write_transaction(
+                sequential_agent_assignment_transaction,
+                project_id,
+                str(first_agent.get("phone") or "").strip(),
+                False,
+                utc_now(),
+            )
+            active_agent = activated.get("agent")
+            if not isinstance(active_agent, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Sequential graph could not activate its first node",
+                )
+            workflow = activated.get("assignment", {}).get("workflow")
+            if (
+                isinstance(workflow, dict)
+                and workflow.get("enabled")
+                and workflow.get("initialize_reviewers") is True
+            ):
+                agents_by_id = {
+                    str(agent.get("id") or "").strip(): agent
+                    for agent in activated.get("agents", [])
+                    if isinstance(agent, dict)
+                }
+                for reviewer_index, reviewer_id in enumerate(
+                    workflow.get("reviewer_agent_ids", []),
+                    start=1,
+                ):
+                    reviewer = agents_by_id.get(str(reviewer_id).strip())
+                    if reviewer is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="A conditional graph reviewer was not imported",
+                        )
+                    queued_tasks.append(
+                        await enqueue_sequential_reviewer_bootstrap(
+                            reviewer,
+                            activated["project_phone"],
+                            activated["queue_context"],
+                            activated["assignment"],
+                            reviewer_index=reviewer_index,
+                            source=f"agent_json_import:{source}",
+                            port=port,
+                        )
+                    )
+            node = await enqueue_sequential_agent_node(
+                active_agent,
+                activated["project_phone"],
+                activated["queue_context"],
+                activated["assignment"],
+                source=f"agent_json_import:{source}",
+                port=port,
+            )
+            queued_tasks.append(node)
+            result["assignment"] = deepcopy(activated["assignment"])
+            result["active_agent"] = deepcopy(active_agent)
         immediately_queued_agents = (
             result["imported_agents"]
             if result.get("assignment_mode") != "sequential"
@@ -19163,11 +19858,28 @@ async def import_project_actors_data(
         "removed_actor_count": len(result["removed_agents"]),
         "imported_actor_count": len(result["imported_agents"]),
         "removed_task_count": len(removed_tasks),
-        "queued_task_count": len(queued_tasks),
+        "queued_task_count": (
+            sum(int(item.get("task_count") or 0) for item in queued_tasks)
+            if result.get("assignment_mode") == "sequential"
+            else len(queued_tasks)
+        ),
+        "queued_queue_item_count": len(queued_tasks),
         "deferred_task_count": (
-            sum(len(agent.get("tasks") or []) for agent in result["imported_agents"])
+            max(
+                0,
+                sum(
+                    len(agent.get("tasks") or [])
+                    for agent in result["imported_agents"]
+                )
+                - sum(int(item.get("task_count") or 0) for item in queued_tasks),
+            )
             if result.get("assignment_mode") == "sequential"
             else 0
+        ),
+        "sequential_poll_endpoint": (
+            f"/worker/all/{result['project_phone']}?to_phone={result['project_phone']}"
+            if result.get("assignment_mode") == "sequential"
+            else None
         ),
         "removed_tasks": removed_tasks,
         "queued_tasks": queued_tasks,
@@ -19743,11 +20455,522 @@ def project_agent_identity_snapshot_transaction(
             }
 
 
+def conditional_graph_assignment_transaction_locked(
+    config: dict[str, Any],
+    raw_key: str,
+    context_key: str,
+    project_entry: dict[str, Any],
+    context: dict[str, Any],
+    state: dict[str, Any],
+    previous_agents: list[dict[str, Any]],
+    original_agents: list[dict[str, Any]],
+    project_agents: list[dict[str, Any]],
+    requested_phone: str,
+    complete_current: bool,
+    seen_at: str,
+    submitted_outcome: str,
+    submitted_feedback: str,
+    submitted_result: str,
+    expected_assignment_id: str,
+) -> dict[str, Any]:
+    workflow = state.get("workflow")
+    if not isinstance(workflow, dict) or not workflow.get("enabled"):
+        raise RuntimeError("Conditional graph workflow is not configured")
+    nodes = [
+        deepcopy(node)
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict)
+    ]
+    nodes_by_id = {
+        str(node.get("id") or "").strip(): node
+        for node in nodes
+        if str(node.get("id") or "").strip()
+    }
+    terminal_nodes = {
+        str(node_id): deepcopy(node)
+        for node_id, node in (workflow.get("terminal_nodes") or {}).items()
+        if isinstance(node, dict)
+    }
+    reviewer_agent_ids = [
+        str(agent_id).strip()
+        for agent_id in workflow.get("reviewer_agent_ids", [])
+        if str(agent_id).strip()
+    ]
+    if len(reviewer_agent_ids) != 2:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Conditional graph requires exactly two configured reviewers",
+        )
+    agents_by_id = {
+        str(agent.get("id") or "").strip(): agent
+        for agent in project_agents
+        if str(agent.get("id") or "").strip()
+    }
+    missing_agents = [
+        agent_id
+        for agent_id in reviewer_agent_ids
+        + [str(node.get("agent_id") or "").strip() for node in nodes]
+        if agent_id not in agents_by_id
+    ]
+    if missing_agents:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "workflow_agents_missing", "agent_ids": missing_agents},
+        )
+
+    assignments = [
+        deepcopy(item)
+        for item in state.get("assignments", [])
+        if isinstance(item, dict)
+    ]
+    state["assignments"] = assignments
+    visit_counts = {
+        str(node_id): max(0, int(count or 0))
+        for node_id, count in (state.get("visit_counts") or {}).items()
+        if str(node_id)
+    }
+    state["visit_counts"] = visit_counts
+
+    def update_agent_parameters(agent_id: str, **changes: Any) -> None:
+        for index, stored_agent in enumerate(previous_agents):
+            if str(stored_agent.get("id") or "").strip() != agent_id:
+                continue
+            updated = deepcopy(stored_agent)
+            parameters = dict(updated.get("parameters") or {})
+            parameters.update(changes)
+            updated["parameters"] = normalize_agent_parameters(parameters)
+            previous_agents[index] = updated
+            return
+
+    def finish_current_assignment(
+        assignment_status: str,
+        *,
+        outcome: str = "",
+        feedback: str = "",
+    ) -> dict[str, Any] | None:
+        assignment_id = str(state.get("current_assignment_id") or "").strip()
+        for assignment in assignments:
+            if str(assignment.get("assignment_id") or "") != assignment_id:
+                continue
+            assignment["status"] = assignment_status
+            assignment["completed_at"] = seen_at
+            if outcome:
+                assignment["outcome"] = outcome
+            if feedback:
+                assignment["feedback"] = feedback
+            return deepcopy(assignment)
+        return None
+
+    def activate_agent(
+        agent_id: str,
+        *,
+        phase: str,
+        node_id: str,
+        review_index: int | None = None,
+    ) -> dict[str, Any]:
+        agent = agents_by_id[agent_id]
+        assignment_id = str(uuid4())
+        assignment = {
+            "assignment_id": assignment_id,
+            "kind": "transition_review" if phase == "review" else "graph_node",
+            "phase": phase,
+            "node_id": node_id,
+            "agent_id": agent_id,
+            "agent_name": agent.get("name"),
+            "agent_phone": agent.get("phone"),
+            "git_branch": agent.get("git_branch")
+            or agent.get("parameters", {}).get("git_branch"),
+            "task_ids": [
+                str(task.get("task_id") or "").strip()
+                for task in agent.get("tasks", [])
+                if isinstance(task, dict) and str(task.get("task_id") or "").strip()
+            ],
+            "review_index": review_index,
+            "status": "active",
+            "started_at": seen_at,
+            "completed_at": None,
+        }
+        assignments.append(assignment)
+        state["phase"] = phase
+        state["current_node_id"] = node_id
+        state["current_agent_id"] = agent_id
+        state["current_assignment_id"] = assignment_id
+        state["current_started_at"] = seen_at
+        state["status"] = "active"
+        if phase == "node":
+            visit_counts[node_id] = visit_counts.get(node_id, 0) + 1
+        update_agent_parameters(
+            agent_id,
+            created_at=agent.get("parameters", {}).get("created_at") or seen_at,
+            first_seen_at=agent.get("parameters", {}).get("first_seen_at") or seen_at,
+            last_seen_at=seen_at,
+            alive_until=(
+                (parse_utc_datetime(seen_at) or datetime.now(timezone.utc))
+                + timedelta(seconds=AGENT_HEARTBEAT_TTL_SECONDS)
+            ).isoformat(),
+            presence_status="alive",
+            assignment_status="active",
+            current_assignment_id=assignment_id,
+        )
+        return assignment
+
+    current_agent_id = str(state.get("current_agent_id") or "").strip()
+    current_agent = agents_by_id.get(current_agent_id)
+    current_node_id = str(state.get("current_node_id") or "").strip()
+    newly_assigned = False
+    completed_agent: dict[str, Any] | None = None
+    completed_assignment: dict[str, Any] | None = None
+    transition_applied: dict[str, Any] | None = None
+
+    if current_agent is None:
+        if str(state.get("status") or "") in {"completed", "blocked"}:
+            selected_agent = None
+        else:
+            start_node_id = str(workflow.get("start_node_id") or "").strip()
+            start_node = nodes_by_id.get(start_node_id)
+            if start_node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The configured graph start node no longer exists",
+                )
+            current_node_id = start_node_id
+            current_agent_id = str(start_node.get("agent_id") or "").strip()
+            current_agent = agents_by_id[current_agent_id]
+            activate_agent(current_agent_id, phase="node", node_id=current_node_id)
+            newly_assigned = True
+            selected_agent = current_agent
+    else:
+        selected_agent = current_agent
+
+    clean_requested_phone = requested_phone.strip()
+    if selected_agent is not None:
+        expected_phone = str(selected_agent.get("phone") or "").strip()
+        if clean_requested_phone != expected_phone:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "sequential_assignment_in_progress",
+                    "current_agent_id": current_agent_id,
+                    "current_agent_name": selected_agent.get("name"),
+                    "expected_phone": expected_phone,
+                    "phase": state.get("phase"),
+                    "message": "Another sequential role is still active",
+                },
+            )
+        if expected_assignment_id and expected_assignment_id != str(
+            state.get("current_assignment_id") or ""
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "stale_sequential_assignment",
+                    "expected_assignment_id": state.get("current_assignment_id"),
+                },
+            )
+
+    if complete_current and selected_agent is not None:
+        phase = str(state.get("phase") or "node")
+        completed_agent = deepcopy(selected_agent)
+        if phase == "node":
+            node = nodes_by_id.get(current_node_id)
+            if node is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="The active graph node no longer exists",
+                )
+            transitions = {
+                str(key).upper(): str(value)
+                for key, value in (node.get("transitions") or {}).items()
+            }
+            outcome = submitted_outcome.strip().upper()
+            if not outcome and len(transitions) == 1:
+                outcome = next(iter(transitions))
+            if outcome not in transitions:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "invalid_graph_outcome",
+                        "node_id": current_node_id,
+                        "outcome": outcome,
+                        "allowed": sorted(transitions),
+                    },
+                )
+            target_node_id = transitions[outcome]
+            completed_assignment = finish_current_assignment(
+                "awaiting_review",
+                outcome=outcome,
+                feedback=submitted_feedback,
+            )
+            pending_transition = {
+                "transition_id": str(uuid4()),
+                "source_node_id": current_node_id,
+                "source_agent_id": current_agent_id,
+                "source_agent_name": selected_agent.get("name"),
+                "source_agent_phone": selected_agent.get("phone"),
+                "source_agent_profile": selected_agent.get("profile"),
+                "source_git_branch": selected_agent.get("git_branch")
+                or selected_agent.get("parameters", {}).get("git_branch"),
+                "source_tasks": deepcopy(selected_agent.get("tasks") or []),
+                "source_assignment_id": state.get("current_assignment_id"),
+                "outcome": outcome,
+                "target_node_id": target_node_id,
+                "result": submitted_result or submitted_feedback,
+                "feedback": submitted_feedback,
+                "proposed_at": seen_at,
+                "reviews": [],
+                "status": "reviewing",
+            }
+            state["pending_transition"] = pending_transition
+            update_agent_parameters(
+                current_agent_id,
+                last_seen_at=seen_at,
+                presence_status="awaiting_review",
+                assignment_status="awaiting_review",
+                assignment_completed_at=seen_at,
+            )
+            reviewer_id = reviewer_agent_ids[0]
+            activate_agent(
+                reviewer_id,
+                phase="review",
+                node_id=current_node_id,
+                review_index=1,
+            )
+            current_agent_id = reviewer_id
+            selected_agent = agents_by_id[reviewer_id]
+            newly_assigned = True
+        elif phase == "review":
+            decision = submitted_outcome.strip().upper()
+            if decision not in SEQUENTIAL_REVIEW_DECISIONS:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "invalid_transition_review_decision",
+                        "decision": decision,
+                        "allowed": sorted(SEQUENTIAL_REVIEW_DECISIONS),
+                    },
+                )
+            if decision == "REJECT" and not submitted_feedback.strip():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="A REJECT decision requires non-empty feedback",
+                )
+            pending_transition = state.get("pending_transition")
+            if not isinstance(pending_transition, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="There is no transition waiting for review",
+                )
+            reviews = [
+                deepcopy(review)
+                for review in pending_transition.get("reviews", [])
+                if isinstance(review, dict)
+            ]
+            review = {
+                "reviewer_index": len(reviews) + 1,
+                "reviewer_agent_id": current_agent_id,
+                "reviewer_name": selected_agent.get("name"),
+                "decision": decision,
+                "feedback": submitted_feedback,
+                "reviewed_at": seen_at,
+                "assignment_id": state.get("current_assignment_id"),
+            }
+            reviews.append(review)
+            pending_transition["reviews"] = reviews
+            if decision == "REJECT":
+                pending_transition["feedback"] = submitted_feedback
+            completed_assignment = finish_current_assignment(
+                "approved" if decision == "APPROVE" else "rejected",
+                outcome=decision,
+                feedback=submitted_feedback,
+            )
+            update_agent_parameters(
+                current_agent_id,
+                last_seen_at=seen_at,
+                alive_until=seen_at,
+                presence_status="completed",
+                assignment_status=(
+                    "review_approved" if decision == "APPROVE" else "review_rejected"
+                ),
+                assignment_completed_at=seen_at,
+            )
+            if decision == "APPROVE" and len(reviews) < 2:
+                next_reviewer_id = reviewer_agent_ids[len(reviews)]
+                activate_agent(
+                    next_reviewer_id,
+                    phase="review",
+                    node_id=str(pending_transition.get("source_node_id") or ""),
+                    review_index=len(reviews) + 1,
+                )
+                current_agent_id = next_reviewer_id
+                selected_agent = agents_by_id[next_reviewer_id]
+                newly_assigned = True
+            else:
+                source_node_id = str(pending_transition.get("source_node_id") or "")
+                proposed_target_id = str(pending_transition.get("target_node_id") or "")
+                applied_target_id = source_node_id if decision == "REJECT" else proposed_target_id
+                rework = (
+                    decision == "REJECT"
+                    or str(pending_transition.get("outcome") or "").upper()
+                    in {"FAIL", "FAILED", "REWORK", "REJECT"}
+                    or (
+                        applied_target_id in nodes_by_id
+                        and visit_counts.get(applied_target_id, 0) > 0
+                    )
+                )
+                rework_cycle_count = max(0, int(state.get("rework_cycle_count") or 0))
+                if rework:
+                    rework_cycle_count += 1
+                state["rework_cycle_count"] = rework_cycle_count
+                max_rework_cycles = max(
+                    0, int(workflow.get("max_rework_cycles") or 0)
+                )
+                pending_transition["status"] = (
+                    "rejected" if decision == "REJECT" else "approved"
+                )
+                pending_transition["resolved_at"] = seen_at
+                pending_transition["applied_target_node_id"] = applied_target_id
+                transition_applied = deepcopy(pending_transition)
+                for assignment in assignments:
+                    if str(assignment.get("assignment_id") or "") == str(
+                        pending_transition.get("source_assignment_id") or ""
+                    ):
+                        assignment["status"] = (
+                            "review_rejected" if decision == "REJECT" else "transitioned"
+                        )
+                        assignment["transition_resolved_at"] = seen_at
+                        assignment["reviews"] = deepcopy(reviews)
+                        break
+                state["last_transition"] = deepcopy(pending_transition)
+                state["pending_transition"] = None
+                if rework_cycle_count > max_rework_cycles:
+                    state["status"] = "blocked"
+                    state["blocked_at"] = seen_at
+                    state["blocked_reason"] = "max_rework_cycles_exceeded"
+                    state["current_agent_id"] = None
+                    state["current_assignment_id"] = None
+                    state["current_started_at"] = None
+                    selected_agent = None
+                    current_agent_id = ""
+                elif applied_target_id in terminal_nodes:
+                    terminal = terminal_nodes[applied_target_id]
+                    state["status"] = "completed"
+                    state["completed_at"] = seen_at
+                    state["terminal_node"] = deepcopy(terminal)
+                    state["current_node_id"] = applied_target_id
+                    state["current_agent_id"] = None
+                    state["current_assignment_id"] = None
+                    state["current_started_at"] = None
+                    selected_agent = None
+                    current_agent_id = ""
+                else:
+                    target_node = nodes_by_id.get(applied_target_id)
+                    if target_node is None:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail="The approved transition target no longer exists",
+                        )
+                    target_agent_id = str(target_node.get("agent_id") or "")
+                    activate_agent(
+                        target_agent_id,
+                        phase="node",
+                        node_id=applied_target_id,
+                    )
+                    current_agent_id = target_agent_id
+                    selected_agent = agents_by_id[target_agent_id]
+                    newly_assigned = True
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Unsupported sequential graph phase: {phase}",
+            )
+
+    if selected_agent is not None and not complete_current:
+        parameters = selected_agent.get("parameters", {})
+        try:
+            heartbeat_count = max(0, int(parameters.get("heartbeat_count") or 0)) + 1
+        except (TypeError, ValueError):
+            heartbeat_count = 1
+        update_agent_parameters(
+            str(selected_agent.get("id") or ""),
+            last_seen_at=seen_at,
+            heartbeat_count=str(heartbeat_count),
+            presence_status="alive",
+            assignment_status="active",
+        )
+
+    completed_agent_ids = [
+        str(agent_id).strip()
+        for agent_id in state.get("completed_agent_ids", [])
+        if str(agent_id).strip()
+    ]
+    if completed_agent is not None:
+        completed_id = str(completed_agent.get("id") or "").strip()
+        if completed_id and completed_id not in completed_agent_ids:
+            completed_agent_ids.append(completed_id)
+    state["completed_agent_ids"] = completed_agent_ids
+    state["visit_counts"] = visit_counts
+    state["updated_at"] = seen_at
+    state["revision"] = int(state.get("revision") or 0) + 1
+    project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+    project_entry["updated_at"] = seen_at
+    raw_projects = config.get(PROJECTS_KEY)
+    projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+    projects[raw_key] = project_entry
+    config[PROJECTS_KEY] = projects
+
+    updated_agents = normalize_agents(previous_agents)
+    write_agents_file_unlocked(updated_agents)
+    try:
+        write_git_config_file(config)
+    except Exception:
+        write_agents_file_unlocked(original_agents)
+        raise
+    updated_project_agents = full_agents_for_project(
+        updated_agents,
+        context_key,
+        phone_git_contexts_from_config(config),
+    )
+    updated_by_id = {
+        str(agent.get("id") or "").strip(): agent for agent in updated_project_agents
+    }
+    selected_agent = updated_by_id.get(current_agent_id)
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    return {
+        "sequential": True,
+        "conditional_graph": True,
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "project": public_project_context(context),
+        "context_key": context_key,
+        "agent": deepcopy(selected_agent) if selected_agent else None,
+        "agents": deepcopy(updated_project_agents),
+        "newly_assigned": newly_assigned,
+        "completed_agent": completed_agent,
+        "completed_assignment": completed_assignment,
+        "transition_applied": transition_applied,
+        "all_completed": state.get("status") in {"completed", "blocked"},
+        "blocked": state.get("status") == "blocked",
+        "assignment": deepcopy(state),
+        "queue_context": {
+            "queue_phone": project_phone,
+            "git_context_phone": project_phone,
+            "project_phone": project_phone,
+            "project_name": project_entry.get("project_name"),
+            "git_context_key": context_key,
+            "git_address": project_entry.get("git_address"),
+        },
+    }
+
+
 def sequential_agent_assignment_transaction(
     project_id: str,
     requested_phone: str,
     complete_current: bool,
     seen_at: str,
+    submitted_outcome: str = "",
+    submitted_feedback: str = "",
+    submitted_result: str = "",
+    expected_assignment_id: str = "",
 ) -> dict[str, Any]:
     with git_config_file_lock():
         with agents_file_lock():
@@ -19769,6 +20992,26 @@ def sequential_agent_assignment_transaction(
                 context_key,
                 phone_contexts,
             )
+            workflow = state.get("workflow")
+            if isinstance(workflow, dict) and workflow.get("enabled"):
+                return conditional_graph_assignment_transaction_locked(
+                    config,
+                    raw_key,
+                    context_key,
+                    project_entry,
+                    context,
+                    state,
+                    previous_agents,
+                    original_agents,
+                    project_agents,
+                    requested_phone,
+                    complete_current,
+                    seen_at,
+                    submitted_outcome,
+                    submitted_feedback,
+                    submitted_result,
+                    expected_assignment_id,
+                )
             clean_requested_phone = requested_phone.strip()
             if not any(
                 str(agent.get("phone") or "").strip() == clean_requested_phone
@@ -20155,8 +21398,42 @@ async def identify_sequential_project_agent(
     request_message: str,
     complete_current: bool,
     request: Request,
+    submitted_outcome: str = "",
+    submitted_feedback: str = "",
+    submitted_result: str = "",
+    expected_assignment_id: str = "",
+    identity_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     seen_at = utc_now()
+    if isinstance(identity_payload, dict):
+        submitted_outcome = str(
+            identity_payload.get("outcome")
+            or identity_payload.get("status")
+            or submitted_outcome
+            or ""
+        )
+        submitted_feedback = str(
+            identity_payload.get("feedback") or submitted_feedback or ""
+        )
+        submitted_result = str(
+            identity_payload.get("result") or submitted_result or ""
+        )
+        expected_assignment_id = str(
+            identity_payload.get("assignment_id")
+            or expected_assignment_id
+            or ""
+        )
+    submitted_outcome = submitted_outcome.strip().upper()
+    submitted_feedback = submitted_feedback.strip()
+    submitted_result = submitted_result.strip()
+    expected_assignment_id = expected_assignment_id.strip()
+    if len(submitted_feedback) > 20000 or len(submitted_result) > 100000:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="feedback or result is too large",
+        )
+    if submitted_outcome:
+        complete_current = True
     async with group_task_submission_lock:
         result = await run_group_write_transaction(
             sequential_agent_assignment_transaction,
@@ -20164,6 +21441,10 @@ async def identify_sequential_project_agent(
             requested_phone,
             complete_current,
             seen_at,
+            submitted_outcome,
+            submitted_feedback,
+            submitted_result,
+            expected_assignment_id,
         )
         completed_agent = result.get("completed_agent")
         removed_tasks: list[dict[str, Any]] = []
@@ -20202,17 +21483,24 @@ async def identify_sequential_project_agent(
         agent = result.get("agent")
         if not isinstance(agent, dict):
             assignment = result.get("assignment") or {}
+            blocked = bool(result.get("blocked")) or assignment.get("status") == "blocked"
             return {
-                "answer": "Все последовательные роли и их задания выполнены.",
+                "answer": (
+                    "Последовательный граф заблокирован: превышено допустимое "
+                    "число циклов доработки."
+                    if blocked
+                    else "Все последовательные роли, проверки и задания выполнены."
+                ),
                 "identity_request": request_message or "Кто я?",
                 "project_id": result["project_id"],
                 "project_phone": result["project_phone"],
                 "project": result["project"],
                 "assignment_mode": "sequential",
                 "all_completed": True,
+                "blocked": blocked,
                 "agent": None,
                 "presence": {
-                    "status": "completed",
+                    "status": "blocked" if blocked else "completed",
                     "is_alive": False,
                 },
                 "assigned_tasks": [],
@@ -20222,6 +21510,9 @@ async def identify_sequential_project_agent(
                 },
                 "work_history": [],
                 "assignment": assignment,
+                "terminal_node": assignment.get("terminal_node"),
+                "last_transition": assignment.get("last_transition"),
+                "transition_applied": result.get("transition_applied"),
                 "completed_assignments": assignment.get("assignments", []),
                 "removed_pending_tasks": removed_tasks,
             }
@@ -20230,14 +21521,14 @@ async def identify_sequential_project_agent(
         assignment_id = str(assignment.get("current_assignment_id") or "").strip()
         queued_tasks: list[dict[str, Any]] = []
         if result.get("newly_assigned"):
-            queued_tasks = await enqueue_stored_agent_tasks(
+            queued_tasks = [await enqueue_sequential_agent_node(
                 agent,
                 result["project_phone"],
                 result["queue_context"],
-                source="sequential_agent_assignment",
+                assignment,
+                source="sequential_agent_node_switch",
                 port=request_port(request),
-                assignment_id=assignment_id,
-            )
+            )]
 
         agent_id = str(agent.get("id") or "").strip()
         agent_name = str(agent.get("name") or "").strip()
@@ -20290,12 +21581,24 @@ async def identify_sequential_project_agent(
     completed_count = len(assignment.get("completed_agent_ids", []))
     total_count = len(assignment.get("role_agent_ids", []))
     role_number = min(completed_count + 1, total_count) if total_count else 0
-    answer = (
-        f"Ваша текущая последовательная роль — {agent_name} "
-        f"(роль {role_number} из {total_count}, id={agent_id}, phone={agent_phone}). "
-        f"Ветка: {git_branch or 'не назначена'}. Задач в этой роли: "
-        f"{len(assigned_tasks)}. Параллельная роль не будет выдана."
-    )
+    phase = str(assignment.get("phase") or "node")
+    if phase == "review":
+        pending_transition = assignment.get("pending_transition") or {}
+        review_number = len(pending_transition.get("reviews", [])) + 1
+        answer = (
+            f"Сейчас вы ревьювер перехода №{review_number} из 2 — {agent_name} "
+            f"(id={agent_id}, phone={agent_phone}). Проверьте переход "
+            f"{pending_transition.get('source_node_id')} --"
+            f"{pending_transition.get('outcome')}--> "
+            f"{pending_transition.get('target_node_id')} и ответьте APPROVE или REJECT."
+        )
+    else:
+        answer = (
+            f"Ваша текущая последовательная роль — {agent_name} "
+            f"(роль {role_number} из {total_count}, id={agent_id}, phone={agent_phone}). "
+            f"Ветка: {git_branch or 'не назначена'}. Задач в этой роли: "
+            f"{len(assigned_tasks)}. Каждый переход подтвердят два ревьювера."
+        )
     return {
         "answer": answer,
         "identity_request": request_message or "Кто я?",
@@ -20304,6 +21607,8 @@ async def identify_sequential_project_agent(
         "project": result["project"],
         "assignment_mode": "sequential",
         "all_completed": False,
+        "blocked": False,
+        "phase": phase,
         "newly_assigned": bool(result.get("newly_assigned")),
         "agent": agent,
         "profile": agent.get("profile"),
@@ -20314,9 +21619,16 @@ async def identify_sequential_project_agent(
         "work_history_since": created_at,
         "work_history": work_history,
         "assignment": assignment,
+        "pending_transition": assignment.get("pending_transition"),
+        "last_transition": assignment.get("last_transition"),
+        "transition_applied": result.get("transition_applied"),
         "current_assignment_id": assignment_id,
         "next_whoami_endpoint": (
             f"/api/v1/projects/{result['project_phone']}/agents/{agent_phone}/whoami"
+        ),
+        "sequential_poll_endpoint": (
+            f"/worker/all/{result['project_phone']}"
+            f"?to_phone={result['project_phone']}"
         ),
         "queued_tasks": queued_tasks,
         "removed_pending_tasks": removed_tasks,
@@ -20324,9 +21636,719 @@ async def identify_sequential_project_agent(
         "completed_assignments": [
             item
             for item in assignment.get("assignments", [])
-            if isinstance(item, dict) and item.get("status") == "completed"
+            if isinstance(item, dict)
+            and item.get("status")
+            in {"completed", "transitioned", "review_rejected", "approved", "rejected"}
         ],
     }
+
+
+def sequential_runtime_project_snapshot_transaction(
+    project_id: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            _, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            assignment = (
+                deepcopy(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY))
+                if isinstance(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY), dict)
+                else {"mode": "parallel", "strategy": "parallel"}
+            )
+            project_phone = normalize_project_phone(
+                project_entry.get("project_phone")
+            )
+            project_agents = full_agents_for_project(
+                read_agents_file(),
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            return {
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "project": public_project_context(context),
+                "context_key": context_key,
+                "assignment": assignment,
+                "agents": deepcopy(project_agents),
+                "queue_context": {
+                    "queue_phone": project_phone,
+                    "git_context_phone": project_phone,
+                    "project_phone": project_phone,
+                    "project_name": project_entry.get("project_name"),
+                    "git_context_key": context_key,
+                    "git_address": project_entry.get("git_address"),
+                },
+            }
+
+
+async def project_state_json(
+    project_id: str,
+    *,
+    history_limit: int = 200,
+) -> dict[str, Any]:
+    snapshot = await run_group_write_transaction(
+        sequential_runtime_project_snapshot_transaction,
+        project_id,
+    )
+    recent_activity = await read_history(
+        limit=history_limit,
+        date_from="1970-01-01",
+        git_context=snapshot["context_key"],
+    )
+    pending_work: dict[str, list[dict[str, Any]]] = {}
+    acquired: list[asyncio.Lock] = []
+    try:
+        for queue_name in sorted(GROUP_QUEUE_NAMES):
+            await locks[queue_name].acquire()
+            acquired.append(locks[queue_name])
+        for queue_name in sorted(GROUP_QUEUE_NAMES):
+            pending_work[queue_name] = [
+                queue_item_snapshot(item)
+                for item in queues[queue_name]
+                if str(
+                    queue_item_metadata(item).get("conversation_phone") or ""
+                ).strip()
+                == snapshot["project_phone"]
+                and queue_item_matches_git_context(item, snapshot["context_key"])
+            ]
+    finally:
+        for queue_lock in reversed(acquired):
+            queue_lock.release()
+    assignment = snapshot["assignment"]
+    return {
+        "schema_version": 1,
+        "generated_at": utc_now(),
+        "project_id": snapshot["project_id"],
+        "project_phone": snapshot["project_phone"],
+        "project": snapshot["project"],
+        "execution": assignment,
+        "workflow": deepcopy(assignment.get("workflow")),
+        "agents": snapshot["agents"],
+        "pending_work": pending_work,
+        "recent_activity": recent_activity,
+    }
+
+
+def sequential_runtime_target_agent(
+    metadata: dict[str, Any],
+    project_agents: list[dict[str, Any]],
+    project_phone: str,
+) -> dict[str, Any] | None:
+    target_agent_id = str(metadata.get("to_agent_id") or "").strip()
+    nested_agent = metadata.get("agent")
+    if not target_agent_id and isinstance(nested_agent, dict):
+        target_agent_id = str(nested_agent.get("id") or "").strip()
+    if target_agent_id:
+        matched_by_id = next(
+            (
+                agent
+                for agent in project_agents
+                if str(agent.get("id") or "").strip() == target_agent_id
+            ),
+            None,
+        )
+        if matched_by_id is not None:
+            return matched_by_id
+
+    target_phone = str(
+        metadata.get("logical_to_phone") or metadata.get("to_phone") or ""
+    ).strip()
+    if target_phone == project_phone and isinstance(nested_agent, dict):
+        target_phone = str(nested_agent.get("phone") or "").strip()
+    return next(
+        (
+            agent
+            for agent in project_agents
+            if str(agent.get("phone") or "").strip() == target_phone
+        ),
+        None,
+    )
+
+
+def record_conditional_graph_identity_delivery_transaction(
+    project_id: str,
+    agent: dict[str, Any],
+    queue_name: str,
+    queue_item: Any,
+    seen_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, context_key, project_entry, context = project_for_group_api(
+            config,
+            project_id,
+        )
+        raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
+        workflow = state.get("workflow")
+        if not (
+            str(state.get("mode") or "parallel") == "sequential"
+            and str(state.get("strategy") or "") == "conditional_graph"
+            and isinstance(workflow, dict)
+            and workflow.get("enabled")
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "conditional_graph_not_active"},
+            )
+
+        metadata = queue_item_metadata(queue_item)
+        agent_id = str(agent.get("id") or "").strip()
+        identity_kind = str(metadata.get("identity_kind") or "graph_node").strip()
+        delivery = {
+            "queue_item_id": queue_item_id(queue_item),
+            "queue": queue_name,
+            "identity_kind": identity_kind,
+            "agent_id": agent_id,
+            "agent_name": agent.get("name"),
+            "agent_phone": agent.get("phone"),
+            "assignment_id": metadata.get("assignment_id"),
+            "delivered_at": seen_at,
+        }
+        deliveries = [
+            deepcopy(item)
+            for item in state.get("identity_deliveries", [])
+            if isinstance(item, dict)
+        ]
+        deliveries.append(delivery)
+        state["identity_deliveries"] = deliveries[-500:]
+
+        if identity_kind == "reviewer_bootstrap":
+            initialized = [
+                deepcopy(item)
+                for item in state.get("reviewer_initializations", [])
+                if isinstance(item, dict)
+                and str(item.get("agent_id") or "").strip() != agent_id
+            ]
+            initialized.append(
+                {
+                    "agent_id": agent_id,
+                    "agent_name": agent.get("name"),
+                    "agent_phone": agent.get("phone"),
+                    "reviewer_index": metadata.get("reviewer_index"),
+                    "initialized_at": seen_at,
+                    "project_state_endpoint": metadata.get(
+                        "project_state_endpoint"
+                    ),
+                }
+            )
+            state["reviewer_initializations"] = sorted(
+                initialized,
+                key=lambda item: int(item.get("reviewer_index") or 0),
+            )
+        else:
+            assignment_id = str(metadata.get("assignment_id") or "").strip()
+            for assignment in state.get("assignments", []):
+                if not isinstance(assignment, dict):
+                    continue
+                if str(assignment.get("assignment_id") or "") == assignment_id:
+                    assignment["delivered_at"] = seen_at
+                    assignment["queue_item_id"] = queue_item_id(queue_item)
+                    assignment["queue"] = queue_name
+                    break
+
+        state["updated_at"] = seen_at
+        state["revision"] = int(state.get("revision") or 0) + 1
+        project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+        project_entry["updated_at"] = seen_at
+        raw_projects = config.get(PROJECTS_KEY)
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        projects[raw_key] = project_entry
+        config[PROJECTS_KEY] = projects
+        write_git_config_file(config)
+        return {
+            "assignment": deepcopy(state),
+            "project": public_project_context(
+                configured_git_context_for_key(config, context_key) or context
+            ),
+        }
+
+
+def record_sequential_runtime_identity_transaction(
+    project_id: str,
+    agent: dict[str, Any],
+    queue_name: str,
+    queue_item: Any,
+    seen_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, context_key, project_entry, context = project_for_group_api(
+            config,
+            project_id,
+        )
+        raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
+        if str(state.get("mode") or "parallel") != "sequential":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "project_not_sequential"},
+            )
+
+        metadata = queue_item_metadata(queue_item)
+        assignments = [
+            deepcopy(item)
+            for item in state.get("assignments", [])
+            if isinstance(item, dict)
+        ]
+        previous_assignment_id = str(
+            state.get("current_assignment_id") or ""
+        ).strip()
+        for assignment in assignments:
+            if (
+                str(assignment.get("assignment_id") or "")
+                == previous_assignment_id
+                and assignment.get("status") == "active"
+            ):
+                assignment["status"] = "advanced"
+                assignment["completed_at"] = seen_at
+                break
+
+        assignment_id = str(metadata.get("assignment_id") or uuid4()).strip()
+        agent_id = str(agent.get("id") or "").strip()
+        agent_phone = str(agent.get("phone") or "").strip()
+        assignments.append(
+            {
+                "assignment_id": assignment_id,
+                "agent_id": agent_id,
+                "agent_name": agent.get("name"),
+                "agent_phone": agent_phone,
+                "git_branch": agent.get("git_branch")
+                or agent.get("parameters", {}).get("git_branch"),
+                "queue": queue_name,
+                "queue_item_id": queue_item_id(queue_item),
+                "task_id": metadata.get("task_id"),
+                "status": "active",
+                "started_at": seen_at,
+                "completed_at": None,
+            }
+        )
+        state.update(
+            {
+                "mode": "sequential",
+                "strategy": "queue_graph",
+                "status": "active",
+                "current_agent_id": agent_id,
+                "current_assignment_id": assignment_id,
+                "current_started_at": seen_at,
+                "assignments": assignments,
+                "updated_at": seen_at,
+                "revision": int(state.get("revision") or 0) + 1,
+            }
+        )
+        project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+        project_entry["updated_at"] = seen_at
+        raw_projects = config.get(PROJECTS_KEY)
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        projects[raw_key] = project_entry
+        config[PROJECTS_KEY] = projects
+        write_git_config_file(config)
+        return {
+            "assignment": deepcopy(state),
+            "project": public_project_context(
+                configured_git_context_for_key(config, context_key) or context
+            ),
+        }
+
+
+async def dequeue_sequential_runtime_task(
+    project_id: str,
+    port: int | None,
+) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        snapshot = await run_group_write_transaction(
+            sequential_runtime_project_snapshot_transaction,
+            project_id,
+        )
+        assignment = snapshot["assignment"]
+        if str(assignment.get("mode") or "parallel") != "sequential":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "project_not_sequential",
+                    "message": (
+                        "The common who-am-I queue is available only for a "
+                        "project imported with agents.assignment_mode=sequential"
+                    ),
+                },
+            )
+
+        acquired: list[asyncio.Lock] = []
+        selected_queue = ""
+        selected_item: Any | None = None
+        try:
+            for queue_name in sorted(GROUP_QUEUE_NAMES):
+                await locks[queue_name].acquire()
+                acquired.append(locks[queue_name])
+
+            candidates: list[tuple[int, str, str, str, Any]] = []
+            for queue_name in sorted(GROUP_QUEUE_NAMES):
+                for item in queues[queue_name]:
+                    metadata = queue_item_metadata(item)
+                    if (
+                        str(metadata.get("conversation_phone") or "").strip()
+                        != snapshot["project_phone"]
+                    ):
+                        continue
+                    if not queue_item_matches_git_context(
+                        item,
+                        snapshot["context_key"],
+                    ):
+                        continue
+                    if assignment.get("strategy") == "conditional_graph":
+                        if metadata.get("sequential_identity_queue") is not True:
+                            continue
+                        if metadata.get("identity_kind") != "reviewer_bootstrap":
+                            current_assignment_id = str(
+                                assignment.get("current_assignment_id") or ""
+                            ).strip()
+                            if current_assignment_id and str(
+                                metadata.get("assignment_id") or ""
+                            ).strip() != current_assignment_id:
+                                continue
+                    candidates.append(
+                        (
+                            (
+                                0
+                                if metadata.get("identity_kind")
+                                == "reviewer_bootstrap"
+                                else 1
+                            ),
+                            str(queue_item_queued_at(item) or ""),
+                            str(queue_item_id(item) or ""),
+                            queue_name,
+                            item,
+                        )
+                    )
+
+            if not candidates:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={
+                        "error": "sequential_graph_queue_empty",
+                        "message": (
+                            "There is no next graph node in the project queues yet. "
+                            "Send the current result or task and ask again."
+                        ),
+                        "project_phone": snapshot["project_phone"],
+                    },
+                )
+
+            _, _, selected_id, selected_queue, selected_item = min(
+                candidates,
+                key=lambda candidate: (candidate[0], candidate[1], candidate[2]),
+            )
+            selected_metadata = queue_item_metadata(selected_item)
+            target_agent = sequential_runtime_target_agent(
+                selected_metadata,
+                snapshot["agents"],
+                snapshot["project_phone"],
+            )
+            if target_agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "queued_target_agent_not_found",
+                        "message": (
+                            "The next queue item is not addressed to an agent "
+                            "from the imported project team"
+                        ),
+                        "queue_item_id": selected_id,
+                        "to_agent_id": selected_metadata.get("to_agent_id"),
+                        "to_phone": selected_metadata.get("logical_to_phone")
+                        or selected_metadata.get("to_phone"),
+                    },
+                )
+
+            kept: deque[Any] = deque()
+            removed = False
+            while queues[selected_queue]:
+                item = queues[selected_queue].popleft()
+                if not removed and str(queue_item_id(item) or "") == selected_id:
+                    removed = True
+                    continue
+                kept.append(item)
+            queues[selected_queue] = kept
+        finally:
+            for queue_lock in reversed(acquired):
+                queue_lock.release()
+
+        if selected_item is None:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="The selected sequential queue item disappeared",
+            )
+
+        metadata = deepcopy(queue_item_metadata(selected_item))
+        item_id = str(queue_item_id(selected_item) or "")
+        message = deepcopy(queue_item_message(selected_item))
+        target_agent = sequential_runtime_target_agent(
+            metadata,
+            snapshot["agents"],
+            snapshot["project_phone"],
+        )
+        if target_agent is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The selected sequential target agent disappeared",
+            )
+        try:
+            identity_transaction = (
+                record_conditional_graph_identity_delivery_transaction
+                if assignment.get("strategy") == "conditional_graph"
+                else record_sequential_runtime_identity_transaction
+            )
+            identity_state = await run_group_write_transaction(
+                identity_transaction,
+                project_id,
+                target_agent,
+                selected_queue,
+                deepcopy(selected_item),
+                utc_now(),
+            )
+        except Exception:
+            async with locks[selected_queue]:
+                queues[selected_queue].appendleft(selected_item)
+            raise
+        snapshot.update(identity_state)
+        await append_history(
+            QUEUE_DEFINITIONS[selected_queue]["get_event"],
+            selected_queue,
+            message,
+            {
+                "queue_item_id": item_id,
+                **metadata,
+                "submitted_via": "sequential_agent_runtime",
+                "action": "sequential_graph_node_delivered",
+            },
+            port,
+            snapshot["queue_context"],
+        )
+        return {
+            **snapshot,
+            "agent": deepcopy(target_agent),
+            "task": {
+                "id": item_id,
+                "queue": selected_queue,
+                "queued_at": queue_item_queued_at(selected_item),
+                "message": message,
+                "metadata": metadata,
+            },
+        }
+
+
+def sequential_runtime_team_directory(
+    agents: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": agent.get("id"),
+            "name": agent.get("name"),
+            "phone": agent.get("phone"),
+            "git_branch": agent.get("git_branch")
+            or agent.get("parameters", {}).get("git_branch"),
+            "profile": agent.get("profile"),
+            "status": agent.get("status"),
+            "presence": agent.get("presence")
+            or agent_presence_snapshot(agent),
+        }
+        for agent in agents
+    ]
+
+
+def sequential_runtime_outgoing_connections(
+    project: dict[str, Any],
+    agent: dict[str, Any],
+) -> list[dict[str, Any]]:
+    agent_id = str(agent.get("id") or "").strip()
+    agent_phone = str(agent.get("phone") or "").strip()
+    outgoing: list[dict[str, Any]] = []
+    for group in project.get("groups", []):
+        if not isinstance(group, dict):
+            continue
+        for connection in group.get("connections", []):
+            if not isinstance(connection, dict):
+                continue
+            if (
+                str(connection.get("from_agent_id") or "").strip() == agent_id
+                or str(connection.get("from_phone") or "").strip() == agent_phone
+            ):
+                outgoing.append(deepcopy(connection))
+    return outgoing
+
+
+def sequential_runtime_response(
+    runtime: dict[str, Any],
+    request: Request,
+) -> dict[str, Any]:
+    base_url = str(request.base_url).rstrip("/")
+    agent = runtime["agent"]
+    agent_id = str(agent.get("id") or "").strip()
+    agent_name = str(agent.get("name") or "").strip()
+    agent_phone = str(agent.get("phone") or "").strip()
+    git_branch = str(
+        agent.get("git_branch")
+        or agent.get("parameters", {}).get("git_branch")
+        or ""
+    ).strip()
+    project_phone = runtime["project_phone"]
+    reply_path = "/api/v1/agents/whoami/repository"
+    git_address = runtime["project"].get("git_address")
+    metadata = runtime["task"]["metadata"]
+    identity_kind = str(metadata.get("identity_kind") or "graph_node")
+    reviewer_bootstrap = identity_kind == "reviewer_bootstrap"
+    assignment = runtime.get("assignment") or {}
+    assignment_strategy = str(assignment.get("strategy") or "queue_graph")
+    team = sequential_runtime_team_directory(runtime["agents"])
+    send_payload = {
+        "from_phone": agent_phone,
+        "to_phone": "<phone из team>",
+        "sender": agent_name,
+        "receiver": "<name из team>",
+        "message": "<результат или следующее задание>",
+    }
+    return {
+        "answer": (
+            (
+                f"Сейчас вы ревьювер №{metadata.get('reviewer_index')} — "
+                f"{agent_name} (id={agent_id}, phone={agent_phone}). "
+                "Эта роль закреплена за вами на всё время проекта."
+            )
+            if reviewer_bootstrap
+            else (
+                f"Сейчас вы агент {agent_name} (id={agent_id}, phone={agent_phone}). "
+                "Эта рабочая роль выбрана текущим узлом графа."
+            )
+        ),
+        "assignment_mode": "sequential",
+        "assignment_strategy": assignment_strategy,
+        "identity_kind": identity_kind,
+        "identity_persistent": reviewer_bootstrap,
+        "reviewer_index": metadata.get("reviewer_index"),
+        "phase": metadata.get("phase") or assignment.get("phase") or "node",
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "project": runtime["project"],
+        "agent": agent,
+        "profile": agent.get("profile"),
+        "git_branch": git_branch,
+        "active_task": runtime["task"],
+        "graph_position": {
+            "queue": runtime["task"]["queue"],
+            "queue_item_id": runtime["task"]["id"],
+            "cycle_id": metadata.get("cycle_id"),
+            "group_id": metadata.get("group_id"),
+            "connection_id": metadata.get("connection_id"),
+            "task_id": metadata.get("task_id"),
+            "task_node_id": metadata.get("task_node_id"),
+            "parent_task_id": metadata.get("parent_task_id"),
+            "parent_task_node_id": metadata.get("parent_task_node_id"),
+        },
+        "team": team,
+        "communication": {
+            "project_phone": project_phone,
+            "send_endpoints": {
+                queue_name: f"{base_url}{group_queue_route(queue_name, project_phone)}"
+                for queue_name in sorted(GROUP_QUEUE_NAMES)
+            },
+            "send_payload_template": send_payload,
+            "outgoing_graph_connections": sequential_runtime_outgoing_connections(
+                runtime["project"],
+                agent,
+            ),
+            "instructions": (
+                (
+                    "Вы постоянный ревьювер. Читайте полный project_state и новые "
+                    "запросы по своему logical phone; решение отправляйте в "
+                    "review_endpoint из active_task.metadata."
+                )
+                if reviewer_bootstrap
+                else (
+                    "Отправьте результат или решение ревью в whoami_endpoint из "
+                    "active_task.metadata, затем запросите следующий рабочий узел."
+                )
+                if assignment_strategy == "conditional_graph"
+                else (
+                    "Отправьте результат или новое задание нужному агенту из team, "
+                    "затем снова запросите следующую личность."
+                )
+            ),
+        },
+        "next_identity_request": (
+            None
+            if reviewer_bootstrap
+            else {
+                "method": "POST",
+                "url": f"{base_url}{reply_path}",
+                "json": {"git_address": git_address},
+            }
+        ),
+    }
+
+
+@app.get("/api/v1/agents/whoami")
+@app.post("/api/v1/agents/whoami")
+async def begin_sequential_agent_identity(request: Request) -> dict[str, Any]:
+    base_url = str(request.base_url).rstrip("/")
+    reply_url = f"{base_url}/api/v1/agents/whoami/repository"
+    return {
+        "status": "repository_required",
+        "question": "Из какого Git-репозитория вы пришли?",
+        "reply": {
+            "method": "POST",
+            "url": reply_url,
+            "content_type": "application/json",
+            "json": {
+                "git_address": "https://github.com/owner/repository.git",
+                "git_context_key": "optional-for-repository-with-several-projects",
+            },
+        },
+        "reply_url": reply_url,
+    }
+
+
+@app.post("/api/v1/agents/whoami/repository")
+async def identify_sequential_agent_from_repository(
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object with git_address",
+        )
+    if payload.get("git_address") is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="git_address is required",
+        )
+    project_phone = await project_phone_for_actor_import(
+        payload,
+        request_port(request),
+    )
+    runtime = await dequeue_sequential_runtime_task(
+        project_phone,
+        port=request_port(request),
+    )
+    response = sequential_runtime_response(runtime, request)
+    response["project_state"] = await project_state_json(project_phone)
+    response["project_state_url"] = (
+        f"{str(request.base_url).rstrip('/')}"
+        f"/api/v1/projects/{project_phone}/state.json"
+    )
+    return response
+
+
+@app.get("/api/v1/projects/{project_id}/state")
+@app.get("/api/v1/projects/{project_id}/state.json")
+async def get_project_state_json(
+    project_id: str,
+    history_limit: int = 200,
+) -> dict[str, Any]:
+    return await project_state_json(project_id, history_limit=history_limit)
 
 
 @app.get("/api/v1/projects/{project_id}/agents")
@@ -20381,6 +22403,7 @@ async def import_project_actors(
         payload,
         source="api",
         port=request_port(request),
+        activate_sequential=True,
     )
 
 
@@ -20488,12 +22511,47 @@ async def identify_project_agent(
         agent_phone,
     )
     if snapshot.get("assignment_mode") == "sequential":
-        return await identify_sequential_project_agent(
-            project_id,
-            agent_phone,
-            request_message,
-            complete_current,
-            request,
+        workflow = snapshot.get("assignment", {}).get("workflow")
+        if isinstance(workflow, dict) and workflow.get("enabled"):
+            submitted_outcome = str(
+                identity_payload.get("outcome")
+                or identity_payload.get("status")
+                or ""
+            ).strip()
+            response = await identify_sequential_project_agent(
+                project_id,
+                agent_phone,
+                request_message,
+                complete_current or bool(submitted_outcome),
+                request,
+                submitted_outcome=submitted_outcome,
+                submitted_feedback=str(
+                    identity_payload.get("feedback") or ""
+                ),
+                submitted_result=str(identity_payload.get("result") or ""),
+                expected_assignment_id=str(
+                    identity_payload.get("assignment_id") or ""
+                ),
+            )
+            response["project_state"] = await project_state_json(project_id)
+            response["project_state_url"] = (
+                f"{str(request.base_url).rstrip('/')}"
+                f"/api/v1/projects/{snapshot['project_phone']}/state.json"
+            )
+            return response
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "use_sequential_queue_graph_identity",
+                "message": (
+                    "A sequential executor is not permanently bound to this "
+                    "phone. Start at /api/v1/agents/whoami and use the returned "
+                    "reply_url; the next queued item selects the current role."
+                ),
+                "whoami_url": (
+                    f"{str(request.base_url).rstrip('/')}/api/v1/agents/whoami"
+                ),
+            },
         )
     async with history_lock:
         previous_history = await asyncio.to_thread(
@@ -20641,6 +22699,7 @@ async def telegram_actor_import_for_mode(
         payload,
         source="telegram",
         port=request_port(request),
+        activate_sequential=assignment_mode == "sequential",
     )
     await asyncio.to_thread(send_telegram_import_reply, message, result)
     return {"ok": True, **result}

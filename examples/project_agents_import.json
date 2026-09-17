@@ -3,6 +3,7 @@
   "agents": {
     "overwrite": true,
     "include_managed": false,
+    "assignment_mode": "sequential",
     "items": [
       {
         "id": "agent-requirements-analyst",

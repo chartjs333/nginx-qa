@@ -655,7 +655,156 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(unknown_status, 404)
 
-    async def test_sequential_whoami_moves_to_next_role_without_parallel_work(self) -> None:
+    async def test_sequential_runtime_changes_identity_from_queue_graph(self) -> None:
+        import_status, import_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {
+                    "overwrite": True,
+                    "assignment_mode": "sequential",
+                    "items": [
+                        {
+                            "id": "sequential-role-a",
+                            "name": "Sequential Role A",
+                            "phone": "2121",
+                            "git_branch": "agent/sequential-a",
+                            "profile": "Analyze the first graph node.",
+                            "tasks": [
+                                {
+                                    "task_id": "SEQ-A",
+                                    "queue": "worker-all",
+                                    "message": "Complete sequential task A.",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "sequential-role-b",
+                            "name": "Sequential Role B",
+                            "phone": "2122",
+                            "git_branch": "agent/sequential-b",
+                            "profile": "Implement the task received from role A.",
+                            "tasks": [],
+                        },
+                    ],
+                }
+            },
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(import_body, dict)
+        assert isinstance(import_body, dict)
+        self.assertEqual(import_body["assignment_mode"], "sequential")
+        self.assertEqual(import_body["assignment"]["strategy"], "queue_graph")
+        self.assertEqual(import_body["queued_task_count"], 1)
+        self.assertEqual(import_body["queued_queue_item_count"], 1)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
+        question_status, question_body = await asgi_request(
+            "/api/v1/agents/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(question_status, 200)
+        self.assertIsInstance(question_body, dict)
+        assert isinstance(question_body, dict)
+        self.assertEqual(question_body["status"], "repository_required")
+        self.assertEqual(
+            question_body["reply_url"],
+            "http://testserver:8025/api/v1/agents/whoami/repository",
+        )
+
+        first_status, first_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "git@github.com:example/actor-import.git",
+            },
+        )
+        self.assertEqual(first_status, 200)
+        self.assertIsInstance(first_body, dict)
+        assert isinstance(first_body, dict)
+        self.assertEqual(first_body["assignment_strategy"], "queue_graph")
+        self.assertEqual(first_body["agent"]["id"], "sequential-role-a")
+        self.assertEqual(first_body["git_branch"], "agent/sequential-a")
+        self.assertEqual(first_body["graph_position"]["queue"], "worker-all")
+        self.assertEqual(len(first_body["team"]), 2)
+        self.assertIn("send_endpoints", first_body["communication"])
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+
+        handoff_status, _ = await asgi_request(
+            f"/tester/all/{self.PROJECT_PHONE}",
+            method="POST",
+            payload={
+                "from_phone": "2121",
+                "to_phone": "2122",
+                "sender": "Sequential Role A",
+                "receiver": "Sequential Role B",
+                "message": "Implement the graph handoff from role A.",
+            },
+        )
+        self.assertEqual(handoff_status, 201)
+
+        second_status, second_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(second_body, dict)
+        assert isinstance(second_body, dict)
+        self.assertEqual(second_body["agent"]["id"], "sequential-role-b")
+        self.assertEqual(
+            second_body["active_task"]["message"],
+            "Implement the graph handoff from role A.",
+        )
+        self.assertEqual(second_body["graph_position"]["queue"], "tester-all")
+
+        project_status, project_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents"
+        )
+        self.assertEqual(project_status, 200)
+        self.assertIsInstance(project_body, dict)
+        assert isinstance(project_body, dict)
+        self.assertEqual(
+            project_body["assignment"]["current_agent_id"],
+            "sequential-role-b",
+        )
+        self.assertEqual(
+            project_body["assignment"]["strategy"],
+            "queue_graph",
+        )
+
+        fixed_phone_status, fixed_phone_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(fixed_phone_status, 409)
+        self.assertIsInstance(fixed_phone_body, dict)
+        assert isinstance(fixed_phone_body, dict)
+        self.assertEqual(
+            fixed_phone_body["detail"]["error"],
+            "use_sequential_queue_graph_identity",
+        )
+
+        empty_status, empty_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(empty_status, 404)
+        self.assertIsInstance(empty_body, dict)
+        assert isinstance(empty_body, dict)
+        self.assertEqual(
+            empty_body["detail"]["error"],
+            "sequential_graph_queue_empty",
+        )
+
+    async def _test_legacy_sequential_whoami_moves_to_next_role_without_parallel_work(self) -> None:
         import_status, import_body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
@@ -726,6 +875,14 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_body["agent"]["id"], "sequential-role-a")
         self.assertEqual(first_body["assigned_tasks"][0]["task_id"], "SEQ-A")
         self.assertEqual(len(first_body["queued_tasks"]), 1)
+        self.assertEqual(
+            first_body["sequential_poll_endpoint"],
+            f"/worker/all/{self.PROJECT_PHONE}?to_phone={self.PROJECT_PHONE}",
+        )
+        self.assertEqual(
+            first_body["queued_tasks"][0]["delivery_phone"],
+            self.PROJECT_PHONE,
+        )
         self.assertEqual(len(main.queues["worker-all"]), 1)
         self.assertEqual(len(main.queues["tester-all"]), 0)
 
@@ -773,8 +930,18 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
         )
         self.assertEqual(len(second_body["removed_pending_tasks"]), 1)
-        self.assertEqual(len(main.queues["worker-all"]), 0)
-        self.assertEqual(len(main.queues["tester-all"]), 1)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(len(main.queues["tester-all"]), 0)
+        next_node = main.queues["worker-all"][0]
+        self.assertIn("Сейчас вы агент Sequential Role B", main.queue_item_message(next_node))
+        self.assertEqual(
+            main.queue_item_metadata(next_node)["graph_node_index"],
+            2,
+        )
+        self.assertEqual(
+            main.queue_item_metadata(next_node)["tasks"][0]["task_id"],
+            "SEQ-B",
+        )
 
         done_status, done_body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
@@ -798,6 +965,847 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(project_body, dict)
         self.assertEqual(project_body["assignment_mode"], "sequential")
         self.assertEqual(project_body["assignment"]["status"], "completed")
+
+    async def test_explicit_sequential_graph_uses_common_identity_queue(self) -> None:
+        import_status, import_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {"overwrite": True},
+                "execution": {
+                    "mode": "sequential",
+                    "start_node": "analysis",
+                    "required_approvals": 2,
+                    "max_rework_cycles": 2,
+                    "reviewers": [
+                        {
+                            "id": "reviewer-one",
+                            "name": "Reviewer One",
+                            "phone": "2151",
+                        },
+                        {
+                            "id": "reviewer-two",
+                            "name": "Reviewer Two",
+                            "phone": "2152",
+                        },
+                    ],
+                },
+                "nodes": [
+                    {
+                        "id": "analysis",
+                        "agent": {
+                            "id": "graph-analyst",
+                            "name": "Graph Analyst",
+                            "phone": "2153",
+                            "git_branch": "agent/graph-analyst",
+                            "profile": "Analyze the graph task.",
+                        },
+                        "tasks": ["Analyze the sprint request."],
+                        "transitions": {"DONE": "finished"},
+                    },
+                    {
+                        "id": "finished",
+                        "type": "terminal",
+                        "status": "DONE",
+                        "message": "Sprint graph completed.",
+                    },
+                ],
+            },
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(import_body, dict)
+        assert isinstance(import_body, dict)
+        self.assertEqual(
+            import_body["assignment"]["strategy"],
+            "conditional_graph",
+        )
+
+        node_status, node_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(node_status, 200)
+        self.assertIsInstance(node_body, dict)
+        assert isinstance(node_body, dict)
+        self.assertEqual(node_body["agent"]["id"], "graph-analyst")
+        node_assignment_id = node_body["active_task"]["metadata"]["assignment_id"]
+
+        first_review_status, first_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+            method="POST",
+            payload={
+                "assignment_id": node_assignment_id,
+                "status": "DONE",
+                "result": "Analysis finished.",
+            },
+        )
+        self.assertEqual(first_review_status, 200)
+        self.assertIsInstance(first_review, dict)
+        assert isinstance(first_review, dict)
+        self.assertEqual(first_review["agent"]["id"], "reviewer-one")
+        self.assertEqual(first_review["assignment"]["phase"], "review")
+        self.assertEqual(len(main.queues["worker-all"]), 1, first_review)
+
+        reviewer_status, reviewer_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(reviewer_status, 200)
+        self.assertIsInstance(reviewer_body, dict)
+        assert isinstance(reviewer_body, dict)
+        self.assertEqual(reviewer_body["agent"]["id"], "reviewer-one")
+
+    async def test_sequential_telegram_url_starts_first_graph_node(self) -> None:
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/agents/sequential",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "assignment_mode": "parallel",
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "url-sequential-a",
+                            "name": "URL Sequential A",
+                            "phone": "2131",
+                            "tasks": [
+                                {
+                                    "task_id": "URL-SEQ-A",
+                                    "queue": "tester-all",
+                                    "message": "Run the first graph node.",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "url-sequential-b",
+                            "name": "URL Sequential B",
+                            "phone": "2132",
+                            "tasks": ["Run the second graph node."],
+                        },
+                    ],
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["assignment_mode"], "sequential")
+        self.assertEqual(body["active_agent"]["id"], "url-sequential-a")
+        self.assertEqual(body["queued_task_count"], 1)
+        self.assertEqual(body["queued_queue_item_count"], 1)
+        self.assertEqual(body["deferred_task_count"], 1)
+        self.assertEqual(
+            body["sequential_poll_endpoint"],
+            f"/worker/all/{self.PROJECT_PHONE}?to_phone={self.PROJECT_PHONE}",
+        )
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(len(main.queues["tester-all"]), 0)
+
+        poll_status, node = await asgi_request(body["sequential_poll_endpoint"])
+        self.assertEqual(poll_status, 200)
+        self.assertIsInstance(node, dict)
+        assert isinstance(node, dict)
+        self.assertIn("Сейчас вы агент URL Sequential A", node["message"])
+        self.assertEqual(node["to_phone"], self.PROJECT_PHONE)
+        self.assertEqual(node["metadata"]["graph_node_index"], 1)
+        self.assertEqual(node["metadata"]["graph_node_count"], 2)
+        self.assertEqual(node["metadata"]["agent"]["id"], "url-sequential-a")
+        self.assertEqual(node["metadata"]["tasks"][0]["task_id"], "URL-SEQ-A")
+
+    async def test_conditional_graph_requires_two_reviews_for_every_transition(self) -> None:
+        payload = {
+            "git_address": "https://github.com/example/actor-import.git",
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "start_node": "development",
+                "max_rework_cycles": 3,
+                "required_approvals": 2,
+                "reviewers": [
+                    {
+                        "id": "reviewer-one",
+                        "name": "Architecture Reviewer",
+                        "phone": "2153",
+                        "profile": "Review correctness and project architecture.",
+                    },
+                    {
+                        "id": "reviewer-two",
+                        "name": "Quality Reviewer",
+                        "phone": "2154",
+                        "profile": "Review tests, evidence, and regressions.",
+                    },
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "development",
+                    "agent": {
+                        "id": "developer",
+                        "name": "Programmer",
+                        "phone": "2151",
+                        "profile": "Implement the requested change.",
+                    },
+                    "task": "Implement and test the change.",
+                    "transitions": {"DONE": "verification"},
+                },
+                {
+                    "id": "verification",
+                    "agent": {
+                        "id": "tester",
+                        "name": "Tester",
+                        "phone": "2152",
+                        "profile": "Verify the implementation independently.",
+                    },
+                    "task": "Run acceptance and regression tests.",
+                    "transitions": {
+                        "PASS": "completed",
+                        "FAIL": "development",
+                    },
+                },
+                {
+                    "id": "completed",
+                    "type": "terminal",
+                    "status": "DONE",
+                    "message": "Implementation accepted.",
+                },
+            ],
+        }
+        import_status, import_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(import_body, dict)
+        assert isinstance(import_body, dict)
+        self.assertEqual(import_body["imported_agent_count"], 4)
+        self.assertEqual(import_body["assignment"]["strategy"], "conditional_graph")
+        self.assertEqual(import_body["active_agent"]["id"], "developer")
+        reviewer_one = next(
+            agent
+            for agent in import_body["imported_agents"]
+            if agent["id"] == "reviewer-one"
+        )
+        self.assertIn("Полный граф проекта", reviewer_one["profile"])
+        self.assertIn(payload["git_address"], reviewer_one["profile"])
+        self.assertEqual(
+            reviewer_one["parameters"]["git_context_key"],
+            self.PROJECT_CONTEXT,
+        )
+        state_status, project_state = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
+        )
+        self.assertEqual(state_status, 200)
+        self.assertIsInstance(project_state, dict)
+        assert isinstance(project_state, dict)
+        self.assertEqual(len(project_state["agents"]), 4)
+        self.assertEqual(
+            project_state["execution"]["workflow"]["reviewer_agent_ids"],
+            ["reviewer-one", "reviewer-two"],
+        )
+
+        first_status, first_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={"git_address": payload["git_address"]},
+        )
+        self.assertEqual(first_status, 200)
+        self.assertIsInstance(first_body, dict)
+        assert isinstance(first_body, dict)
+        self.assertEqual(first_body["agent"]["id"], "developer")
+        self.assertEqual(first_body["assignment_strategy"], "conditional_graph")
+        developer_assignment_id = first_body["active_task"]["metadata"]["assignment_id"]
+
+        review_one_status, review_one = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2151/whoami",
+            method="POST",
+            payload={
+                "assignment_id": developer_assignment_id,
+                "status": "DONE",
+                "result": "Implemented the feature; unit tests pass.",
+            },
+        )
+        self.assertEqual(review_one_status, 200)
+        self.assertIsInstance(review_one, dict)
+        assert isinstance(review_one, dict)
+        self.assertEqual(review_one["phase"], "review")
+        self.assertEqual(review_one["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            review_one["pending_transition"]["target_node_id"],
+            "verification",
+        )
+        self.assertEqual(len(main.queues["worker-all"]), 1, review_one)
+
+        reviewer_card_status, reviewer_card = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={"git_address": payload["git_address"]},
+        )
+        self.assertEqual(reviewer_card_status, 200)
+        self.assertIsInstance(reviewer_card, dict)
+        assert isinstance(reviewer_card, dict)
+        self.assertEqual(reviewer_card["agent"]["id"], "reviewer-one")
+        self.assertEqual(reviewer_card["phase"], "review")
+        self.assertIn("Implemented the feature", reviewer_card["active_task"]["message"])
+        self.assertIn("Полный граф проекта", reviewer_card["active_task"]["message"])
+        self.assertEqual(reviewer_card["project"]["git_address"], payload["git_address"])
+
+        review_two_status, review_two = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+            method="POST",
+            payload={
+                "assignment_id": reviewer_card["active_task"]["metadata"]["assignment_id"],
+                "status": "APPROVE",
+                "feedback": "Architecture is consistent.",
+            },
+        )
+        self.assertEqual(review_two_status, 200)
+        self.assertIsInstance(review_two, dict)
+        assert isinstance(review_two, dict)
+        self.assertEqual(review_two["agent"]["id"], "reviewer-two")
+        self.assertEqual(len(review_two["pending_transition"]["reviews"]), 1)
+
+        reviewer_two_status, reviewer_two_card = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={"git_address": payload["git_address"]},
+        )
+        self.assertEqual(reviewer_two_status, 200)
+        self.assertIsInstance(reviewer_two_card, dict)
+        assert isinstance(reviewer_two_card, dict)
+        self.assertEqual(reviewer_two_card["agent"]["id"], "reviewer-two")
+
+        tester_status, tester = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2154/whoami",
+            method="POST",
+            payload={
+                "assignment_id": reviewer_two_card["active_task"]["metadata"]["assignment_id"],
+                "status": "APPROVE",
+                "feedback": "Tests and evidence are sufficient.",
+            },
+        )
+        self.assertEqual(tester_status, 200)
+        self.assertIsInstance(tester, dict)
+        assert isinstance(tester, dict)
+        self.assertEqual(tester["phase"], "node")
+        self.assertEqual(tester["agent"]["id"], "tester")
+        self.assertEqual(len(tester["transition_applied"]["reviews"]), 2)
+
+        tester_card_status, tester_card = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={"git_address": payload["git_address"]},
+        )
+        self.assertEqual(tester_card_status, 200)
+        self.assertIsInstance(tester_card, dict)
+        assert isinstance(tester_card, dict)
+        self.assertEqual(tester_card["agent"]["id"], "tester")
+
+        fail_review_status, fail_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2152/whoami",
+            method="POST",
+            payload={
+                "assignment_id": tester_card["active_task"]["metadata"]["assignment_id"],
+                "status": "FAIL",
+                "result": "Regression test failed.",
+                "feedback": "Fix the duplicate notification.",
+            },
+        )
+        self.assertEqual(fail_review_status, 200)
+        self.assertIsInstance(fail_review, dict)
+        assert isinstance(fail_review, dict)
+        self.assertEqual(fail_review["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            fail_review["pending_transition"]["target_node_id"],
+            "development",
+        )
+
+        first_fail_approval_status, first_fail_approval = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+            method="POST",
+            payload={
+                "assignment_id": fail_review["current_assignment_id"],
+                "status": "APPROVE",
+                "feedback": "The failure report is reproducible.",
+            },
+        )
+        self.assertEqual(first_fail_approval_status, 200)
+        self.assertIsInstance(first_fail_approval, dict)
+        assert isinstance(first_fail_approval, dict)
+        second_fail_approval_status, rework = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2154/whoami",
+            method="POST",
+            payload={
+                "assignment_id": first_fail_approval["current_assignment_id"],
+                "status": "APPROVE",
+                "feedback": "Returning the issue for rework is justified.",
+            },
+        )
+        self.assertEqual(second_fail_approval_status, 200)
+        self.assertIsInstance(rework, dict)
+        assert isinstance(rework, dict)
+        self.assertEqual(rework["agent"]["id"], "developer")
+        self.assertEqual(rework["assignment"]["rework_cycle_count"], 1)
+        self.assertIn(
+            "Fix the duplicate notification",
+            main.queue_item_message(main.queues["worker-all"][0]),
+        )
+
+        development_done_status, development_done = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2151/whoami",
+            method="POST",
+            payload={
+                "assignment_id": rework["current_assignment_id"],
+                "status": "DONE",
+                "result": "Duplicate notification fixed and regression test added.",
+            },
+        )
+        self.assertEqual(development_done_status, 200)
+        self.assertIsInstance(development_done, dict)
+        assert isinstance(development_done, dict)
+        approval_a_status, approval_a = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+            method="POST",
+            payload={
+                "assignment_id": development_done["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(approval_a_status, 200)
+        self.assertIsInstance(approval_a, dict)
+        assert isinstance(approval_a, dict)
+        approval_b_status, verification_again = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2154/whoami",
+            method="POST",
+            payload={
+                "assignment_id": approval_a["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(approval_b_status, 200)
+        self.assertIsInstance(verification_again, dict)
+        assert isinstance(verification_again, dict)
+        self.assertEqual(verification_again["agent"]["id"], "tester")
+
+        pass_status, pass_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2152/whoami",
+            method="POST",
+            payload={
+                "assignment_id": verification_again["current_assignment_id"],
+                "status": "PASS",
+                "result": "Acceptance and regression tests pass.",
+            },
+        )
+        self.assertEqual(pass_status, 200)
+        self.assertIsInstance(pass_review, dict)
+        assert isinstance(pass_review, dict)
+        terminal_review_a_status, terminal_review_a = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+            method="POST",
+            payload={
+                "assignment_id": pass_review["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(terminal_review_a_status, 200)
+        self.assertIsInstance(terminal_review_a, dict)
+        assert isinstance(terminal_review_a, dict)
+        completed_status, completed = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2154/whoami",
+            method="POST",
+            payload={
+                "assignment_id": terminal_review_a["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(completed_status, 200)
+        self.assertIsInstance(completed, dict)
+        assert isinstance(completed, dict)
+        self.assertTrue(completed["all_completed"])
+        self.assertFalse(completed["blocked"])
+        self.assertEqual(completed["terminal_node"]["id"], "completed")
+
+    async def test_graph_reject_requires_feedback_and_returns_source_node(self) -> None:
+        payload = {
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "start_node": "work",
+                "max_rework_cycles": 2,
+                "reviewers": [
+                    {"id": "review-a", "name": "Reviewer A", "phone": "2161"},
+                    {"id": "review-b", "name": "Reviewer B", "phone": "2162"},
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "work",
+                    "agent": {"id": "worker", "name": "Worker", "phone": "2163"},
+                    "task": "Prepare the result.",
+                    "transitions": {"DONE": "finished"},
+                },
+                {"id": "finished", "type": "terminal", "status": "DONE"},
+            ],
+        }
+        import_status, imported = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(imported, dict)
+        assert isinstance(imported, dict)
+        worker_assignment = imported["assignment"]["current_assignment_id"]
+        review_status, review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2163/whoami",
+            method="POST",
+            payload={
+                "assignment_id": worker_assignment,
+                "status": "DONE",
+                "result": "Draft result.",
+            },
+        )
+        self.assertEqual(review_status, 200)
+        self.assertIsInstance(review, dict)
+        assert isinstance(review, dict)
+        reject_without_feedback, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2161/whoami",
+            method="POST",
+            payload={
+                "assignment_id": review["current_assignment_id"],
+                "status": "REJECT",
+            },
+        )
+        self.assertEqual(reject_without_feedback, 400)
+        reject_status, rejected = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2161/whoami",
+            method="POST",
+            payload={
+                "assignment_id": review["current_assignment_id"],
+                "status": "REJECT",
+                "feedback": "Add reproducible verification evidence.",
+            },
+        )
+        self.assertEqual(reject_status, 200)
+        self.assertIsInstance(rejected, dict)
+        assert isinstance(rejected, dict)
+        self.assertEqual(rejected["agent"]["id"], "worker")
+        self.assertEqual(rejected["assignment"]["rework_cycle_count"], 1)
+        self.assertIn(
+            "Add reproducible verification evidence",
+            main.queue_item_message(main.queues["worker-all"][0]),
+        )
+
+    async def test_graph_blocks_after_rework_limit(self) -> None:
+        payload = {
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "start_node": "work",
+                "max_rework_cycles": 0,
+                "reviewers": [
+                    {"id": "limit-review-a", "name": "Limit Review A", "phone": "2171"},
+                    {"id": "limit-review-b", "name": "Limit Review B", "phone": "2172"},
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "work",
+                    "agent": {
+                        "id": "limit-worker",
+                        "name": "Limit Worker",
+                        "phone": "2173",
+                    },
+                    "task": "Prepare the result.",
+                    "transitions": {"DONE": "finished"},
+                },
+                {"id": "finished", "type": "terminal"},
+            ],
+        }
+        import_status, imported = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(imported, dict)
+        assert isinstance(imported, dict)
+        review_status, review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2173/whoami",
+            method="POST",
+            payload={
+                "assignment_id": imported["assignment"]["current_assignment_id"],
+                "status": "DONE",
+                "result": "Result requiring review.",
+            },
+        )
+        self.assertEqual(review_status, 200)
+        self.assertIsInstance(review, dict)
+        assert isinstance(review, dict)
+        blocked_status, blocked = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2171/whoami",
+            method="POST",
+            payload={
+                "assignment_id": review["current_assignment_id"],
+                "status": "REJECT",
+                "feedback": "The evidence is incomplete.",
+            },
+        )
+        self.assertEqual(blocked_status, 200)
+        self.assertIsInstance(blocked, dict)
+        assert isinstance(blocked, dict)
+        self.assertTrue(blocked["all_completed"])
+        self.assertTrue(blocked["blocked"])
+        self.assertEqual(blocked["assignment"]["status"], "blocked")
+        self.assertEqual(
+            blocked["assignment"]["blocked_reason"],
+            "max_rework_cycles_exceeded",
+        )
+
+    async def test_parallel_telegram_url_never_switches_roles(self) -> None:
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "assignment_mode": "sequential",
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "url-parallel-a",
+                            "name": "URL Parallel A",
+                            "phone": "2141",
+                            "tasks": ["Run parallel task A."],
+                        },
+                        {
+                            "id": "url-parallel-b",
+                            "name": "URL Parallel B",
+                            "phone": "2142",
+                            "tasks": ["Run parallel task B."],
+                        },
+                    ],
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["assignment_mode"], "parallel")
+        self.assertEqual(body["queued_task_count"], 2)
+        self.assertEqual(body["deferred_task_count"], 0)
+        self.assertIsNone(body["sequential_poll_endpoint"])
+        queued_phones = {
+            main.queue_item_metadata(item)["to_phone"]
+            for item in main.queues["worker-all"]
+        }
+        self.assertEqual(queued_phones, {"2141", "2142"})
+
+        whoami_status, whoami_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2142/whoami",
+            method="POST",
+            payload={"message": "Кто я?", "completed": True},
+        )
+        self.assertEqual(whoami_status, 200)
+        self.assertIsInstance(whoami_body, dict)
+        assert isinstance(whoami_body, dict)
+        self.assertEqual(whoami_body["agent"]["id"], "url-parallel-b")
+        self.assertNotIn("assignment_mode", whoami_body)
+
+        switch_status, switch_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(switch_status, 409)
+        self.assertIsInstance(switch_body, dict)
+        assert isinstance(switch_body, dict)
+        self.assertEqual(
+            switch_body["detail"]["error"],
+            "project_not_sequential",
+        )
+
+    async def test_conditional_graph_initializes_two_reviewers_before_work(self) -> None:
+        graph_json = {
+            "git_address": "https://github.com/example/actor-import.git",
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "initialize_reviewers": True,
+                "start_node": "build",
+                "required_approvals": 2,
+                "reviewers": [
+                    {
+                        "id": "reviewer-one",
+                        "name": "Reviewer One",
+                        "phone": "2101",
+                        "profile": "Review the whole project and product requirements.",
+                    },
+                    {
+                        "id": "reviewer-two",
+                        "name": "Reviewer Two",
+                        "phone": "2102",
+                        "profile": "Review the whole project and technical quality.",
+                    },
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "build",
+                    "agent": {
+                        "id": "builder",
+                        "name": "Builder",
+                        "phone": "2201",
+                        "profile": "Build and verify the requested change.",
+                    },
+                    "tasks": [
+                        {
+                            "task_id": "BUILD-1",
+                            "queue": "worker-all",
+                            "message": "Implement the project change.",
+                        }
+                    ],
+                    "transitions": {"DONE": "finished"},
+                },
+                {
+                    "id": "finished",
+                    "type": "terminal",
+                    "status": "DONE",
+                    "message": "Project work is complete.",
+                },
+            ],
+        }
+        import_status, imported = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=graph_json,
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(imported, dict)
+        assert isinstance(imported, dict)
+        self.assertEqual(imported["assignment"]["strategy"], "conditional_graph")
+        self.assertEqual(imported["queued_queue_item_count"], 3)
+
+        identities: list[dict[str, object]] = []
+        for _ in range(3):
+            status_code, body = await asgi_request(
+                "/api/v1/agents/whoami/repository",
+                method="POST",
+                payload={
+                    "git_address": "https://github.com/example/actor-import.git"
+                },
+            )
+            self.assertEqual(status_code, 200)
+            self.assertIsInstance(body, dict)
+            assert isinstance(body, dict)
+            identities.append(body)
+
+        self.assertEqual(
+            [identity["agent"]["id"] for identity in identities],
+            ["reviewer-one", "reviewer-two", "builder"],
+        )
+        self.assertEqual(
+            [identity["identity_kind"] for identity in identities],
+            ["reviewer_bootstrap", "reviewer_bootstrap", "graph_node"],
+        )
+        self.assertTrue(identities[0]["identity_persistent"])
+        self.assertTrue(identities[1]["identity_persistent"])
+        self.assertFalse(identities[2]["identity_persistent"])
+        reviewer_state = identities[1]["project_state"]
+        self.assertEqual(len(reviewer_state["agents"]), 3)
+        self.assertEqual(
+            reviewer_state["workflow"]["start_node_id"],
+            "build",
+        )
+        self.assertEqual(
+            len(reviewer_state["execution"]["reviewer_initializations"]),
+            2,
+        )
+        self.assertGreaterEqual(len(reviewer_state["recent_activity"]), 1)
+
+        builder_identity = identities[2]
+        work_status, work_result = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2201/whoami",
+            method="POST",
+            payload={
+                "assignment_id": builder_identity["active_task"]["metadata"][
+                    "assignment_id"
+                ],
+                "status": "DONE",
+                "result": "Implemented the change and all tests passed.",
+            },
+        )
+        self.assertEqual(work_status, 200)
+        self.assertIsInstance(work_result, dict)
+        assert isinstance(work_result, dict)
+        self.assertEqual(work_result["phase"], "review")
+        self.assertEqual(work_result["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            work_result["project_state"]["execution"]["pending_transition"][
+                "result"
+            ],
+            "Implemented the change and all tests passed.",
+        )
+
+        first_review_status, first_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2101/whoami",
+            method="POST",
+            payload={
+                "assignment_id": work_result["current_assignment_id"],
+                "status": "APPROVE",
+                "feedback": "Product requirements are satisfied.",
+            },
+        )
+        self.assertEqual(first_review_status, 200)
+        self.assertIsInstance(first_review, dict)
+        assert isinstance(first_review, dict)
+        self.assertEqual(first_review["agent"]["id"], "reviewer-two")
+
+        second_review_status, second_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2102/whoami",
+            method="POST",
+            payload={
+                "assignment_id": first_review["current_assignment_id"],
+                "status": "APPROVE",
+                "feedback": "Technical verification passed.",
+            },
+        )
+        self.assertEqual(second_review_status, 200)
+        self.assertIsInstance(second_review, dict)
+        assert isinstance(second_review, dict)
+        self.assertTrue(second_review["all_completed"])
+        self.assertEqual(
+            second_review["project_state"]["execution"]["status"],
+            "completed",
+        )
+        self.assertEqual(
+            len(
+                second_review["project_state"]["execution"]["last_transition"][
+                    "reviews"
+                ]
+            ),
+            2,
+        )
+
+        state_status, state = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
+        )
+        self.assertEqual(state_status, 200)
+        self.assertIsInstance(state, dict)
+        assert isinstance(state, dict)
+        self.assertEqual(state["execution"]["status"], "completed")
+        self.assertGreaterEqual(len(state["recent_activity"]), 1)
 
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
         actor_json = {

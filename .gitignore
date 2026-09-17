@@ -33,6 +33,8 @@ evidence_folders/
 *.log
 server_*.out.log
 server_*.err.log
+.pytest-progress.out
+.pytest-progress.err
 
 # OS / editor
 .DS_Store
