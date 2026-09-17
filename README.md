@@ -93,6 +93,26 @@ Agents should repeat the heartbeat every five minutes. Presence remains
 `offline` until the agent checks in again. The generated communication section
 in every imported profile includes this endpoint and instruction.
 
+For a strictly non-parallel project, set this inside the `agents` object:
+
+```json
+"assignment_mode": "sequential"
+```
+
+In sequential mode imported tasks are deferred instead of all being queued at
+once. The first `whoami` activates the first imported role and queues only its
+tasks. Normal heartbeat calls keep returning that role. After all tasks for the
+role are finished, the active agent advances the project with:
+
+```json
+{"message":"Задание выполнено. Кто я?","completed":true}
+```
+
+The response contains the next role, profile, branch, tasks, and
+`next_whoami_endpoint`. A call made through another role phone while work is
+active receives HTTP 409, so two roles cannot run in parallel. After the final
+role the response has `all_completed: true`.
+
 All project agents and their pending phone-addressed tasks can be removed with:
 
 ```text

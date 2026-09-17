@@ -169,9 +169,11 @@ MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
-AGENT_COMMUNICATION_VERSION = "2"
+AGENT_COMMUNICATION_VERSION = "3"
 AGENT_HEARTBEAT_INTERVAL_SECONDS = 300
 AGENT_HEARTBEAT_TTL_SECONDS = 900
+PROJECT_AGENT_ASSIGNMENT_KEY = "agent_assignment"
+AGENT_ASSIGNMENT_MODES = {"parallel", "sequential"}
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 CYCLE_LIFECYCLE_EVENT_TYPES = {
     "ARTIFACT_CREATED",
@@ -3277,6 +3279,7 @@ def agent_communication_profile(
     project_phone: str,
     project: dict[str, Any],
     project_agents: list[dict[str, Any]],
+    assignment_mode: str = "parallel",
 ) -> str:
     authored_profile = profile_without_agent_communication_block(profile)
     agent_name = str(agent.get("name") or "").strip()
@@ -3345,6 +3348,23 @@ def agent_communication_profile(
                 f"переключитесь на {git_branch}; если нет — создайте её командой "
                 f"git switch -c {git_branch} от базовой ветки проекта и опубликуйте "
                 f"git push -u origin {git_branch}."
+            ),
+            *(
+                [
+                    "Проект работает в последовательном режиме: одновременно активна только одна роль.",
+                    (
+                        "После выполнения ВСЕХ задач текущей роли отправьте на текущий "
+                        "whoami endpoint:"
+                    ),
+                    '{"message":"Задание выполнено. Кто я?","completed":true}',
+                    (
+                        "Система закроет текущую роль и вернёт следующую. Примите новый "
+                        "agent.profile, agent.phone, git_branch, assigned_tasks и "
+                        "next_whoami_endpoint. Не начинайте следующую роль заранее."
+                    ),
+                ]
+                if assignment_mode == "sequential"
+                else []
             ),
             "",
             "Получить свою актуальную карточку (включая этот профиль и ветку):",
@@ -3441,6 +3461,7 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
         raw_items = raw_section
         overwrite = payload.get("overwrite", False)
         include_managed = payload.get("include_managed", False)
+        assignment_mode = payload.get("assignment_mode", "parallel")
     elif isinstance(raw_section, dict):
         raw_items = raw_section.get("items")
         if raw_items is None:
@@ -3449,6 +3470,10 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
         include_managed = raw_section.get(
             "include_managed",
             payload.get("include_managed", False),
+        )
+        assignment_mode = raw_section.get(
+            "assignment_mode",
+            payload.get("assignment_mode", "parallel"),
         )
     else:
         raise HTTPException(
@@ -3459,6 +3484,21 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"{section_name}.overwrite and {section_name}.include_managed must be booleans",
+        )
+    assignment_mode = str(assignment_mode or "parallel").strip().lower()
+    if assignment_mode not in AGENT_ASSIGNMENT_MODES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "invalid_agent_assignment_mode",
+                "assignment_mode": assignment_mode,
+                "allowed": sorted(AGENT_ASSIGNMENT_MODES),
+            },
+        )
+    if assignment_mode == "sequential" and not overwrite:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Sequential agent assignment requires overwrite: true",
         )
     if not isinstance(raw_items, list):
         raise HTTPException(
@@ -3575,6 +3615,7 @@ def actor_import_options(payload: Any) -> dict[str, Any]:
     return {
         "overwrite": overwrite,
         "include_managed": include_managed,
+        "assignment_mode": assignment_mode,
         "actors": actors,
         "task_count": task_count,
     }
@@ -3625,6 +3666,9 @@ def project_actor_mutation_transaction(
             }
             overwrite = bool(options.get("overwrite")) or delete_all
             include_managed = bool(options.get("include_managed"))
+            assignment_mode = str(
+                options.get("assignment_mode") or "parallel"
+            ).strip().lower()
             imported_specs = [] if delete_all else list(options.get("actors") or [])
 
             matched_by_spec: dict[int, dict[str, Any]] = {}
@@ -3820,18 +3864,35 @@ def project_actor_mutation_transaction(
                     if matched is not None and isinstance(matched.get("parameters"), dict)
                     else {}
                 )
-                for presence_key in (
-                    "created_at",
-                    "first_seen_at",
-                    "last_seen_at",
-                    "alive_until",
-                    "heartbeat_count",
-                    "presence_status",
-                ):
+                preserved_presence_keys = (
+                    ("created_at",)
+                    if assignment_mode == "sequential"
+                    else (
+                        "created_at",
+                        "first_seen_at",
+                        "last_seen_at",
+                        "alive_until",
+                        "heartbeat_count",
+                        "presence_status",
+                    )
+                )
+                for presence_key in preserved_presence_keys:
                     if not parameters.get(presence_key) and matched_parameters.get(
                         presence_key
                     ):
                         parameters[presence_key] = matched_parameters[presence_key]
+                if assignment_mode == "sequential":
+                    for reset_key in (
+                        "first_seen_at",
+                        "last_seen_at",
+                        "alive_until",
+                        "heartbeat_count",
+                        "presence_status",
+                        "assignment_status",
+                        "assignment_completed_at",
+                        "current_assignment_id",
+                    ):
+                        parameters.pop(reset_key, None)
                 created_at = str(
                     parameters.get("created_at") or import_timestamp
                 ).strip()
@@ -3862,6 +3923,8 @@ def project_actor_mutation_transaction(
                         "conversation_phone": project_phone,
                         "agent_phone": phone,
                         "git_branch": git_branch,
+                        "assignment_order": str(index + 1),
+                        "assignment_mode": assignment_mode,
                         "created_at": created_at,
                         "imported_at": import_timestamp,
                         "profile_endpoint": (
@@ -3927,8 +3990,36 @@ def project_actor_mutation_transaction(
                     project_phone,
                     project_entry,
                     project_agents_for_profiles,
+                    assignment_mode,
                 )
             final_agents = normalize_agents(retained_agents + imported_agents)
+            assignment_timestamp = utc_now()
+            assignment_state = {
+                "mode": assignment_mode,
+                "status": (
+                    "ready"
+                    if assignment_mode == "sequential" and imported_agents
+                    else ("completed" if assignment_mode == "sequential" else "parallel")
+                ),
+                "revision": 1,
+                "created_at": assignment_timestamp,
+                "updated_at": assignment_timestamp,
+                "current_agent_id": None,
+                "current_started_at": None,
+                "completed_agent_ids": [],
+                "assignments": [],
+                "role_agent_ids": [
+                    str(agent.get("id") or "").strip()
+                    for agent in imported_agents
+                ],
+            }
+            project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = assignment_state
+            project_entry["updated_at"] = assignment_timestamp
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            config_changed = True
             write_agents_file_unlocked(final_agents)
             if config_changed:
                 try:
@@ -3954,6 +4045,8 @@ def project_actor_mutation_transaction(
                 "project": public_context,
                 "overwrite": overwrite,
                 "include_managed": include_managed,
+                "assignment_mode": assignment_mode,
+                "assignment": deepcopy(assignment_state),
                 "removed_agents": removed_agents,
                 "removed_actor_ids": sorted(removed_ids),
                 "removed_actor_phones": sorted(removed_phones),
@@ -18791,6 +18884,197 @@ async def remove_project_actor_queue_items(
     return removed
 
 
+async def enqueue_stored_agent_tasks(
+    agent: dict[str, Any],
+    project_phone: str,
+    queue_context: dict[str, Any],
+    *,
+    source: str,
+    port: int | None = None,
+    assignment_id: str | None = None,
+) -> list[dict[str, Any]]:
+    agent_id = str(agent.get("id") or "").strip()
+    agent_name = str(agent.get("name") or "").strip()
+    agent_phone = str(agent.get("phone") or "").strip()
+    agent_git_branch = str(
+        agent.get("git_branch")
+        or agent.get("parameters", {}).get("git_branch")
+        or ""
+    ).strip()
+    queued_tasks: list[dict[str, Any]] = []
+    for task in agent.get("tasks", []):
+        metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+        task_id = str(task.get("task_id") or "").strip()
+        queued = await enqueue_phone_channel(
+            str(task.get("queue") or "worker-all"),
+            project_phone,
+            str(task.get("message") or "").strip(),
+            {
+                **metadata,
+                "submitted_via": source,
+                "sender": "Project Manager",
+                "receiver": agent_name,
+                "from_phone": PROJECT_MANAGER_PHONE,
+                "to_phone": agent_phone,
+                "from_agent_id": PROJECT_MANAGER_AGENT_ID,
+                "to_agent_id": agent_id,
+                "to_agent_git_branch": agent_git_branch,
+                "to_agent_profile_endpoint": (
+                    f"/api/v1/projects/{project_phone}/agents/{agent_phone}"
+                ),
+                "assignment_id": assignment_id,
+                "task_id": task_id,
+                "request_id": task.get("request_id"),
+                "status": task.get("status") or "QUEUED",
+            },
+            port,
+            queue_context,
+        )
+        queued_tasks.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "agent_phone": agent_phone,
+                "agent_git_branch": agent_git_branch,
+                "actor_id": agent_id,
+                "actor_name": agent_name,
+                "actor_phone": agent_phone,
+                "task_id": task_id,
+                "assignment_id": assignment_id,
+                "queue": queued["queue"],
+                "queue_item_id": queued["id"],
+            }
+        )
+    return queued_tasks
+
+
+async def enqueue_sequential_agent_node(
+    agent: dict[str, Any],
+    project_phone: str,
+    queue_context: dict[str, Any],
+    assignment: dict[str, Any],
+    *,
+    source: str,
+    port: int | None = None,
+) -> dict[str, Any]:
+    agent_id = str(agent.get("id") or "").strip()
+    agent_name = str(agent.get("name") or "").strip()
+    logical_agent_phone = str(agent.get("phone") or "").strip()
+    agent_parameters = (
+        agent.get("parameters")
+        if isinstance(agent.get("parameters"), dict)
+        else {}
+    )
+    git_branch = str(
+        agent.get("git_branch") or agent_parameters.get("git_branch") or ""
+    ).strip()
+    role_agent_ids = [
+        str(agent_id_value).strip()
+        for agent_id_value in assignment.get("role_agent_ids", [])
+        if str(agent_id_value).strip()
+    ]
+    try:
+        node_index = role_agent_ids.index(agent_id) + 1
+    except ValueError:
+        node_index = len(assignment.get("completed_agent_ids", [])) + 1
+    node_count = len(role_agent_ids)
+    assignment_id = str(assignment.get("current_assignment_id") or "").strip()
+    tasks = deepcopy(agent.get("tasks") or [])
+    task_lines = [
+        f"{index}. [{str(task.get('queue') or 'worker-all')}] "
+        f"{str(task.get('message') or '').strip()}"
+        for index, task in enumerate(tasks, start=1)
+        if isinstance(task, dict)
+    ]
+    if not task_lines:
+        task_lines = ["Заданий для этого узла нет."]
+    profile = str(agent.get("profile") or "").strip()
+    message = "\n".join(
+        [
+            "ПОСЛЕДОВАТЕЛЬНЫЙ РЕЖИМ: НОВЫЙ УЗЕЛ ГРАФА",
+            (
+                f"Сейчас вы агент {agent_name} "
+                f"(id={agent_id}, logical_phone={logical_agent_phone})."
+            ),
+            f"Узел графа: {node_index} из {node_count}.",
+            f"Рабочая Git-ветка: {git_branch or 'не назначена'}.",
+            "Профиль текущей роли:",
+            profile or "Профиль не задан.",
+            "Задания текущего узла:",
+            *task_lines,
+            (
+                "После завершения вызовите "
+                f"POST /api/v1/projects/{project_phone}/agents/"
+                f"{logical_agent_phone}/whoami с JSON "
+                '{"completed":true,"message":"Задание выполнено"}. '
+                "Затем снова прочитайте эту последовательную очередь: система "
+                "сообщит, каким агентом вы стали на следующем узле."
+            ),
+        ]
+    )
+    queued = await enqueue_phone_channel(
+        "worker-all",
+        project_phone,
+        message,
+        {
+            "submitted_via": source,
+            "action": "sequential_agent_node_assigned",
+            "assignment_mode": "sequential",
+            "assignment_id": assignment_id,
+            "sender": PROJECT_MANAGER_AGENT_NAME,
+            "receiver": agent_name,
+            "from_phone": PROJECT_MANAGER_PHONE,
+            "to_phone": project_phone,
+            "to_agent_id": agent_id,
+            "logical_to_phone": logical_agent_phone,
+            "to_agent_git_branch": git_branch,
+            "graph_node_index": node_index,
+            "graph_node_count": node_count,
+            "task_ids": [
+                str(task.get("task_id") or "").strip()
+                for task in tasks
+                if isinstance(task, dict) and str(task.get("task_id") or "").strip()
+            ],
+            "tasks": tasks,
+            "agent": {
+                "id": agent_id,
+                "name": agent_name,
+                "phone": logical_agent_phone,
+                "git_branch": git_branch,
+                "profile": profile,
+            },
+            "whoami_endpoint": (
+                f"/api/v1/projects/{project_phone}/agents/"
+                f"{logical_agent_phone}/whoami"
+            ),
+            "sequential_poll_endpoint": (
+                f"/worker/all/{project_phone}?to_phone={project_phone}"
+            ),
+            "status": "QUEUED",
+        },
+        port,
+        queue_context,
+    )
+    return {
+        "agent_id": agent_id,
+        "agent_name": agent_name,
+        "logical_agent_phone": logical_agent_phone,
+        "delivery_phone": project_phone,
+        "assignment_id": assignment_id,
+        "graph_node_index": node_index,
+        "graph_node_count": node_count,
+        "task_count": len(tasks),
+        "task_ids": [
+            str(task.get("task_id") or "").strip()
+            for task in tasks
+            if isinstance(task, dict) and str(task.get("task_id") or "").strip()
+        ],
+        "queue": queued["queue"],
+        "queue_item_id": queued["id"],
+        "poll_endpoint": f"/worker/all/{project_phone}?to_phone={project_phone}",
+    }
+
+
 async def import_project_actors_data(
     project_id: str,
     payload: Any,
@@ -18813,7 +19097,12 @@ async def import_project_actors_data(
             action="removed_by_actor_import_overwrite",
         )
         queued_tasks: list[dict[str, Any]] = []
-        for actor in result["imported_agents"]:
+        immediately_queued_agents = (
+            result["imported_agents"]
+            if result.get("assignment_mode") != "sequential"
+            else []
+        )
+        for actor in immediately_queued_agents:
             actor_id = str(actor.get("id") or "").strip()
             actor_name = str(actor.get("name") or "").strip()
             actor_phone = str(actor.get("phone") or "").strip()
@@ -18875,6 +19164,11 @@ async def import_project_actors_data(
         "imported_actor_count": len(result["imported_agents"]),
         "removed_task_count": len(removed_tasks),
         "queued_task_count": len(queued_tasks),
+        "deferred_task_count": (
+            sum(len(agent.get("tasks") or []) for agent in result["imported_agents"])
+            if result.get("assignment_mode") == "sequential"
+            else 0
+        ),
         "removed_tasks": removed_tasks,
         "queued_tasks": queued_tasks,
     }
@@ -19421,8 +19715,306 @@ def project_agent_identity_snapshot_transaction(
                 "project_phone": project_phone,
                 "project": public_project_context(context),
                 "context_key": context_key,
+                "assignment_mode": str(
+                    project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY, {}).get("mode")
+                    if isinstance(
+                        project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY), dict
+                    )
+                    else "parallel"
+                )
+                or "parallel",
+                "assignment": deepcopy(
+                    project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY, {})
+                    if isinstance(
+                        project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY), dict
+                    )
+                    else {}
+                ),
                 "agent": deepcopy(target_agent),
                 "agents": deepcopy(project_agents),
+                "queue_context": {
+                    "queue_phone": project_phone,
+                    "git_context_phone": project_phone,
+                    "project_phone": project_phone,
+                    "project_name": project_entry.get("project_name"),
+                    "git_context_key": context_key,
+                    "git_address": project_entry.get("git_address"),
+                },
+            }
+
+
+def sequential_agent_assignment_transaction(
+    project_id: str,
+    requested_phone: str,
+    complete_current: bool,
+    seen_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            raw_key, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+            state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
+            if str(state.get("mode") or "parallel") != "sequential":
+                return {"sequential": False}
+
+            previous_agents = read_agents_file()
+            original_agents = deepcopy(previous_agents)
+            phone_contexts = phone_git_contexts_from_config(config)
+            project_agents = full_agents_for_project(
+                previous_agents,
+                context_key,
+                phone_contexts,
+            )
+            clean_requested_phone = requested_phone.strip()
+            if not any(
+                str(agent.get("phone") or "").strip() == clean_requested_phone
+                for agent in project_agents
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent phone was not found in this project",
+                )
+
+            agents_by_id = {
+                str(agent.get("id") or "").strip(): agent
+                for agent in project_agents
+            }
+            role_agent_ids = [
+                str(agent_id).strip()
+                for agent_id in state.get("role_agent_ids", [])
+                if str(agent_id).strip() in agents_by_id
+            ]
+            if not role_agent_ids:
+                role_agent_ids = [
+                    str(agent.get("id") or "").strip()
+                    for agent in sorted(
+                        (
+                            agent
+                            for agent in project_agents
+                            if str(
+                                agent.get("parameters", {}).get("assignment_order")
+                                or ""
+                            ).strip()
+                        ),
+                        key=lambda agent: int(
+                            agent.get("parameters", {}).get("assignment_order") or 0
+                        ),
+                    )
+                ]
+                state["role_agent_ids"] = role_agent_ids
+
+            completed_agent_ids = [
+                str(agent_id).strip()
+                for agent_id in state.get("completed_agent_ids", [])
+                if str(agent_id).strip()
+            ]
+            completed_set = set(completed_agent_ids)
+            current_agent_id = str(state.get("current_agent_id") or "").strip()
+            current_agent = agents_by_id.get(current_agent_id)
+            completed_agent: dict[str, Any] | None = None
+            completed_assignment: dict[str, Any] | None = None
+
+            if complete_current:
+                if current_agent is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "no_active_sequential_assignment",
+                            "message": "There is no active role to complete",
+                        },
+                    )
+                current_phone = str(current_agent.get("phone") or "").strip()
+                if clean_requested_phone != current_phone:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "sequential_assignment_phone_mismatch",
+                            "current_agent_id": current_agent_id,
+                            "expected_phone": current_phone,
+                        },
+                    )
+                completed_agent = deepcopy(current_agent)
+                if current_agent_id not in completed_set:
+                    completed_agent_ids.append(current_agent_id)
+                    completed_set.add(current_agent_id)
+                for assignment in state.get("assignments", []):
+                    if not isinstance(assignment, dict):
+                        continue
+                    if (
+                        str(assignment.get("assignment_id") or "")
+                        == str(state.get("current_assignment_id") or "")
+                    ):
+                        assignment["status"] = "completed"
+                        assignment["completed_at"] = seen_at
+                        completed_assignment = deepcopy(assignment)
+                        break
+                for index, stored_agent in enumerate(previous_agents):
+                    if str(stored_agent.get("id") or "").strip() != current_agent_id:
+                        continue
+                    updated_completed = deepcopy(stored_agent)
+                    completed_parameters = dict(updated_completed.get("parameters") or {})
+                    completed_parameters.update(
+                        {
+                            "presence_status": "completed",
+                            "last_seen_at": seen_at,
+                            "alive_until": seen_at,
+                            "assignment_status": "completed",
+                            "assignment_completed_at": seen_at,
+                        }
+                    )
+                    updated_completed["parameters"] = normalize_agent_parameters(
+                        completed_parameters
+                    )
+                    previous_agents[index] = updated_completed
+                    break
+                state["current_agent_id"] = None
+                state["current_assignment_id"] = None
+                state["current_started_at"] = None
+                current_agent = None
+                current_agent_id = ""
+
+            if current_agent is not None and not complete_current:
+                expected_phone = str(current_agent.get("phone") or "").strip()
+                if clean_requested_phone != expected_phone:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "sequential_assignment_in_progress",
+                            "current_agent_id": current_agent_id,
+                            "current_agent_name": current_agent.get("name"),
+                            "expected_phone": expected_phone,
+                            "message": "Another sequential role is still active",
+                        },
+                    )
+
+            newly_assigned = False
+            if current_agent is None:
+                next_agent_id = next(
+                    (
+                        agent_id
+                        for agent_id in role_agent_ids
+                        if agent_id not in completed_set
+                    ),
+                    "",
+                )
+                current_agent = agents_by_id.get(next_agent_id)
+                current_agent_id = next_agent_id
+                if current_agent is not None:
+                    newly_assigned = True
+                    assignment_id = str(uuid4())
+                    assignment = {
+                        "assignment_id": assignment_id,
+                        "agent_id": current_agent_id,
+                        "agent_name": current_agent.get("name"),
+                        "agent_phone": current_agent.get("phone"),
+                        "git_branch": current_agent.get("git_branch")
+                        or current_agent.get("parameters", {}).get("git_branch"),
+                        "task_ids": [
+                            str(task.get("task_id") or "").strip()
+                            for task in current_agent.get("tasks", [])
+                            if str(task.get("task_id") or "").strip()
+                        ],
+                        "status": "active",
+                        "started_at": seen_at,
+                        "completed_at": None,
+                    }
+                    assignments = [
+                        deepcopy(item)
+                        for item in state.get("assignments", [])
+                        if isinstance(item, dict)
+                    ]
+                    assignments.append(assignment)
+                    state["assignments"] = assignments
+                    state["current_agent_id"] = current_agent_id
+                    state["current_assignment_id"] = assignment_id
+                    state["current_started_at"] = seen_at
+                    state["status"] = "active"
+                else:
+                    state["status"] = "completed"
+                    state["completed_at"] = seen_at
+
+            if current_agent is not None:
+                for index, stored_agent in enumerate(previous_agents):
+                    if str(stored_agent.get("id") or "").strip() != current_agent_id:
+                        continue
+                    updated_current = deepcopy(stored_agent)
+                    parameters = dict(updated_current.get("parameters") or {})
+                    try:
+                        heartbeat_count = max(
+                            0,
+                            int(parameters.get("heartbeat_count") or 0),
+                        ) + 1
+                    except (TypeError, ValueError):
+                        heartbeat_count = 1
+                    seen_time = parse_utc_datetime(seen_at) or datetime.now(timezone.utc)
+                    parameters.update(
+                        {
+                            "created_at": parameters.get("created_at") or seen_at,
+                            "first_seen_at": parameters.get("first_seen_at") or seen_at,
+                            "last_seen_at": seen_at,
+                            "alive_until": (
+                                seen_time
+                                + timedelta(seconds=AGENT_HEARTBEAT_TTL_SECONDS)
+                            ).isoformat(),
+                            "heartbeat_count": str(heartbeat_count),
+                            "presence_status": "alive",
+                            "assignment_status": "active",
+                            "current_assignment_id": state.get(
+                                "current_assignment_id"
+                            ),
+                        }
+                    )
+                    updated_current["parameters"] = normalize_agent_parameters(
+                        parameters
+                    )
+                    previous_agents[index] = updated_current
+                    break
+
+            state["completed_agent_ids"] = completed_agent_ids
+            state["updated_at"] = seen_at
+            state["revision"] = int(state.get("revision") or 0) + 1
+            project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+            project_entry["updated_at"] = seen_at
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+
+            updated_agents = normalize_agents(previous_agents)
+            write_agents_file_unlocked(updated_agents)
+            try:
+                write_git_config_file(config)
+            except Exception:
+                write_agents_file_unlocked(original_agents)
+                raise
+            updated_project_agents = full_agents_for_project(
+                updated_agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            updated_by_id = {
+                str(agent.get("id") or "").strip(): agent
+                for agent in updated_project_agents
+            }
+            selected_agent = updated_by_id.get(current_agent_id)
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            return {
+                "sequential": True,
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "project": public_project_context(context),
+                "context_key": context_key,
+                "agent": deepcopy(selected_agent) if selected_agent else None,
+                "agents": deepcopy(updated_project_agents),
+                "newly_assigned": newly_assigned,
+                "completed_agent": completed_agent,
+                "completed_assignment": completed_assignment,
+                "all_completed": selected_agent is None,
+                "assignment": deepcopy(state),
                 "queue_context": {
                     "queue_phone": project_phone,
                     "git_context_phone": project_phone,
@@ -19557,6 +20149,186 @@ def mark_project_agent_alive_transaction(
             }
 
 
+async def identify_sequential_project_agent(
+    project_id: str,
+    requested_phone: str,
+    request_message: str,
+    complete_current: bool,
+    request: Request,
+) -> dict[str, Any]:
+    seen_at = utc_now()
+    async with group_task_submission_lock:
+        result = await run_group_write_transaction(
+            sequential_agent_assignment_transaction,
+            project_id,
+            requested_phone,
+            complete_current,
+            seen_at,
+        )
+        completed_agent = result.get("completed_agent")
+        removed_tasks: list[dict[str, Any]] = []
+        if isinstance(completed_agent, dict):
+            completed_id = str(completed_agent.get("id") or "").strip()
+            completed_phone = str(completed_agent.get("phone") or "").strip()
+            removed_tasks = await remove_project_actor_queue_items(
+                result["queue_context"],
+                {completed_id} if completed_id else set(),
+                {completed_phone} if completed_phone else set(),
+                action="removed_by_sequential_assignment_completion",
+            )
+            await append_history(
+                "agent_assignment_completed",
+                "worker-all",
+                request_message or "Задание выполнено. Кто я?",
+                {
+                    "submitted_via": "agent_whoami",
+                    "action": "sequential_role_completed",
+                    "sender": completed_agent.get("name"),
+                    "receiver": "Project Manager",
+                    "from_phone": completed_phone,
+                    "to_phone": PROJECT_MANAGER_PHONE,
+                    "from_agent_id": completed_id,
+                    "to_agent_id": PROJECT_MANAGER_AGENT_ID,
+                    "project_phone": result["project_phone"],
+                    "assignment_id": (
+                        result.get("completed_assignment") or {}
+                    ).get("assignment_id"),
+                    "status": "COMPLETED",
+                },
+                request_port(request),
+                result["queue_context"],
+            )
+
+        agent = result.get("agent")
+        if not isinstance(agent, dict):
+            assignment = result.get("assignment") or {}
+            return {
+                "answer": "Все последовательные роли и их задания выполнены.",
+                "identity_request": request_message or "Кто я?",
+                "project_id": result["project_id"],
+                "project_phone": result["project_phone"],
+                "project": result["project"],
+                "assignment_mode": "sequential",
+                "all_completed": True,
+                "agent": None,
+                "presence": {
+                    "status": "completed",
+                    "is_alive": False,
+                },
+                "assigned_tasks": [],
+                "work_summary": {
+                    "assigned_task_count": 0,
+                    "history_event_count": 0,
+                },
+                "work_history": [],
+                "assignment": assignment,
+                "completed_assignments": assignment.get("assignments", []),
+                "removed_pending_tasks": removed_tasks,
+            }
+
+        assignment = result.get("assignment") or {}
+        assignment_id = str(assignment.get("current_assignment_id") or "").strip()
+        queued_tasks: list[dict[str, Any]] = []
+        if result.get("newly_assigned"):
+            queued_tasks = await enqueue_stored_agent_tasks(
+                agent,
+                result["project_phone"],
+                result["queue_context"],
+                source="sequential_agent_assignment",
+                port=request_port(request),
+                assignment_id=assignment_id,
+            )
+
+        agent_id = str(agent.get("id") or "").strip()
+        agent_name = str(agent.get("name") or "").strip()
+        agent_phone = str(agent.get("phone") or "").strip()
+        heartbeat_event = (
+            "agent_assignment_started"
+            if result.get("newly_assigned")
+            else "agent_identity_heartbeat"
+        )
+        await append_history(
+            heartbeat_event,
+            "worker-all",
+            request_message or "Кто я?",
+            {
+                "submitted_via": "agent_whoami",
+                "action": (
+                    "sequential_role_assigned"
+                    if result.get("newly_assigned")
+                    else "agent_marked_alive"
+                ),
+                "sender": agent_name,
+                "receiver": agent_name,
+                "from_phone": agent_phone,
+                "to_phone": agent_phone,
+                "from_agent_id": agent_id,
+                "to_agent_id": agent_id,
+                "project_phone": result["project_phone"],
+                "presence_status": "alive",
+                "assignment_id": assignment_id,
+            },
+            request_port(request),
+            result["queue_context"],
+        )
+
+    created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
+    async with history_lock:
+        work_history = await asyncio.to_thread(
+            read_agent_work_history_file,
+            agent,
+            result["context_key"],
+            created_at,
+        )
+    assigned_tasks = deepcopy(agent.get("tasks") or [])
+    work_summary = agent_work_history_summary(work_history, len(assigned_tasks))
+    git_branch = str(
+        agent.get("git_branch")
+        or agent.get("parameters", {}).get("git_branch")
+        or ""
+    ).strip()
+    completed_count = len(assignment.get("completed_agent_ids", []))
+    total_count = len(assignment.get("role_agent_ids", []))
+    role_number = min(completed_count + 1, total_count) if total_count else 0
+    answer = (
+        f"Ваша текущая последовательная роль — {agent_name} "
+        f"(роль {role_number} из {total_count}, id={agent_id}, phone={agent_phone}). "
+        f"Ветка: {git_branch or 'не назначена'}. Задач в этой роли: "
+        f"{len(assigned_tasks)}. Параллельная роль не будет выдана."
+    )
+    return {
+        "answer": answer,
+        "identity_request": request_message or "Кто я?",
+        "project_id": result["project_id"],
+        "project_phone": result["project_phone"],
+        "project": result["project"],
+        "assignment_mode": "sequential",
+        "all_completed": False,
+        "newly_assigned": bool(result.get("newly_assigned")),
+        "agent": agent,
+        "profile": agent.get("profile"),
+        "git_branch": git_branch,
+        "presence": agent.get("presence") or agent_presence_snapshot(agent),
+        "assigned_tasks": assigned_tasks,
+        "work_summary": work_summary,
+        "work_history_since": created_at,
+        "work_history": work_history,
+        "assignment": assignment,
+        "current_assignment_id": assignment_id,
+        "next_whoami_endpoint": (
+            f"/api/v1/projects/{result['project_phone']}/agents/{agent_phone}/whoami"
+        ),
+        "queued_tasks": queued_tasks,
+        "removed_pending_tasks": removed_tasks,
+        "completed_assignment": result.get("completed_assignment"),
+        "completed_assignments": [
+            item
+            for item in assignment.get("assignments", [])
+            if isinstance(item, dict) and item.get("status") == "completed"
+        ],
+    }
+
+
 @app.get("/api/v1/projects/{project_id}/agents")
 @app.get("/api/v1/projects/{project_id}/actors")
 async def get_project_actors(project_id: str) -> dict[str, Any]:
@@ -19573,10 +20345,17 @@ async def get_project_actors(project_id: str) -> dict[str, Any]:
         context_key,
         phone_git_contexts_from_config(config),
     )
+    assignment = (
+        deepcopy(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY))
+        if isinstance(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY), dict)
+        else {"mode": "parallel", "status": "parallel"}
+    )
     return {
         "project_id": normalize_project_phone(project_entry.get("project_phone")),
         "project_phone": normalize_project_phone(project_entry.get("project_phone")),
         "project": public_project_context(context),
+        "assignment_mode": assignment.get("mode") or "parallel",
+        "assignment": assignment,
         "agents": project_agents,
         "agent_count": len(project_agents),
         "actors": project_agents,
@@ -19669,6 +20448,7 @@ async def identify_project_agent(
     request: Request,
 ) -> dict[str, Any]:
     request_message = "Кто я?"
+    identity_payload: dict[str, Any] = {}
     raw_body = await request.body()
     if raw_body:
         try:
@@ -19683,6 +20463,7 @@ async def identify_project_agent(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Expected JSON object",
             )
+        identity_payload = payload
         request_message = str(payload.get("message") or request_message).strip()
         if len(request_message) > 1000:
             raise HTTPException(
@@ -19690,11 +20471,30 @@ async def identify_project_agent(
                 detail="Identity request message must not exceed 1000 characters",
             )
 
+    normalized_message = request_message.casefold()
+    complete_current = bool(
+        identity_payload.get("completed") is True
+        or str(identity_payload.get("status") or "").strip().upper()
+        in {"COMPLETED", "DONE"}
+        or re.search(
+            r"(?:задани\w*|работ\w*|роль)\s+(?:выполн\w*|заверш\w*)|\b(?:completed|done)\b",
+            normalized_message,
+        )
+    )
+
     snapshot = await run_group_write_transaction(
         project_agent_identity_snapshot_transaction,
         project_id,
         agent_phone,
     )
+    if snapshot.get("assignment_mode") == "sequential":
+        return await identify_sequential_project_agent(
+            project_id,
+            agent_phone,
+            request_message,
+            complete_current,
+            request,
+        )
     async with history_lock:
         previous_history = await asyncio.to_thread(
             read_agent_work_history_file,
@@ -19802,9 +20602,25 @@ async def identify_project_agent(
     }
 
 
-@app.post("/api/v1/telegram/agents")
-@app.post("/api/v1/telegram/actors")
-async def telegram_actor_import(request: Request) -> dict[str, Any]:
+def actor_payload_with_assignment_mode(
+    payload: dict[str, Any],
+    assignment_mode: str,
+) -> dict[str, Any]:
+    if assignment_mode not in AGENT_ASSIGNMENT_MODES:
+        raise ValueError(f"Unsupported agent assignment mode: {assignment_mode}")
+    normalized_payload = deepcopy(payload)
+    normalized_payload["assignment_mode"] = assignment_mode
+    for section_name in ("agents", "actors"):
+        section = normalized_payload.get(section_name)
+        if isinstance(section, dict):
+            section["assignment_mode"] = assignment_mode
+    return normalized_payload
+
+
+async def telegram_actor_import_for_mode(
+    request: Request,
+    assignment_mode: str,
+) -> dict[str, Any]:
     expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     supplied_secret = request.headers.get("x-telegram-bot-api-secret-token", "").strip()
     if expected_secret and not hmac.compare_digest(expected_secret, supplied_secret):
@@ -19815,6 +20631,7 @@ async def telegram_actor_import(request: Request) -> dict[str, Any]:
     update = await read_message(request)
     payload, message = await asyncio.to_thread(actor_payload_from_telegram_update, update)
     ensure_telegram_sender_allowed(message)
+    payload = actor_payload_with_assignment_mode(payload, assignment_mode)
     project_id = await project_phone_for_actor_import(
         payload,
         request_port(request),
@@ -19827,6 +20644,22 @@ async def telegram_actor_import(request: Request) -> dict[str, Any]:
     )
     await asyncio.to_thread(send_telegram_import_reply, message, result)
     return {"ok": True, **result}
+
+
+@app.post("/api/v1/telegram/agents/sequential")
+async def telegram_sequential_agent_import(request: Request) -> dict[str, Any]:
+    return await telegram_actor_import_for_mode(request, "sequential")
+
+
+@app.post("/api/v1/telegram/agents/parallel")
+async def telegram_parallel_agent_import(request: Request) -> dict[str, Any]:
+    return await telegram_actor_import_for_mode(request, "parallel")
+
+
+@app.post("/api/v1/telegram/agents")
+@app.post("/api/v1/telegram/actors")
+async def telegram_actor_import(request: Request) -> dict[str, Any]:
+    return await telegram_actor_import_for_mode(request, "parallel")
 
 
 @app.get("/api/v1/group-templates")

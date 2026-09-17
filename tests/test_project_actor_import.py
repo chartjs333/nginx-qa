@@ -655,6 +655,150 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(unknown_status, 404)
 
+    async def test_sequential_whoami_moves_to_next_role_without_parallel_work(self) -> None:
+        import_status, import_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {
+                    "overwrite": True,
+                    "assignment_mode": "sequential",
+                    "items": [
+                        {
+                            "id": "sequential-role-a",
+                            "name": "Sequential Role A",
+                            "phone": "2121",
+                            "git_branch": "agent/sequential-a",
+                            "profile": "Complete role A before role B starts.",
+                            "tasks": [
+                                {
+                                    "task_id": "SEQ-A",
+                                    "queue": "worker-all",
+                                    "message": "Complete sequential task A.",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "sequential-role-b",
+                            "name": "Sequential Role B",
+                            "phone": "2122",
+                            "git_branch": "agent/sequential-b",
+                            "profile": "Start only after role A is complete.",
+                            "tasks": [
+                                {
+                                    "task_id": "SEQ-B",
+                                    "queue": "tester-all",
+                                    "message": "Complete sequential task B.",
+                                }
+                            ],
+                        },
+                    ],
+                }
+            },
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(import_body, dict)
+        assert isinstance(import_body, dict)
+        self.assertEqual(import_body["assignment_mode"], "sequential")
+        self.assertEqual(import_body["queued_task_count"], 0)
+        self.assertEqual(import_body["deferred_task_count"], 2)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        self.assertIn(
+            "одновременно активна только одна роль",
+            import_body["imported_agents"][0]["profile"],
+        )
+        self.assertEqual(
+            import_body["imported_agents"][0]["parameters"]["assignment_order"],
+            "1",
+        )
+
+        first_status, first_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2121/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(first_status, 200)
+        self.assertIsInstance(first_body, dict)
+        assert isinstance(first_body, dict)
+        self.assertEqual(first_body["assignment_mode"], "sequential")
+        self.assertFalse(first_body["all_completed"])
+        self.assertTrue(first_body["newly_assigned"])
+        self.assertEqual(first_body["agent"]["id"], "sequential-role-a")
+        self.assertEqual(first_body["assigned_tasks"][0]["task_id"], "SEQ-A")
+        self.assertEqual(len(first_body["queued_tasks"]), 1)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(len(main.queues["tester-all"]), 0)
+
+        heartbeat_status, heartbeat_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2121/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(heartbeat_status, 200)
+        self.assertIsInstance(heartbeat_body, dict)
+        assert isinstance(heartbeat_body, dict)
+        self.assertFalse(heartbeat_body["newly_assigned"])
+        self.assertEqual(heartbeat_body["agent"]["id"], "sequential-role-a")
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
+        parallel_status, parallel_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(parallel_status, 409)
+        self.assertIsInstance(parallel_body, dict)
+        assert isinstance(parallel_body, dict)
+        self.assertEqual(
+            parallel_body["detail"]["error"],
+            "sequential_assignment_in_progress",
+        )
+
+        second_status, second_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2121/whoami",
+            method="POST",
+            payload={
+                "message": "Задание выполнено. Кто я?",
+                "completed": True,
+            },
+        )
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(second_body, dict)
+        assert isinstance(second_body, dict)
+        self.assertTrue(second_body["newly_assigned"])
+        self.assertEqual(second_body["agent"]["id"], "sequential-role-b")
+        self.assertEqual(second_body["completed_assignment"]["agent_id"], "sequential-role-a")
+        self.assertEqual(
+            second_body["next_whoami_endpoint"],
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
+        )
+        self.assertEqual(len(second_body["removed_pending_tasks"]), 1)
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+        self.assertEqual(len(main.queues["tester-all"]), 1)
+
+        done_status, done_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2122/whoami",
+            method="POST",
+            payload={"message": "Role completed. Who am I?", "status": "DONE"},
+        )
+        self.assertEqual(done_status, 200)
+        self.assertIsInstance(done_body, dict)
+        assert isinstance(done_body, dict)
+        self.assertTrue(done_body["all_completed"])
+        self.assertIsNone(done_body["agent"])
+        self.assertEqual(done_body["assignment"]["status"], "completed")
+        self.assertEqual(len(done_body["completed_assignments"]), 2)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        project_status, project_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents"
+        )
+        self.assertEqual(project_status, 200)
+        self.assertIsInstance(project_body, dict)
+        assert isinstance(project_body, dict)
+        self.assertEqual(project_body["assignment_mode"], "sequential")
+        self.assertEqual(project_body["assignment"]["status"], "completed")
+
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
         actor_json = {
             "project_id": self.PROJECT_PHONE,
