@@ -525,6 +525,136 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(body, dict)
         self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
 
+    async def test_whoami_marks_agent_alive_and_returns_full_work_history(self) -> None:
+        import_status, import_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "dynamic-agent",
+                            "name": "Dynamic Agent",
+                            "phone": "2111",
+                            "git_branch": "agent/dynamic-agent",
+                            "profile": "Perform dynamically assigned work.",
+                            "tasks": [
+                                {
+                                    "task_id": "DYN-1",
+                                    "queue": "worker-all",
+                                    "message": "Complete the dynamic task.",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "peer-agent",
+                            "name": "Peer Agent",
+                            "phone": "2112",
+                            "git_branch": "agent/peer-agent",
+                            "tasks": [],
+                        },
+                    ],
+                }
+            },
+        )
+        self.assertEqual(import_status, 201)
+        self.assertIsInstance(import_body, dict)
+        assert isinstance(import_body, dict)
+        imported_agent = next(
+            agent
+            for agent in import_body["imported_agents"]
+            if agent["id"] == "dynamic-agent"
+        )
+        self.assertIn(
+            f"POST /api/v1/projects/{self.PROJECT_PHONE}/agents/2111/whoami",
+            imported_agent["profile"],
+        )
+        self.assertEqual(
+            imported_agent["parameters"]["whoami_endpoint"],
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2111/whoami",
+        )
+        self.assertTrue(imported_agent["parameters"]["created_at"])
+
+        whoami_status, whoami_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2111/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(whoami_status, 200)
+        self.assertIsInstance(whoami_body, dict)
+        assert isinstance(whoami_body, dict)
+        self.assertIn("Dynamic Agent", whoami_body["answer"])
+        self.assertIn("Вы отмечены как живой агент", whoami_body["answer"])
+        self.assertEqual(whoami_body["agent"]["status"], "active")
+        self.assertTrue(whoami_body["presence"]["is_alive"])
+        self.assertEqual(whoami_body["presence"]["status"], "alive")
+        self.assertEqual(whoami_body["presence"]["heartbeat_count"], 1)
+        self.assertEqual(len(whoami_body["assigned_tasks"]), 1)
+        self.assertEqual(whoami_body["work_summary"]["assigned_task_count"], 1)
+        self.assertGreaterEqual(whoami_body["work_summary"]["history_event_count"], 2)
+        self.assertIn(
+            "queued_to_worker_all",
+            whoami_body["work_summary"]["event_counts"],
+        )
+        self.assertIn(
+            "agent_identity_heartbeat",
+            whoami_body["work_summary"]["event_counts"],
+        )
+        self.assertEqual(
+            whoami_body["work_history"][0]["metadata"]["task_id"],
+            "DYN-1",
+        )
+        self.assertEqual(
+            {agent["id"] for agent in whoami_body["project_agents"]},
+            {"dynamic-agent", "peer-agent"},
+        )
+
+        stored_agent = next(
+            agent
+            for agent in main.read_agents_file()
+            if agent["id"] == "dynamic-agent"
+        )
+        self.assertEqual(stored_agent["parameters"]["presence_status"], "alive")
+        self.assertEqual(stored_agent["parameters"]["heartbeat_count"], "1")
+        first_seen_at = stored_agent["parameters"]["first_seen_at"]
+
+        second_status, second_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2111/whoami",
+            method="POST",
+            payload={"message": "Who am I?"},
+        )
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(second_body, dict)
+        assert isinstance(second_body, dict)
+        self.assertEqual(second_body["presence"]["heartbeat_count"], 2)
+        self.assertEqual(
+            second_body["agent"]["parameters"]["first_seen_at"],
+            first_seen_at,
+        )
+        self.assertGreater(
+            second_body["work_summary"]["history_event_count"],
+            whoami_body["work_summary"]["history_event_count"],
+        )
+
+        list_status, list_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(list_body, dict)
+        assert isinstance(list_body, dict)
+        listed_agent = next(
+            agent for agent in list_body["agents"] if agent["id"] == "dynamic-agent"
+        )
+        self.assertTrue(listed_agent["presence"]["is_alive"])
+
+        unknown_status, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2999/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(unknown_status, 404)
+
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
         actor_json = {
             "project_id": self.PROJECT_PHONE,

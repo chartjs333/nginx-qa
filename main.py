@@ -169,7 +169,9 @@ MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
-AGENT_COMMUNICATION_VERSION = "1"
+AGENT_COMMUNICATION_VERSION = "2"
+AGENT_HEARTBEAT_INTERVAL_SECONDS = 300
+AGENT_HEARTBEAT_TTL_SECONDS = 900
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 CYCLE_LIFECYCLE_EVENT_TYPES = {
     "ARTIFACT_CREATED",
@@ -1509,6 +1511,42 @@ def parse_utc_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def agent_presence_snapshot(
+    agent: dict[str, Any],
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    parameters = agent.get("parameters") if isinstance(agent.get("parameters"), dict) else {}
+    checked_at = now or datetime.now(timezone.utc)
+    last_seen_at = parse_utc_datetime(parameters.get("last_seen_at"))
+    alive_until = parse_utc_datetime(parameters.get("alive_until"))
+    is_alive = bool(
+        str(parameters.get("presence_status") or "").strip() == "alive"
+        and last_seen_at is not None
+        and alive_until is not None
+        and alive_until > checked_at
+    )
+    try:
+        heartbeat_count = max(0, int(parameters.get("heartbeat_count") or 0))
+    except (TypeError, ValueError):
+        heartbeat_count = 0
+    return {
+        "status": "alive" if is_alive else ("offline" if last_seen_at else "unknown"),
+        "is_alive": is_alive,
+        "created_at": parameters.get("created_at"),
+        "first_seen_at": parameters.get("first_seen_at"),
+        "last_seen_at": parameters.get("last_seen_at"),
+        "alive_until": parameters.get("alive_until"),
+        "heartbeat_count": heartbeat_count,
+        "heartbeat_interval_seconds": AGENT_HEARTBEAT_INTERVAL_SECONDS,
+    }
+
+
+def agent_with_presence(agent: dict[str, Any]) -> dict[str, Any]:
+    public_agent = deepcopy(agent)
+    public_agent["presence"] = agent_presence_snapshot(agent)
+    return public_agent
 
 
 def empty_agent_expires_at(agent: dict[str, Any]) -> datetime | None:
@@ -3176,6 +3214,7 @@ def full_agents_for_project(
             dict(parameters) if isinstance(parameters, dict) else {}
         )
         full_agent["status"] = agent_status_value(agent) or "active"
+        full_agent["presence"] = agent_presence_snapshot(agent)
         project_agents.append(full_agent)
     return sorted(
         project_agents,
@@ -3310,6 +3349,15 @@ def agent_communication_profile(
             "",
             "Получить свою актуальную карточку (включая этот профиль и ветку):",
             f"GET /api/v1/projects/{project_phone}/agents/{agent_phone}",
+            "",
+            "Представиться системе, спросить «Кто я?» и отметить себя живым:",
+            f"POST /api/v1/projects/{project_phone}/agents/{agent_phone}/whoami",
+            'Content-Type: application/json; body: {"message":"Кто я?"}',
+            (
+                "При первом запуске ответ содержит вашу полную карточку, назначенные задачи "
+                "и всю историю работы с момента создания. Повторяйте heartbeat не реже "
+                f"чем раз в {AGENT_HEARTBEAT_INTERVAL_SECONDS // 60} минут."
+            ),
             "",
             "Получать адресованные вам сообщения (опрашивайте все три очереди):",
             f"GET /worker/all/{project_phone}?to_phone={agent_phone}",
@@ -3732,6 +3780,7 @@ def project_actor_mutation_transaction(
             }
 
             imported_agents: list[dict[str, Any]] = []
+            import_timestamp = utc_now()
             for index, spec in enumerate(imported_specs):
                 matched = matched_by_spec.get(index)
                 actor_id = str(spec.get("id") or "").strip()
@@ -3771,6 +3820,21 @@ def project_actor_mutation_transaction(
                     if matched is not None and isinstance(matched.get("parameters"), dict)
                     else {}
                 )
+                for presence_key in (
+                    "created_at",
+                    "first_seen_at",
+                    "last_seen_at",
+                    "alive_until",
+                    "heartbeat_count",
+                    "presence_status",
+                ):
+                    if not parameters.get(presence_key) and matched_parameters.get(
+                        presence_key
+                    ):
+                        parameters[presence_key] = matched_parameters[presence_key]
+                created_at = str(
+                    parameters.get("created_at") or import_timestamp
+                ).strip()
                 git_branch = normalized_agent_git_branch(
                     spec.get("git_branch")
                     or parameters.get("git_branch")
@@ -3798,8 +3862,16 @@ def project_actor_mutation_transaction(
                         "conversation_phone": project_phone,
                         "agent_phone": phone,
                         "git_branch": git_branch,
+                        "created_at": created_at,
+                        "imported_at": import_timestamp,
                         "profile_endpoint": (
                             f"/api/v1/projects/{project_phone}/agents/{phone}"
+                        ),
+                        "whoami_endpoint": (
+                            f"/api/v1/projects/{project_phone}/agents/{phone}/whoami"
+                        ),
+                        "heartbeat_interval_seconds": str(
+                            AGENT_HEARTBEAT_INTERVAL_SECONDS
                         ),
                         "worker_receive_endpoint": (
                             f"/worker/all/{project_phone}?to_phone={phone}"
@@ -7564,6 +7636,113 @@ async def read_history(
         )
 
 
+def agent_history_direction(
+    record: dict[str, Any],
+    agent: dict[str, Any],
+) -> str:
+    metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+    agent_id = str(agent.get("id") or "").strip()
+    agent_phone = str(agent.get("phone") or "").strip()
+    agent_name = str(agent.get("name") or "").strip().casefold()
+
+    from_agent_id = str(
+        metadata.get("from_agent_id") or record.get("from_agent_id") or ""
+    ).strip()
+    to_agent_id = str(
+        metadata.get("to_agent_id") or record.get("to_agent_id") or ""
+    ).strip()
+    from_phone = str(metadata.get("from_phone") or record.get("from_phone") or "").strip()
+    to_phone = str(metadata.get("to_phone") or record.get("to_phone") or "").strip()
+    sender = str(metadata.get("sender") or record.get("sender") or "").strip().casefold()
+    receiver = str(metadata.get("receiver") or record.get("receiver") or "").strip().casefold()
+    from_matches = bool(
+        (agent_id and from_agent_id == agent_id)
+        or (agent_phone and from_phone == agent_phone)
+        or (agent_name and sender == agent_name)
+    )
+    to_matches = bool(
+        (agent_id and to_agent_id == agent_id)
+        or (agent_phone and to_phone == agent_phone)
+        or (agent_name and receiver == agent_name)
+    )
+    if from_matches and to_matches:
+        return "self"
+    if from_matches:
+        return "sent"
+    if to_matches:
+        return "received"
+    return ""
+
+
+def read_agent_work_history_file(
+    agent: dict[str, Any],
+    git_context_key: str,
+    created_at: str | None = None,
+) -> list[dict[str, Any]]:
+    if not history_path.exists():
+        return []
+    created_time = parse_utc_datetime(created_at)
+    records: list[dict[str, Any]] = []
+    with history_path.open("r", encoding="utf-8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(record, dict):
+                continue
+            if git_context_key and not record_matches_git_context(
+                record,
+                git_context_key,
+            ):
+                continue
+            record_time = parse_history_timestamp(record.get("timestamp"))
+            if created_time is not None and (
+                record_time is None or record_time < created_time
+            ):
+                continue
+            direction = agent_history_direction(record, agent)
+            if not direction:
+                continue
+            public_record = deepcopy(record)
+            public_record["agent_direction"] = direction
+            records.append(public_record)
+    return records
+
+
+def agent_work_history_summary(
+    history: list[dict[str, Any]],
+    assigned_task_count: int,
+) -> dict[str, Any]:
+    event_counts: dict[str, int] = {}
+    task_ids: set[str] = set()
+    direction_counts = {"sent": 0, "received": 0, "self": 0}
+    for record in history:
+        event = str(record.get("event") or "unknown").strip() or "unknown"
+        event_counts[event] = event_counts.get(event, 0) + 1
+        direction = str(record.get("agent_direction") or "").strip()
+        if direction in direction_counts:
+            direction_counts[direction] += 1
+        metadata = record.get("metadata") if isinstance(record.get("metadata"), dict) else {}
+        task_id = str(metadata.get("task_id") or record.get("task_id") or "").strip()
+        if task_id:
+            task_ids.add(task_id)
+    return {
+        "assigned_task_count": assigned_task_count,
+        "history_event_count": len(history),
+        "sent_event_count": direction_counts["sent"],
+        "received_event_count": direction_counts["received"],
+        "self_event_count": direction_counts["self"],
+        "known_task_ids": sorted(task_ids),
+        "first_activity_at": history[0].get("timestamp") if history else None,
+        "last_activity_at": history[-1].get("timestamp") if history else None,
+        "event_counts": dict(sorted(event_counts.items())),
+    }
+
+
 def cycle_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
     metadata = record.get("metadata")
     return metadata if isinstance(metadata, dict) else {}
@@ -10525,6 +10704,10 @@ def render_index_v2() -> str:
     .agent-state-chip.sent {
       background: var(--blue-bg);
       color: var(--blue-text);
+    }
+    .agent-state-chip.alive {
+      background: var(--green-bg);
+      color: var(--green-text);
     }
     .agent-state-chip.expired {
       background: #fff1f0;
@@ -13749,6 +13932,12 @@ def render_index_v2() -> str:
       return String((agent && (agent.status || (agent.parameters && agent.parameters.status))) || "").trim();
     }
 
+    function agentPresenceStatus(agent) {
+      const parameters = agent && agent.parameters ? agent.parameters : {};
+      const presence = agent && agent.presence ? agent.presence : {};
+      return String(presence.status || parameters.presence_status || "unknown").trim();
+    }
+
     function agentExpiresAt(agent) {
       const parameters = agent && agent.parameters ? agent.parameters : {};
       const value = parameters.expires_at || agent.expires_at || "";
@@ -13850,7 +14039,10 @@ def render_index_v2() -> str:
         const kind = emptyAgentStateKind(agent);
         return `<li>${escapeHtml(agent.name || "Без имени")}${escapeHtml(phone)} <span class="agent-state-chip ${kind}">${escapeHtml(emptyAgentStateLabel(agent))}</span>${escapeHtml(extra ? " · " + extra : "")}</li>`;
       }
-      return `<li>${escapeHtml(agent.name || "Без имени")}${escapeHtml(phone)}${escapeHtml(status)}${escapeHtml(extra)}</li>`;
+      const presence = agentPresenceStatus(agent) === "alive"
+        ? ` <span class="agent-state-chip alive">жив</span>`
+        : "";
+      return `<li>${escapeHtml(agent.name || "Без имени")}${escapeHtml(phone)}${escapeHtml(status)}${presence}${escapeHtml(extra)}</li>`;
     }
 
     function renderAgentStatusSummary() {
@@ -19090,6 +19282,179 @@ async def restore_history_record_to_queue(
     )
 
 
+def project_agent_identity_snapshot_transaction(
+    project_id: str,
+    agent_phone: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            _, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            agents = read_agents_file()
+            project_agents = full_agents_for_project(
+                agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            clean_phone = agent_phone.strip()
+            target_agent = next(
+                (
+                    agent
+                    for agent in project_agents
+                    if str(agent.get("phone") or "").strip() == clean_phone
+                ),
+                None,
+            )
+            if target_agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent phone was not found in this project",
+                )
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            return {
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "project": public_project_context(context),
+                "context_key": context_key,
+                "agent": deepcopy(target_agent),
+                "agents": deepcopy(project_agents),
+                "queue_context": {
+                    "queue_phone": project_phone,
+                    "git_context_phone": project_phone,
+                    "project_phone": project_phone,
+                    "project_name": project_entry.get("project_name"),
+                    "git_context_key": context_key,
+                    "git_address": project_entry.get("git_address"),
+                },
+            }
+
+
+def earliest_iso_timestamp(*values: Any) -> str:
+    parsed = [
+        timestamp
+        for value in values
+        if (timestamp := parse_utc_datetime(value)) is not None
+    ]
+    return min(parsed).isoformat() if parsed else ""
+
+
+def mark_project_agent_alive_transaction(
+    project_id: str,
+    agent_phone: str,
+    seen_at: str,
+    suggested_created_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            _, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            previous_agents = read_agents_file()
+            project_agents = full_agents_for_project(
+                previous_agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            clean_phone = agent_phone.strip()
+            project_agent = next(
+                (
+                    agent
+                    for agent in project_agents
+                    if str(agent.get("phone") or "").strip() == clean_phone
+                ),
+                None,
+            )
+            if project_agent is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Agent phone was not found in this project",
+                )
+            agent_id = str(project_agent.get("id") or "").strip()
+            target_index = next(
+                (
+                    index
+                    for index, agent in enumerate(previous_agents)
+                    if str(agent.get("id") or "").strip() == agent_id
+                ),
+                None,
+            )
+            if target_index is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Project agent disappeared while heartbeat was being recorded",
+                )
+
+            target = deepcopy(previous_agents[target_index])
+            parameters = (
+                dict(target.get("parameters"))
+                if isinstance(target.get("parameters"), dict)
+                else {}
+            )
+            try:
+                heartbeat_count = max(0, int(parameters.get("heartbeat_count") or 0)) + 1
+            except (TypeError, ValueError):
+                heartbeat_count = 1
+            seen_time = parse_utc_datetime(seen_at) or datetime.now(timezone.utc)
+            alive_until = seen_time + timedelta(seconds=AGENT_HEARTBEAT_TTL_SECONDS)
+            created_at = earliest_iso_timestamp(
+                parameters.get("created_at"),
+                suggested_created_at,
+                seen_at,
+            )
+            project_phone = normalize_project_phone(project_entry.get("project_phone"))
+            parameters.update(
+                {
+                    "created_at": created_at or seen_at,
+                    "first_seen_at": parameters.get("first_seen_at") or seen_at,
+                    "last_seen_at": seen_at,
+                    "alive_until": alive_until.isoformat(),
+                    "heartbeat_count": str(heartbeat_count),
+                    "presence_status": "alive",
+                    "heartbeat_interval_seconds": str(
+                        AGENT_HEARTBEAT_INTERVAL_SECONDS
+                    ),
+                    "whoami_endpoint": (
+                        f"/api/v1/projects/{project_phone}/agents/{clean_phone}/whoami"
+                    ),
+                }
+            )
+            target["parameters"] = normalize_agent_parameters(parameters)
+            previous_agents[target_index] = target
+            updated_agents = normalize_agents(previous_agents)
+            write_agents_file_unlocked(updated_agents)
+            updated_project_agents = full_agents_for_project(
+                updated_agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            updated_agent = next(
+                agent
+                for agent in updated_project_agents
+                if str(agent.get("id") or "").strip() == agent_id
+            )
+            return {
+                "project_id": project_phone,
+                "project_phone": project_phone,
+                "project": public_project_context(context),
+                "context_key": context_key,
+                "agent": deepcopy(updated_agent),
+                "agents": deepcopy(updated_project_agents),
+                "queue_context": {
+                    "queue_phone": project_phone,
+                    "git_context_phone": project_phone,
+                    "project_phone": project_phone,
+                    "project_name": project_entry.get("project_name"),
+                    "git_context_key": context_key,
+                    "git_address": project_entry.get("git_address"),
+                },
+            }
+
+
 @app.get("/api/v1/projects/{project_id}/agents")
 @app.get("/api/v1/projects/{project_id}/actors")
 async def get_project_actors(project_id: str) -> dict[str, Any]:
@@ -19190,6 +19555,148 @@ async def get_project_agent(
         "profile": target_agent.get("profile"),
         "git_branch": target_agent.get("git_branch")
         or target_agent.get("parameters", {}).get("git_branch"),
+        "presence": target_agent.get("presence")
+        or agent_presence_snapshot(target_agent),
+    }
+
+
+@app.post("/api/v1/projects/{project_id}/agents/{agent_phone}/whoami")
+async def identify_project_agent(
+    project_id: str,
+    agent_phone: str,
+    request: Request,
+) -> dict[str, Any]:
+    request_message = "Кто я?"
+    raw_body = await request.body()
+    if raw_body:
+        try:
+            payload = json.loads(raw_body)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON body",
+            ) from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Expected JSON object",
+            )
+        request_message = str(payload.get("message") or request_message).strip()
+        if len(request_message) > 1000:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Identity request message must not exceed 1000 characters",
+            )
+
+    snapshot = await run_group_write_transaction(
+        project_agent_identity_snapshot_transaction,
+        project_id,
+        agent_phone,
+    )
+    async with history_lock:
+        previous_history = await asyncio.to_thread(
+            read_agent_work_history_file,
+            snapshot["agent"],
+            snapshot["context_key"],
+            None,
+        )
+    parameters = (
+        snapshot["agent"].get("parameters")
+        if isinstance(snapshot["agent"].get("parameters"), dict)
+        else {}
+    )
+    earliest_history_at = (
+        str(previous_history[0].get("timestamp") or "")
+        if previous_history
+        else ""
+    )
+    seen_at = utc_now()
+    suggested_created_at = earliest_iso_timestamp(
+        parameters.get("created_at"),
+        earliest_history_at,
+        seen_at,
+    )
+    updated = await run_group_write_transaction(
+        mark_project_agent_alive_transaction,
+        project_id,
+        agent_phone,
+        seen_at,
+        suggested_created_at,
+    )
+    agent = updated["agent"]
+    agent_id = str(agent.get("id") or "").strip()
+    agent_name = str(agent.get("name") or "").strip()
+    clean_phone = str(agent.get("phone") or "").strip()
+    await append_history(
+        "agent_identity_heartbeat",
+        "worker-all",
+        request_message or "Кто я?",
+        {
+            "submitted_via": "agent_whoami",
+            "action": "agent_marked_alive",
+            "sender": agent_name,
+            "receiver": agent_name,
+            "from_phone": clean_phone,
+            "to_phone": clean_phone,
+            "from_agent_id": agent_id,
+            "to_agent_id": agent_id,
+            "project_phone": updated["project_phone"],
+            "presence_status": "alive",
+        },
+        request_port(request),
+        updated["queue_context"],
+    )
+    created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
+    async with history_lock:
+        work_history = await asyncio.to_thread(
+            read_agent_work_history_file,
+            agent,
+            updated["context_key"],
+            created_at,
+        )
+    assigned_tasks = deepcopy(agent.get("tasks") or [])
+    work_summary = agent_work_history_summary(
+        work_history,
+        len(assigned_tasks),
+    )
+    git_branch = str(
+        agent.get("git_branch")
+        or agent.get("parameters", {}).get("git_branch")
+        or ""
+    ).strip()
+    project_directory = [
+        {
+            "id": project_agent.get("id"),
+            "name": project_agent.get("name"),
+            "phone": project_agent.get("phone"),
+            "git_branch": project_agent.get("git_branch")
+            or project_agent.get("parameters", {}).get("git_branch"),
+            "presence": project_agent.get("presence")
+            or agent_presence_snapshot(project_agent),
+        }
+        for project_agent in updated["agents"]
+    ]
+    answer = (
+        f"Вы — {agent_name} (id={agent_id}, phone={clean_phone}). "
+        f"Ваша рабочая ветка: {git_branch or 'не назначена'}. "
+        f"Назначено задач: {len(assigned_tasks)}; событий работы с момента создания: "
+        f"{len(work_history)}. Вы отмечены как живой агент."
+    )
+    return {
+        "answer": answer,
+        "identity_request": request_message or "Кто я?",
+        "project_id": updated["project_id"],
+        "project_phone": updated["project_phone"],
+        "project": updated["project"],
+        "agent": agent,
+        "profile": agent.get("profile"),
+        "git_branch": git_branch,
+        "presence": agent.get("presence") or agent_presence_snapshot(agent),
+        "assigned_tasks": assigned_tasks,
+        "work_summary": work_summary,
+        "work_history_since": created_at,
+        "work_history": work_history,
+        "project_agents": project_directory,
     }
 
 
@@ -19858,7 +20365,7 @@ async def get_agents() -> dict[str, Any]:
         queues_data = await asyncio.to_thread(read_specialization_queues_file)
     return {
         "config_path": str(agents_path),
-        "agents": agents,
+        "agents": [agent_with_presence(agent) for agent in agents],
         "pending_specializations": {
             phone: queue[0]
             for phone, queue in queues_data.items()

@@ -71,6 +71,28 @@ complete card with:
 GET /api/v1/projects/{project_phone}/agents/{agent_phone}
 ```
 
+### Dynamic identity and presence
+
+At startup an agent can ask who it is and mark itself alive:
+
+```text
+POST /api/v1/projects/{project_phone}/agents/{agent_phone}/whoami
+Content-Type: application/json
+
+{"message":"Кто я?"}
+```
+
+The response contains the current agent card and profile, assigned Git branch,
+all stored tasks, the project agent directory, and the complete matching work
+history since the agent was created. It also includes counts by direction and
+event type. The heartbeat stores `first_seen_at`, `last_seen_at`, `alive_until`,
+and `heartbeat_count` while keeping the operational agent status unchanged.
+
+Agents should repeat the heartbeat every five minutes. Presence remains
+`alive` for 15 minutes after the most recent heartbeat and is then reported as
+`offline` until the agent checks in again. The generated communication section
+in every imported profile includes this endpoint and instruction.
+
 All project agents and their pending phone-addressed tasks can be removed with:
 
 ```text

@@ -1294,7 +1294,7 @@ class GroupsApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_project_manager_returns_groups_and_full_group_agents(self) -> None:
         _status, _body, group = await self.create_group()
         expected_agents = {
-            agent["id"]: agent
+            agent["id"]: main.agent_with_presence(agent)
             for agent in deepcopy(self.stored_agents())
             if agent.get("parameters", {}).get("managed_by") == "group_api"
         }
