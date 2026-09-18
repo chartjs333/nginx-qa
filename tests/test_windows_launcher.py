@@ -23,6 +23,8 @@ def test_quick_tunnel_script_has_scoped_process_cleanup() -> None:
     assert 'WindowStyle = "Hidden"' in helper
     assert '"--no-autoupdate"' in helper
     assert 'trycloudflare\\.com' in helper
+    assert 'Resolve-DnsName' in helper
+    assert 'Public DNS is ready' in helper
     assert 'process_ids = $managedProcessIds' in helper
     assert '$actualExecutable -ieq $expectedExecutable' in helper
     assert '[string]$process.CommandLine -like "*$expectedCommand*"' in helper

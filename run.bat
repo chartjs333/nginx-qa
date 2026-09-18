@@ -26,7 +26,7 @@ if not defined TELEGRAM_ALLOWED_USER_IDS set "TELEGRAM_ALLOWED_USER_IDS="
 if not defined TELEGRAM_HISTORY_CHAT_ID set "TELEGRAM_HISTORY_CHAT_ID="
 if not defined TELEGRAM_HISTORY_MESSAGE_THREAD_ID set "TELEGRAM_HISTORY_MESSAGE_THREAD_ID="
 if not defined TELEGRAM_WEBHOOK_MODE set "TELEGRAM_WEBHOOK_MODE=sequential"
-if not defined CLOUDFLARED_QUICK_TUNNEL_ORIGIN set "CLOUDFLARED_QUICK_TUNNEL_ORIGIN=http://localhost:8025"
+if not defined CLOUDFLARED_QUICK_TUNNEL_ORIGIN set "CLOUDFLARED_QUICK_TUNNEL_ORIGIN=http://127.0.0.1:8025"
 
 if not exist ".venv\Scripts\python.exe" (
     echo Creating local Python environment...
@@ -114,9 +114,6 @@ if /i not "%TELEGRAM_WEBHOOK_MODE%"=="sequential" if /i not "%TELEGRAM_WEBHOOK_M
     exit /b 1
 )
 
-set "NGINX_QA_TUNNEL_ATTEMPT=0"
-:start_quick_tunnel_attempt
-set /a NGINX_QA_TUNNEL_ATTEMPT+=1 >nul
 powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0cloudflared_quick_tunnel.ps1" -Action Start -Origin "%CLOUDFLARED_QUICK_TUNNEL_ORIGIN%"
 if errorlevel 1 exit /b 1
 set "NGINX_QA_TUNNEL_STARTED=1"
@@ -125,27 +122,13 @@ set "NGINX_QA_TUNNEL_URL="
 if exist "runtime_state\cloudflared-quick-tunnel.url" set /p NGINX_QA_TUNNEL_URL=<"runtime_state\cloudflared-quick-tunnel.url"
 if not defined NGINX_QA_TUNNEL_URL (
     echo Cloudflare Quick Tunnel started without a public URL.
-    goto retry_quick_tunnel
-)
-
-powershell.exe -NoLogo -NoProfile -Command "$deadline = [DateTime]::UtcNow.AddSeconds(45); while ([DateTime]::UtcNow -lt $deadline) { try { $response = Invoke-WebRequest -Uri ('%NGINX_QA_TUNNEL_URL%/') -UseBasicParsing -TimeoutSec 5; if ($response.StatusCode -eq 200) { exit 0 } } catch {}; Start-Sleep -Milliseconds 750 }; exit 1"
-if errorlevel 1 (
-    echo Cloudflare Quick Tunnel URL did not become publicly reachable.
-    goto retry_quick_tunnel
+    exit /b 1
 )
 
 set "TELEGRAM_WEBHOOK_URL=%NGINX_QA_TUNNEL_URL%/api/v1/telegram/agents/%TELEGRAM_WEBHOOK_MODE%"
 set "TELEGRAM_WEBHOOK_AUTO_REGISTER=1"
 echo Telegram webhook for this run: %TELEGRAM_WEBHOOK_URL%
 exit /b 0
-
-:retry_quick_tunnel
-call :stop_quick_tunnel
-if %NGINX_QA_TUNNEL_ATTEMPT% LSS 3 (
-    echo Retrying Cloudflare Quick Tunnel ^(attempt %NGINX_QA_TUNNEL_ATTEMPT% of 3 failed^)...
-    goto start_quick_tunnel_attempt
-)
-exit /b 1
 
 :start_bootstrap_server
 powershell.exe -NoLogo -NoProfile -Command "$connection = Get-NetTCPConnection -LocalPort 8025 -State Listen -ErrorAction SilentlyContinue; if ($connection) { exit 1 }; exit 0"

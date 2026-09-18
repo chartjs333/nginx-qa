@@ -1,8 +1,9 @@
 param(
     [ValidateSet("Start", "Stop")]
     [string]$Action = "Start",
-    [string]$Origin = "http://localhost:8025",
-    [int]$StartupTimeoutSeconds = 45
+    [string]$Origin = "http://127.0.0.1:8025",
+    [int]$StartupTimeoutSeconds = 45,
+    [int]$DnsTimeoutSeconds = 120
 )
 
 $ErrorActionPreference = "Stop"
@@ -67,6 +68,7 @@ function Stop-ManagedTunnel {
         $expectedExecutable = [System.IO.Path]::GetFullPath([string]$state.executable)
         $expectedOrigin = [string]$state.origin
         $processIds = if ($state.process_ids) { @($state.process_ids) } else { @($state.process_id) }
+        $stoppedProcessIds = @()
         foreach ($managedProcessId in $processIds) {
             $processId = [int]$managedProcessId
             $process = Get-CimInstance Win32_Process -Filter "ProcessId = $processId" -ErrorAction SilentlyContinue
@@ -83,8 +85,12 @@ function Stop-ManagedTunnel {
                     [string]$process.CommandLine -like "*$expectedCommand*"
                 ) {
                     Stop-Process -Id $processId -Force -ErrorAction SilentlyContinue
+                    $stoppedProcessIds += $processId
                 }
             }
+        }
+        foreach ($stoppedProcessId in $stoppedProcessIds) {
+            Wait-Process -Id $stoppedProcessId -Timeout 10 -ErrorAction SilentlyContinue
         }
     } finally {
         Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
@@ -186,6 +192,33 @@ $managedProcessIds = @(
 if (-not $managedProcessIds) {
     $managedProcessIds = @($tunnelProcess.Id)
 }
+
+$publicHost = ([uri]$publicUrl).DnsSafeHost
+$dnsDeadline = [DateTime]::UtcNow.AddSeconds($DnsTimeoutSeconds)
+$dnsReady = $false
+Write-Host "Waiting for public DNS for $publicHost..."
+while ([DateTime]::UtcNow -lt $dnsDeadline -and -not $dnsReady) {
+    foreach ($dnsServer in @("1.1.1.1", "8.8.8.8")) {
+        try {
+            Resolve-DnsName -Name $publicHost -Type A -Server $dnsServer -DnsOnly -QuickTimeout -ErrorAction Stop |
+                Out-Null
+            $dnsReady = $true
+            break
+        } catch {
+            # The quick-tunnel hostname can take several seconds to propagate.
+        }
+    }
+    if (-not $dnsReady) {
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $dnsReady) {
+    foreach ($managedProcessId in $managedProcessIds) {
+        Stop-Process -Id $managedProcessId -Force -ErrorAction SilentlyContinue
+    }
+    throw "Quick Tunnel hostname $publicHost did not appear in public DNS within $DnsTimeoutSeconds seconds."
+}
+Write-Host "Public DNS is ready for $publicHost."
 
 $state = [ordered]@{
     process_id = $managedProcessIds[0]

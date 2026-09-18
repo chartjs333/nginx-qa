@@ -343,7 +343,9 @@ to `runtime_state/server-monitor.log`, and restarted after five seconds. Set
 For local Telegram testing, set `CLOUDFLARED_QUICK_TUNNEL=1` in `.env`.
 `run.bat` then installs `cloudflared` through `winget` when necessary, starts a
 temporary `trycloudflare.com` tunnel, registers the generated sequential webhook,
-and stops the managed tunnel when the server exits. Set
+and stops the managed tunnel when the server exits. The launcher waits for the
+new hostname to appear in public DNS and retries Telegram registration for up to
+`TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS` (120 seconds by default). Set
 `TELEGRAM_WEBHOOK_MODE=parallel` only when parallel dispatch is intended. A real
 public deployment should set `CLOUDFLARED_QUICK_TUNNEL=0` and use a stable HTTPS
 address in `TELEGRAM_WEBHOOK_URL`.

@@ -2,6 +2,7 @@ import contextlib
 import io
 import os
 import unittest
+import urllib.error
 from unittest import mock
 
 import configure_telegram
@@ -18,6 +19,9 @@ class ConfigureTelegramTests(unittest.TestCase):
         "TELEGRAM_ALLOWED_USER_IDS",
         "TELEGRAM_HISTORY_CHAT_ID",
         "TELEGRAM_HISTORY_MESSAGE_THREAD_ID",
+        "TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS",
+        "TELEGRAM_WEBHOOK_IP_ADDRESS",
+        "CLOUDFLARED_QUICK_TUNNEL",
     )
 
     def clean_environment(self, values: dict[str, str] | None = None):
@@ -88,6 +92,79 @@ class ConfigureTelegramTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "TELEGRAM_HISTORY_CHAT_ID"):
                 configure_telegram.configure()
+
+    def test_transient_webhook_dns_error_is_retried(self) -> None:
+        with self.clean_environment(
+            {
+                "TELEGRAM_BOT_TOKEN": "123:new-token",
+                "TELEGRAM_WEBHOOK_AUTO_REGISTER": "1",
+                "TELEGRAM_WEBHOOK_URL": "https://fresh.trycloudflare.com/hook",
+                "TELEGRAM_WEBHOOK_SECRET": "valid-secret",
+                "CLOUDFLARED_QUICK_TUNNEL": "1",
+            }
+        ), mock.patch.object(
+            configure_telegram,
+            "telegram_request",
+            side_effect=[
+                RuntimeError(
+                    "Telegram setWebhook failed with HTTP 400: "
+                    "Bad Request: bad webhook: Failed to resolve host"
+                ),
+                {"ok": True, "result": True},
+            ],
+        ) as request, mock.patch.object(
+            configure_telegram.socket,
+            "getaddrinfo",
+            return_value=[],
+        ), mock.patch.object(configure_telegram.time, "sleep") as sleep:
+            configure_telegram.configure()
+
+        self.assertEqual(request.call_count, 2)
+        sleep.assert_called_once_with(5.0)
+
+    def test_quick_tunnel_ip_is_passed_to_telegram(self) -> None:
+        with self.clean_environment(
+            {
+                "TELEGRAM_BOT_TOKEN": "123:new-token",
+                "TELEGRAM_WEBHOOK_AUTO_REGISTER": "1",
+                "TELEGRAM_WEBHOOK_URL": "https://fresh.trycloudflare.com/hook",
+                "TELEGRAM_WEBHOOK_SECRET": "valid-secret",
+                "CLOUDFLARED_QUICK_TUNNEL": "1",
+            }
+        ), mock.patch.object(
+            configure_telegram.socket,
+            "getaddrinfo",
+            return_value=[
+                (
+                    configure_telegram.socket.AF_INET,
+                    configure_telegram.socket.SOCK_STREAM,
+                    6,
+                    "",
+                    ("104.16.230.132", 443),
+                )
+            ],
+        ), mock.patch.object(
+            configure_telegram,
+            "telegram_request",
+            return_value={"ok": True, "result": True},
+        ) as request:
+            configure_telegram.configure()
+
+        self.assertEqual(request.call_args.args[2]["ip_address"], "104.16.230.132")
+
+    def test_http_error_includes_telegram_description(self) -> None:
+        error = urllib.error.HTTPError(
+            "https://api.telegram.org/redacted/setWebhook",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(
+                b'{"ok":false,"description":"Bad Request: bad webhook: Failed to resolve host"}'
+            ),
+        )
+        with mock.patch.object(configure_telegram.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "Failed to resolve host"):
+                configure_telegram.telegram_request("redacted", "setWebhook", {"url": "https://x"})
 
 
 if __name__ == "__main__":

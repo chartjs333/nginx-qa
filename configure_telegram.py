@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -13,6 +16,13 @@ from typing import Any
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"", "0", "false", "no", "off"}
 WEBHOOK_SECRET_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,256}$")
+TRANSIENT_WEBHOOK_ERROR_MARKERS = (
+    "failed to resolve host",
+    "failed to connect",
+    "connection timed out",
+    "connection refused",
+    "temporary failure",
+)
 
 
 def env_bool(name: str, default: bool = False) -> bool:
@@ -56,7 +66,16 @@ def telegram_request(token: str, method: str, data: dict[str, Any]) -> dict[str,
         with urllib.request.urlopen(request, timeout=30) as response:
             raw = response.read(64 * 1024)
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Telegram {method} failed with HTTP {exc.code}") from exc
+        raw_error = exc.read(64 * 1024)
+        description = ""
+        try:
+            error_payload = json.loads(raw_error)
+            if isinstance(error_payload, dict):
+                description = str(error_payload.get("description") or "").strip()
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        suffix = f": {description}" if description else ""
+        raise RuntimeError(f"Telegram {method} failed with HTTP {exc.code}{suffix}") from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"Telegram {method} request failed") from exc
     try:
@@ -67,6 +86,78 @@ def telegram_request(token: str, method: str, data: dict[str, Any]) -> dict[str,
         description = payload.get("description") if isinstance(payload, dict) else None
         raise RuntimeError(description or f"Telegram {method} was rejected")
     return payload
+
+
+def webhook_retry_seconds() -> float:
+    raw = os.getenv("TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS", "").strip()
+    if not raw:
+        return 120.0 if env_bool("CLOUDFLARED_QUICK_TUNNEL") else 0.0
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError("TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS must be numeric") from exc
+    if value < 0 or value > 600:
+        raise ValueError("TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS must be between 0 and 600")
+    return value
+
+
+def webhook_ip_address(webhook_url: str) -> str:
+    configured = os.getenv("TELEGRAM_WEBHOOK_IP_ADDRESS", "").strip()
+    if configured:
+        try:
+            return str(ipaddress.ip_address(configured))
+        except ValueError as exc:
+            raise ValueError("TELEGRAM_WEBHOOK_IP_ADDRESS must be a valid IP address") from exc
+    if not env_bool("CLOUDFLARED_QUICK_TUNNEL"):
+        return ""
+    hostname = urllib.parse.urlparse(webhook_url).hostname or ""
+    if not hostname.casefold().endswith(".trycloudflare.com"):
+        return ""
+    try:
+        addresses = socket.getaddrinfo(
+            hostname,
+            443,
+            family=socket.AF_INET,
+            type=socket.SOCK_STREAM,
+        )
+    except socket.gaierror:
+        return ""
+    for address in addresses:
+        if address[4]:
+            return str(address[4][0])
+    return ""
+
+
+def register_webhook_with_retry(
+    token: str,
+    data: dict[str, Any],
+    *,
+    retry_seconds: float,
+) -> None:
+    deadline = time.monotonic() + retry_seconds
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            request_data = dict(data)
+            resolved_ip = webhook_ip_address(str(request_data.get("url") or ""))
+            if resolved_ip:
+                request_data["ip_address"] = resolved_ip
+            telegram_request(token, "setWebhook", request_data)
+            return
+        except RuntimeError as exc:
+            message = str(exc).casefold()
+            is_transient = any(marker in message for marker in TRANSIENT_WEBHOOK_ERROR_MARKERS)
+            remaining = deadline - time.monotonic()
+            if not is_transient or remaining <= 0:
+                raise
+            delay = min(5.0, remaining)
+            print(
+                f"Telegram: webhook address is not ready yet; retrying in {delay:.0f}s "
+                f"(attempt {attempt}).",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
 
 
 def configure() -> None:
@@ -107,15 +198,15 @@ def configure() -> None:
             "Set a non-placeholder TELEGRAM_WEBHOOK_SECRET before registering the webhook"
         )
 
-    telegram_request(
+    register_webhook_with_retry(
         token,
-        "setWebhook",
         {
             "url": webhook_url,
             "secret_token": secret,
             "allowed_updates": json.dumps(["message", "channel_post"]),
             "drop_pending_updates": "true" if drop_pending else "false",
         },
+        retry_seconds=webhook_retry_seconds(),
     )
     print(f"Telegram: webhook registered at {webhook_url}")
 
