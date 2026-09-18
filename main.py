@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 
 app = FastAPI()
@@ -116,6 +116,7 @@ screenshot_folders_lock = asyncio.Lock()
 evidence_folders_lock = asyncio.Lock()
 scheduled_tasks_lock = asyncio.Lock()
 group_task_submission_lock = asyncio.Lock()
+sprint_history_lock = asyncio.Lock()
 scheduled_tasks: dict[str, dict[str, Any]] = {}
 scheduled_timer_tasks: dict[str, asyncio.Task[Any]] = {}
 base_dir = Path(__file__).resolve().parent
@@ -126,6 +127,7 @@ PROJECTS_KEY = "projects"
 group_templates_path = base_dir / "group_templates.json"
 email_routes_path = base_dir / "email_routes.json"
 agents_path = base_dir / "agents.json"
+sprint_history_path = base_dir / "project_sprints.json"
 specializations_path = base_dir / "specializations.json"
 attachments_path = base_dir / "attachments"
 screenshot_folders_path = base_dir / "screenshot_folders"
@@ -379,6 +381,13 @@ def agents_file_lock(timeout_seconds: float = 30.0):
         yield
 
 
+@contextmanager
+def sprint_history_file_lock(timeout_seconds: float = 30.0):
+    lock_path = sprint_history_path.with_name(f"{sprint_history_path.name}.lock")
+    with interprocess_file_lock(lock_path, timeout_seconds):
+        yield
+
+
 def write_json_file_atomic(target_path: Path, data: Any) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target_path.with_name(
@@ -408,6 +417,32 @@ def write_json_file_atomic(target_path: Path, data: Any) -> None:
 
 def write_git_config_file(data: dict[str, Any]) -> None:
     write_json_file_atomic(git_config_path, data)
+
+
+def empty_sprint_history() -> dict[str, Any]:
+    return {"schema_version": 1, "projects": {}}
+
+
+def read_sprint_history_file() -> dict[str, Any]:
+    if not sprint_history_path.exists():
+        return empty_sprint_history()
+    with sprint_history_path.open("r", encoding="utf-8") as file:
+        try:
+            data = json.load(file)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Sprint history file is invalid JSON: {sprint_history_path}"
+            ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        raise RuntimeError(
+            f"Sprint history file has an invalid structure: {sprint_history_path}"
+        )
+    data.setdefault("schema_version", 1)
+    return data
+
+
+def write_sprint_history_file(data: dict[str, Any]) -> None:
+    write_json_file_atomic(sprint_history_path, data)
 
 
 def normalize_email_route(raw_route: Any) -> dict[str, str] | None:
@@ -10922,6 +10957,59 @@ def render_index_v2() -> str:
       flex-wrap: wrap;
       justify-content: flex-end;
     }
+    .sprint-history-panel {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 10px;
+    }
+    .sprint-history-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    .sprint-history-head h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+    .sprint-history-items {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .sprint-history-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding-top: 8px;
+      border-top: 1px solid var(--line);
+    }
+    .sprint-history-item:first-child {
+      padding-top: 0;
+      border-top: 0;
+    }
+    .sprint-history-title {
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+    .sprint-history-badge {
+      display: inline-block;
+      margin-left: 6px;
+      border-radius: 999px;
+      padding: 2px 7px;
+      background: #ddf4ff;
+      color: #0550ae;
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .sprint-history-badge.archived {
+      background: #f1f3f5;
+      color: #57606a;
+    }
     .agent-editor {
       margin-top: 12px;
     }
@@ -11745,10 +11833,12 @@ def render_index_v2() -> str:
         grid-template-columns: 1fr;
       }
       .agent-project-lists,
-      .agent-project-item {
+      .agent-project-item,
+      .sprint-history-item {
         grid-template-columns: 1fr;
       }
-      .agent-project-item-actions {
+      .agent-project-item-actions,
+      .sprint-history-item .actions {
         justify-content: flex-start;
       }
       .agent-row-head {
@@ -12261,6 +12351,14 @@ def render_index_v2() -> str:
           </div>
           <div class="subtle">Для полной замены укажите в JSON <code>agents.overwrite: true</code>. Каждому агенту автоматически добавляются его Git-ветка, адресная книга проекта и инструкция обмена сообщениями.</div>
           <div class="subtle agent-project-meta" id="agentProjectStatus"></div>
+          <div class="sprint-history-panel">
+            <div class="sprint-history-head">
+              <h3>История спринтов</h3>
+              <button class="secondary" id="refreshProjectSprintsButton" type="button">Обновить</button>
+            </div>
+            <div class="subtle" id="projectSprintsStatus">Выберите проект, чтобы увидеть сохранённые спринты.</div>
+            <div class="sprint-history-items" id="projectSprints"></div>
+          </div>
           <div class="agent-project-lists">
             <div class="agent-project-list">
               <h3>Доступные агенты</h3>
@@ -13377,6 +13475,9 @@ def render_index_v2() -> str:
     const importProjectActorsButtonEl = document.getElementById("importProjectActorsButton");
     const deleteAllProjectActorsButtonEl = document.getElementById("deleteAllProjectActorsButton");
     const agentProjectStatusEl = document.getElementById("agentProjectStatus");
+    const projectSprintsEl = document.getElementById("projectSprints");
+    const projectSprintsStatusEl = document.getElementById("projectSprintsStatus");
+    const refreshProjectSprintsButtonEl = document.getElementById("refreshProjectSprintsButton");
     const projectAvailableAgentsEl = document.getElementById("projectAvailableAgents");
     const projectAttachedAgentsEl = document.getElementById("projectAttachedAgents");
     const agentsEl = document.getElementById("agents");
@@ -13444,6 +13545,8 @@ def render_index_v2() -> str:
     let draggedEvidence = null;
     let agents = [];
     let allAgents = [];
+    let projectSprints = [];
+    let projectSprintsProjectPhone = "";
     let pendingSpecializations = {};
     let selectedAgentId = "";
     let pendingGitContextKey = "";
@@ -14017,6 +14120,11 @@ def render_index_v2() -> str:
       refreshQueues().catch((error) => setStatus(error.message, "error"));
       refreshScheduledTasks().catch((error) => setScheduledTasksStatus(error.message, "error"));
       refreshHistory().catch((error) => setHistoryStatus(error.message, "error"));
+      projectSprintsProjectPhone = "";
+      renderProjectSprints();
+      refreshProjectSprints().catch((error) => {
+        projectSprintsStatusEl.textContent = error.message;
+      });
       refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
       refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
       refreshEvidenceFolders().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
@@ -14841,6 +14949,7 @@ def render_index_v2() -> str:
       detachSelectedAgentFromProjectButtonEl.disabled = !activeKey || !selectedAgentId;
       importProjectActorsButtonEl.disabled = !activeKey || !activePhone;
       deleteAllProjectActorsButtonEl.disabled = !activeKey || !activePhone || !attachedAgents.length;
+      refreshProjectSprintsButtonEl.disabled = !activeKey || !activePhone;
       projectAvailableAgentsEl.innerHTML = activeKey
         ? availableAgents.length
           ? availableAgents.map((agent) => agentProjectItemHtml(agent, [
@@ -14864,6 +14973,63 @@ def render_index_v2() -> str:
       } else {
         agentProjectStatusEl.textContent = `Проект: ${projectLabel} · phone ${activePhone}. В проекте ${agents.length} из ${allAgents.length} агентов.`;
       }
+    }
+
+    function renderProjectSprints() {
+      const activePhone = activeMappedQueuePhone();
+      if (!activePhone) {
+        projectSprintsEl.innerHTML = "";
+        projectSprintsStatusEl.textContent = "Выберите проект с телефоном, чтобы увидеть сохранённые спринты.";
+        return;
+      }
+      if (projectSprintsProjectPhone !== activePhone) {
+        projectSprintsEl.innerHTML = "";
+        projectSprintsStatusEl.textContent = "Загружаю историю спринтов...";
+        return;
+      }
+      projectSprintsStatusEl.textContent = projectSprints.length
+        ? `Сохранено спринтов: ${projectSprints.length}. Архив содержит исходный JSON и состояние выполнения.`
+        : "История пока пуста. Первый импорт создаст текущий спринт и сохранит существующее состояние проекта как архив.";
+      projectSprintsEl.innerHTML = projectSprints.map((sprint) => {
+        const isCurrent = sprint.status === "current";
+        const statusText = isCurrent ? "текущий" : "архив";
+        const statusClass = isCurrent ? "" : " archived";
+        const savedAt = sprint.archived_at || sprint.imported_at;
+        const dateText = savedAt ? formatLocalDateTime(savedAt) : "дата неизвестна";
+        const sourceText = sprint.source_filename ? ` · файл: ${sprint.source_filename}` : "";
+        const legacyText = sprint.legacy ? " · состояние до включения истории" : "";
+        const meta = `#${sprint.sequence} · ${dateText} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${sourceText}${legacyText}`;
+        return `<div class="sprint-history-item">
+          <div>
+            <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence}`)}<span class="sprint-history-badge${statusClass}">${statusText}</span></div>
+            <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
+          </div>
+          <div class="actions">
+            <button class="secondary" data-action="download-project-sprint" data-sprint-url="${escapeHtml(sprint.download_url || "")}" type="button">Скачать JSON</button>
+          </div>
+        </div>`;
+      }).join("");
+    }
+
+    async function refreshProjectSprints() {
+      const projectPhone = activeMappedQueuePhone();
+      if (!projectPhone) {
+        projectSprints = [];
+        projectSprintsProjectPhone = "";
+        renderProjectSprints();
+        return;
+      }
+      const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectPhone)}/sprints`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(formatMessage(data.detail || "Ошибка загрузки истории спринтов."));
+      }
+      if (projectPhone !== activeMappedQueuePhone()) {
+        return;
+      }
+      projectSprintsProjectPhone = projectPhone;
+      projectSprints = Array.isArray(data.sprints) ? data.sprints : [];
+      renderProjectSprints();
     }
 
     async function attachAgentToProjectById(sourceAgentId) {
@@ -14959,7 +15125,10 @@ def render_index_v2() -> str:
       setAgentsStatus("Импортирую агентов и задачи...");
       const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectPhone)}/agents/import`, {
         method: "POST",
-        headers: {"Content-Type": "application/json"},
+        headers: {
+          "Content-Type": "application/json",
+          "X-Nginx-QA-Sprint-Filename": encodeURIComponent(file.name || "sprint.json")
+        },
         body: JSON.stringify(payload)
       });
       const data = await response.json();
@@ -14970,9 +15139,9 @@ def render_index_v2() -> str:
       projectActorsJsonFileEl.value = "";
       clearAgentEditorDirty();
       await refreshAgents({force: true});
-      await refreshQueues();
+      await Promise.all([refreshQueues(), refreshProjectSprints()]);
       setAgentsStatus(
-        `Импорт завершен: агентов ${data.imported_agent_count ?? data.imported_actor_count}, удалено ${data.removed_agent_count ?? data.removed_actor_count}, задач поставлено ${data.queued_task_count}.`,
+        `Импорт завершен: сохранён ${data.sprint && data.sprint.title ? data.sprint.title : "новый спринт"}; агентов ${data.imported_agent_count ?? data.imported_actor_count}, удалено ${data.removed_agent_count ?? data.removed_actor_count}, задач поставлено ${data.queued_task_count}.`,
         "ok"
       );
     }
@@ -18038,7 +18207,7 @@ ${data.patch || ""}
     async function refresh() {
       await refreshGitConfig();
       await refreshAgents();
-      const refreshTasks = [refreshQueues(), refreshScheduledTasks(), refreshHistory()];
+      const refreshTasks = [refreshQueues(), refreshScheduledTasks(), refreshHistory(), refreshProjectSprints()];
       if (cycleGraphViewIsActive()) {
         refreshTasks.push(refreshCycleGraph({silent: true}));
       }
@@ -18596,6 +18765,12 @@ ${data.patch || ""}
     importProjectActorsButtonEl.addEventListener("click", () => {
       importProjectActorsFromJson().catch((error) => setAgentsStatus(error.message, "error"));
     });
+    refreshProjectSprintsButtonEl.addEventListener("click", () => {
+      projectSprintsStatusEl.textContent = "Обновляю историю спринтов...";
+      refreshProjectSprints().catch((error) => {
+        projectSprintsStatusEl.textContent = error.message;
+      });
+    });
     deleteAllProjectActorsButtonEl.addEventListener("click", () => {
       deleteAllProjectActors().catch((error) => setAgentsStatus(error.message, "error"));
     });
@@ -18612,6 +18787,9 @@ ${data.patch || ""}
       }
       if (target.dataset.action === "detach-agent-from-project") {
         detachAgentFromProjectById(target.dataset.agentId).catch((error) => setAgentsStatus(error.message, "error"));
+      }
+      if (target.dataset.action === "download-project-sprint" && target.dataset.sprintUrl) {
+        window.location.assign(target.dataset.sprintUrl);
       }
     });
     document.getElementById("cloneAgentButton").addEventListener("click", openCloneAgentModal);
@@ -19684,17 +19862,228 @@ async def enqueue_sequential_reviewer_bootstrap(
     }
 
 
+def sprint_payload_identity(
+    payload: dict[str, Any],
+    source_filename: str,
+    sequence: int,
+) -> tuple[str, str]:
+    raw_sprint = payload.get("sprint")
+    sprint_object = raw_sprint if isinstance(raw_sprint, dict) else {}
+    external_id = str(
+        sprint_object.get("id")
+        or payload.get("sprint_id")
+        or (raw_sprint if isinstance(raw_sprint, str) else "")
+        or ""
+    ).strip()
+    title = str(
+        sprint_object.get("title")
+        or sprint_object.get("name")
+        or payload.get("sprint_title")
+        or payload.get("sprint_name")
+        or ""
+    ).strip()
+    if not title and source_filename:
+        title = Path(source_filename).stem.strip()
+    return external_id, title or f"Спринт {sequence}"
+
+
+def project_state_has_sprint_content(state: dict[str, Any]) -> bool:
+    if state.get("agents"):
+        return True
+    pending = state.get("pending_work")
+    if isinstance(pending, dict) and any(pending.values()):
+        return True
+    execution = state.get("execution")
+    if isinstance(execution, dict):
+        if execution.get("assignments") or execution.get("workflow"):
+            return True
+        if execution.get("role_agent_ids") or execution.get("current_agent_id"):
+            return True
+    return False
+
+
+def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: deepcopy(record.get(key))
+        for key in (
+            "id",
+            "sequence",
+            "external_id",
+            "title",
+            "status",
+            "source",
+            "source_filename",
+            "imported_at",
+            "archived_at",
+            "assignment_mode",
+            "agent_count",
+            "task_count",
+            "legacy",
+        )
+    }
+
+
+def record_project_sprint_import_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    project_name: str,
+    payload: dict[str, Any],
+    source: str,
+    source_filename: str,
+    previous_state: dict[str, Any],
+    current_state: dict[str, Any],
+    assignment_mode: str,
+    agent_count: int,
+    task_count: int,
+) -> dict[str, Any]:
+    with sprint_history_file_lock():
+        history = read_sprint_history_file()
+        raw_projects = history.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        raw_project = projects.get(context_key)
+        project = dict(raw_project) if isinstance(raw_project, dict) else {}
+        raw_records = project.get("sprints")
+        records = [
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+        ] if isinstance(raw_records, list) else []
+        now = utc_now()
+        current_record = next(
+            (
+                record
+                for record in reversed(records)
+                if str(record.get("status") or "") == "current"
+            ),
+            None,
+        )
+        if current_record is not None:
+            current_record["status"] = "archived"
+            current_record["archived_at"] = now
+            current_record["final_state"] = deepcopy(previous_state)
+        elif project_state_has_sprint_content(previous_state):
+            legacy_sequence = max(
+                (int(record.get("sequence") or 0) for record in records),
+                default=0,
+            ) + 1
+            records.append(
+                {
+                    "id": f"sprint-{legacy_sequence:04d}-{uuid4().hex[:8]}",
+                    "sequence": legacy_sequence,
+                    "external_id": "",
+                    "title": "Состояние до первого сохранённого импорта",
+                    "status": "archived",
+                    "source": "legacy-runtime",
+                    "source_filename": "",
+                    "imported_at": None,
+                    "archived_at": now,
+                    "assignment_mode": str(
+                        (previous_state.get("execution") or {}).get("mode")
+                        or "parallel"
+                    ),
+                    "agent_count": len(previous_state.get("agents") or []),
+                    "task_count": sum(
+                        len(agent.get("tasks") or [])
+                        for agent in previous_state.get("agents") or []
+                        if isinstance(agent, dict)
+                    ),
+                    "legacy": True,
+                    "import_payload": None,
+                    "initial_state": None,
+                    "final_state": deepcopy(previous_state),
+                }
+            )
+
+        sequence = max(
+            (int(record.get("sequence") or 0) for record in records),
+            default=0,
+        ) + 1
+        external_id, title = sprint_payload_identity(
+            payload,
+            source_filename,
+            sequence,
+        )
+        new_record = {
+            "id": f"sprint-{sequence:04d}-{uuid4().hex[:8]}",
+            "sequence": sequence,
+            "external_id": external_id,
+            "title": title,
+            "status": "current",
+            "source": source,
+            "source_filename": source_filename,
+            "imported_at": now,
+            "archived_at": None,
+            "assignment_mode": assignment_mode,
+            "agent_count": agent_count,
+            "task_count": task_count,
+            "legacy": False,
+            "import_payload": deepcopy(payload),
+            "initial_state": deepcopy(current_state),
+            "final_state": None,
+        }
+        records.append(new_record)
+        project.update(
+            {
+                "project_phone": project_phone,
+                "project_name": project_name,
+                "git_context_key": context_key,
+                "current_sprint_id": new_record["id"],
+                "updated_at": now,
+                "sprints": records,
+            }
+        )
+        projects[context_key] = project
+        history["schema_version"] = 1
+        history["projects"] = projects
+        write_sprint_history_file(history)
+        return sprint_record_summary(new_record)
+
+
+async def record_project_sprint_import(
+    *,
+    context_key: str,
+    project_phone: str,
+    project_name: str,
+    payload: dict[str, Any],
+    source: str,
+    source_filename: str,
+    previous_state: dict[str, Any],
+    current_state: dict[str, Any],
+    assignment_mode: str,
+    agent_count: int,
+    task_count: int,
+) -> dict[str, Any]:
+    async with sprint_history_lock:
+        return await asyncio.to_thread(
+            record_project_sprint_import_file,
+            context_key=context_key,
+            project_phone=project_phone,
+            project_name=project_name,
+            payload=payload,
+            source=source,
+            source_filename=source_filename,
+            previous_state=previous_state,
+            current_state=current_state,
+            assignment_mode=assignment_mode,
+            agent_count=agent_count,
+            task_count=task_count,
+        )
+
+
 async def import_project_actors_data(
     project_id: str,
     payload: Any,
     *,
     source: str = "api",
+    source_filename: str = "",
     port: int | None = None,
     activate_sequential: bool = True,
 ) -> dict[str, Any]:
     options = actor_import_options(payload)
     options["source"] = source
     async with group_task_submission_lock:
+        previous_state = await project_state_json(project_id, history_limit=10000)
         result = await run_group_write_transaction(
             project_actor_mutation_transaction,
             project_id,
@@ -19857,43 +20246,64 @@ async def import_project_actors_data(
                         "queue_item_id": queued["id"],
                     }
                 )
-    return {
-        key: value
-        for key, value in result.items()
-        if key not in {"queue_context", "removed_actor_ids", "removed_actor_phones"}
-    } | {
-        "source": source,
-        "removed_agent_count": len(result["removed_agents"]),
-        "imported_agent_count": len(result["imported_agents"]),
-        "removed_actor_count": len(result["removed_agents"]),
-        "imported_actor_count": len(result["imported_agents"]),
-        "removed_task_count": len(removed_tasks),
-        "queued_task_count": (
-            sum(int(item.get("task_count") or 0) for item in queued_tasks)
-            if result.get("assignment_mode") == "sequential"
-            else len(queued_tasks)
-        ),
-        "queued_queue_item_count": len(queued_tasks),
-        "deferred_task_count": (
-            max(
-                0,
-                sum(
-                    len(agent.get("tasks") or [])
-                    for agent in result["imported_agents"]
+        response = {
+            key: value
+            for key, value in result.items()
+            if key not in {"queue_context", "removed_actor_ids", "removed_actor_phones"}
+        } | {
+            "source": source,
+            "removed_agent_count": len(result["removed_agents"]),
+            "imported_agent_count": len(result["imported_agents"]),
+            "removed_actor_count": len(result["removed_agents"]),
+            "imported_actor_count": len(result["imported_agents"]),
+            "removed_task_count": len(removed_tasks),
+            "queued_task_count": (
+                sum(int(item.get("task_count") or 0) for item in queued_tasks)
+                if result.get("assignment_mode") == "sequential"
+                else len(queued_tasks)
+            ),
+            "queued_queue_item_count": len(queued_tasks),
+            "deferred_task_count": (
+                max(
+                    0,
+                    sum(
+                        len(agent.get("tasks") or [])
+                        for agent in result["imported_agents"]
+                    )
+                    - sum(int(item.get("task_count") or 0) for item in queued_tasks),
                 )
-                - sum(int(item.get("task_count") or 0) for item in queued_tasks),
-            )
-            if result.get("assignment_mode") == "sequential"
-            else 0
-        ),
-        "sequential_poll_endpoint": (
-            f"/worker/all/{result['project_phone']}?to_phone={result['project_phone']}"
-            if result.get("assignment_mode") == "sequential"
-            else None
-        ),
-        "removed_tasks": removed_tasks,
-        "queued_tasks": queued_tasks,
-    }
+                if result.get("assignment_mode") == "sequential"
+                else 0
+            ),
+            "sequential_poll_endpoint": (
+                f"/worker/all/{result['project_phone']}?to_phone={result['project_phone']}"
+                if result.get("assignment_mode") == "sequential"
+                else None
+            ),
+            "removed_tasks": removed_tasks,
+            "queued_tasks": queued_tasks,
+        }
+        current_state = await project_state_json(project_id, history_limit=10000)
+        context_key = git_context_key_from_metadata(result["queue_context"])
+        response["sprint"] = await record_project_sprint_import(
+            context_key=context_key,
+            project_phone=result["project_phone"],
+            project_name=str(result["project"].get("project_name") or "").strip(),
+            payload=payload,
+            source=source,
+            source_filename=safe_attachment_filename(source_filename)
+            if source_filename
+            else "",
+            previous_state=previous_state,
+            current_state=current_state,
+            assignment_mode=str(result.get("assignment_mode") or "parallel"),
+            agent_count=len(result["imported_agents"]),
+            task_count=sum(
+                len(agent.get("tasks") or [])
+                for agent in result["imported_agents"]
+            ),
+        )
+        return response
 
 
 async def delete_project_actors_data(
@@ -22502,6 +22912,107 @@ async def get_project_state_json(
     return await project_state_json(project_id, history_limit=history_limit)
 
 
+def project_sprint_history_file_snapshot(
+    context_key: str,
+) -> dict[str, Any] | None:
+    with sprint_history_file_lock():
+        history = read_sprint_history_file()
+        project = history.get("projects", {}).get(context_key)
+        return deepcopy(project) if isinstance(project, dict) else None
+
+
+async def project_sprint_history_snapshot(
+    project_id: str,
+) -> tuple[str, str, dict[str, Any] | None]:
+    config = await read_git_config()
+    _, context_key, project_entry, _ = project_for_group_api(config, project_id)
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    async with sprint_history_lock:
+        project = await asyncio.to_thread(
+            project_sprint_history_file_snapshot,
+            context_key,
+        )
+    return project_phone, context_key, project
+
+
+@app.get("/api/v1/projects/{project_id}/sprints")
+async def get_project_sprints(project_id: str) -> dict[str, Any]:
+    project_phone, context_key, project = await project_sprint_history_snapshot(
+        project_id
+    )
+    raw_records = project.get("sprints") if isinstance(project, dict) else []
+    records = [
+        sprint_record_summary(record)
+        for record in raw_records
+        if isinstance(record, dict)
+    ] if isinstance(raw_records, list) else []
+    records.sort(
+        key=lambda record: int(record.get("sequence") or 0),
+        reverse=True,
+    )
+    for record in records:
+        record["download_url"] = (
+            f"/api/v1/projects/{project_phone}/sprints/{record['id']}/download"
+        )
+    return {
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "current_sprint_id": (
+            project.get("current_sprint_id") if isinstance(project, dict) else None
+        ),
+        "sprint_count": len(records),
+        "sprints": records,
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/sprints/{sprint_id}/download")
+async def download_project_sprint(
+    project_id: str,
+    sprint_id: str,
+) -> JSONResponse:
+    project_phone, context_key, project = await project_sprint_history_snapshot(
+        project_id
+    )
+    raw_records = project.get("sprints") if isinstance(project, dict) else []
+    record = next(
+        (
+            deepcopy(item)
+            for item in raw_records
+            if isinstance(item, dict)
+            and str(item.get("id") or "").strip() == sprint_id.strip()
+        ),
+        None,
+    ) if isinstance(raw_records, list) else None
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Sprint archive was not found for this project",
+        )
+    runtime_state = record.get("final_state") or record.get("initial_state")
+    if str(record.get("status") or "") == "current":
+        runtime_state = await project_state_json(project_phone, history_limit=10000)
+    metadata = sprint_record_summary(record)
+    archive = {
+        "schema_version": 1,
+        "archive_type": "nginx-qa-project-sprint",
+        "exported_at": utc_now(),
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "sprint": metadata,
+        "import_payload": deepcopy(record.get("import_payload")),
+        "initial_state": deepcopy(record.get("initial_state")),
+        "runtime_state": deepcopy(runtime_state),
+    }
+    sequence = int(record.get("sequence") or 0)
+    filename = f"project-{project_phone}-sprint-{sequence:04d}.json"
+    return JSONResponse(
+        content=archive,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.get("/api/v1/projects/{project_id}/agents")
 @app.get("/api/v1/projects/{project_id}/actors")
 async def get_project_actors(project_id: str) -> dict[str, Any]:
@@ -22536,6 +23047,38 @@ async def get_project_actors(project_id: str) -> dict[str, Any]:
     }
 
 
+async def ensure_actor_import_matches_route_project(
+    project_id: str,
+    payload: Any,
+    current_port: int | None,
+) -> None:
+    if not isinstance(payload, dict):
+        return
+    has_project_reference = any(
+        actor_import_reference_value(payload, key) is not None
+        for key in ("project_id", "project_phone", "git_address", "git_context_key")
+    )
+    if not has_project_reference:
+        return
+    config = await read_git_config()
+    _, _, project_entry, _ = project_for_group_api(config, project_id)
+    route_phone = normalize_project_phone(project_entry.get("project_phone"))
+    referenced_phone = await project_phone_for_actor_import(payload, current_port)
+    if referenced_phone != route_phone:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_reference_mismatch",
+                "message": (
+                    "The JSON project reference does not match the project selected "
+                    "in the import URL"
+                ),
+                "route_project_phone": route_phone,
+                "json_project_phone": referenced_phone,
+            },
+        )
+
+
 @app.post(
     "/api/v1/projects/{project_id}/agents/import",
     status_code=status.HTTP_201_CREATED,
@@ -22549,10 +23092,18 @@ async def import_project_actors(
     request: Request,
 ) -> dict[str, Any]:
     payload = await read_message(request)
+    await ensure_actor_import_matches_route_project(
+        project_id,
+        payload,
+        request_port(request),
+    )
+    encoded_filename = request.headers.get("x-nginx-qa-sprint-filename", "").strip()
+    source_filename = urllib.parse.unquote(encoded_filename) if encoded_filename else ""
     return await import_project_actors_data(
         project_id,
         payload,
         source="api",
+        source_filename=source_filename,
         port=request_port(request),
         activate_sequential=True,
     )
@@ -22845,10 +23396,17 @@ async def telegram_actor_import_for_mode(
         payload,
         request_port(request),
     )
+    document = message.get("document") if isinstance(message, dict) else None
+    source_filename = (
+        str(document.get("file_name") or "").strip()
+        if isinstance(document, dict)
+        else ""
+    )
     result = await import_project_actors_data(
         project_id,
         payload,
         source="telegram",
+        source_filename=source_filename or "telegram-message.json",
         port=request_port(request),
         activate_sequential=assignment_mode == "sequential",
     )

@@ -83,9 +83,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "git_config_path": main.git_config_path,
             "agents_path": main.agents_path,
             "history_path": main.history_path,
+            "sprint_history_path": main.sprint_history_path,
             "git_config_lock": main.git_config_lock,
             "agents_lock": main.agents_lock,
             "history_lock": main.history_lock,
+            "sprint_history_lock": main.sprint_history_lock,
             "group_task_submission_lock": main.group_task_submission_lock,
             "queues": main.queues,
             "locks": main.locks,
@@ -93,9 +95,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.git_config_path = temp_path / "port_git_map.json"
         main.agents_path = temp_path / "agents.json"
         main.history_path = temp_path / "conversation_log.jsonl"
+        main.sprint_history_path = temp_path / "project_sprints.json"
         main.git_config_lock = asyncio.Lock()
         main.agents_lock = asyncio.Lock()
         main.history_lock = asyncio.Lock()
+        main.sprint_history_lock = asyncio.Lock()
         main.group_task_submission_lock = asyncio.Lock()
         main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
         main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
@@ -258,6 +262,211 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second_body["imported_agents"][0]["phone"], "2000")
         self.assertEqual(len(main.queues["tester-all"]), 0)
         self.assertEqual(len(main.queues["worker-all"]), 1)
+
+    async def test_new_import_archives_previous_sprint_state_and_downloads_it(self) -> None:
+        first_payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"id": "sprint-one", "title": "Sprint One"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "sprint-agent",
+                        "name": "Sprint Agent",
+                        "phone": "2026",
+                        "git_branch": "agent/sprint-agent",
+                        "tasks": [
+                            {"task_id": "S1-1", "message": "Finish sprint one."}
+                        ],
+                    }
+                ],
+            },
+        }
+        first_status, first_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=first_payload,
+            headers=[
+                (
+                    b"x-nginx-qa-sprint-filename",
+                    urllib.parse.quote("delta_sprint_01.json").encode("ascii"),
+                )
+            ],
+        )
+        self.assertEqual(first_status, 201)
+        self.assertIsInstance(first_body, dict)
+        assert isinstance(first_body, dict)
+        self.assertEqual(first_body["sprint"]["title"], "Sprint One")
+
+        delivered_status, delivered_body = await asgi_request(
+            f"/worker/all/{self.PROJECT_PHONE}?to_phone=2026"
+        )
+        self.assertEqual(delivered_status, 200)
+        self.assertIsInstance(delivered_body, dict)
+
+        second_payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"id": "sprint-two", "title": "Sprint Two"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "sprint-agent",
+                        "name": "Sprint Agent",
+                        "phone": "2026",
+                        "git_branch": "agent/sprint-agent",
+                        "tasks": [
+                            {"task_id": "S2-1", "message": "Start sprint two."}
+                        ],
+                    }
+                ],
+            },
+        }
+        second_status, second_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=second_payload,
+            headers=[
+                (
+                    b"x-nginx-qa-sprint-filename",
+                    urllib.parse.quote("delta_sprint_02.json").encode("ascii"),
+                )
+            ],
+        )
+        self.assertEqual(second_status, 201)
+        self.assertIsInstance(second_body, dict)
+        assert isinstance(second_body, dict)
+        self.assertEqual(second_body["sprint"]["title"], "Sprint Two")
+
+        list_status, list_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(list_body, dict)
+        assert isinstance(list_body, dict)
+        self.assertEqual(list_body["sprint_count"], 3)
+        sprint_one = next(
+            sprint for sprint in list_body["sprints"] if sprint["title"] == "Sprint One"
+        )
+        sprint_two = next(
+            sprint for sprint in list_body["sprints"] if sprint["title"] == "Sprint Two"
+        )
+        self.assertEqual(sprint_one["status"], "archived")
+        self.assertEqual(sprint_two["status"], "current")
+        self.assertEqual(sprint_one["source_filename"], "delta_sprint_01.json")
+
+        download_status, archive = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints/{sprint_one['id']}/download"
+        )
+        self.assertEqual(download_status, 200)
+        self.assertIsInstance(archive, dict)
+        assert isinstance(archive, dict)
+        self.assertEqual(archive["archive_type"], "nginx-qa-project-sprint")
+        self.assertEqual(archive["import_payload"]["sprint"]["id"], "sprint-one")
+        self.assertTrue(
+            any(
+                record.get("message") == "Finish sprint one."
+                for record in archive["runtime_state"]["recent_activity"]
+            )
+        )
+
+    async def test_sprint_history_is_isolated_by_project(self) -> None:
+        second_context = "github.com/example/second-project"
+        second_phone = "9009"
+        config = main.read_git_config_file()
+        second_project = {
+            "project_name": "Second Project",
+            "git_address": "https://github.com/example/second-project.git",
+            "git_context_key": second_context,
+            "project_phone": second_phone,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config[main.PROJECTS_KEY][second_context] = second_project
+        config[main.PHONE_GIT_CONTEXTS_KEY][second_phone] = {
+            **second_project,
+            "phone": second_phone,
+        }
+        main.write_git_config_file(config)
+
+        for project_phone, git_address, title, agent_id, agent_name, agent_phone in (
+            (
+                self.PROJECT_PHONE,
+                "https://github.com/example/actor-import.git",
+                "Primary Sprint",
+                "primary-sprint-agent",
+                "Primary Sprint Agent",
+                "2021",
+            ),
+            (
+                second_phone,
+                second_project["git_address"],
+                "Second Sprint",
+                "second-sprint-agent",
+                "Second Sprint Agent",
+                "2022",
+            ),
+        ):
+            status_code, _ = await asgi_request(
+                f"/api/v1/projects/{project_phone}/agents/import",
+                method="POST",
+                payload={
+                    "project_id": project_phone,
+                    "git_address": git_address,
+                    "sprint": {"title": title},
+                    "agents": {
+                        "overwrite": True,
+                        "items": [
+                            {
+                                "id": agent_id,
+                                "name": agent_name,
+                                "phone": agent_phone,
+                                "tasks": [{"message": f"Task for {title}"}],
+                            }
+                        ],
+                    },
+                },
+            )
+            self.assertEqual(status_code, 201)
+
+        primary_status, primary = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints"
+        )
+        second_status, second = await asgi_request(
+            f"/api/v1/projects/{second_phone}/sprints"
+        )
+        self.assertEqual(primary_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(primary, dict)
+        self.assertIsInstance(second, dict)
+        assert isinstance(primary, dict) and isinstance(second, dict)
+        primary_titles = {sprint["title"] for sprint in primary["sprints"]}
+        second_titles = {sprint["title"] for sprint in second["sprints"]}
+        self.assertIn("Primary Sprint", primary_titles)
+        self.assertNotIn("Second Sprint", primary_titles)
+        self.assertEqual(second_titles, {"Second Sprint"})
+
+    async def test_import_route_rejects_json_for_another_project(self) -> None:
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "project_id": "9009",
+                "agents": {
+                    "overwrite": True,
+                    "items": [{"name": "Wrong Project Agent"}],
+                },
+            },
+        )
+        self.assertEqual(status_code, 409)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["detail"]["error"], "project_reference_mismatch")
+        self.assertFalse(main.sprint_history_path.exists())
+        self.assertIn("old-project-actor", {agent["id"] for agent in main.read_agents_file()})
 
     async def test_delete_all_removes_project_actors_and_pending_tasks_only(self) -> None:
         import_status, _ = await asgi_request(
@@ -2051,8 +2260,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             'id="projectActorsJsonFile"',
             'id="importProjectActorsButton"',
             'id="deleteAllProjectActorsButton"',
+            'id="projectSprints"',
+            'id="refreshProjectSprintsButton"',
             "async function importProjectActorsFromJson()",
             "async function deleteAllProjectActors()",
+            "async function refreshProjectSprints()",
+            "download-project-sprint",
             "agents.overwrite: true",
             "/agents/import",
         ):

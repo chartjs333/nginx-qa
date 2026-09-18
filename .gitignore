@@ -24,6 +24,8 @@ specializations.json
 email_routes.json
 port_git_map.json
 port_git_map.json.lock
+project_sprints.json
+project_sprints.json.lock
 queue_backup_before_restart_*.json
 attachments/
 screenshot_folders/

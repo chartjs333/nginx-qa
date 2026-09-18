@@ -59,6 +59,25 @@ immediately queued to their agents' phones; in sequential mode the entry node
 is queued first and later nodes are reached through graph handoffs. See
 [`examples/project_agents_import.json`](examples/project_agents_import.json).
 
+Every successful import also creates a persistent project sprint record. When
+the next JSON is imported, the previous record is archived together with its
+latest execution graph, agents, pending queues, and up to 10,000 project
+history events. The original import payload is retained as well. The first
+import after upgrading preserves any already existing project state as a
+legacy archive before creating the new current sprint. List and download these
+records with:
+
+```text
+GET /api/v1/projects/{project_phone}/sprints
+GET /api/v1/projects/{project_phone}/sprints/{sprint_id}/download
+```
+
+The Agents tab shows the same project-specific history and provides a
+`Скачать JSON` button for every current or archived sprint. A JSON project
+reference is validated against the project selected in the import URL, so a
+file for another project is rejected instead of being imported into the
+active project.
+
 Each item may set `git_branch`, for example `agent/backend-developer`. When it
 is omitted, the server creates a stable `agent/<agent-id>` branch name. The
 branch is stored both as `agent.git_branch` and in `agent.parameters.git_branch`.
