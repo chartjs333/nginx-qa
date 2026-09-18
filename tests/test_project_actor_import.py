@@ -1489,6 +1489,52 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(reviewer_body, dict)
         assert isinstance(reviewer_body, dict)
         self.assertEqual(reviewer_body["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            reviewer_body["active_task"]["message"].count(
+                "[PATCH BETWEEN COMMITS]"
+            ),
+            1,
+        )
+        queued_context = reviewer_body["active_task"]["metadata"][
+            "pending_transition"
+        ]["review_context"]
+        self.assertNotIn("text", queued_context)
+        self.assertEqual(queued_context["patch_count"], 1)
+
+        reviewer_one_status, reviewer_one_result = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2151/whoami",
+            method="POST",
+            payload={
+                "assignment_id": reviewer_body["active_task"]["metadata"][
+                    "assignment_id"
+                ],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(reviewer_one_status, 200)
+        self.assertIsInstance(reviewer_one_result, dict)
+
+        reviewer_two_status, reviewer_two_body = await asgi_request(
+            "/api/v1/agents/whoami/repository",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        self.assertEqual(reviewer_two_status, 200)
+        self.assertIsInstance(reviewer_two_body, dict)
+        assert isinstance(reviewer_two_body, dict)
+        self.assertEqual(reviewer_two_body["agent"]["id"], "reviewer-two")
+        self.assertEqual(
+            reviewer_two_body["active_task"]["message"].count(
+                "[PATCH BETWEEN COMMITS]"
+            ),
+            1,
+        )
+        self.assertIn(
+            "diff --git a/analysis.txt b/analysis.txt",
+            reviewer_two_body["active_task"]["message"],
+        )
 
     async def test_sequential_telegram_url_starts_first_graph_node(self) -> None:
         status_code, body = await asgi_request(

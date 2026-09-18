@@ -19859,16 +19859,94 @@ async def enqueue_sequential_agent_node(
             if isinstance(pending_transition.get("review_context"), dict)
             else {}
         )
-        review_context_text = str(review_context.get("text") or "").strip()
+        review_submission = (
+            review_context.get("submission")
+            if isinstance(review_context.get("submission"), dict)
+            else {}
+        )
+        submitted_from_commit = str(
+            review_submission.get("from_commit") or ""
+        ).casefold()
+        submitted_git_commit = str(
+            review_submission.get("git_commit") or ""
+        ).casefold()
+        review_patches = [
+            patch
+            for patch in review_context.get("patches", [])
+            if isinstance(patch, dict)
+        ]
+        matching_patches = [
+            patch
+            for patch in review_patches
+            if (
+                not submitted_from_commit
+                or str(
+                    (patch.get("from_commit") or {}).get("full")
+                    if isinstance(patch.get("from_commit"), dict)
+                    else patch.get("from_commit")
+                    or ""
+                ).casefold()
+                == submitted_from_commit
+            )
+            and (
+                not submitted_git_commit
+                or str(
+                    (patch.get("to_commit") or {}).get("full")
+                    if isinstance(patch.get("to_commit"), dict)
+                    else patch.get("to_commit")
+                    or ""
+                ).casefold()
+                == submitted_git_commit
+            )
+        ]
+        if (
+            not matching_patches
+            and review_patches
+            and not submitted_from_commit
+            and not submitted_git_commit
+        ):
+            matching_patches = [review_patches[-1]]
+        review_patch_blocks: list[str] = []
+        for patch in matching_patches:
+            from_info = patch.get("from_commit")
+            to_info = patch.get("to_commit")
+            from_info = from_info if isinstance(from_info, dict) else {
+                "full": str(from_info or ""),
+                "short": str(from_info or "")[:12],
+            }
+            to_info = to_info if isinstance(to_info, dict) else {
+                "full": str(to_info or ""),
+                "short": str(to_info or "")[:12],
+            }
+            header = history_patch_block_header(
+                from_info,
+                to_info,
+                str(patch.get("git_address") or ""),
+                patch,
+            )
+            if patch.get("status") == "available":
+                review_patch_blocks.append(
+                    f"{header}\n\n{str(patch.get('patch') or '')}\n[END PATCH]"
+                )
+            else:
+                review_patch_blocks.append(
+                    f"{header}\nStatus: unavailable\n"
+                    f"Reason: {patch.get('reason') or 'unknown'}\n[END PATCH]"
+                )
+        review_patch_text = "\n\n---\n\n".join(review_patch_blocks)
         review_context_lines = [
-            "История проекта и изменения кода:",
+            "Изменения кода для этого перехода:",
             (
                 f"Сообщений: {int(review_context.get('record_count') or 0)}; "
                 f"patch-блоков: {int(review_context.get('patch_count') or 0)}; "
                 f"недоступных patch-блоков: "
                 f"{int(review_context.get('patch_error_count') or 0)}."
             ),
-            review_context_text or "История с commit-метаданными пока отсутствует.",
+            review_patch_text or "Для этого перехода новый patch-блок отсутствует.",
+            (
+                "Полная история сообщений с дедуплицированными patch-блоками: "
+                "project_state.execution.pending_transition.review_context.text."
+            ),
         ]
         graph_lines = [
             f"- {node.get('id')} ({node.get('agent_name') or node.get('agent_id')}): "
@@ -20032,7 +20110,26 @@ async def enqueue_sequential_agent_node(
             "graph_node_id": current_node_id,
             "phase": phase,
             "workflow": deepcopy(workflow),
-            "pending_transition": deepcopy(pending_transition) or None,
+            "pending_transition": (
+                {
+                    **deepcopy(pending_transition),
+                    "review_context": {
+                        key: deepcopy(review_context.get(key))
+                        for key in (
+                            "schema_version",
+                            "generated_at",
+                            "record_count",
+                            "patch_count",
+                            "patch_error_count",
+                            "deduplicated_by_commit_pair",
+                            "submission",
+                        )
+                        if review_context.get(key) is not None
+                    },
+                }
+                if pending_transition
+                else None
+            ),
             "allowed_outcomes": sorted(
                 str(outcome).upper()
                 for outcome in (graph_node.get("transitions") or {})
