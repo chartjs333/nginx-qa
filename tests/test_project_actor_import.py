@@ -1413,6 +1413,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                     "project_name": "Patch Project",
                     "git_commit": commits[commit_name],
                     "git_commit_short": commits[commit_name][:12],
+                    "git_branch": f"agent/{commit_name}",
                     "sender": "Agent A",
                     "receiver": "Agent B",
                 },
@@ -1461,6 +1462,10 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["record_count"], 5)
         self.assertEqual(result["patch_count"], 2)
         self.assertEqual(result["patch_error_count"], 0)
+        self.assertIn("From branch: agent/one", result["text"])
+        self.assertIn("To branch: agent/two", result["text"])
+        self.assertEqual(result["patches"][0]["from_branch"], "agent/one")
+        self.assertEqual(result["patches"][0]["to_branch"], "agent/two")
         self.assertEqual(
             [entry["type"] for entry in result["timeline"]],
             ["activity", "activity", "patch", "activity", "activity", "patch", "activity"],
@@ -1732,6 +1737,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                     "result": "Analysis finished.",
                     "from_commit": from_commit,
                     "git_commit": to_commit,
+                    "git_branch": "agent/graph-analyst",
                 },
             )
         self.assertEqual(first_review_status, 200)
@@ -1754,6 +1760,20 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.assertEqual(review_context["patch_count"], 1)
         self.assertIn("diff --git", review_context["text"])
+        self.assertEqual(
+            review_context["submission"]["git_branch"],
+            "agent/graph-analyst",
+        )
+        transition_patch = review_context["patches"][0]
+        self.assertEqual(
+            transition_patch["from_commit"]["branch"],
+            "agent/graph-analyst",
+        )
+        self.assertEqual(
+            transition_patch["to_commit"]["branch"],
+            "agent/graph-analyst",
+        )
+        self.assertIn("From branch: agent/graph-analyst", review_context["text"])
         self.assertEqual(len(main.queues["worker-all"]), 1, first_review)
         self.assertIn(
             "diff --git a/analysis.txt b/analysis.txt",

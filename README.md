@@ -88,6 +88,14 @@ order, a Git patch is inserted before the first message with a changed commit,
 and the same commit transition is never repeated. Unavailable patches are kept
 in the timeline with their error reason instead of failing the sprint import.
 
+Pending queue items and scheduled messages are durable. Every queue mutation is
+written atomically under `runtime_state/queues/`, and delayed/PASS-triggered
+messages are stored in `runtime_state/scheduled_tasks.json`. The service restores
+both before accepting work after startup. A failed disk write rolls the in-memory
+queue mutation back, and invalid runtime-state JSON fails startup instead of
+silently discarding tasks. Queue records retain `git_context_key`, so restored
+messages remain isolated between Git projects.
+
 Each item may set `git_branch`, for example `agent/backend-developer`. When it
 is omitted, the server creates a stable `agent/<agent-id>` branch name. The
 branch is stored both as `agent.git_branch` and in `agent.parameters.git_branch`.
@@ -218,16 +226,21 @@ Submit a node result to the `whoami_endpoint` from the active queue item:
   "status": "DONE",
   "result": "Implementation and verification evidence",
   "from_commit": "commit checked out when work started",
-  "git_commit": "commit containing the completed work"
+  "git_commit": "commit containing the completed work",
+  "git_branch": "agent/backend-developer"
 }
 ```
 
 The allowed status values are the keys from that node's `transitions`, for
 example `DONE`, `PASS`, or `FAIL`. When the two commit hashes are supplied, the
 service inserts their Git diff into the stored transition context and into the
-task sent to both reviewers. For a locally available repository the final HEAD
-can be detected automatically, but supplying both hashes is recommended for a
-remote repository. Each reviewer uses the same endpoint shape:
+task sent to both reviewers. The branch is stored with both history records and
+shown next to the commit in copied history and patch headers. A diff itself only
+requires the two commit hashes; the branch records provenance and helps locate
+commits that have not been pushed. For a repository configured as a local path,
+the final HEAD and branch can be detected automatically. Supplying all three
+fields is recommended for a remote repository. Each reviewer uses the same
+endpoint shape:
 
 ```json
 {

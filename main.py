@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 from collections import deque
 from copy import deepcopy
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -30,7 +30,16 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 
-app = FastAPI()
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    await restore_runtime_state()
+    try:
+        yield
+    finally:
+        await shutdown_runtime_state()
+
+
+app = FastAPI(lifespan=app_lifespan)
 
 QUEUE_DEFINITIONS: dict[str, dict[str, str]] = {
     "work": {
@@ -135,6 +144,7 @@ evidence_folders_path = base_dir / "evidence_folders"
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
 FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
+RUNTIME_STATE_SCHEMA_VERSION = 1
 DEFAULT_PROJECT_NAME = "LLM Extractor"
 PROJECT_NAMES_BY_GIT_CONTEXT = {
     "github.com/chartjs333/nginx-qc-qc_symptoms-mdsgene-validator": DEFAULT_PROJECT_NAME,
@@ -821,6 +831,7 @@ def write_folder_git_context(folder_path: Path, git_context: dict[str, Any] | No
             "git_address",
             "git_commit",
             "git_commit_short",
+            "git_branch",
             "git_error",
         )
         if git_context.get(key) is not None
@@ -2161,9 +2172,17 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
 
     local_path = Path(address)
     if local_path.exists():
-        command = ["git", "-C", str(local_path), "rev-parse", "HEAD"]
+        command = [
+            "git",
+            "-C",
+            str(local_path),
+            "rev-parse",
+            "HEAD",
+            "--abbrev-ref",
+            "HEAD",
+        ]
     else:
-        command = ["git", "ls-remote", address, "HEAD"]
+        command = ["git", "ls-remote", "--symref", address, "HEAD"]
 
     try:
         result = subprocess.run(
@@ -2185,11 +2204,31 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
     if not output:
         return {"git_error": "Git returned an empty commit reference"}
 
-    commit = output.split()[0]
-    return {
+    commit = ""
+    branch = ""
+    if local_path.exists():
+        output_lines = [line.strip() for line in output.splitlines() if line.strip()]
+        commit = output_lines[0].split()[0] if output_lines else ""
+        if len(output_lines) > 1 and output_lines[1] != "HEAD":
+            branch = output_lines[1]
+    else:
+        for line in output.splitlines():
+            parts = line.split()
+            if len(parts) >= 3 and parts[0] == "ref:" and parts[-1] == "HEAD":
+                branch = parts[1].removeprefix("refs/heads/")
+            elif len(parts) >= 2 and parts[-1] == "HEAD" and re.fullmatch(
+                r"[0-9a-fA-F]{4,64}", parts[0]
+            ):
+                commit = parts[0]
+    if not commit:
+        return {"git_error": "Git returned an invalid commit reference"}
+    git_context = {
         "git_commit": commit,
         "git_commit_short": commit[:12],
     }
+    if branch:
+        git_context["git_branch"] = branch
+    return git_context
 
 
 def normalize_commit_ref(value: str | None) -> str:
@@ -6429,10 +6468,12 @@ async def remove_queued_cycle_items(cycle_id: str) -> list[dict[str, Any]]:
     removed: list[dict[str, Any]] = []
     removed_items: list[tuple[str, Any]] = []
     acquired_queue_locks: list[asyncio.Lock] = []
+    previous_queues: dict[str, deque[Any]] = {}
     try:
         for queue_name in sorted(GROUP_QUEUE_NAMES):
             await locks[queue_name].acquire()
             acquired_queue_locks.append(locks[queue_name])
+            previous_queues[queue_name] = deque(queues[queue_name])
         for queue_name in sorted(GROUP_QUEUE_NAMES):
             kept_items: deque[Any] = deque()
             while queues[queue_name]:
@@ -6452,6 +6493,11 @@ async def remove_queued_cycle_items(cycle_id: str) -> list[dict[str, Any]]:
                     continue
                 kept_items.append(item)
             queues[queue_name] = kept_items
+        if removed_items:
+            await persist_queue_mutations_locked(
+                {queue_name for queue_name, _ in removed_items},
+                previous_queues,
+            )
     finally:
         for queue_lock in reversed(acquired_queue_locks):
             queue_lock.release()
@@ -6476,6 +6522,7 @@ async def remove_queued_cycle_items(cycle_id: str) -> list[dict[str, Any]]:
                     "git_address",
                     "git_commit",
                     "git_commit_short",
+                    "git_branch",
                     "git_error",
                 )
                 if metadata.get(key) is not None
@@ -7346,10 +7393,12 @@ async def dequeue_group_agent_task(
         delivered_queue = ""
         queue_names = sorted(GROUP_QUEUE_NAMES)
         acquired_queue_locks: list[asyncio.Lock] = []
+        previous_queues: dict[str, deque[Any]] = {}
         try:
             for queue_name in queue_names:
                 await locks[queue_name].acquire()
                 acquired_queue_locks.append(locks[queue_name])
+                previous_queues[queue_name] = deque(queues[queue_name])
 
             candidates: list[tuple[str, str, str, Any]] = []
             for queue_name in queue_names:
@@ -7381,6 +7430,10 @@ async def dequeue_group_agent_task(
                         continue
                     kept_items.append(item)
                 queues[delivered_queue] = kept_items
+                await persist_queue_mutations_locked(
+                    {delivered_queue},
+                    previous_queues,
+                )
         finally:
             for queue_lock in reversed(acquired_queue_locks):
                 queue_lock.release()
@@ -7540,9 +7593,16 @@ def resolve_local_git_reference(git_address: str) -> dict[str, Any]:
         return {}
 
     local_path = Path(address)
-    if not local_path.exists():
+    if local_path.exists():
+        return resolve_git_reference(str(local_path))
+
+    matching_local_repo = local_repo_for_remote(address)
+    if matching_local_repo is None:
         return {}
-    return resolve_git_reference(str(local_path))
+    reference = resolve_git_reference(str(matching_local_repo))
+    if reference:
+        reference["local_repo"] = str(matching_local_repo)
+    return reference
 
 
 def resolve_git_patch(
@@ -7680,6 +7740,20 @@ def queue_definition(queue_name: str) -> dict[str, str]:
         ) from exc
 
 
+def metadata_with_git_context(
+    metadata: dict[str, Any],
+    git_context: dict[str, Any],
+) -> dict[str, Any]:
+    merged = {**metadata, **git_context}
+    # A sender may report a feature-branch revision that differs from the
+    # repository's current/default HEAD. Keep the routing context authoritative,
+    # but keep an explicitly submitted commit and branch together.
+    for key in ("git_commit", "git_commit_short", "git_branch"):
+        if metadata.get(key) is not None:
+            merged[key] = metadata[key]
+    return merged
+
+
 async def append_history(
     event: str,
     queue_name: str,
@@ -7697,7 +7771,8 @@ async def append_history(
         if git_context is not None
         else await git_context_for_port(port)
     )
-    enriched_metadata = {
+    enriched_metadata = metadata_with_git_context(
+        {
         "route": queue_meta["route"],
         "context": queue_meta["context"],
         "context_label": queue_meta["context_label"],
@@ -7705,8 +7780,9 @@ async def append_history(
         "receiver": submitted_metadata.get("receiver") or queue_meta["default_receiver"],
         "direction": queue_meta["label"],
         **submitted_metadata,
-        **history_git_context,
-    }
+        },
+        history_git_context,
+    )
     record = {
         "id": str(uuid4()),
         "timestamp": utc_now(),
@@ -7761,6 +7837,174 @@ def queue_item_matches_git_context(item: Any, git_context_key: str | None) -> bo
     if not git_context_key:
         return True
     return git_context_key_from_metadata(queue_item_metadata(item)) == git_context_key
+
+
+def runtime_state_directory() -> Path:
+    return history_path.parent / "runtime_state"
+
+
+def queue_runtime_state_path(queue_name: str) -> Path:
+    if queue_name not in QUEUE_DEFINITIONS:
+        raise RuntimeError(f"Unknown persisted queue: {queue_name}")
+    return runtime_state_directory() / "queues" / f"{queue_name}.json"
+
+
+def scheduled_runtime_state_path() -> Path:
+    return runtime_state_directory() / "scheduled_tasks.json"
+
+
+def validate_persisted_queue_item(item: Any, queue_name: str) -> dict[str, Any]:
+    if (
+        not isinstance(item, dict)
+        or not isinstance(item.get("id"), str)
+        or not item.get("id", "").strip()
+        or not isinstance(item.get("queued_at"), str)
+        or "message" not in item
+        or not isinstance(item.get("metadata"), dict)
+    ):
+        raise RuntimeError(
+            f"Runtime state for queue {queue_name} contains an invalid queue item"
+        )
+    return deepcopy(item)
+
+
+def write_queue_runtime_state(queue_name: str, items: list[Any]) -> None:
+    write_json_file_atomic(
+        queue_runtime_state_path(queue_name),
+        {
+            "schema_version": RUNTIME_STATE_SCHEMA_VERSION,
+            "queue": queue_name,
+            "updated_at": utc_now(),
+            "items": deepcopy(items),
+        },
+    )
+
+
+def read_queue_runtime_state(queue_name: str) -> list[dict[str, Any]]:
+    state_path = queue_runtime_state_path(queue_name)
+    if not state_path.exists():
+        return []
+    try:
+        with state_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Queue runtime state is invalid JSON: {state_path}"
+        ) from exc
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") != RUNTIME_STATE_SCHEMA_VERSION
+        or data.get("queue") != queue_name
+        or not isinstance(data.get("items"), list)
+    ):
+        raise RuntimeError(f"Queue runtime state has an invalid schema: {state_path}")
+    return [validate_persisted_queue_item(item, queue_name) for item in data["items"]]
+
+
+async def persist_queue_state_locked(queue_name: str) -> None:
+    await asyncio.to_thread(
+        write_queue_runtime_state,
+        queue_name,
+        list(queues[queue_name]),
+    )
+
+
+async def persist_queue_mutations_locked(
+    queue_names: list[str] | tuple[str, ...] | set[str],
+    original_queues: dict[str, deque[Any]],
+) -> None:
+    changed_queue_names = sorted(set(queue_names))
+    try:
+        for queue_name in changed_queue_names:
+            await persist_queue_state_locked(queue_name)
+    except Exception:
+        for queue_name, original_items in original_queues.items():
+            queues[queue_name] = deque(original_items)
+        for queue_name in changed_queue_names:
+            try:
+                await asyncio.to_thread(
+                    write_queue_runtime_state,
+                    queue_name,
+                    list(original_queues[queue_name]),
+                )
+            except Exception:
+                pass
+        raise
+
+
+def validate_persisted_scheduled_task(task: Any) -> dict[str, Any]:
+    if not isinstance(task, dict):
+        raise RuntimeError("Scheduled runtime state contains an invalid task")
+    task_id = str(task.get("id") or "").strip()
+    queue_name = str(task.get("queue") or "").strip()
+    mode = str(task.get("schedule_mode") or "").strip()
+    if (
+        not task_id
+        or queue_name not in QUEUE_DEFINITIONS
+        or mode not in {"delay", "pass"}
+        or "message" not in task
+        or not isinstance(task.get("metadata"), dict)
+        or not isinstance(task.get("created_at"), str)
+        or (mode == "delay" and not isinstance(task.get("due_at"), str))
+    ):
+        raise RuntimeError(
+            f"Scheduled runtime state contains an invalid task: {task_id or '<missing id>'}"
+        )
+    if mode == "delay":
+        due_at_raw = str(task["due_at"]).strip()
+        try:
+            datetime.fromisoformat(due_at_raw.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Scheduled task {task_id} has an invalid due_at value"
+            ) from exc
+    return deepcopy(task)
+
+
+def write_scheduled_runtime_state(tasks: dict[str, dict[str, Any]]) -> None:
+    write_json_file_atomic(
+        scheduled_runtime_state_path(),
+        {
+            "schema_version": RUNTIME_STATE_SCHEMA_VERSION,
+            "updated_at": utc_now(),
+            "tasks": [deepcopy(tasks[task_id]) for task_id in sorted(tasks)],
+        },
+    )
+
+
+def read_scheduled_runtime_state() -> dict[str, dict[str, Any]]:
+    state_path = scheduled_runtime_state_path()
+    if not state_path.exists():
+        return {}
+    try:
+        with state_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f"Scheduled runtime state is invalid JSON: {state_path}"
+        ) from exc
+    if (
+        not isinstance(data, dict)
+        or data.get("schema_version") != RUNTIME_STATE_SCHEMA_VERSION
+        or not isinstance(data.get("tasks"), list)
+    ):
+        raise RuntimeError(
+            f"Scheduled runtime state has an invalid schema: {state_path}"
+        )
+    tasks: dict[str, dict[str, Any]] = {}
+    for raw_task in data["tasks"]:
+        task = validate_persisted_scheduled_task(raw_task)
+        task_id = str(task["id"])
+        if task_id in tasks:
+            raise RuntimeError(
+                f"Scheduled runtime state contains duplicate task id: {task_id}"
+            )
+        tasks[task_id] = task
+    return tasks
+
+
+async def persist_scheduled_tasks_locked() -> None:
+    await asyncio.to_thread(write_scheduled_runtime_state, scheduled_tasks)
 
 
 def queue_items_for_git_context(
@@ -7857,13 +8101,39 @@ def scheduled_task_snapshot(task: dict[str, Any]) -> dict[str, Any]:
                 "git_context_key",
                 "git_address",
                 "git_commit_short",
+                "git_branch",
             )
             if metadata.get(key) is not None
         },
     }
 
 
-async def delayed_release_task(task_id: str, delay_seconds: int) -> None:
+def scheduled_delay_seconds(task: dict[str, Any]) -> float:
+    due_at_raw = str(task.get("due_at") or "").strip()
+    try:
+        due_at = datetime.fromisoformat(due_at_raw.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Scheduled task {task.get('id')} has an invalid due_at value"
+        ) from exc
+    if due_at.tzinfo is None:
+        due_at = due_at.replace(tzinfo=timezone.utc)
+    remaining = due_at.astimezone(timezone.utc) - datetime.now(timezone.utc)
+    return max(0.0, remaining.total_seconds())
+
+
+def start_scheduled_timer_locked(task: dict[str, Any]) -> asyncio.Task[Any] | None:
+    if task.get("schedule_mode") != "delay":
+        return None
+    task_id = str(task["id"])
+    timer = asyncio.create_task(
+        delayed_release_task(task_id, scheduled_delay_seconds(task))
+    )
+    scheduled_timer_tasks[task_id] = timer
+    return timer
+
+
+async def delayed_release_task(task_id: str, delay_seconds: float) -> None:
     try:
         await asyncio.sleep(delay_seconds)
         await release_scheduled_task(task_id, "delay_elapsed")
@@ -7897,6 +8167,7 @@ async def release_scheduled_task(
             "git_address",
             "git_commit",
             "git_commit_short",
+            "git_branch",
             "git_error",
         )
         if metadata.get(key) is not None
@@ -7916,13 +8187,37 @@ async def release_scheduled_task(
         release_metadata["scheduled_trigger_event"] = trigger_record.get("event")
         release_metadata["scheduled_trigger_queue"] = trigger_record.get("queue")
 
-    return await enqueue(
-        str(task["queue"]),
-        task.get("message"),
-        release_metadata,
-        task.get("port", port),
-        task_git_context,
-    )
+    try:
+        result = await enqueue(
+            str(task["queue"]),
+            task.get("message"),
+            release_metadata,
+            task.get("port", port),
+            task_git_context,
+        )
+    except Exception:
+        queue_name = str(task["queue"])
+        async with locks[queue_name]:
+            already_queued = any(
+                str(queue_item_metadata(item).get("scheduled_task_id") or "")
+                == task_id
+                for item in queues[queue_name]
+            )
+        async with scheduled_tasks_lock:
+            if not already_queued:
+                scheduled_tasks[task_id] = task
+                start_scheduled_timer_locked(task)
+            try:
+                await persist_scheduled_tasks_locked()
+            except Exception:
+                # The old on-disk record is still sufficient for recovery. If the
+                # queue item was already durable, startup reconciliation removes it.
+                pass
+        raise
+
+    async with scheduled_tasks_lock:
+        await persist_scheduled_tasks_locked()
+    return result
 
 
 async def release_pass_scheduled_tasks(
@@ -8003,9 +8298,15 @@ async def schedule_message(
     async with scheduled_tasks_lock:
         scheduled_tasks[task_id] = task
         if mode == "delay":
-            scheduled_timer_tasks[task_id] = asyncio.create_task(
-                delayed_release_task(task_id, int(task["delay_minutes"]) * 60)
-            )
+            start_scheduled_timer_locked(task)
+        try:
+            await persist_scheduled_tasks_locked()
+        except Exception:
+            scheduled_tasks.pop(task_id, None)
+            timer = scheduled_timer_tasks.pop(task_id, None)
+            if timer is not None:
+                timer.cancel()
+            raise
 
     await append_history(
         "scheduled_for_delay" if mode == "delay" else "scheduled_waiting_for_pass",
@@ -8060,6 +8361,15 @@ async def cancel_scheduled_task(
         task = scheduled_tasks.pop(task_id, None)
         timer = scheduled_timer_tasks.pop(task_id, None)
 
+        if task is not None:
+            try:
+                await persist_scheduled_tasks_locked()
+            except Exception:
+                scheduled_tasks[task_id] = task
+                if timer is not None:
+                    scheduled_timer_tasks[task_id] = timer
+                raise
+
     if task is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -8079,6 +8389,7 @@ async def cancel_scheduled_task(
             "git_address",
             "git_commit",
             "git_commit_short",
+            "git_branch",
             "git_error",
         )
         if metadata.get(key) is not None
@@ -8102,6 +8413,85 @@ async def cancel_scheduled_task(
         "queue": task.get("queue"),
         "task": scheduled_task_snapshot(task),
     }
+
+
+def released_scheduled_task_ids_from_history(task_ids: set[str]) -> set[str]:
+    if not task_ids or not history_path.exists():
+        return set()
+    released: set[str] = set()
+    with history_path.open("r", encoding="utf-8") as file:
+        for line in file:
+            if len(released) == len(task_ids):
+                break
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            metadata = record.get("metadata") if isinstance(record, dict) else None
+            if not isinstance(metadata, dict) or metadata.get("scheduled_release") is not True:
+                continue
+            task_id = str(metadata.get("scheduled_task_id") or "").strip()
+            if task_id in task_ids:
+                released.add(task_id)
+    return released
+
+
+async def restore_runtime_state() -> None:
+    restored_queues = {
+        queue_name: await asyncio.to_thread(read_queue_runtime_state, queue_name)
+        for queue_name in sorted(QUEUE_DEFINITIONS)
+    }
+    restored_scheduled_tasks = await asyncio.to_thread(read_scheduled_runtime_state)
+
+    queued_scheduled_ids = {
+        str(queue_item_metadata(item).get("scheduled_task_id") or "").strip()
+        for items in restored_queues.values()
+        for item in items
+        if str(queue_item_metadata(item).get("scheduled_task_id") or "").strip()
+    }
+    released_scheduled_ids = queued_scheduled_ids | await asyncio.to_thread(
+        released_scheduled_task_ids_from_history,
+        set(restored_scheduled_tasks),
+    )
+    reconciled = False
+    for task_id in released_scheduled_ids:
+        if restored_scheduled_tasks.pop(task_id, None) is not None:
+            reconciled = True
+
+    queue_names = sorted(QUEUE_DEFINITIONS)
+    acquired_queue_locks: list[asyncio.Lock] = []
+    timers_to_cancel: list[asyncio.Task[Any]] = []
+    try:
+        for queue_name in queue_names:
+            await locks[queue_name].acquire()
+            acquired_queue_locks.append(locks[queue_name])
+        async with scheduled_tasks_lock:
+            timers_to_cancel = list(scheduled_timer_tasks.values())
+            scheduled_timer_tasks.clear()
+            for queue_name in queue_names:
+                queues[queue_name] = deque(restored_queues[queue_name])
+            scheduled_tasks.clear()
+            scheduled_tasks.update(restored_scheduled_tasks)
+            if reconciled:
+                await persist_scheduled_tasks_locked()
+            for task in scheduled_tasks.values():
+                start_scheduled_timer_locked(task)
+    finally:
+        for queue_lock in reversed(acquired_queue_locks):
+            queue_lock.release()
+
+    for timer in timers_to_cancel:
+        timer.cancel()
+
+
+async def shutdown_runtime_state() -> None:
+    async with scheduled_tasks_lock:
+        timers = list(scheduled_timer_tasks.values())
+        scheduled_timer_tasks.clear()
+    for timer in timers:
+        timer.cancel()
+    if timers:
+        await asyncio.gather(*timers, return_exceptions=True)
 
 
 def record_matches_date_range(
@@ -8292,9 +8682,17 @@ def format_history_record_for_context(record: dict[str, Any]) -> str:
     event_label = str(metadata.get("cycle_event_type") or record.get("event") or "")
     timestamp = str(record.get("timestamp") or "")
     message = history_record_message_for_context(record)
+    branch = str(
+        metadata.get("git_branch")
+        or metadata.get("to_agent_git_branch")
+        or metadata.get("agent_git_branch")
+        or ""
+    ).strip()
+    branch_label = f" [Branch: {branch}]" if branch else ""
     return (
         f"[{timestamp}] [Project: {project}] "
-        f"[{revision_label}: {revision_value}] [{actor}] [{event_label}]\n"
+        f"[{revision_label}: {revision_value}]{branch_label} "
+        f"[{actor}] [{event_label}]\n"
         f"{message}"
     )
 
@@ -8309,7 +8707,13 @@ def history_commit_info(record: dict[str, Any]) -> dict[str, str]:
         metadata.get("git_commit") or metadata.get("git_commit_short") or ""
     ).strip()
     short = str(metadata.get("git_commit_short") or full[:12]).strip()
-    return {"full": full, "short": short}
+    branch = str(
+        metadata.get("git_branch")
+        or metadata.get("to_agent_git_branch")
+        or metadata.get("agent_git_branch")
+        or ""
+    ).strip()
+    return {"full": full, "short": short, "branch": branch}
 
 
 def history_patch_block_header(
@@ -8323,6 +8727,10 @@ def history_patch_block_header(
         f"From: {previous_commit.get('short') or previous_commit['full'][:12]}",
         f"To: {current_commit.get('short') or current_commit['full'][:12]}",
     ]
+    if previous_commit.get("branch"):
+        lines.append(f"From branch: {previous_commit['branch']}")
+    if current_commit.get("branch"):
+        lines.append(f"To branch: {current_commit['branch']}")
     if git_address:
         lines.append(f"Repository: {git_address}")
     if patch_data and patch_data.get("source"):
@@ -8363,6 +8771,8 @@ def history_with_patches_context(
                     "type": "patch",
                     "from_commit": deepcopy(previous_commit),
                     "to_commit": deepcopy(current_commit),
+                    "from_branch": previous_commit.get("branch") or None,
+                    "to_branch": current_commit.get("branch") or None,
                     "git_address": git_address,
                     "inserted_before_activity_id": record.get("id"),
                 }
@@ -17850,7 +18260,9 @@ ${question}`;
       const actor = [meta.sender, meta.receiver].filter(Boolean).join(" -> ") || meta.direction || record.route || record.queue;
       const message = formatHistoryRecordMessage(record);
       const eventLabel = meta.cycle_event_type || record.event;
-      return `[${timestamp}] [Project: ${project}] [${revision.label}: ${revision.value}] [${actor}] [${eventLabel}]
+      const branch = String(meta.git_branch || meta.to_agent_git_branch || "").trim();
+      const branchLabel = branch ? ` [Branch: ${branch}]` : "";
+      return `[${timestamp}] [Project: ${project}] [${revision.label}: ${revision.value}]${branchLabel} [${actor}] [${eventLabel}]
 ${message}`;
     }
 
@@ -17890,7 +18302,8 @@ ${message}`;
       const full = String(meta.git_commit || meta.git_commit_short || "").trim();
       return {
         full,
-        short: String(meta.git_commit_short || (full ? full.slice(0, 12) : "")).trim()
+        short: String(meta.git_commit_short || (full ? full.slice(0, 12) : "")).trim(),
+        branch: String(meta.git_branch || meta.to_agent_git_branch || meta.agent_git_branch || "").trim()
       };
     }
 
@@ -17919,6 +18332,12 @@ ${message}`;
         `From: ${commitLabel(previousCommit)}`,
         `To: ${commitLabel(currentCommit)}`
       ];
+      if (previousCommit.branch) {
+        lines.push(`From branch: ${previousCommit.branch}`);
+      }
+      if (currentCommit.branch) {
+        lines.push(`To branch: ${currentCommit.branch}`);
+      }
       if (gitAddress) {
         lines.push(`Repository: ${gitAddress}`);
       }
@@ -18518,6 +18937,7 @@ ${data.patch || ""}
         const statusText = extractStatus(message);
         const summary = extractSummary(message);
         const eventLabel = meta.cycle_event_type || record.event;
+        const branch = String(meta.git_branch || meta.to_agent_git_branch || "").trim();
         const queueItemId = meta.queue_item_id || "";
         const canDeleteFromQueue = queueItemId && activeQueueItemIds.has(`${record.queue}:${queueItemId}`);
         const canDeleteHistoryRecord = record.event === "removed_from_backend_queue";
@@ -18529,6 +18949,7 @@ ${data.patch || ""}
                 <span class="badge ${escapeHtml(context)}">${escapeHtml(context)}</span>
                 <span class="badge">${escapeHtml(project)}</span>
                 <span class="badge">${escapeHtml(revision.label)}: ${escapeHtml(revision.value)}</span>
+                ${branch ? `<span class="badge">branch: ${escapeHtml(branch)}</span>` : ""}
                 <span class="badge event">${escapeHtml(eventLabel)}</span>
               </div>
               <p class="entry-summary"><strong>${escapeHtml(actor)}:</strong> STATUS: ${escapeHtml(statusText)}${summary ? ". " + escapeHtml(summary) : ""}</p>
@@ -19449,10 +19870,15 @@ async def enqueue(
         if git_context is not None
         else await git_context_for_port(port)
     )
-    item = make_queue_item(message, {**clean_metadata, **item_git_context})
+    item = make_queue_item(
+        message,
+        metadata_with_git_context(clean_metadata, item_git_context),
+    )
     item_id = item["id"]
     async with locks[queue_name]:
+        original_queues = {queue_name: deque(queues[queue_name])}
         queues[queue_name].append(item)
+        await persist_queue_mutations_locked({queue_name}, original_queues)
         size = len(queues[queue_name])
 
     event = queue_meta["post_event"]
@@ -19480,6 +19906,7 @@ async def dequeue(
     )
     delivered_item: Any | None = None
     async with locks[queue_name]:
+        original_queues = {queue_name: deque(queues[queue_name])}
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
@@ -19503,6 +19930,7 @@ async def dequeue(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=detail,
             )
+        await persist_queue_mutations_locked({queue_name}, original_queues)
 
     item_id = queue_item_id(delivered_item)
     message = queue_item_message(delivered_item)
@@ -19587,6 +20015,7 @@ async def _dequeue_phone_channel_unlocked(
     )
     delivered_item: Any | None = None
     async with locks[queue_name]:
+        original_queues = {queue_name: deque(queues[queue_name])}
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
@@ -19602,6 +20031,9 @@ async def _dequeue_phone_channel_unlocked(
                 continue
             kept_items.append(item)
         queues[queue_name] = kept_items
+
+        if delivered_item is not None:
+            await persist_queue_mutations_locked({queue_name}, original_queues)
 
     if delivered_item is None:
         raise HTTPException(
@@ -19667,6 +20099,7 @@ async def _delete_queued_item_unlocked(
     )
     deleted_item: Any | None = None
     async with locks[queue_name]:
+        original_queues = {queue_name: deque(queues[queue_name])}
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
@@ -19683,6 +20116,9 @@ async def _delete_queued_item_unlocked(
             kept_items.append(item)
         queues[queue_name] = kept_items
         size = len(queues[queue_name])
+
+        if deleted_item is not None:
+            await persist_queue_mutations_locked({queue_name}, original_queues)
 
     if deleted_item is None:
         raise HTTPException(
@@ -19701,6 +20137,7 @@ async def _delete_queued_item_unlocked(
             "git_address",
             "git_commit",
             "git_commit_short",
+            "git_branch",
             "git_error",
         )
         if deleted_metadata.get(key) is not None
@@ -19749,10 +20186,12 @@ async def remove_project_actor_queue_items(
     context_key = git_context_key_from_metadata(queue_context)
     removed_items: list[tuple[str, Any]] = []
     acquired: list[asyncio.Lock] = []
+    previous_queues: dict[str, deque[Any]] = {}
     try:
         for queue_name in sorted(GROUP_QUEUE_NAMES):
             await locks[queue_name].acquire()
             acquired.append(locks[queue_name])
+            previous_queues[queue_name] = deque(queues[queue_name])
         for queue_name in sorted(GROUP_QUEUE_NAMES):
             kept: deque[Any] = deque()
             while queues[queue_name]:
@@ -19771,6 +20210,11 @@ async def remove_project_actor_queue_items(
                     continue
                 kept.append(item)
             queues[queue_name] = kept
+        if removed_items:
+            await persist_queue_mutations_locked(
+                {queue_name for queue_name, _ in removed_items},
+                previous_queues,
+            )
     finally:
         for queue_lock in reversed(acquired):
             queue_lock.release()
@@ -20091,6 +20535,7 @@ async def enqueue_sequential_agent_node(
                     or "<commit до начала работы>"
                 ),
                 "git_commit": "<commit с выполненной работой>",
+                "git_branch": git_branch or "<ветка с выполненной работой>",
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -20118,8 +20563,8 @@ async def enqueue_sequential_agent_node(
                     "переход только после двух APPROVE."
                 ),
                 (
-                    "Для удалённого репозитория передайте from_commit и git_commit; "
-                    "для локального клона HEAD определяется автоматически."
+                    "Передайте from_commit, git_commit и git_branch. Для локального "
+                    "клона итоговые HEAD и branch определяются автоматически."
                 ),
                 f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
                 completion_example,
@@ -20149,6 +20594,7 @@ async def enqueue_sequential_agent_node(
             "to_agent_id": agent_id,
             "logical_to_phone": logical_agent_phone,
             "to_agent_git_branch": git_branch,
+            "git_branch": git_branch,
             "from_commit": queue_context.get("git_commit"),
             "graph_node_index": node_index,
             "graph_node_count": node_count,
@@ -20208,6 +20654,7 @@ async def enqueue_sequential_agent_node(
         # The active graph node/review must be consumed before one-time reviewer
         # bootstrap cards that may already be waiting in the shared queue.
         async with locks["worker-all"]:
+            original_queues = {"worker-all": deque(queues["worker-all"])}
             promoted_item: Any | None = None
             remaining: deque[Any] = deque()
             while queues["worker-all"]:
@@ -20222,6 +20669,10 @@ async def enqueue_sequential_agent_node(
             if promoted_item is not None:
                 remaining.appendleft(promoted_item)
             queues["worker-all"] = remaining
+            await persist_queue_mutations_locked(
+                {"worker-all"},
+                original_queues,
+            )
     return {
         "agent_id": agent_id,
         "agent_name": agent_name,
@@ -21319,6 +21770,7 @@ async def restore_history_record_to_queue(
             "git_address",
             "git_commit",
             "git_commit_short",
+            "git_branch",
             "git_error",
         )
         if record_metadata.get(key) is not None
@@ -22393,6 +22845,7 @@ async def identify_sequential_project_agent(
     seen_at = utc_now()
     submitted_from_commit = ""
     submitted_git_commit = ""
+    submitted_git_branch = ""
     if isinstance(identity_payload, dict):
         submitted_outcome = str(
             identity_payload.get("outcome")
@@ -22422,6 +22875,11 @@ async def identify_sequential_project_agent(
             or identity_payload.get("git_commit_short")
             or ""
         ).strip()
+        submitted_git_branch = normalized_agent_git_branch(
+            identity_payload.get("git_branch")
+            or identity_payload.get("branch"),
+            "git_branch",
+        )
     submitted_outcome = submitted_outcome.strip().upper()
     submitted_feedback = submitted_feedback.strip()
     submitted_result = submitted_result.strip()
@@ -22470,6 +22928,22 @@ async def identify_sequential_project_agent(
             )
             if local_git_reference.get("git_commit"):
                 completion_git_context.update(local_git_reference)
+        completed_agent_branch = (
+            str(
+                completed_agent.get("git_branch")
+                or completed_agent.get("parameters", {}).get("git_branch")
+                or ""
+            ).strip()
+            if isinstance(completed_agent, dict)
+            else ""
+        )
+        completion_branch = (
+            submitted_git_branch
+            or str(completion_git_context.get("git_branch") or "").strip()
+            or completed_agent_branch
+        )
+        if completion_branch:
+            completion_git_context["git_branch"] = completion_branch
         result["queue_context"] = completion_git_context
         removed_tasks: list[dict[str, Any]] = []
         if isinstance(completed_agent, dict):
@@ -22555,6 +23029,7 @@ async def identify_sequential_project_agent(
                             ),
                             "from_commit": submitted_from_commit or None,
                             "git_commit": completion_git_context.get("git_commit"),
+                            "git_branch": completion_git_context.get("git_branch"),
                         },
                     }
                 )
@@ -23210,10 +23685,12 @@ async def dequeue_sequential_runtime_task(
         acquired: list[asyncio.Lock] = []
         selected_queue = ""
         selected_item: Any | None = None
+        previous_queues: dict[str, deque[Any]] = {}
         try:
             for queue_name in sorted(GROUP_QUEUE_NAMES):
                 await locks[queue_name].acquire()
                 acquired.append(locks[queue_name])
+                previous_queues[queue_name] = deque(queues[queue_name])
 
             candidates: list[tuple[int, str, str, str, Any]] = []
             for queue_name in sorted(GROUP_QUEUE_NAMES):
@@ -23291,6 +23768,10 @@ async def dequeue_sequential_runtime_task(
                         continue
                     kept.append(item)
                 queues[selected_queue] = kept
+                await persist_queue_mutations_locked(
+                    {selected_queue},
+                    previous_queues,
+                )
         finally:
             for queue_lock in reversed(acquired):
                 queue_lock.release()
@@ -23342,6 +23823,7 @@ async def dequeue_sequential_runtime_task(
         except Exception:
             async with locks[selected_queue]:
                 queues[selected_queue].appendleft(selected_item)
+                await persist_queue_state_locked(selected_queue)
             raise
         snapshot.update(identity_state)
         await append_history(
@@ -25387,6 +25869,14 @@ async def read_phone_channel_payload(request: Request) -> tuple[Any, dict[str, A
             detail="Message is empty",
         )
 
+    raw_git_commit = payload.get("git_commit") or payload.get("git_commit_short")
+    git_commit = ""
+    if raw_git_commit is not None and str(raw_git_commit).strip():
+        git_commit = normalize_commit_ref(str(raw_git_commit))
+    git_branch = normalized_agent_git_branch(
+        payload.get("git_branch"),
+        "git_branch",
+    )
     metadata = {
         "submitted_via": payload.get("submitted_via") or "phone_channel",
         "sender": payload.get("sender"),
@@ -25394,6 +25884,9 @@ async def read_phone_channel_payload(request: Request) -> tuple[Any, dict[str, A
         "from_phone": payload.get("from_phone"),
         "to_phone": payload.get("to_phone"),
         "status": payload.get("status"),
+        "git_commit": git_commit or None,
+        "git_commit_short": git_commit[:12] if git_commit else None,
+        "git_branch": git_branch or None,
     }
     return message.strip(), metadata
 
