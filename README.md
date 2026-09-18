@@ -78,6 +78,12 @@ reference is validated against the project selected in the import URL, so a
 file for another project is rejected instead of being imported into the
 active project.
 
+Downloaded archives also contain `code_history`. It follows the UI's
+`Скопировать сообщения + патчи` semantics: messages stay in chronological
+order, a Git patch is inserted before the first message with a changed commit,
+and the same commit transition is never repeated. Unavailable patches are kept
+in the timeline with their error reason instead of failing the sprint import.
+
 Each item may set `git_branch`, for example `agent/backend-developer`. When it
 is omitted, the server creates a stable `agent/<agent-id>` branch name. The
 branch is stored both as `agent.git_branch` and in `agent.parameters.git_branch`.
@@ -144,6 +150,17 @@ the addressed agent only for this graph node. A successful response also sets
 `execution_authorized: true` and `requires_additional_confirmation: false`:
 show the requested identity summary and start immediately without pausing for
 another approval.
+
+The same response includes the complete `project_state`. Its
+`activity_with_patches` array follows the UI's `Скопировать сообщения + патчи`
+ordering: a `patch` entry is inserted immediately before the first `activity`
+entry whose commit differs from the previous known commit, and the same commit
+transition is emitted only once. `code_patches` contains the patch entries on
+their own and `code_patch_summary` reports available and unavailable patch
+counts. `history_with_patches.text` contains the same copy-ready text as the UI.
+Patch lookup errors are returned as `status: "unavailable"` and do not prevent
+the agent from receiving its task. The state endpoint accepts `history_limit`
+when a larger history window is needed.
 
 The repository reply is idempotent while that node remains active. Repeating
 the request before a handoff returns the same identity and `active_task` with

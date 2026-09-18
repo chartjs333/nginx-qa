@@ -158,6 +158,8 @@ SCREENSHOT_EXTENSIONS = {
 MAX_SCREENSHOT_SIZE = 25 * 1024 * 1024
 MAX_EVIDENCE_SIZE = 100 * 1024 * 1024
 MAX_PATCH_SIZE = 5 * 1024 * 1024
+PROJECT_STATE_PATCH_CACHE_MAX = 512
+project_state_patch_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
 PROJECT_MANAGER_PHONE = "0001"
 PROJECT_MANAGER_AGENT_ID = "agent-project-manager"
 PROJECT_MANAGER_AGENT_NAME = "Project Manager"
@@ -8148,6 +8150,284 @@ async def read_history(
         )
 
 
+def history_record_message_for_context(record: dict[str, Any]) -> str:
+    message = record.get("message")
+    if isinstance(message, str):
+        direct_message = message
+    elif message is None:
+        direct_message = ""
+    else:
+        direct_message = json.dumps(
+            message,
+            ensure_ascii=False,
+            indent=2,
+            default=str,
+        )
+    if direct_message.strip():
+        return direct_message
+
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    payload = metadata.get("cycle_event_payload")
+    if record.get("event") == "cycle_lifecycle_event" and isinstance(payload, dict):
+        event_type = str(
+            metadata.get("cycle_event_type") or "CYCLE_EVENT"
+        ).strip().upper()
+        return "\n".join(
+            [
+                f"EVENT: {event_type}",
+                "",
+                "PAYLOAD:",
+                json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            ]
+        )
+    return direct_message
+
+
+def history_record_revision_for_context(
+    record: dict[str, Any],
+) -> tuple[str, str]:
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    commit = str(
+        metadata.get("git_commit_short") or metadata.get("git_commit") or ""
+    ).strip()
+    if commit:
+        return "Commit", commit
+
+    payload = metadata.get("cycle_event_payload")
+    payload = payload if isinstance(payload, dict) else {}
+    artifact = payload.get("artifact")
+    artifact = artifact if isinstance(artifact, dict) else {}
+    artifact_ref = str(artifact.get("ref") or "").strip()
+    if artifact_ref:
+        return "Ref", artifact_ref
+    for candidate in [
+        artifact.get("artifact_id"),
+        artifact.get("path"),
+        *(artifact.get("paths") if isinstance(artifact.get("paths"), list) else []),
+    ]:
+        if candidate is not None and str(candidate).strip():
+            return "Artifact", str(candidate).strip()
+    cycle_id = str(metadata.get("cycle_id") or "").strip()
+    if record.get("event") == "cycle_lifecycle_event" and cycle_id:
+        return "Cycle", cycle_id
+    return "Commit", "no-commit"
+
+
+def format_history_record_for_context(record: dict[str, Any]) -> str:
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    revision_label, revision_value = history_record_revision_for_context(record)
+    project = str(metadata.get("project_name") or "no-project")
+    actor = " -> ".join(
+        str(value).strip()
+        for value in (metadata.get("sender"), metadata.get("receiver"))
+        if str(value or "").strip()
+    )
+    if not actor:
+        actor = str(
+            metadata.get("direction")
+            or record.get("route")
+            or record.get("queue")
+            or "unknown"
+        )
+    event_label = str(metadata.get("cycle_event_type") or record.get("event") or "")
+    timestamp = str(record.get("timestamp") or "")
+    message = history_record_message_for_context(record)
+    return (
+        f"[{timestamp}] [Project: {project}] "
+        f"[{revision_label}: {revision_value}] [{actor}] [{event_label}]\n"
+        f"{message}"
+    )
+
+
+def history_commit_info(record: dict[str, Any]) -> dict[str, str]:
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    full = str(
+        metadata.get("git_commit") or metadata.get("git_commit_short") or ""
+    ).strip()
+    short = str(metadata.get("git_commit_short") or full[:12]).strip()
+    return {"full": full, "short": short}
+
+
+def history_patch_block_header(
+    previous_commit: dict[str, str],
+    current_commit: dict[str, str],
+    git_address: str,
+    patch_data: dict[str, Any] | None = None,
+) -> str:
+    lines = [
+        "[PATCH BETWEEN COMMITS]",
+        f"From: {previous_commit.get('short') or previous_commit['full'][:12]}",
+        f"To: {current_commit.get('short') or current_commit['full'][:12]}",
+    ]
+    if git_address:
+        lines.append(f"Repository: {git_address}")
+    if patch_data and patch_data.get("source"):
+        lines.append(f"Source: {patch_data['source']}")
+    if patch_data and patch_data.get("patch_url"):
+        lines.append(f"Patch URL: {patch_data['patch_url']}")
+    return "\n".join(lines)
+
+
+def history_with_patches_context(
+    records: list[dict[str, Any]],
+    git_address: str,
+) -> dict[str, Any]:
+    sections: list[str] = []
+    timeline: list[dict[str, Any]] = []
+    patches: list[dict[str, Any]] = []
+    used_patch_keys: set[tuple[str, str, str]] = set()
+    previous_commit: dict[str, str] | None = None
+    patch_count = 0
+    patch_error_count = 0
+
+    for record in records:
+        current_commit = history_commit_info(record)
+        if (
+            previous_commit is not None
+            and current_commit["full"]
+            and previous_commit["full"].casefold()
+            != current_commit["full"].casefold()
+        ):
+            key = (
+                git_address,
+                previous_commit["full"].casefold(),
+                current_commit["full"].casefold(),
+            )
+            if key not in used_patch_keys:
+                used_patch_keys.add(key)
+                patch_entry: dict[str, Any] = {
+                    "type": "patch",
+                    "from_commit": deepcopy(previous_commit),
+                    "to_commit": deepcopy(current_commit),
+                    "git_address": git_address,
+                    "inserted_before_activity_id": record.get("id"),
+                }
+                try:
+                    if not git_address:
+                        raise ValueError("Git address is missing in project context")
+                    safe_from_commit = normalize_commit_ref(previous_commit["full"])
+                    safe_to_commit = normalize_commit_ref(current_commit["full"])
+                    cached_patch = project_state_patch_cache.get(key)
+                    if cached_patch is None:
+                        cached_patch = resolve_git_patch(
+                            git_address,
+                            safe_to_commit,
+                            safe_from_commit,
+                        )
+                        if len(project_state_patch_cache) >= PROJECT_STATE_PATCH_CACHE_MAX:
+                            project_state_patch_cache.pop(
+                                next(iter(project_state_patch_cache)),
+                                None,
+                            )
+                        project_state_patch_cache[key] = deepcopy(cached_patch)
+                    patch_data = deepcopy(cached_patch)
+                    patch_text = str(patch_data.get("patch") or "")
+                    patch_entry.update(
+                        {
+                            "status": "available",
+                            "source": patch_data.get("source"),
+                            "patch_url": patch_data.get("patch_url"),
+                            "local_repo": patch_data.get("local_repo"),
+                            "patch": patch_text,
+                        }
+                    )
+                    sections.append(
+                        "\n\n".join(
+                            [
+                                history_patch_block_header(
+                                    previous_commit,
+                                    current_commit,
+                                    git_address,
+                                    patch_data,
+                                ),
+                                patch_text,
+                            ]
+                        )
+                        + "\n[END PATCH]"
+                    )
+                    patch_count += 1
+                except Exception as exc:
+                    reason: Any = exc
+                    if isinstance(exc, HTTPException):
+                        reason = exc.detail
+                    if isinstance(reason, (dict, list)):
+                        reason = json.dumps(reason, ensure_ascii=False, default=str)
+                    reason_text = str(reason)
+                    patch_entry.update(
+                        {
+                            "status": "unavailable",
+                            "reason": reason_text,
+                            "patch": "",
+                        }
+                    )
+                    sections.append(
+                        history_patch_block_header(
+                            previous_commit,
+                            current_commit,
+                            git_address,
+                        )
+                        + "\nStatus: unavailable\n"
+                        + f"Reason: {reason_text}\n[END PATCH]"
+                    )
+                    patch_error_count += 1
+                patches.append(patch_entry)
+                timeline.append(deepcopy(patch_entry))
+
+        sections.append(format_history_record_for_context(record))
+        timeline.append(
+            {
+                "type": "activity",
+                "activity": deepcopy(record),
+            }
+        )
+        if current_commit["full"]:
+            previous_commit = current_commit
+
+    return {
+        "text": "\n\n---\n\n".join(sections),
+        "record_count": len(records),
+        "patch_count": patch_count,
+        "patch_error_count": patch_error_count,
+        "deduplicated_by_commit_pair": True,
+        "timeline": timeline,
+        "patches": patches,
+    }
+
+
+async def project_history_with_patches_context(
+    git_context_key: str,
+    git_address: str,
+    *,
+    limit: int = 10000,
+) -> dict[str, Any]:
+    records = await read_history(
+        limit=limit,
+        date_from="1970-01-01",
+        git_context=git_context_key,
+    )
+    return await asyncio.to_thread(
+        history_with_patches_context,
+        records,
+        git_address,
+    )
+
+
 def agent_history_direction(
     record: dict[str, Any],
     agent: dict[str, Any],
@@ -14998,7 +15278,10 @@ def render_index_v2() -> str:
         const dateText = savedAt ? formatLocalDateTime(savedAt) : "дата неизвестна";
         const sourceText = sprint.source_filename ? ` · файл: ${sprint.source_filename}` : "";
         const legacyText = sprint.legacy ? " · состояние до включения истории" : "";
-        const meta = `#${sprint.sequence} · ${dateText} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${sourceText}${legacyText}`;
+        const patchText = Number.isInteger(sprint.code_patch_count)
+          ? ` · code patches: ${sprint.code_patch_count}${sprint.code_patch_error_count ? ` (недоступно: ${sprint.code_patch_error_count})` : ""}`
+          : "";
+        const meta = `#${sprint.sequence} · ${dateText} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${patchText}${sourceText}${legacyText}`;
         return `<div class="sprint-history-item">
           <div>
             <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence}`)}<span class="sprint-history-badge${statusClass}">${statusText}</span></div>
@@ -19903,7 +20186,7 @@ def project_state_has_sprint_content(state: dict[str, Any]) -> bool:
 
 
 def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
-    return {
+    summary = {
         key: deepcopy(record.get(key))
         for key in (
             "id",
@@ -19921,6 +20204,18 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
             "legacy",
         )
     }
+    code_history = record.get("final_code_history")
+    summary["code_patch_count"] = (
+        int(code_history.get("patch_count") or 0)
+        if isinstance(code_history, dict)
+        else None
+    )
+    summary["code_patch_error_count"] = (
+        int(code_history.get("patch_error_count") or 0)
+        if isinstance(code_history, dict)
+        else None
+    )
+    return summary
 
 
 def record_project_sprint_import_file(
@@ -19932,6 +20227,7 @@ def record_project_sprint_import_file(
     source: str,
     source_filename: str,
     previous_state: dict[str, Any],
+    previous_code_history: dict[str, Any],
     current_state: dict[str, Any],
     assignment_mode: str,
     agent_count: int,
@@ -19962,6 +20258,7 @@ def record_project_sprint_import_file(
             current_record["status"] = "archived"
             current_record["archived_at"] = now
             current_record["final_state"] = deepcopy(previous_state)
+            current_record["final_code_history"] = deepcopy(previous_code_history)
         elif project_state_has_sprint_content(previous_state):
             legacy_sequence = max(
                 (int(record.get("sequence") or 0) for record in records),
@@ -19992,6 +20289,7 @@ def record_project_sprint_import_file(
                     "import_payload": None,
                     "initial_state": None,
                     "final_state": deepcopy(previous_state),
+                    "final_code_history": deepcopy(previous_code_history),
                 }
             )
 
@@ -20021,6 +20319,7 @@ def record_project_sprint_import_file(
             "import_payload": deepcopy(payload),
             "initial_state": deepcopy(current_state),
             "final_state": None,
+            "final_code_history": None,
         }
         records.append(new_record)
         project.update(
@@ -20054,6 +20353,22 @@ async def record_project_sprint_import(
     agent_count: int,
     task_count: int,
 ) -> dict[str, Any]:
+    previous_project = previous_state.get("project")
+    previous_git_address = str(
+        previous_project.get("git_address")
+        if isinstance(previous_project, dict)
+        else ""
+    ).strip()
+    previous_records = previous_state.get("recent_activity")
+    if not isinstance(previous_records, list):
+        previous_records = []
+    previous_code_history = previous_state.get("history_with_patches")
+    if not isinstance(previous_code_history, dict):
+        previous_code_history = await asyncio.to_thread(
+            history_with_patches_context,
+            previous_records,
+            previous_git_address,
+        )
     async with sprint_history_lock:
         return await asyncio.to_thread(
             record_project_sprint_import_file,
@@ -20064,6 +20379,7 @@ async def record_project_sprint_import(
             source=source,
             source_filename=source_filename,
             previous_state=previous_state,
+            previous_code_history=previous_code_history,
             current_state=current_state,
             assignment_mode=assignment_mode,
             agent_count=agent_count,
@@ -22120,6 +22436,11 @@ async def project_state_json(
         date_from="1970-01-01",
         git_context=snapshot["context_key"],
     )
+    history_with_patches = await asyncio.to_thread(
+        history_with_patches_context,
+        recent_activity,
+        str(snapshot["project"].get("git_address") or ""),
+    )
     pending_work: dict[str, list[dict[str, Any]]] = {}
     acquired: list[asyncio.Lock] = []
     try:
@@ -22151,6 +22472,18 @@ async def project_state_json(
         "agents": snapshot["agents"],
         "pending_work": pending_work,
         "recent_activity": recent_activity,
+        "history_with_patches": history_with_patches,
+        "activity_with_patches": history_with_patches["timeline"],
+        "code_patches": history_with_patches["patches"],
+        "code_patch_summary": {
+            "activity_count": history_with_patches["record_count"],
+            "unique_commit_transition_count": (
+                history_with_patches["patch_count"]
+                + history_with_patches["patch_error_count"]
+            ),
+            "available_patch_count": history_with_patches["patch_count"],
+            "unavailable_patch_count": history_with_patches["patch_error_count"],
+        },
     }
 
 
@@ -22895,7 +23228,14 @@ async def identify_sequential_agent_from_repository(
         port=request_port(request),
     )
     response = sequential_runtime_response(runtime, request)
-    response["project_state"] = await project_state_json(project_phone)
+    project_state = await project_state_json(project_phone)
+    response["communication"]["instructions"] += (
+        " Полная история сообщений и межкоммитные diff-блоки находятся в "
+        "project_state.activity_with_patches. Для одного commit patch не "
+        "повторяется; при смене commit patch расположен перед первым сообщением "
+        "нового commit. Сводка находится в project_state.code_patch_summary."
+    )
+    response["project_state"] = project_state
     response["project_state_url"] = (
         f"{str(request.base_url).rstrip('/')}"
         f"/api/v1/projects/{project_phone}/state.json"
@@ -22992,6 +23332,29 @@ async def download_project_sprint(
     runtime_state = record.get("final_state") or record.get("initial_state")
     if str(record.get("status") or "") == "current":
         runtime_state = await project_state_json(project_phone, history_limit=10000)
+    code_history = record.get("final_code_history")
+    if not isinstance(code_history, dict) and isinstance(runtime_state, dict):
+        runtime_code_history = runtime_state.get("history_with_patches")
+        if isinstance(runtime_code_history, dict):
+            code_history = runtime_code_history
+    if not isinstance(code_history, dict):
+        runtime_project = (
+            runtime_state.get("project")
+            if isinstance(runtime_state, dict)
+            and isinstance(runtime_state.get("project"), dict)
+            else {}
+        )
+        runtime_records = (
+            runtime_state.get("recent_activity")
+            if isinstance(runtime_state, dict)
+            and isinstance(runtime_state.get("recent_activity"), list)
+            else []
+        )
+        code_history = await asyncio.to_thread(
+            history_with_patches_context,
+            runtime_records,
+            str(runtime_project.get("git_address") or "").strip(),
+        )
     metadata = sprint_record_summary(record)
     archive = {
         "schema_version": 1,
@@ -23004,6 +23367,7 @@ async def download_project_sprint(
         "import_payload": deepcopy(record.get("import_payload")),
         "initial_state": deepcopy(record.get("initial_state")),
         "runtime_state": deepcopy(runtime_state),
+        "code_history": deepcopy(code_history),
     }
     sequence = int(record.get("sequence") or 0)
     filename = f"project-{project_phone}-sprint-{sequence:04d}.json"

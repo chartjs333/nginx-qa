@@ -6,6 +6,7 @@ import unittest
 import urllib.parse
 from collections import deque
 from pathlib import Path
+from unittest.mock import patch
 
 import main
 
@@ -89,6 +90,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "history_lock": main.history_lock,
             "sprint_history_lock": main.sprint_history_lock,
             "group_task_submission_lock": main.group_task_submission_lock,
+            "project_state_patch_cache": main.project_state_patch_cache,
             "queues": main.queues,
             "locks": main.locks,
         }
@@ -101,6 +103,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.history_lock = asyncio.Lock()
         main.sprint_history_lock = asyncio.Lock()
         main.group_task_submission_lock = asyncio.Lock()
+        main.project_state_patch_cache = {}
         main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
         main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
         self.original_telegram_env = {
@@ -305,6 +308,31 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(delivered_status, 200)
         self.assertIsInstance(delivered_body, dict)
 
+        for message, commit in (
+            ("Work at commit A.", "a" * 40),
+            ("More work at commit A.", "a" * 40),
+            ("Work at commit B.", "b" * 40),
+        ):
+            await main.append_history(
+                "agent_progress",
+                "worker-all",
+                message,
+                {
+                    "sender": "Sprint Agent",
+                    "receiver": "Project Manager",
+                    "from_phone": "2026",
+                    "to_phone": main.PROJECT_MANAGER_PHONE,
+                    "from_agent_id": "sprint-agent",
+                },
+                git_context={
+                    "project_name": "Actor Import Project",
+                    "git_context_key": self.PROJECT_CONTEXT,
+                    "git_address": "https://github.com/example/actor-import.git",
+                    "git_commit": commit,
+                    "git_commit_short": commit[:12],
+                },
+            )
+
         second_payload = {
             "project_id": self.PROJECT_PHONE,
             "git_address": "https://github.com/example/actor-import.git",
@@ -324,17 +352,35 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                 ],
             },
         }
-        second_status, second_body = await asgi_request(
-            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
-            method="POST",
-            payload=second_payload,
-            headers=[
-                (
-                    b"x-nginx-qa-sprint-filename",
-                    urllib.parse.quote("delta_sprint_02.json").encode("ascii"),
-                )
-            ],
-        )
+        patch_calls: list[tuple[str, str, str | None]] = []
+        original_resolve_git_patch = main.resolve_git_patch
+
+        def fake_resolve_git_patch(
+            git_address: str,
+            to_commit: str,
+            from_commit: str | None = None,
+        ) -> dict[str, str]:
+            patch_calls.append((git_address, to_commit, from_commit))
+            return {
+                "source": "test_git",
+                "patch": f"diff --git a/file.txt b/file.txt\n+{to_commit[:8]}",
+            }
+
+        main.resolve_git_patch = fake_resolve_git_patch
+        try:
+            second_status, second_body = await asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+                method="POST",
+                payload=second_payload,
+                headers=[
+                    (
+                        b"x-nginx-qa-sprint-filename",
+                        urllib.parse.quote("delta_sprint_02.json").encode("ascii"),
+                    )
+                ],
+            )
+        finally:
+            main.resolve_git_patch = original_resolve_git_patch
         self.assertEqual(second_status, 201)
         self.assertIsInstance(second_body, dict)
         assert isinstance(second_body, dict)
@@ -356,6 +402,9 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sprint_one["status"], "archived")
         self.assertEqual(sprint_two["status"], "current")
         self.assertEqual(sprint_one["source_filename"], "delta_sprint_01.json")
+        self.assertEqual(sprint_one["code_patch_count"], 1)
+        self.assertEqual(sprint_one["code_patch_error_count"], 0)
+        self.assertEqual(len(patch_calls), 1, patch_calls)
 
         download_status, archive = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/sprints/{sprint_one['id']}/download"
@@ -365,6 +414,16 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(archive, dict)
         self.assertEqual(archive["archive_type"], "nginx-qa-project-sprint")
         self.assertEqual(archive["import_payload"]["sprint"]["id"], "sprint-one")
+        self.assertEqual(archive["code_history"]["patch_count"], 1)
+        patch_entries = [
+            item
+            for item in archive["code_history"]["timeline"]
+            if item["type"] == "patch"
+        ]
+        self.assertEqual(len(patch_entries), 1)
+        self.assertEqual(patch_entries[0]["from_commit"]["full"], "a" * 40)
+        self.assertEqual(patch_entries[0]["to_commit"]["full"], "b" * 40)
+        self.assertIn("diff --git", patch_entries[0]["patch"])
         self.assertTrue(
             any(
                 record.get("message") == "Finish sprint one."
@@ -941,6 +1000,23 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(first_body["identity_reused"])
         self.assertTrue(first_body["execution_authorized"])
         self.assertFalse(first_body["requires_additional_confirmation"])
+        self.assertIn("activity_with_patches", first_body["project_state"])
+        self.assertGreaterEqual(
+            first_body["project_state"]["code_patch_summary"]["activity_count"],
+            1,
+        )
+        self.assertTrue(
+            any(
+                entry.get("type") == "activity"
+                and "Complete sequential task A"
+                in str(entry.get("activity", {}).get("message") or "")
+                for entry in first_body["project_state"]["activity_with_patches"]
+            )
+        )
+        self.assertIn(
+            "project_state.activity_with_patches",
+            first_body["communication"]["instructions"],
+        )
         self.assertEqual(len(main.queues["worker-all"]), 0)
 
         repeated_first_status, repeated_first_body = await asgi_request(
@@ -1040,6 +1116,84 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             repeated_second_body["agent"]["id"],
             "sequential-role-b",
+        )
+
+    def test_sequential_history_inserts_each_commit_patch_once(self) -> None:
+        commits = {
+            "one": "1" * 40,
+            "two": "2" * 40,
+            "three": "3" * 40,
+        }
+        records = [
+            {
+                "id": f"record-{index}",
+                "timestamp": f"2026-09-18T10:0{index}:00+00:00",
+                "event": "message",
+                "queue": "worker-all",
+                "message": message,
+                "metadata": {
+                    "project_name": "Patch Project",
+                    "git_commit": commits[commit_name],
+                    "git_commit_short": commits[commit_name][:12],
+                    "sender": "Agent A",
+                    "receiver": "Agent B",
+                },
+            }
+            for index, (commit_name, message) in enumerate(
+                [
+                    ("one", "Message at commit one."),
+                    ("one", "Second message at commit one."),
+                    ("two", "First message at commit two."),
+                    ("two", "Second message at commit two."),
+                    ("three", "Message at commit three."),
+                ]
+            )
+        ]
+        patch_calls: list[tuple[str, str]] = []
+
+        def fake_resolve_git_patch(
+            git_address: str,
+            to_commit: str,
+            from_commit: str | None = None,
+        ) -> dict[str, str]:
+            self.assertEqual(
+                git_address,
+                "https://github.com/example/actor-import.git",
+            )
+            assert from_commit is not None
+            patch_calls.append((from_commit, to_commit))
+            return {
+                "source": "test",
+                "patch": f"diff {from_commit[:4]}..{to_commit[:4]}",
+            }
+
+        with patch.object(main, "resolve_git_patch", fake_resolve_git_patch):
+            result = main.history_with_patches_context(
+                records,
+                "https://github.com/example/actor-import.git",
+            )
+
+        self.assertEqual(
+            patch_calls,
+            [
+                (commits["one"], commits["two"]),
+                (commits["two"], commits["three"]),
+            ],
+        )
+        self.assertEqual(result["record_count"], 5)
+        self.assertEqual(result["patch_count"], 2)
+        self.assertEqual(result["patch_error_count"], 0)
+        self.assertEqual(
+            [entry["type"] for entry in result["timeline"]],
+            ["activity", "activity", "patch", "activity", "activity", "patch", "activity"],
+        )
+        self.assertLess(
+            result["text"].index("diff 1111..2222"),
+            result["text"].index("First message at commit two."),
+        )
+        self.assertLess(
+            result["text"].index("diff 2222..3333"),
+            result["text"].index("Message at commit three."),
         )
 
     async def _test_legacy_sequential_whoami_moves_to_next_role_without_parallel_work(self) -> None:
