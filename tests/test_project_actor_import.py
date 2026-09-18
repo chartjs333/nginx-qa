@@ -531,6 +531,185 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Second Sprint", primary_titles)
         self.assertEqual(second_titles, {"Second Sprint"})
 
+    async def test_parallel_project_queues_and_cleanup_are_isolated(self) -> None:
+        second_context = "github.com/example/second-project"
+        second_phone = "9009"
+        second_project = {
+            "project_name": "Second Project",
+            "git_address": "https://github.com/example/second-project.git",
+            "git_context_key": second_context,
+            "project_phone": second_phone,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config = main.read_git_config_file()
+        config[main.PROJECTS_KEY][second_context] = second_project
+        config[main.PHONE_GIT_CONTEXTS_KEY][second_phone] = {
+            **second_project,
+            "phone": second_phone,
+        }
+        main.write_git_config_file(config)
+
+        async def post_message(project_phone: str, message: str) -> tuple[int, object]:
+            return await asgi_request(
+                f"/worker/all/{project_phone}",
+                method="POST",
+                payload={
+                    "message": message,
+                    "sender": "Project Manager",
+                    "receiver": "Shared logical recipient",
+                    "from_phone": main.PROJECT_MANAGER_PHONE,
+                    "to_phone": "2999",
+                },
+            )
+
+        post_results = await asyncio.gather(
+            post_message(self.PROJECT_PHONE, "Primary project message."),
+            post_message(second_phone, "Second project message."),
+        )
+        self.assertEqual([result[0] for result in post_results], [201, 201])
+        self.assertEqual(len(main.queues["worker-all"]), 2)
+
+        primary_result, second_result = await asyncio.gather(
+            asgi_request(
+                f"/worker/all/{self.PROJECT_PHONE}?to_phone=2999"
+            ),
+            asgi_request(f"/worker/all/{second_phone}?to_phone=2999"),
+        )
+        self.assertEqual(primary_result[0], 200)
+        self.assertEqual(second_result[0], 200)
+        self.assertEqual(primary_result[1]["message"], "Primary project message.")
+        self.assertEqual(second_result[1]["message"], "Second project message.")
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+
+        await asyncio.gather(
+            post_message(self.PROJECT_PHONE, "Primary cleanup candidate."),
+            post_message(second_phone, "Second cleanup survivor."),
+        )
+        removed = await main.remove_project_actor_queue_items(
+            {
+                "project_phone": self.PROJECT_PHONE,
+                "git_context_key": self.PROJECT_CONTEXT,
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+            set(),
+            {"2999"},
+            action="test_project_scoped_cleanup",
+        )
+        self.assertEqual(len(removed), 1)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        remaining = main.queues["worker-all"][0]
+        self.assertEqual(
+            main.queue_item_message(remaining),
+            "Second cleanup survivor.",
+        )
+        self.assertEqual(
+            main.queue_item_metadata(remaining)["git_context_key"],
+            second_context,
+        )
+
+    async def test_sequential_projects_dequeue_their_own_tasks_concurrently(self) -> None:
+        second_context = "github.com/example/second-project"
+        second_phone = "9009"
+        second_project = {
+            "project_name": "Second Project",
+            "git_address": "https://github.com/example/second-project.git",
+            "git_context_key": second_context,
+            "project_phone": second_phone,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config = main.read_git_config_file()
+        config[main.PROJECTS_KEY][second_context] = second_project
+        config[main.PHONE_GIT_CONTEXTS_KEY][second_phone] = {
+            **second_project,
+            "phone": second_phone,
+        }
+        main.write_git_config_file(config)
+
+        imports = await asyncio.gather(
+            asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+                method="POST",
+                payload={
+                    "project_id": self.PROJECT_PHONE,
+                    "git_address": "https://github.com/example/actor-import.git",
+                    "agents": {
+                        "overwrite": True,
+                        "assignment_mode": "sequential",
+                        "items": [
+                            {
+                                "id": "primary-sequential-agent",
+                                "name": "Primary Sequential Agent",
+                                "phone": "2021",
+                                "tasks": ["Primary sequential task."],
+                            }
+                        ],
+                    },
+                },
+            ),
+            asgi_request(
+                f"/api/v1/projects/{second_phone}/agents/import",
+                method="POST",
+                payload={
+                    "project_id": second_phone,
+                    "git_address": second_project["git_address"],
+                    "agents": {
+                        "overwrite": True,
+                        "assignment_mode": "sequential",
+                        "items": [
+                            {
+                                "id": "second-sequential-agent",
+                                "name": "Second Sequential Agent",
+                                "phone": "2022",
+                                "tasks": ["Second sequential task."],
+                            }
+                        ],
+                    },
+                },
+            ),
+        )
+        self.assertEqual([result[0] for result in imports], [201, 201])
+        self.assertEqual(len(main.queues["worker-all"]), 2)
+
+        primary_identity, second_identity = await asyncio.gather(
+            asgi_request(
+                "/api/v1/agents/whoami/repository",
+                method="POST",
+                payload={
+                    "git_address": "https://github.com/example/actor-import.git"
+                },
+            ),
+            asgi_request(
+                "/api/v1/agents/whoami/repository",
+                method="POST",
+                payload={"git_address": second_project["git_address"]},
+            ),
+        )
+        self.assertEqual(primary_identity[0], 200)
+        self.assertEqual(second_identity[0], 200)
+        self.assertEqual(
+            primary_identity[1]["agent"]["id"],
+            "primary-sequential-agent",
+        )
+        self.assertEqual(
+            second_identity[1]["agent"]["id"],
+            "second-sequential-agent",
+        )
+        self.assertEqual(primary_identity[1]["project_phone"], self.PROJECT_PHONE)
+        self.assertEqual(second_identity[1]["project_phone"], second_phone)
+        self.assertIn(
+            "Primary sequential task.",
+            primary_identity[1]["active_task"]["message"],
+        )
+        self.assertIn(
+            "Second sequential task.",
+            second_identity[1]["active_task"]["message"],
+        )
+        self.assertEqual(len(main.queues["worker-all"]), 0)
+
     async def test_import_route_rejects_json_for_another_project(self) -> None:
         status_code, body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
