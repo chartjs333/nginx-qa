@@ -7497,6 +7497,18 @@ def local_repo_for_remote(git_address: str) -> Path | None:
     return None
 
 
+def resolve_local_git_reference(git_address: str) -> dict[str, Any]:
+    """Resolve HEAD without contacting a remote Git server."""
+    address = git_address.strip()
+    if not address:
+        return {}
+
+    local_path = Path(address)
+    if not local_path.exists():
+        return {}
+    return resolve_git_reference(str(local_path))
+
+
 def resolve_git_patch(
     git_address: str,
     to_commit: str,
@@ -8415,12 +8427,27 @@ async def project_history_with_patches_context(
     git_address: str,
     *,
     limit: int = 10000,
+    assignment_id: str | None = None,
 ) -> dict[str, Any]:
     records = await read_history(
         limit=limit,
         date_from="1970-01-01",
         git_context=git_context_key,
     )
+    if assignment_id:
+        records = [
+            record
+            for record in records
+            if str(
+                (
+                    record.get("metadata")
+                    if isinstance(record.get("metadata"), dict)
+                    else {}
+                ).get("assignment_id")
+                or ""
+            ).strip()
+            == assignment_id
+        ]
     return await asyncio.to_thread(
         history_with_patches_context,
         records,
@@ -19827,6 +19854,22 @@ async def enqueue_sequential_agent_node(
             )
             for review in reviews
         ] or ["- Предыдущих решений нет."]
+        review_context = (
+            pending_transition.get("review_context")
+            if isinstance(pending_transition.get("review_context"), dict)
+            else {}
+        )
+        review_context_text = str(review_context.get("text") or "").strip()
+        review_context_lines = [
+            "История проекта и изменения кода:",
+            (
+                f"Сообщений: {int(review_context.get('record_count') or 0)}; "
+                f"patch-блоков: {int(review_context.get('patch_count') or 0)}; "
+                f"недоступных patch-блоков: "
+                f"{int(review_context.get('patch_error_count') or 0)}."
+            ),
+            review_context_text or "История с commit-метаданными пока отсутствует.",
+        ]
         graph_lines = [
             f"- {node.get('id')} ({node.get('agent_name') or node.get('agent_id')}): "
             + ", ".join(
@@ -19871,6 +19914,7 @@ async def enqueue_sequential_agent_node(
                 *source_task_lines,
                 "Результат исходного агента:",
                 str(pending_transition.get("result") or "Результат не приложен."),
+                *review_context_lines,
                 "Полный граф проекта:",
                 *graph_lines,
                 "Решения предыдущих ревьюверов:",
@@ -19919,6 +19963,11 @@ async def enqueue_sequential_agent_node(
                 "assignment_id": assignment_id,
                 "status": allowed_outcomes[0] if allowed_outcomes else "DONE",
                 "result": "Описание выполненной работы и проверок",
+                "from_commit": (
+                    queue_context.get("git_commit")
+                    or "<commit до начала работы>"
+                ),
+                "git_commit": "<commit с выполненной работой>",
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -19944,6 +19993,10 @@ async def enqueue_sequential_agent_node(
                     "После выполнения отправьте результат в текущий whoami endpoint. "
                     "Система выдаст две последовательные роли ревьюверов и применит "
                     "переход только после двух APPROVE."
+                ),
+                (
+                    "Для удалённого репозитория передайте from_commit и git_commit; "
+                    "для локального клона HEAD определяется автоматически."
                 ),
                 f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
                 completion_example,
@@ -19973,6 +20026,7 @@ async def enqueue_sequential_agent_node(
             "to_agent_id": agent_id,
             "logical_to_phone": logical_agent_phone,
             "to_agent_git_branch": git_branch,
+            "from_commit": queue_context.get("git_commit"),
             "graph_node_index": node_index,
             "graph_node_count": node_count,
             "graph_node_id": current_node_id,
@@ -22130,6 +22184,40 @@ def mark_project_agent_alive_transaction(
             }
 
 
+def attach_transition_review_context_transaction(
+    project_id: str,
+    transition_id: str,
+    review_context: dict[str, Any],
+    seen_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, _, project_entry, _ = project_for_group_api(config, project_id)
+        raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
+        pending_transition = state.get("pending_transition")
+        if not isinstance(pending_transition, dict) or str(
+            pending_transition.get("transition_id") or ""
+        ) != transition_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="The transition awaiting review changed before context was attached",
+            )
+        if not isinstance(pending_transition.get("review_context"), dict):
+            pending_transition["review_context"] = deepcopy(review_context)
+            state["pending_transition"] = pending_transition
+            state["updated_at"] = seen_at
+            state["revision"] = int(state.get("revision") or 0) + 1
+            project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+            project_entry["updated_at"] = seen_at
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            write_git_config_file(config)
+        return deepcopy(state)
+
+
 async def identify_sequential_project_agent(
     project_id: str,
     requested_phone: str,
@@ -22143,6 +22231,8 @@ async def identify_sequential_project_agent(
     identity_payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     seen_at = utc_now()
+    submitted_from_commit = ""
+    submitted_git_commit = ""
     if isinstance(identity_payload, dict):
         submitted_outcome = str(
             identity_payload.get("outcome")
@@ -22161,10 +22251,25 @@ async def identify_sequential_project_agent(
             or expected_assignment_id
             or ""
         )
+        submitted_from_commit = str(
+            identity_payload.get("from_commit")
+            or identity_payload.get("base_commit")
+            or ""
+        ).strip()
+        submitted_git_commit = str(
+            identity_payload.get("git_commit")
+            or identity_payload.get("commit")
+            or identity_payload.get("git_commit_short")
+            or ""
+        ).strip()
     submitted_outcome = submitted_outcome.strip().upper()
     submitted_feedback = submitted_feedback.strip()
     submitted_result = submitted_result.strip()
     expected_assignment_id = expected_assignment_id.strip()
+    if submitted_from_commit:
+        submitted_from_commit = normalize_commit_ref(submitted_from_commit)
+    if submitted_git_commit:
+        submitted_git_commit = normalize_commit_ref(submitted_git_commit)
     if len(submitted_feedback) > 20000 or len(submitted_result) > 100000:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
@@ -22185,6 +22290,27 @@ async def identify_sequential_project_agent(
             expected_assignment_id,
         )
         completed_agent = result.get("completed_agent")
+        completed_assignment = result.get("completed_assignment") or {}
+        graph_node_completed = (
+            isinstance(completed_assignment, dict)
+            and completed_assignment.get("kind") == "graph_node"
+        )
+        completion_git_context = deepcopy(result["queue_context"])
+        if submitted_git_commit:
+            completion_git_context.update(
+                {
+                    "git_commit": submitted_git_commit,
+                    "git_commit_short": submitted_git_commit[:12],
+                }
+            )
+        elif isinstance(completed_agent, dict) and graph_node_completed:
+            local_git_reference = await asyncio.to_thread(
+                resolve_local_git_reference,
+                str(completion_git_context.get("git_address") or ""),
+            )
+            if local_git_reference.get("git_commit"):
+                completion_git_context.update(local_git_reference)
+        result["queue_context"] = completion_git_context
         removed_tasks: list[dict[str, Any]] = []
         if isinstance(completed_agent, dict):
             completed_id = str(completed_agent.get("id") or "").strip()
@@ -22195,10 +22321,34 @@ async def identify_sequential_project_agent(
                 {completed_phone} if completed_phone else set(),
                 action="removed_by_sequential_assignment_completion",
             )
+            if graph_node_completed and submitted_from_commit:
+                await append_history(
+                    "agent_assignment_base_commit",
+                    "worker-all",
+                    f"Начальный commit задания: {submitted_from_commit}",
+                    {
+                        "submitted_via": "agent_whoami",
+                        "action": "sequential_role_base_commit",
+                        "sender": completed_agent.get("name"),
+                        "receiver": completed_agent.get("name"),
+                        "from_phone": completed_phone,
+                        "to_phone": completed_phone,
+                        "from_agent_id": completed_id,
+                        "to_agent_id": completed_id,
+                        "project_phone": result["project_phone"],
+                        "assignment_id": completed_assignment.get("assignment_id"),
+                    },
+                    request_port(request),
+                    {
+                        **result["queue_context"],
+                        "git_commit": submitted_from_commit,
+                        "git_commit_short": submitted_from_commit[:12],
+                    },
+                )
             await append_history(
                 "agent_assignment_completed",
                 "worker-all",
-                request_message or "Задание выполнено. Кто я?",
+                submitted_result or request_message or "Задание выполнено. Кто я?",
                 {
                     "submitted_via": "agent_whoami",
                     "action": "sequential_role_completed",
@@ -22212,11 +22362,50 @@ async def identify_sequential_project_agent(
                     "assignment_id": (
                         result.get("completed_assignment") or {}
                     ).get("assignment_id"),
+                    "outcome": submitted_outcome,
+                    "result": submitted_result,
                     "status": "COMPLETED",
                 },
                 request_port(request),
-                result["queue_context"],
+                completion_git_context,
             )
+            pending_transition = (result.get("assignment") or {}).get(
+                "pending_transition"
+            )
+            if graph_node_completed and isinstance(pending_transition, dict):
+                review_context = await project_history_with_patches_context(
+                    result["context_key"],
+                    str(result["project"].get("git_address") or ""),
+                    assignment_id=str(
+                        completed_assignment.get("assignment_id") or ""
+                    ).strip()
+                    or None,
+                )
+                review_context.update(
+                    {
+                        "schema_version": 1,
+                        "generated_at": seen_at,
+                        "semantics": (
+                            "A patch is inserted before the first message at a "
+                            "different commit; identical commit pairs are not repeated."
+                        ),
+                        "submission": {
+                            "assignment_id": completed_assignment.get(
+                                "assignment_id"
+                            ),
+                            "from_commit": submitted_from_commit or None,
+                            "git_commit": completion_git_context.get("git_commit"),
+                        },
+                    }
+                )
+                updated_assignment = await run_group_write_transaction(
+                    attach_transition_review_context_transaction,
+                    project_id,
+                    str(pending_transition.get("transition_id") or ""),
+                    review_context,
+                    seen_at,
+                )
+                result["assignment"] = updated_assignment
 
         agent = result.get("agent")
         if not isinstance(agent, dict):
@@ -23598,6 +23787,7 @@ async def identify_project_agent(
                 expected_assignment_id=str(
                     identity_payload.get("assignment_id") or ""
                 ),
+                identity_payload=identity_payload,
             )
             response["project_state"] = await project_state_json(project_id)
             response["project_state_url"] = (

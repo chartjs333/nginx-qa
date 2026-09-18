@@ -1425,21 +1425,58 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(node_body["agent"]["id"], "graph-analyst")
         node_assignment_id = node_body["active_task"]["metadata"]["assignment_id"]
 
-        first_review_status, first_review = await asgi_request(
-            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
-            method="POST",
-            payload={
-                "assignment_id": node_assignment_id,
-                "status": "DONE",
-                "result": "Analysis finished.",
-            },
-        )
+        from_commit = "a" * 40
+        to_commit = "b" * 40
+        patch_calls: list[tuple[str, str, str | None]] = []
+
+        def fake_resolve_git_patch(
+            git_address: str,
+            target_commit: str,
+            base_commit: str | None = None,
+        ) -> dict[str, str]:
+            patch_calls.append((git_address, target_commit, base_commit))
+            return {
+                "source": "test_git",
+                "patch": "diff --git a/analysis.txt b/analysis.txt\n+finished",
+            }
+
+        with patch.object(main, "resolve_git_patch", fake_resolve_git_patch):
+            first_review_status, first_review = await asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2153/whoami",
+                method="POST",
+                payload={
+                    "assignment_id": node_assignment_id,
+                    "status": "DONE",
+                    "result": "Analysis finished.",
+                    "from_commit": from_commit,
+                    "git_commit": to_commit,
+                },
+            )
         self.assertEqual(first_review_status, 200)
         self.assertIsInstance(first_review, dict)
         assert isinstance(first_review, dict)
         self.assertEqual(first_review["agent"]["id"], "reviewer-one")
         self.assertEqual(first_review["assignment"]["phase"], "review")
+        self.assertEqual(
+            patch_calls,
+            [
+                (
+                    "https://github.com/example/actor-import.git",
+                    to_commit,
+                    from_commit,
+                )
+            ],
+        )
+        review_context = first_review["assignment"]["pending_transition"][
+            "review_context"
+        ]
+        self.assertEqual(review_context["patch_count"], 1)
+        self.assertIn("diff --git", review_context["text"])
         self.assertEqual(len(main.queues["worker-all"]), 1, first_review)
+        self.assertIn(
+            "diff --git a/analysis.txt b/analysis.txt",
+            main.queue_item_message(main.queues["worker-all"][0]),
+        )
 
         reviewer_status, reviewer_body = await asgi_request(
             "/api/v1/agents/whoami/repository",

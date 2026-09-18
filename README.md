@@ -212,12 +212,18 @@ Submit a node result to the `whoami_endpoint` from the active queue item:
 {
   "assignment_id": "value-from-active-task-metadata",
   "status": "DONE",
-  "result": "Implementation and verification evidence"
+  "result": "Implementation and verification evidence",
+  "from_commit": "commit checked out when work started",
+  "git_commit": "commit containing the completed work"
 }
 ```
 
 The allowed status values are the keys from that node's `transitions`, for
-example `DONE`, `PASS`, or `FAIL`. Each reviewer uses the same endpoint shape:
+example `DONE`, `PASS`, or `FAIL`. When the two commit hashes are supplied, the
+service inserts their Git diff into the stored transition context and into the
+task sent to both reviewers. For a locally available repository the final HEAD
+can be detected automatically, but supplying both hashes is recommended for a
+remote repository. Each reviewer uses the same endpoint shape:
 
 ```json
 {
