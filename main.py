@@ -4049,6 +4049,42 @@ def project_actor_mutation_transaction(
                 config,
                 project_id,
             )
+            expected_context_key = normalize_project_context_reference(
+                options.get("expected_git_context_key")
+            )
+            if expected_context_key and context_key != expected_context_key:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "project_context_changed",
+                        "message": (
+                            "The project Git context changed after the JSON was "
+                            "validated; import was cancelled"
+                        ),
+                        "expected_git_context_key": expected_context_key,
+                        "actual_git_context_key": context_key,
+                    },
+                )
+            expected_repository_key = str(
+                options.get("expected_repository_key") or ""
+            ).strip()
+            actual_repository_key = project_repository_key_for_context(context)
+            if (
+                expected_repository_key
+                and actual_repository_key != expected_repository_key
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "project_repository_changed",
+                        "message": (
+                            "The project Git repository changed after the JSON was "
+                            "validated; import was cancelled"
+                        ),
+                        "expected_repository_key": expected_repository_key,
+                        "actual_repository_key": actual_repository_key,
+                    },
+                )
             project_phone = normalize_project_phone(project_entry.get("project_phone"))
             phone_contexts = phone_git_contexts_from_config(config)
             previous_agents = read_agents_file()
@@ -12656,7 +12692,7 @@ def render_index_v2() -> str:
               <button class="danger" id="deleteAllProjectActorsButton" type="button">Удалить всех агентов</button>
             </div>
           </div>
-          <div class="subtle">Для полной замены укажите в JSON <code>agents.overwrite: true</code>. Каждому агенту автоматически добавляются его Git-ветка, адресная книга проекта и инструкция обмена сообщениями.</div>
+          <div class="subtle">JSON должен содержать <code>project_id</code>/<code>project_phone</code>, <code>git_context_key</code> или <code>git_address</code>; сервер сверяет проект до любых изменений. Для полной замены укажите <code>agents.overwrite: true</code>. Каждому агенту автоматически добавляются его Git-ветка, адресная книга проекта и инструкция обмена сообщениями.</div>
           <div class="subtle agent-project-meta" id="agentProjectStatus"></div>
           <div class="sprint-history-panel">
             <div class="sprint-history-head">
@@ -19544,6 +19580,11 @@ async def _dequeue_phone_channel_unlocked(
         )
 
     queue_meta = queue_definition(queue_name)
+    target_context_key = (
+        git_context_key_from_metadata(git_context)
+        if isinstance(git_context, dict)
+        else ""
+    )
     delivered_item: Any | None = None
     async with locks[queue_name]:
         kept_items: deque[Any] = deque()
@@ -19552,6 +19593,10 @@ async def _dequeue_phone_channel_unlocked(
             if (
                 delivered_item is None
                 and phone_channel_item_matches(item, conversation_phone, to_phone)
+                and (
+                    not target_context_key
+                    or queue_item_matches_git_context(item, target_context_key)
+                )
             ):
                 delivered_item = item
                 continue
@@ -20546,9 +20591,13 @@ async def import_project_actors_data(
     source_filename: str = "",
     port: int | None = None,
     activate_sequential: bool = True,
+    expected_git_context_key: str = "",
+    expected_repository_key: str = "",
 ) -> dict[str, Any]:
     options = actor_import_options(payload)
     options["source"] = source
+    options["expected_git_context_key"] = expected_git_context_key
+    options["expected_repository_key"] = expected_repository_key
     async with group_task_submission_lock:
         previous_state = await project_state_json(project_id, history_limit=10000)
         result = await run_group_write_transaction(
@@ -20948,6 +20997,20 @@ def actor_import_reference_value(payload: dict[str, Any], key: str) -> Any:
         if isinstance(section, dict) and key in section:
             return section.get(key)
     return None
+
+
+def actor_import_reference_items(
+    payload: dict[str, Any],
+    key: str,
+) -> list[tuple[str, Any]]:
+    references: list[tuple[str, Any]] = []
+    if key in payload:
+        references.append((key, payload.get(key)))
+    for section_name in ("agents", "actors"):
+        section = payload.get(section_name)
+        if isinstance(section, dict) and key in section:
+            references.append((f"{section_name}.{key}", section.get(key)))
+    return references
 
 
 async def project_phone_for_actor_import(
@@ -23701,32 +23764,118 @@ async def ensure_actor_import_matches_route_project(
     project_id: str,
     payload: Any,
     current_port: int | None,
-) -> None:
+) -> dict[str, str]:
     if not isinstance(payload, dict):
-        return
-    has_project_reference = any(
-        actor_import_reference_value(payload, key) is not None
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+
+    reference_items = {
+        key: actor_import_reference_items(payload, key)
         for key in ("project_id", "project_phone", "git_address", "git_context_key")
-    )
-    if not has_project_reference:
-        return
+    }
+    if not any(reference_items.values()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "project_reference_required",
+                "message": (
+                    "Agent JSON must identify its project with project_id/"
+                    "project_phone, git_context_key, or git_address"
+                ),
+            },
+        )
+
     config = await read_git_config()
-    _, _, project_entry, _ = project_for_group_api(config, project_id)
+    _, route_context_key, project_entry, route_context = project_for_group_api(
+        config,
+        project_id,
+    )
     route_phone = normalize_project_phone(project_entry.get("project_phone"))
-    referenced_phone = await project_phone_for_actor_import(payload, current_port)
-    if referenced_phone != route_phone:
+    route_repository_key = project_repository_key_for_context(route_context)
+
+    def mismatch(field: str, supplied: Any) -> None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
                 "error": "project_reference_mismatch",
                 "message": (
-                    "The JSON project reference does not match the project selected "
-                    "in the import URL"
+                    f"JSON field {field} does not match the project selected in "
+                    "the import URL"
                 ),
                 "route_project_phone": route_phone,
-                "json_project_phone": referenced_phone,
+                "route_git_context_key": route_context_key,
+                "route_repository_key": route_repository_key,
+                "json_field": field,
+                "json_value": supplied,
             },
         )
+
+    has_unique_project_reference = False
+    for key in ("project_id", "project_phone"):
+        for field, supplied in reference_items[key]:
+            supplied_phone = normalize_project_phone(supplied)
+            if not supplied_phone:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "invalid_project_reference",
+                        "field": field,
+                        "message": "Project phone must be a registered four-digit value",
+                    },
+                )
+            if supplied_phone != route_phone:
+                mismatch(field, supplied)
+            has_unique_project_reference = True
+
+    for field, supplied in reference_items["git_address"]:
+        _, supplied_repository_key = normalize_project_git_address(supplied)
+        if supplied_repository_key != route_repository_key:
+            mismatch(field, supplied)
+
+    for field, supplied in reference_items["git_context_key"]:
+        if not isinstance(supplied, str) or not supplied.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "invalid_project_reference",
+                    "field": field,
+                    "message": "git_context_key must be a non-empty string",
+                },
+            )
+        supplied_context_key = normalize_project_context_reference(supplied)
+        if supplied_context_key != route_context_key:
+            mismatch(field, supplied)
+        has_unique_project_reference = True
+
+    if not has_unique_project_reference:
+        matching_contexts = [
+            context
+            for context in configured_git_contexts_from_config(config, current_port)
+            if project_repository_key_for_context(context) == route_repository_key
+        ]
+        if len(matching_contexts) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "ambiguous_project_reference",
+                    "message": (
+                        "git_address identifies a repository used by several projects; "
+                        "add project_id/project_phone or exact git_context_key"
+                    ),
+                    "candidates": [
+                        public_project_context(context)
+                        for context in matching_contexts
+                    ],
+                },
+            )
+
+    return {
+        "project_phone": route_phone,
+        "git_context_key": route_context_key,
+        "repository_key": route_repository_key,
+    }
 
 
 @app.post(
@@ -23742,7 +23891,7 @@ async def import_project_actors(
     request: Request,
 ) -> dict[str, Any]:
     payload = await read_message(request)
-    await ensure_actor_import_matches_route_project(
+    validated_project = await ensure_actor_import_matches_route_project(
         project_id,
         payload,
         request_port(request),
@@ -23756,6 +23905,8 @@ async def import_project_actors(
         source_filename=source_filename,
         port=request_port(request),
         activate_sequential=True,
+        expected_git_context_key=validated_project["git_context_key"],
+        expected_repository_key=validated_project["repository_key"],
     )
 
 
@@ -24047,6 +24198,11 @@ async def telegram_actor_import_for_mode(
         payload,
         request_port(request),
     )
+    validated_project = await ensure_actor_import_matches_route_project(
+        project_id,
+        payload,
+        request_port(request),
+    )
     document = message.get("document") if isinstance(message, dict) else None
     source_filename = (
         str(document.get("file_name") or "").strip()
@@ -24060,6 +24216,8 @@ async def telegram_actor_import_for_mode(
         source_filename=source_filename or "telegram-message.json",
         port=request_port(request),
         activate_sequential=assignment_mode == "sequential",
+        expected_git_context_key=validated_project["git_context_key"],
+        expected_repository_key=validated_project["repository_key"],
     )
     await asyncio.to_thread(send_telegram_import_reply, message, result)
     return {"ok": True, **result}

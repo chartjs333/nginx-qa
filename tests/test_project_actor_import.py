@@ -176,6 +176,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_overwrite_import_replaces_project_actors_and_queues_tasks(self) -> None:
         payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
             "actors": {
                 "overwrite": True,
                 "items": [
@@ -224,6 +226,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(main.queues["worker-all"]), 1)
         self.assertEqual(len(main.queues["tester-all"]), 1)
 
+        wrong_project_item = main.make_queue_item(
+            "Message from another Git project.",
+            {
+                "conversation_phone": self.PROJECT_PHONE,
+                "from_phone": "2998",
+                "to_phone": "2021",
+                "phone_channel": "worker-all",
+                "git_context_key": "github.com/example/other-project",
+                "git_address": "https://github.com/example/other-project.git",
+            },
+        )
+        main.queues["worker-all"].appendleft(wrong_project_item)
+
         poll_status, poll_body = await asgi_request(
             f"/worker/all/{self.PROJECT_PHONE}?to_phone=2021"
         )
@@ -240,11 +255,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             poll_body["metadata"]["to_agent_profile_endpoint"],
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2021",
         )
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(
+            main.queue_item_message(main.queues["worker-all"][0]),
+            "Message from another Git project.",
+        )
+        main.queues["worker-all"].popleft()
 
         second_status, second_body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "actors": {
                     "overwrite": True,
                     "items": [
@@ -527,11 +550,77 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(main.sprint_history_path.exists())
         self.assertIn("old-project-actor", {agent["id"] for agent in main.read_agents_file()})
 
+    async def test_import_route_requires_a_json_project_reference(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "agents": {
+                    "overwrite": True,
+                    "items": [{"name": "Unscoped Agent"}],
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 400)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["detail"]["error"], "project_reference_required")
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertFalse(main.sprint_history_path.exists())
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_import_route_rejects_mixed_git_project_references_atomically(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        queued = main.make_queue_item(
+            "Existing Delta task.",
+            {
+                "conversation_phone": self.PROJECT_PHONE,
+                "from_phone": main.PROJECT_MANAGER_PHONE,
+                "to_phone": "2010",
+                "to_agent_id": "old-project-actor",
+                "phone_channel": "worker-all",
+                "git_context_key": self.PROJECT_CONTEXT,
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        main.queues["worker-all"].append(queued)
+
+        status_code, body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
+                "agents": {
+                    "git_address": "https://github.com/example/other-project.git",
+                    "overwrite": True,
+                    "items": [{"name": "Wrong Repository Agent"}],
+                },
+            },
+        )
+
+        self.assertEqual(status_code, 409)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(body["detail"]["error"], "project_reference_mismatch")
+        self.assertEqual(body["detail"]["json_field"], "agents.git_address")
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(
+            main.queue_item_message(main.queues["worker-all"][0]),
+            "Existing Delta task.",
+        )
+        self.assertFalse(main.sprint_history_path.exists())
+
     async def test_delete_all_removes_project_actors_and_pending_tasks_only(self) -> None:
         import_status, _ = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "actors": {
                     "overwrite": True,
                     "items": [
@@ -645,6 +734,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "actors": {
                     "overwrite": True,
                     "items": [
@@ -665,6 +756,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_agent_profiles_include_project_communication_and_git_branches(self) -> None:
         payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
             "agents": {
                 "overwrite": True,
                 "items": [
@@ -780,6 +873,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "agents": {
                     "overwrite": True,
                     "items": [
@@ -798,6 +893,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "agents": {
                     "overwrite": True,
                     "items": [
@@ -928,6 +1025,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "agents": {
                     "overwrite": True,
                     "assignment_mode": "sequential",
@@ -1201,6 +1300,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "agents": {
                     "overwrite": True,
                     "assignment_mode": "sequential",
@@ -1363,6 +1464,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
             method="POST",
             payload={
+                "project_id": self.PROJECT_PHONE,
+                "git_address": "https://github.com/example/actor-import.git",
                 "agents": {"overwrite": True},
                 "execution": {
                     "mode": "sequential",
@@ -1910,6 +2013,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_graph_reject_requires_feedback_and_returns_source_node(self) -> None:
         payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
             "agents": {"overwrite": True},
             "execution": {
                 "mode": "sequential",
@@ -1981,6 +2086,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_graph_blocks_after_rework_limit(self) -> None:
         payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
             "agents": {"overwrite": True},
             "execution": {
                 "mode": "sequential",

@@ -73,10 +73,14 @@ GET /api/v1/projects/{project_phone}/sprints/{sprint_id}/download
 ```
 
 The Agents tab shows the same project-specific history and provides a
-`Скачать JSON` button for every current or archived sprint. A JSON project
-reference is validated against the project selected in the import URL, so a
-file for another project is rejected instead of being imported into the
-active project.
+`Скачать JSON` button for every current or archived sprint. Every imported
+JSON must identify its project with `project_id`/`project_phone`, an exact
+`git_context_key`, or `git_address`. Every reference found at the top level or
+inside `agents`/`actors` is validated against the project selected in the
+import URL. Missing, conflicting, or foreign-project references are rejected
+before `overwrite` can change agents or queues. A repository shared by several
+project contexts additionally requires the exact project phone or
+`git_context_key`.
 
 Downloaded archives also contain `code_history`. It follows the UI's
 `Скопировать сообщения + патчи` semantics: messages stay in chronological
