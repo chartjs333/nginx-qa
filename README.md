@@ -340,6 +340,14 @@ to `runtime_state/server-monitor.log`, and restarted after five seconds. Set
 `NGINX_QA_AUTO_RESTART=0` to stop after an error, or override
 `NGINX_QA_RESTART_DELAY_SECONDS` and `NGINX_QA_RUNTIME_LOG` in `.env`.
 
+For local Telegram testing, set `CLOUDFLARED_QUICK_TUNNEL=1` in `.env`.
+`run.bat` then installs `cloudflared` through `winget` when necessary, starts a
+temporary `trycloudflare.com` tunnel, registers the generated sequential webhook,
+and stops the managed tunnel when the server exits. Set
+`TELEGRAM_WEBHOOK_MODE=parallel` only when parallel dispatch is intended. A real
+public deployment should set `CLOUDFLARED_QUICK_TUNNEL=0` and use a stable HTTPS
+address in `TELEGRAM_WEBHOOK_URL`.
+
 Run one application process per runtime directory. `run_8026.bat` is an
 alternative port launcher, not a second concurrent worker for the same local
 queue state.
