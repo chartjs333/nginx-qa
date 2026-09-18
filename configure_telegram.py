@@ -36,6 +36,16 @@ def validate_id_allowlist(name: str) -> None:
         raise ValueError(f"{name} must contain comma-separated numeric Telegram IDs")
 
 
+def validate_optional_numeric_id(name: str, *, allow_negative: bool) -> None:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return
+    pattern = r"-?\d+" if allow_negative else r"\d+"
+    if not re.fullmatch(pattern, raw):
+        qualifier = "numeric" if allow_negative else "a positive numeric"
+        raise ValueError(f"{name} must be {qualifier} Telegram ID")
+
+
 def telegram_request(token: str, method: str, data: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         f"https://api.telegram.org/bot{token}/{method}",
@@ -67,6 +77,11 @@ def configure() -> None:
     drop_pending = env_bool("TELEGRAM_DROP_PENDING_UPDATES")
     validate_id_allowlist("TELEGRAM_ALLOWED_CHAT_IDS")
     validate_id_allowlist("TELEGRAM_ALLOWED_USER_IDS")
+    validate_optional_numeric_id("TELEGRAM_HISTORY_CHAT_ID", allow_negative=True)
+    validate_optional_numeric_id(
+        "TELEGRAM_HISTORY_MESSAGE_THREAD_ID",
+        allow_negative=False,
+    )
 
     if secret and not WEBHOOK_SECRET_PATTERN.fullmatch(secret):
         raise ValueError(

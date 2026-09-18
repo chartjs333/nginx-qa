@@ -186,7 +186,10 @@ AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END
 AGENT_COMMUNICATION_VERSION = "5"
 AGENT_HEARTBEAT_INTERVAL_SECONDS = 300
 AGENT_HEARTBEAT_TTL_SECONDS = 900
+AGENT_MESSAGE_REMINDER_AFTER_SECONDS = 60 * 60
 PROJECT_AGENT_ASSIGNMENT_KEY = "agent_assignment"
+TELEGRAM_HISTORY_FORWARDING_KEY = "telegram_history_forwarding"
+TELEGRAM_MESSAGE_MAX_LENGTH = 4096
 AGENT_ASSIGNMENT_MODES = {"parallel", "sequential"}
 CYCLE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$")
 CYCLE_LIFECYCLE_EVENT_TYPES = {
@@ -7799,6 +7802,15 @@ async def append_history(
     }
     async with history_lock:
         await asyncio.to_thread(write_history_line, record)
+    try:
+        await maybe_forward_history_record_to_telegram(record)
+    except Exception as exc:
+        # History persistence and queue delivery must remain available even if
+        # Telegram or its project setting cannot be read temporarily.
+        print(
+            "Telegram history forwarding failed for record "
+            f"{record.get('id')}: {type(exc).__name__}"
+        )
     if should_release_scheduled_on_pass(message, enriched_metadata):
         await release_pass_scheduled_tasks(record, port)
     return record
@@ -9010,6 +9022,92 @@ def agent_work_history_summary(
         "last_activity_at": history[-1].get("timestamp") if history else None,
         "event_counts": dict(sorted(event_counts.items())),
     }
+
+
+def agent_message_reminder(
+    agent: dict[str, Any],
+    history: list[dict[str, Any]],
+    *,
+    now: datetime | None = None,
+    monitoring_started_at: Any = None,
+) -> dict[str, Any]:
+    """Describe whether an agent needs an hourly communication reminder.
+
+    Identity heartbeats are deliberately excluded: asking ``whoami`` proves that
+    the agent is alive, but it is not a progress/result message to the team.
+    """
+    ignored_events = {"agent_identity_heartbeat", "agent_assignment_started"}
+    ignored_actions = {"agent_marked_alive", "sequential_role_assigned"}
+    last_message_at: datetime | None = None
+    for record in reversed(history):
+        direction = str(record.get("agent_direction") or "").strip()
+        if not direction:
+            direction = agent_history_direction(record, agent)
+        if direction not in {"sent", "self"}:
+            continue
+        metadata = (
+            record.get("metadata")
+            if isinstance(record.get("metadata"), dict)
+            else {}
+        )
+        if (
+            str(record.get("event") or "").strip() in ignored_events
+            or str(metadata.get("action") or "").strip() in ignored_actions
+        ):
+            continue
+        last_message_at = parse_utc_datetime(record.get("timestamp"))
+        if last_message_at is not None:
+            break
+
+    parameters = (
+        agent.get("parameters")
+        if isinstance(agent.get("parameters"), dict)
+        else {}
+    )
+    monitoring_started = last_message_at or parse_utc_datetime(
+        monitoring_started_at
+        or parameters.get("first_seen_at")
+        or parameters.get("created_at")
+    )
+    checked_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    inactive_seconds = (
+        max(0, int((checked_at - monitoring_started).total_seconds()))
+        if monitoring_started is not None
+        else 0
+    )
+    required = bool(
+        monitoring_started is not None
+        and inactive_seconds >= AGENT_MESSAGE_REMINDER_AFTER_SECONDS
+    )
+    text = (
+        "Напоминание: более часа не было исходящих сообщений. Во время работы "
+        "регулярно отправляйте сообщения о прогрессе, результате или блокировке "
+        "через выданные communication.send_endpoints."
+        if required
+        else ""
+    )
+    return {
+        "required": required,
+        "threshold_seconds": AGENT_MESSAGE_REMINDER_AFTER_SECONDS,
+        "last_outgoing_message_at": (
+            last_message_at.isoformat() if last_message_at is not None else None
+        ),
+        "monitoring_started_at": (
+            monitoring_started.isoformat() if monitoring_started is not None else None
+        ),
+        "inactive_seconds": inactive_seconds,
+        "text": text,
+    }
+
+
+def append_agent_message_reminder(
+    text: str,
+    reminder: dict[str, Any],
+) -> str:
+    reminder_text = str(reminder.get("text") or "").strip()
+    if not reminder.get("required") or not reminder_text:
+        return text
+    return f"{text.rstrip()} {reminder_text}"
 
 
 def cycle_metadata_from_record(record: dict[str, Any]) -> dict[str, Any]:
@@ -11662,6 +11760,24 @@ def render_index_v2() -> str:
     .agent-project-meta {
       margin-top: 8px;
     }
+    .agent-project-telegram-forwarding {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      font-weight: 600;
+    }
+    .agent-project-telegram-forwarding input {
+      width: auto;
+      margin: 0;
+    }
+    .agent-project-telegram-status {
+      margin-top: 5px;
+    }
     .agent-project-lists {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -13107,6 +13223,11 @@ def render_index_v2() -> str:
             </div>
           </div>
           <div class="subtle">JSON должен содержать <code>project_id</code>/<code>project_phone</code>, <code>git_context_key</code> или <code>git_address</code>; сервер сверяет проект до любых изменений. Для полной замены укажите <code>agents.overwrite: true</code>. Каждому агенту автоматически добавляются его Git-ветка, адресная книга проекта и инструкция обмена сообщениями.</div>
+          <label class="agent-project-telegram-forwarding" for="projectTelegramHistoryForwarding">
+            <input id="projectTelegramHistoryForwarding" type="checkbox">
+            Пересылать копию каждого нового сообщения истории этого проекта в Telegram-канал
+          </label>
+          <div class="subtle agent-project-telegram-status" id="projectTelegramHistoryForwardingStatus"></div>
           <div class="subtle agent-project-meta" id="agentProjectStatus"></div>
           <div class="sprint-history-panel">
             <div class="sprint-history-head">
@@ -14231,6 +14352,8 @@ def render_index_v2() -> str:
     const projectActorsJsonFileEl = document.getElementById("projectActorsJsonFile");
     const importProjectActorsButtonEl = document.getElementById("importProjectActorsButton");
     const deleteAllProjectActorsButtonEl = document.getElementById("deleteAllProjectActorsButton");
+    const projectTelegramHistoryForwardingEl = document.getElementById("projectTelegramHistoryForwarding");
+    const projectTelegramHistoryForwardingStatusEl = document.getElementById("projectTelegramHistoryForwardingStatus");
     const agentProjectStatusEl = document.getElementById("agentProjectStatus");
     const projectSprintsEl = document.getElementById("projectSprints");
     const projectSprintsStatusEl = document.getElementById("projectSprintsStatus");
@@ -14304,6 +14427,8 @@ def render_index_v2() -> str:
     let allAgents = [];
     let projectSprints = [];
     let projectSprintsProjectPhone = "";
+    let telegramHistoryForwarding = {enabled: false, destination_configured: false};
+    let telegramHistoryForwardingProjectPhone = "";
     let pendingSpecializations = {};
     let selectedAgentId = "";
     let pendingGitContextKey = "";
@@ -14881,6 +15006,11 @@ def render_index_v2() -> str:
       renderProjectSprints();
       refreshProjectSprints().catch((error) => {
         projectSprintsStatusEl.textContent = error.message;
+      });
+      telegramHistoryForwardingProjectPhone = "";
+      renderTelegramHistoryForwarding();
+      refreshTelegramHistoryForwarding().catch((error) => {
+        projectTelegramHistoryForwardingStatusEl.textContent = error.message;
       });
       refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
       refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
@@ -15681,6 +15811,89 @@ def render_index_v2() -> str:
       </div>`;
     }
 
+    function renderTelegramHistoryForwarding() {
+      const projectPhone = activeMappedQueuePhone();
+      const loaded = Boolean(
+        projectPhone && telegramHistoryForwardingProjectPhone === projectPhone
+      );
+      projectTelegramHistoryForwardingEl.disabled = !projectPhone || !loaded;
+      projectTelegramHistoryForwardingEl.checked = loaded
+        ? Boolean(telegramHistoryForwarding.enabled)
+        : false;
+      if (!projectPhone) {
+        projectTelegramHistoryForwardingStatusEl.textContent = "Выберите проект с телефоном.";
+      } else if (!loaded) {
+        projectTelegramHistoryForwardingStatusEl.textContent = "Загружаю настройку Telegram...";
+      } else if (!telegramHistoryForwarding.destination_configured) {
+        projectTelegramHistoryForwardingStatusEl.textContent = telegramHistoryForwarding.enabled
+          ? "Пересылка включена, но на сервере не заданы TELEGRAM_BOT_TOKEN и TELEGRAM_HISTORY_CHAT_ID."
+          : "Канал не настроен: задайте TELEGRAM_BOT_TOKEN и TELEGRAM_HISTORY_CHAT_ID в .env.";
+      } else {
+        projectTelegramHistoryForwardingStatusEl.textContent = telegramHistoryForwarding.enabled
+          ? "Пересылка включена только для истории этого проекта."
+          : "Пересылка выключена.";
+      }
+    }
+
+    async function refreshTelegramHistoryForwarding() {
+      const projectPhone = activeMappedQueuePhone();
+      if (!projectPhone) {
+        telegramHistoryForwardingProjectPhone = "";
+        telegramHistoryForwarding = {enabled: false, destination_configured: false};
+        renderTelegramHistoryForwarding();
+        return;
+      }
+      if (telegramHistoryForwardingProjectPhone !== projectPhone) {
+        telegramHistoryForwardingProjectPhone = "";
+        renderTelegramHistoryForwarding();
+      }
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(projectPhone)}/telegram-history-forwarding`
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(formatMessage(data.detail || "Ошибка загрузки настройки Telegram."));
+      }
+      if (projectPhone !== activeMappedQueuePhone()) {
+        return;
+      }
+      telegramHistoryForwardingProjectPhone = projectPhone;
+      telegramHistoryForwarding = data;
+      renderTelegramHistoryForwarding();
+    }
+
+    async function updateTelegramHistoryForwarding() {
+      const projectPhone = activeMappedQueuePhone();
+      if (!projectPhone || telegramHistoryForwardingProjectPhone !== projectPhone) {
+        renderTelegramHistoryForwarding();
+        return;
+      }
+      const previousEnabled = Boolean(telegramHistoryForwarding.enabled);
+      const enabled = Boolean(projectTelegramHistoryForwardingEl.checked);
+      projectTelegramHistoryForwardingEl.disabled = true;
+      projectTelegramHistoryForwardingStatusEl.textContent = "Сохраняю настройку...";
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(projectPhone)}/telegram-history-forwarding`,
+        {
+          method: "PUT",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({enabled})
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        telegramHistoryForwarding.enabled = previousEnabled;
+        renderTelegramHistoryForwarding();
+        throw new Error(formatMessage(data.detail || "Ошибка сохранения настройки Telegram."));
+      }
+      if (projectPhone !== activeMappedQueuePhone()) {
+        return;
+      }
+      telegramHistoryForwardingProjectPhone = projectPhone;
+      telegramHistoryForwarding = data;
+      renderTelegramHistoryForwarding();
+    }
+
     function renderAgentProjectControls() {
       const activeKey = activeGitContextKey();
       const projectLabel = activeProjectLabel();
@@ -15707,6 +15920,7 @@ def render_index_v2() -> str:
       importProjectActorsButtonEl.disabled = !activeKey || !activePhone;
       deleteAllProjectActorsButtonEl.disabled = !activeKey || !activePhone || !attachedAgents.length;
       refreshProjectSprintsButtonEl.disabled = !activeKey || !activePhone;
+      renderTelegramHistoryForwarding();
       projectAvailableAgentsEl.innerHTML = activeKey
         ? availableAgents.length
           ? availableAgents.map((agent) => agentProjectItemHtml(agent, [
@@ -18978,7 +19192,13 @@ ${data.patch || ""}
     async function refresh() {
       await refreshGitConfig();
       await refreshAgents();
-      const refreshTasks = [refreshQueues(), refreshScheduledTasks(), refreshHistory(), refreshProjectSprints()];
+      const refreshTasks = [
+        refreshQueues(),
+        refreshScheduledTasks(),
+        refreshHistory(),
+        refreshProjectSprints(),
+        refreshTelegramHistoryForwarding()
+      ];
       if (cycleGraphViewIsActive()) {
         refreshTasks.push(refreshCycleGraph({silent: true}));
       }
@@ -19535,6 +19755,11 @@ ${data.patch || ""}
     });
     importProjectActorsButtonEl.addEventListener("click", () => {
       importProjectActorsFromJson().catch((error) => setAgentsStatus(error.message, "error"));
+    });
+    projectTelegramHistoryForwardingEl.addEventListener("change", () => {
+      updateTelegramHistoryForwarding().catch((error) => {
+        projectTelegramHistoryForwardingStatusEl.textContent = error.message;
+      });
     });
     refreshProjectSprintsButtonEl.addEventListener("click", () => {
       projectSprintsStatusEl.textContent = "Обновляю историю спринтов...";
@@ -21338,6 +21563,208 @@ def json_object_from_text(raw_text: str) -> dict[str, Any]:
     return payload
 
 
+def telegram_history_destination() -> dict[str, str]:
+    return {
+        "token": os.getenv("TELEGRAM_BOT_TOKEN", "").strip(),
+        "chat_id": os.getenv("TELEGRAM_HISTORY_CHAT_ID", "").strip(),
+        "message_thread_id": os.getenv(
+            "TELEGRAM_HISTORY_MESSAGE_THREAD_ID", ""
+        ).strip(),
+    }
+
+
+def telegram_history_forwarding_snapshot(
+    project_entry: dict[str, Any],
+) -> dict[str, Any]:
+    raw_setting = project_entry.get(TELEGRAM_HISTORY_FORWARDING_KEY)
+    setting = raw_setting if isinstance(raw_setting, dict) else {}
+    destination = telegram_history_destination()
+    return {
+        "enabled": bool(setting.get("enabled")),
+        "destination_configured": bool(
+            destination["token"] and destination["chat_id"]
+        ),
+        "updated_at": setting.get("updated_at"),
+    }
+
+
+def project_telegram_history_forwarding_transaction(
+    project_id: str,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, context_key, project_entry, _ = project_for_group_api(
+            config,
+            project_id,
+        )
+        if enabled is not None:
+            timestamp = utc_now()
+            project_entry[TELEGRAM_HISTORY_FORWARDING_KEY] = {
+                "enabled": enabled,
+                "updated_at": timestamp,
+            }
+            project_entry["updated_at"] = timestamp
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            write_git_config_file(config)
+        project_phone = normalize_project_phone(project_entry.get("project_phone"))
+        return {
+            "project_id": project_phone,
+            "project_phone": project_phone,
+            "git_context_key": context_key,
+            **telegram_history_forwarding_snapshot(project_entry),
+        }
+
+
+def telegram_history_project_for_record(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    context_key = git_context_key_from_metadata(metadata)
+    project_phone = normalize_project_phone(
+        metadata.get("project_phone")
+        or metadata.get("project_id")
+        or metadata.get("conversation_phone")
+    )
+    with git_config_file_lock():
+        config = read_git_config_file()
+        if not context_key and project_phone:
+            context_key = canonical_project_context_key_for_phone(
+                config,
+                project_phone,
+            )
+        if not context_key:
+            return None
+        located = raw_project_registry_entry_for_context(config, context_key)
+        if located is None:
+            return None
+        _, project_entry = located
+        entry_phone = normalize_project_phone(project_entry.get("project_phone"))
+        if project_phone and entry_phone != project_phone:
+            return None
+        setting = telegram_history_forwarding_snapshot(project_entry)
+        if not setting["enabled"]:
+            return None
+        return {
+            "project_phone": entry_phone,
+            "project_name": normalize_project_name(
+                project_entry.get("project_name"),
+                str(project_entry.get("git_address") or ""),
+            ),
+            "git_context_key": context_key,
+            **setting,
+        }
+
+
+def telegram_history_record_text(
+    record: dict[str, Any],
+    project: dict[str, Any],
+) -> str:
+    metadata = (
+        record.get("metadata")
+        if isinstance(record.get("metadata"), dict)
+        else {}
+    )
+    sender = str(metadata.get("sender") or "?").strip()
+    receiver = str(metadata.get("receiver") or "?").strip()
+    revision = str(
+        metadata.get("git_commit_short")
+        or metadata.get("git_commit")
+        or ""
+    ).strip()
+    branch = str(metadata.get("git_branch") or "").strip()
+    header = [
+        "NGINX-QA · новое сообщение истории",
+        (
+            f"Проект: {project.get('project_name') or project.get('project_phone')} "
+            f"(phone {project.get('project_phone')})"
+        ),
+        f"Событие: {record.get('event') or 'unknown'} · очередь: {record.get('queue') or 'unknown'}",
+        f"От: {sender} → Кому: {receiver}",
+        f"Время: {record.get('timestamp') or ''}",
+    ]
+    if branch:
+        header.append(f"Ветка: {branch}")
+    if revision:
+        header.append(f"Commit: {revision}")
+    message = history_record_message_for_context(record)
+    return "\n".join(header) + f"\n\n{message}"
+
+
+def telegram_message_chunks(text: str) -> list[str]:
+    if len(text) <= TELEGRAM_MESSAGE_MAX_LENGTH:
+        return [text]
+    payload_limit = TELEGRAM_MESSAGE_MAX_LENGTH - 24
+    chunks: list[str] = []
+    remaining = text
+    while remaining:
+        split_at = min(len(remaining), payload_limit)
+        if split_at < len(remaining):
+            newline_at = remaining.rfind("\n", 0, split_at + 1)
+            if newline_at >= payload_limit // 2:
+                split_at = newline_at + 1
+        chunks.append(remaining[:split_at].rstrip())
+        remaining = remaining[split_at:].lstrip("\n")
+    total = len(chunks)
+    return [f"[{index}/{total}] {chunk}" for index, chunk in enumerate(chunks, 1)]
+
+
+def forward_history_record_to_telegram(
+    record: dict[str, Any],
+    project: dict[str, Any],
+) -> bool:
+    destination = telegram_history_destination()
+    token = destination["token"]
+    chat_id = destination["chat_id"]
+    if not token or not chat_id:
+        print(
+            "Telegram history forwarding is enabled, but "
+            "TELEGRAM_BOT_TOKEN/TELEGRAM_HISTORY_CHAT_ID is not configured."
+        )
+        return False
+    try:
+        for chunk in telegram_message_chunks(
+            telegram_history_record_text(record, project)
+        ):
+            request_data: dict[str, Any] = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "disable_web_page_preview": "true",
+            }
+            if destination["message_thread_id"]:
+                request_data["message_thread_id"] = destination[
+                    "message_thread_id"
+                ]
+            telegram_api_json(token, "sendMessage", request_data)
+    except HTTPException as exc:
+        print(
+            "Telegram history forwarding failed for record "
+            f"{record.get('id')}: {exc.detail}"
+        )
+        return False
+    return True
+
+
+async def maybe_forward_history_record_to_telegram(
+    record: dict[str, Any],
+) -> bool:
+    project = await asyncio.to_thread(telegram_history_project_for_record, record)
+    if project is None:
+        return False
+    return await asyncio.to_thread(
+        forward_history_record_to_telegram,
+        deepcopy(record),
+        project,
+    )
+
+
 def telegram_api_json(token: str, method: str, data: dict[str, Any]) -> dict[str, Any]:
     encoded = urllib.parse.urlencode(data).encode("utf-8")
     request = urllib.request.Request(
@@ -23099,6 +23526,24 @@ async def identify_sequential_project_agent(
         agent_id = str(agent.get("id") or "").strip()
         agent_name = str(agent.get("name") or "").strip()
         agent_phone = str(agent.get("phone") or "").strip()
+        created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
+        async with history_lock:
+            previous_work_history = await asyncio.to_thread(
+                read_agent_work_history_file,
+                agent,
+                result["context_key"],
+                created_at,
+            )
+        communication_reminder = agent_message_reminder(
+            agent,
+            previous_work_history,
+            now=parse_utc_datetime(seen_at),
+            monitoring_started_at=(
+                assignment.get("current_started_at")
+                or agent.get("parameters", {}).get("first_seen_at")
+                or created_at
+            ),
+        )
         heartbeat_event = (
             "agent_assignment_started"
             if result.get("newly_assigned")
@@ -23129,7 +23574,6 @@ async def identify_sequential_project_agent(
             result["queue_context"],
         )
 
-    created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
     async with history_lock:
         work_history = await asyncio.to_thread(
             read_agent_work_history_file,
@@ -23151,19 +23595,25 @@ async def identify_sequential_project_agent(
     if phase == "review":
         pending_transition = assignment.get("pending_transition") or {}
         review_number = len(pending_transition.get("reviews", [])) + 1
-        answer = (
-            f"Сейчас вы ревьювер перехода №{review_number} из 2 — {agent_name} "
-            f"(id={agent_id}, phone={agent_phone}). Проверьте переход "
-            f"{pending_transition.get('source_node_id')} --"
-            f"{pending_transition.get('outcome')}--> "
-            f"{pending_transition.get('target_node_id')} и ответьте APPROVE или REJECT."
+        answer = append_agent_message_reminder(
+            (
+                f"Сейчас вы ревьювер перехода №{review_number} из 2 — {agent_name} "
+                f"(id={agent_id}, phone={agent_phone}). Проверьте переход "
+                f"{pending_transition.get('source_node_id')} --"
+                f"{pending_transition.get('outcome')}--> "
+                f"{pending_transition.get('target_node_id')} и ответьте APPROVE или REJECT."
+            ),
+            communication_reminder,
         )
     else:
-        answer = (
-            f"Ваша текущая последовательная роль — {agent_name} "
-            f"(роль {role_number} из {total_count}, id={agent_id}, phone={agent_phone}). "
-            f"Ветка: {git_branch or 'не назначена'}. Задач в этой роли: "
-            f"{len(assigned_tasks)}. Каждый переход подтвердят два ревьювера."
+        answer = append_agent_message_reminder(
+            (
+                f"Ваша текущая последовательная роль — {agent_name} "
+                f"(роль {role_number} из {total_count}, id={agent_id}, phone={agent_phone}). "
+                f"Ветка: {git_branch or 'не назначена'}. Задач в этой роли: "
+                f"{len(assigned_tasks)}. Каждый переход подтвердят два ревьювера."
+            ),
+            communication_reminder,
         )
     return {
         "answer": answer,
@@ -23184,6 +23634,7 @@ async def identify_sequential_project_agent(
         "work_summary": work_summary,
         "work_history_since": created_at,
         "work_history": work_history,
+        "communication_reminder": communication_reminder,
         "assignment": assignment,
         "pending_transition": assignment.get("pending_transition"),
         "last_transition": assignment.get("last_transition"),
@@ -23895,6 +24346,38 @@ def sequential_runtime_outgoing_connections(
     return outgoing
 
 
+async def sequential_runtime_agent_message_reminder(
+    runtime: dict[str, Any],
+) -> dict[str, Any]:
+    agent = runtime["agent"]
+    parameters = (
+        agent.get("parameters")
+        if isinstance(agent.get("parameters"), dict)
+        else {}
+    )
+    created_at = str(parameters.get("created_at") or "")
+    async with history_lock:
+        history = await asyncio.to_thread(
+            read_agent_work_history_file,
+            agent,
+            runtime["context_key"],
+            created_at or None,
+        )
+    assignment = runtime.get("assignment") or {}
+    monitoring_started_at = (
+        utc_now()
+        if not runtime.get("identity_reused")
+        else assignment.get("current_started_at")
+        or parameters.get("first_seen_at")
+        or created_at
+    )
+    return agent_message_reminder(
+        agent,
+        history,
+        monitoring_started_at=monitoring_started_at,
+    )
+
+
 def sequential_runtime_response(
     runtime: dict[str, Any],
     request: Request,
@@ -24065,6 +24548,19 @@ async def identify_sequential_agent_from_repository(
         port=request_port(request),
     )
     response = sequential_runtime_response(runtime, request)
+    communication_reminder = await sequential_runtime_agent_message_reminder(
+        runtime
+    )
+    response["communication_reminder"] = communication_reminder
+    response["answer"] = append_agent_message_reminder(
+        response["answer"],
+        communication_reminder,
+    )
+    if communication_reminder["required"]:
+        response["communication"]["instructions"] = append_agent_message_reminder(
+            response["communication"]["instructions"],
+            communication_reminder,
+        )
     project_state = await project_state_json(project_phone)
     response["communication"]["instructions"] += (
         " Полная история сообщений и межкоммитные diff-блоки находятся в "
@@ -24239,6 +24735,9 @@ async def get_project_actors(project_id: str) -> dict[str, Any]:
         "project_id": normalize_project_phone(project_entry.get("project_phone")),
         "project_phone": normalize_project_phone(project_entry.get("project_phone")),
         "project": public_project_context(context),
+        "telegram_history_forwarding": telegram_history_forwarding_snapshot(
+            project_entry
+        ),
         "assignment_mode": assignment.get("mode") or "parallel",
         "assignment": assignment,
         "agents": project_agents,
@@ -24396,6 +24895,40 @@ async def import_project_actors(
         expected_git_context_key=validated_project["git_context_key"],
         expected_repository_key=validated_project["repository_key"],
     )
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/telegram-history-forwarding"
+)
+async def get_project_telegram_history_forwarding(
+    project_id: str,
+) -> dict[str, Any]:
+    async with git_config_lock:
+        return await asyncio.to_thread(
+            project_telegram_history_forwarding_transaction,
+            project_id,
+        )
+
+
+@app.put(
+    "/api/v1/projects/{project_id}/telegram-history-forwarding"
+)
+async def put_project_telegram_history_forwarding(
+    project_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict) or not isinstance(payload.get("enabled"), bool):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object with boolean field 'enabled'",
+        )
+    async with git_config_lock:
+        return await asyncio.to_thread(
+            project_telegram_history_forwarding_transaction,
+            project_id,
+            payload["enabled"],
+        )
 
 
 @app.delete("/api/v1/projects/{project_id}/agents")
@@ -24568,6 +25101,16 @@ async def identify_project_agent(
         earliest_history_at,
         seen_at,
     )
+    communication_reminder = agent_message_reminder(
+        snapshot["agent"],
+        previous_history,
+        now=parse_utc_datetime(seen_at),
+        monitoring_started_at=(
+            parameters.get("first_seen_at")
+            or parameters.get("created_at")
+            or suggested_created_at
+        ),
+    )
     updated = await run_group_write_transaction(
         mark_project_agent_alive_transaction,
         project_id,
@@ -24628,11 +25171,14 @@ async def identify_project_agent(
         }
         for project_agent in updated["agents"]
     ]
-    answer = (
-        f"Вы — {agent_name} (id={agent_id}, phone={clean_phone}). "
-        f"Ваша рабочая ветка: {git_branch or 'не назначена'}. "
-        f"Назначено задач: {len(assigned_tasks)}; событий работы с момента создания: "
-        f"{len(work_history)}. Вы отмечены как живой агент."
+    answer = append_agent_message_reminder(
+        (
+            f"Вы — {agent_name} (id={agent_id}, phone={clean_phone}). "
+            f"Ваша рабочая ветка: {git_branch or 'не назначена'}. "
+            f"Назначено задач: {len(assigned_tasks)}; событий работы с момента создания: "
+            f"{len(work_history)}. Вы отмечены как живой агент."
+        ),
+        communication_reminder,
     )
     return {
         "answer": answer,
@@ -24649,6 +25195,7 @@ async def identify_project_agent(
         "work_history_since": created_at,
         "work_history": work_history,
         "project_agents": project_directory,
+        "communication_reminder": communication_reminder,
     }
 
 

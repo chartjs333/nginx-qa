@@ -16,6 +16,8 @@ class ConfigureTelegramTests(unittest.TestCase):
         "TELEGRAM_DROP_PENDING_UPDATES",
         "TELEGRAM_ALLOWED_CHAT_IDS",
         "TELEGRAM_ALLOWED_USER_IDS",
+        "TELEGRAM_HISTORY_CHAT_ID",
+        "TELEGRAM_HISTORY_MESSAGE_THREAD_ID",
     )
 
     def clean_environment(self, values: dict[str, str] | None = None):
@@ -75,6 +77,16 @@ class ConfigureTelegramTests(unittest.TestCase):
             }
         ):
             with self.assertRaisesRegex(ValueError, "numeric Telegram IDs"):
+                configure_telegram.configure()
+
+    def test_invalid_history_destination_is_rejected(self) -> None:
+        with self.clean_environment(
+            {
+                "TELEGRAM_BOT_TOKEN": "123:new-token",
+                "TELEGRAM_HISTORY_CHAT_ID": "channel-name",
+            }
+        ):
+            with self.assertRaisesRegex(ValueError, "TELEGRAM_HISTORY_CHAT_ID"):
                 configure_telegram.configure()
 
 

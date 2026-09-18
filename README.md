@@ -133,6 +133,12 @@ Agents should repeat the heartbeat every five minutes. Presence remains
 `offline` until the agent checks in again. The generated communication section
 in every imported profile includes this endpoint and instruction.
 
+If an agent has not sent an outgoing progress/result message for at least one
+hour, its next resolved `whoami` response includes `communication_reminder`
+and appends a reminder to `answer`. Identity heartbeats themselves do not reset
+this timer. The common sequential `/api/v1/agents/whoami` repository flow uses
+the same rule after it has resolved the current agent.
+
 For a strictly non-parallel project, set this inside the `agents` object:
 
 ```json
@@ -318,6 +324,11 @@ and configure the local file; `.env` is intentionally ignored by Git.
 - `TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_ALLOWED_USER_IDS` are optional
   comma-separated allowlists. Configure at least one for a bot that can mutate
   project data.
+- `TELEGRAM_HISTORY_CHAT_ID` is the channel/group/chat that receives history
+  copies when the project checkbox in the Agents tab is enabled. The setting is
+  stored per project and exact `git_context_key`, so projects do not share it.
+- `TELEGRAM_HISTORY_MESSAGE_THREAD_ID` optionally directs those copies to one
+  forum topic. The bot must be allowed to post to the selected destination.
 
 `run.bat` and `run_8026.bat` load `.env` without printing its values. Never put
 a real bot token directly in either tracked launcher. If a token has appeared

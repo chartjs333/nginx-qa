@@ -75,6 +75,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         "TELEGRAM_DROP_PENDING_UPDATES",
         "TELEGRAM_ALLOWED_CHAT_IDS",
         "TELEGRAM_ALLOWED_USER_IDS",
+        "TELEGRAM_HISTORY_CHAT_ID",
+        "TELEGRAM_HISTORY_MESSAGE_THREAD_ID",
     )
 
     def setUp(self) -> None:
@@ -1199,6 +1201,181 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(unknown_status, 404)
 
+    async def test_whoami_reminds_after_one_hour_without_outgoing_messages(self) -> None:
+        import_status, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload={
+                "project_id": self.PROJECT_PHONE,
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "quiet-agent",
+                            "name": "Quiet Agent",
+                            "phone": "2188",
+                            "git_branch": "agent/quiet",
+                            "tasks": [],
+                        },
+                        {
+                            "id": "quiet-peer",
+                            "name": "Quiet Peer",
+                            "phone": "2189",
+                            "git_branch": "agent/quiet-peer",
+                            "tasks": [],
+                        },
+                    ],
+                },
+            },
+        )
+        self.assertEqual(import_status, 201)
+        agents = main.read_agents_file()
+        quiet_agent = next(agent for agent in agents if agent["id"] == "quiet-agent")
+        quiet_agent["parameters"]["created_at"] = "2020-01-01T00:00:00+00:00"
+        main.write_agents_file(agents)
+
+        quiet_status, quiet_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2188/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(quiet_status, 200)
+        self.assertIsInstance(quiet_body, dict)
+        assert isinstance(quiet_body, dict)
+        self.assertTrue(quiet_body["communication_reminder"]["required"])
+        self.assertIn("более часа не было исходящих сообщений", quiet_body["answer"])
+
+        await main.append_history(
+            "queued_to_worker_all",
+            "worker-all",
+            "Свежий отчёт о прогрессе.",
+            {
+                "sender": "Quiet Agent",
+                "receiver": "Quiet Peer",
+                "from_phone": "2188",
+                "to_phone": "2189",
+                "from_agent_id": "quiet-agent",
+                "to_agent_id": "quiet-peer",
+                "project_phone": self.PROJECT_PHONE,
+            },
+            8025,
+            {
+                "project_phone": self.PROJECT_PHONE,
+                "git_context_key": self.PROJECT_CONTEXT,
+                "git_address": "https://github.com/example/actor-import.git",
+            },
+        )
+        active_status, active_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2188/whoami",
+            method="POST",
+            payload={"message": "Кто я?"},
+        )
+        self.assertEqual(active_status, 200)
+        self.assertIsInstance(active_body, dict)
+        assert isinstance(active_body, dict)
+        self.assertFalse(active_body["communication_reminder"]["required"])
+        self.assertNotIn("более часа не было исходящих сообщений", active_body["answer"])
+
+    async def test_project_history_forwarding_setting_is_persistent_and_isolated(self) -> None:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+        os.environ["TELEGRAM_HISTORY_CHAT_ID"] = "-100555"
+
+        initial_status, initial_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/telegram-history-forwarding"
+        )
+        self.assertEqual(initial_status, 200)
+        self.assertIsInstance(initial_body, dict)
+        assert isinstance(initial_body, dict)
+        self.assertFalse(initial_body["enabled"])
+        self.assertTrue(initial_body["destination_configured"])
+
+        enabled_status, enabled_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/telegram-history-forwarding",
+            method="PUT",
+            payload={"enabled": True},
+        )
+        self.assertEqual(enabled_status, 200)
+        self.assertIsInstance(enabled_body, dict)
+        assert isinstance(enabled_body, dict)
+        self.assertTrue(enabled_body["enabled"])
+
+        config = main.read_git_config_file()
+        second_context = "github.com/example/other-project"
+        second_project = {
+            "project_name": "Other Project",
+            "git_address": "https://github.com/example/other-project.git",
+            "git_context_key": second_context,
+            "project_phone": "9009",
+            "groups": [],
+        }
+        config[main.PROJECTS_KEY][second_context] = second_project
+        config[main.PHONE_GIT_CONTEXTS_KEY]["9009"] = {
+            **second_project,
+            "phone": "9009",
+        }
+        main.write_git_config_file(config)
+
+        telegram_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def fake_telegram_api(
+            token: str,
+            method: str,
+            data: dict[str, object],
+        ) -> dict[str, object]:
+            telegram_calls.append((token, method, data))
+            return {"ok": True}
+
+        with patch.object(main, "telegram_api_json", side_effect=fake_telegram_api):
+            await main.append_history(
+                "queued_to_worker_all",
+                "worker-all",
+                "Сообщение проекта Actor Import.",
+                {
+                    "sender": "Agent A",
+                    "receiver": "Agent B",
+                    "project_phone": self.PROJECT_PHONE,
+                },
+                8025,
+                {
+                    "project_phone": self.PROJECT_PHONE,
+                    "git_context_key": self.PROJECT_CONTEXT,
+                },
+            )
+            await main.append_history(
+                "queued_to_worker_all",
+                "worker-all",
+                "Сообщение другого проекта.",
+                {
+                    "sender": "Other A",
+                    "receiver": "Other B",
+                    "project_phone": "9009",
+                },
+                8025,
+                {
+                    "project_phone": "9009",
+                    "git_context_key": second_context,
+                },
+            )
+
+        self.assertEqual(len(telegram_calls), 1)
+        token, method, data = telegram_calls[0]
+        self.assertEqual(token, "test-token")
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(data["chat_id"], "-100555")
+        self.assertIn("Actor Import Project", str(data["text"]))
+        self.assertIn("Сообщение проекта Actor Import", str(data["text"]))
+
+        stored = main.read_git_config_file()
+        self.assertTrue(
+            stored[main.PROJECTS_KEY][self.PROJECT_CONTEXT][
+                main.TELEGRAM_HISTORY_FORWARDING_KEY
+            ]["enabled"]
+        )
+        self.assertNotIn(
+            main.TELEGRAM_HISTORY_FORWARDING_KEY,
+            stored[main.PROJECTS_KEY][second_context],
+        )
+
     async def test_sequential_runtime_changes_identity_from_queue_graph(self) -> None:
         import_status, import_body = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
@@ -1276,6 +1453,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(first_body["team"]), 2)
         self.assertIn("send_endpoints", first_body["communication"])
         self.assertFalse(first_body["identity_reused"])
+        self.assertFalse(first_body["communication_reminder"]["required"])
         self.assertTrue(first_body["execution_authorized"])
         self.assertFalse(first_body["requires_additional_confirmation"])
         self.assertIn("activity_with_patches", first_body["project_state"])
@@ -1297,6 +1475,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(len(main.queues["worker-all"]), 0)
 
+        config = main.read_git_config_file()
+        config[main.PROJECTS_KEY][self.PROJECT_CONTEXT][
+            main.PROJECT_AGENT_ASSIGNMENT_KEY
+        ]["current_started_at"] = "2020-01-01T00:00:00+00:00"
+        main.write_git_config_file(config)
+
         repeated_first_status, repeated_first_body = await asgi_request(
             "/api/v1/agents/whoami/repository",
             method="POST",
@@ -1308,6 +1492,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(repeated_first_body, dict)
         assert isinstance(repeated_first_body, dict)
         self.assertTrue(repeated_first_body["identity_reused"])
+        self.assertTrue(repeated_first_body["communication_reminder"]["required"])
+        self.assertIn(
+            "более часа не было исходящих сообщений",
+            repeated_first_body["answer"],
+        )
         self.assertEqual(
             repeated_first_body["active_task"]["id"],
             first_body["active_task"]["id"],
@@ -2805,9 +2994,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             'id="deleteAllProjectActorsButton"',
             'id="projectSprints"',
             'id="refreshProjectSprintsButton"',
+            'id="projectTelegramHistoryForwarding"',
             "async function importProjectActorsFromJson()",
             "async function deleteAllProjectActors()",
             "async function refreshProjectSprints()",
+            "async function updateTelegramHistoryForwarding()",
             "download-project-sprint",
             "agents.overwrite: true",
             "/agents/import",
