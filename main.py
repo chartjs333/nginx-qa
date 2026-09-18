@@ -3400,6 +3400,8 @@ def agent_communication_profile(
             "sender": agent_name,
             "receiver": "<ИМЯ_ДРУГОГО_АГЕНТА>",
             "message": "<ТЕКСТ_СООБЩЕНИЯ>",
+            "git_commit": "<ХЕШ_КОММИТА_С_РЕЗУЛЬТАТОМ>",
+            "git_branch": git_branch,
         },
         ensure_ascii=False,
         separators=(",", ":"),
@@ -7773,13 +7775,15 @@ async def append_history(
     )
     enriched_metadata = metadata_with_git_context(
         {
-        "route": queue_meta["route"],
-        "context": queue_meta["context"],
-        "context_label": queue_meta["context_label"],
-        "sender": submitted_metadata.get("sender") or queue_meta["default_sender"],
-        "receiver": submitted_metadata.get("receiver") or queue_meta["default_receiver"],
-        "direction": queue_meta["label"],
-        **submitted_metadata,
+            "route": queue_meta["route"],
+            "context": queue_meta["context"],
+            "context_label": queue_meta["context_label"],
+            "sender": submitted_metadata.get("sender")
+            or queue_meta["default_sender"],
+            "receiver": submitted_metadata.get("receiver")
+            or queue_meta["default_receiver"],
+            "direction": queue_meta["label"],
+            **submitted_metadata,
         },
         history_git_context,
     )
@@ -23920,6 +23924,8 @@ def sequential_runtime_response(
         "sender": agent_name,
         "receiver": "<name из team>",
         "message": "<результат или следующее задание>",
+        "git_commit": "<хеш коммита с результатом>",
+        "git_branch": git_branch,
     }
     return {
         "answer": (

@@ -28,6 +28,10 @@ class HistoryUiTests(unittest.TestCase):
             "function historyRecordRevision(record)",
             "const message = formatHistoryRecordMessage(record);",
             "const revision = historyRecordRevision(record);",
+            "const branch = String(meta.git_branch || meta.to_agent_git_branch || \"\").trim();",
+            "branch: String(meta.git_branch || meta.to_agent_git_branch || meta.agent_git_branch || \"\").trim()",
+            "lines.push(`From branch: ${previousCommit.branch}`);",
+            "lines.push(`To branch: ${currentCommit.branch}`);",
             "const eventLabel = meta.cycle_event_type || record.event;",
             "${escapeHtml(revision.label)}: ${escapeHtml(revision.value)}",
         ):
