@@ -3633,6 +3633,7 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
     actor_items: list[dict[str, Any]] = []
     reviewer_agent_ids: list[str] = []
     reviewer_names: list[str] = []
+    reviewer_phones: list[str] = []
     for index, raw_reviewer in enumerate(raw_reviewers):
         if isinstance(raw_reviewer, str):
             reviewer = {"name": raw_reviewer}
@@ -3677,6 +3678,9 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
         )
         reviewer_agent_ids.append(reviewer_id)
         reviewer_names.append(reviewer_name.casefold())
+        reviewer_phone = str(reviewer.get("phone") or "").strip()
+        if reviewer_phone:
+            reviewer_phones.append(reviewer_phone)
     if len(set(reviewer_agent_ids)) != 2 or len(set(reviewer_names)) != 2:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -3686,6 +3690,9 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
     graph_nodes: list[dict[str, Any]] = []
     terminal_nodes: dict[str, dict[str, Any]] = {}
     seen_node_ids: set[str] = set()
+    used_actor_names = set(reviewer_names)
+    used_actor_phones = set(reviewer_phones)
+    graph_identities: dict[tuple[str, str], dict[str, Any]] = {}
     for index, raw_node in enumerate(raw_nodes):
         if not isinstance(raw_node, dict):
             raise HTTPException(
@@ -3733,6 +3740,7 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
         agent_name = str(
             agent.get("name") or raw_node.get("name") or raw_agent or node_id
         ).strip()
+        agent_phone = str(agent.get("phone") or raw_node.get("phone") or "").strip()
         raw_tasks = raw_node.get("tasks")
         if raw_tasks is None and "task" in raw_node:
             raw_tasks = [raw_node.get("task")]
@@ -3766,13 +3774,51 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
             else {}
         )
         parameters.update({"workflow_role": "graph_node", "workflow_node_id": node_id})
+        storage_name = agent_name
+        storage_phone = agent_phone
+        logical_identity = (agent_name.casefold(), agent_phone)
+        first_identity = graph_identities.get(logical_identity) if agent_phone else None
+        if first_identity is not None:
+            # A sequential graph may deliberately return to the same logical
+            # person under another node id, branch, and task list. Stored agent
+            # records still need unique names and phones so their endpoints and
+            # work histories remain unambiguous.
+            name_base = f"{agent_name} [{node_id}]"
+            storage_name = name_base
+            suffix = 2
+            while storage_name.casefold() in used_actor_names:
+                storage_name = f"{name_base} #{suffix}"
+                suffix += 1
+            storage_phone = ""
+            identity_group = str(first_identity.get("id") or "").strip()
+            logical_parameters = {
+                "workflow_logical_agent_name": agent_name,
+                "workflow_logical_agent_phone": agent_phone,
+                "workflow_identity_group": identity_group,
+                "workflow_identity_reused": "true",
+            }
+            parameters.update(logical_parameters)
+            first_parameters = first_identity.get("parameters")
+            if isinstance(first_parameters, dict):
+                first_parameters.update(logical_parameters)
+        elif (
+            agent_name.casefold() not in used_actor_names
+            and (not agent_phone or agent_phone not in used_actor_phones)
+        ):
+            graph_identities[logical_identity] = {
+                "id": agent_id,
+                "parameters": parameters,
+            }
+        used_actor_names.add(storage_name.casefold())
+        if storage_phone:
+            used_actor_phones.add(storage_phone)
         actor_items.append(
             {
                 **agent,
                 "id": agent_id,
-                "name": agent_name,
+                "name": storage_name,
                 "profile": agent.get("profile") or raw_node.get("profile"),
-                "phone": agent.get("phone") or raw_node.get("phone"),
+                "phone": storage_phone,
                 "git_branch": agent.get("git_branch") or raw_node.get("git_branch"),
                 "parameters": parameters,
                 "tasks": raw_tasks,
@@ -3783,6 +3829,7 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
                 "id": node_id,
                 "agent_id": agent_id,
                 "agent_name": agent_name,
+                "agent_phone": agent_phone,
                 "transitions": transitions,
             }
         )
@@ -22031,6 +22078,45 @@ def send_telegram_import_reply(message: dict[str, Any], result: dict[str, Any]) 
         return
 
 
+def send_telegram_import_error_reply(
+    message: dict[str, Any],
+    exc: HTTPException,
+    source_filename: str = "",
+) -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat = message.get("chat") if isinstance(message, dict) else None
+    chat_id = chat.get("id") if isinstance(chat, dict) else None
+    if not token or chat_id is None:
+        return
+    detail = exc.detail
+    if isinstance(detail, dict):
+        error_code = str(detail.get("error") or "import_rejected").strip()
+        explanation = str(detail.get("message") or "").strip()
+        if not explanation:
+            explanation = json.dumps(detail, ensure_ascii=False, sort_keys=True)
+    else:
+        error_code = "import_rejected"
+        explanation = str(detail or "Import rejected").strip()
+    lines = ["JSON import was not completed."]
+    if source_filename:
+        lines.append(f"File: {source_filename}")
+    lines.extend([f"Error: {error_code}", explanation])
+    request_data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": "\n".join(line for line in lines if line),
+    }
+    message_thread_id = message.get("message_thread_id")
+    if message_thread_id is not None:
+        request_data["message_thread_id"] = message_thread_id
+    message_id = message.get("message_id")
+    if message_id is not None:
+        request_data["reply_to_message_id"] = message_id
+    try:
+        telegram_api_json(token, "sendMessage", request_data)
+    except HTTPException:
+        return
+
+
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     return HTMLResponse(
@@ -25214,7 +25300,7 @@ def actor_payload_with_assignment_mode(
     return normalized_payload
 
 
-async def telegram_actor_import_for_mode(
+async def _telegram_actor_import_for_mode(
     request: Request,
     assignment_mode: str,
 ) -> dict[str, Any]:
@@ -25256,6 +25342,76 @@ async def telegram_actor_import_for_mode(
     )
     await asyncio.to_thread(send_telegram_import_reply, message, result)
     return {"ok": True, **result}
+
+
+async def telegram_actor_import_for_mode(
+    request: Request,
+    assignment_mode: str,
+) -> dict[str, Any]:
+    try:
+        return await _telegram_actor_import_for_mode(request, assignment_mode)
+    except HTTPException as exc:
+        update_id: Any = None
+        source_filename = ""
+        message: dict[str, Any] = {}
+        try:
+            update = await request.json()
+            if isinstance(update, dict):
+                update_id = update.get("update_id")
+                raw_message = update.get("message") or update.get("channel_post")
+                message = raw_message if isinstance(raw_message, dict) else {}
+                document = message.get("document")
+                if isinstance(document, dict):
+                    source_filename = str(document.get("file_name") or "").strip()
+        except (json.JSONDecodeError, UnicodeDecodeError, RuntimeError):
+            pass
+        diagnostic = {
+            "assignment_mode": assignment_mode,
+            "update_id": update_id,
+            "source_filename": source_filename,
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+        }
+        print(
+            "Telegram agent import rejected: "
+            + json.dumps(diagnostic, ensure_ascii=True, sort_keys=True),
+            flush=True,
+        )
+        if (
+            update_id is not None
+            and message
+            and exc.status_code
+            in {
+                status.HTTP_400_BAD_REQUEST,
+                status.HTTP_404_NOT_FOUND,
+                status.HTTP_409_CONFLICT,
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+            }
+        ):
+            expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+            supplied_secret = request.headers.get(
+                "x-telegram-bot-api-secret-token", ""
+            ).strip()
+            if expected_secret and not hmac.compare_digest(
+                expected_secret,
+                supplied_secret,
+            ):
+                raise
+            ensure_telegram_sender_allowed(message)
+            await asyncio.to_thread(
+                send_telegram_import_error_reply,
+                message,
+                exc,
+                source_filename,
+            )
+            return {
+                "ok": False,
+                "accepted": True,
+                "status_code": exc.status_code,
+                "error": deepcopy(exc.detail),
+            }
+        raise
 
 
 @app.post("/api/v1/telegram/agents/sequential")

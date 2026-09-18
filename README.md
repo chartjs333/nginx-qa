@@ -218,6 +218,13 @@ project snapshot is also available to them at:
 GET /api/v1/projects/{project_phone}/state.json
 ```
 
+The same logical worker may own several graph nodes. Give every node a unique
+`agent.id` and `git_branch`, but repeat the worker's `name` and four-digit
+`phone`. The importer preserves that logical identity in workflow metadata and
+creates unique internal role names and phones, so every node keeps its own task
+list, branch, endpoint, and work history. Reviewers must still be two distinct
+agents and cannot use this reuse rule.
+
 When a graph-node agent submits an outcome, the requested transition does not
 happen immediately. The common identity queue first returns reviewer 1 and then
 reviewer 2. Both must independently send `APPROVE`. A single `REJECT` cancels

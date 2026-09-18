@@ -2027,6 +2027,142 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             reviewer_two_body["active_task"]["message"],
         )
 
+    async def test_sequential_graph_reuses_logical_agent_across_nodes(self) -> None:
+        payload = {
+            "git_address": "https://github.com/example/actor-import.git",
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "start_node": "coordinate",
+                "required_approvals": 2,
+                "reviewers": [
+                    {
+                        "id": "reuse-reviewer-one",
+                        "name": "Reuse Reviewer One",
+                        "phone": "2181",
+                    },
+                    {
+                        "id": "reuse-reviewer-two",
+                        "name": "Reuse Reviewer Two",
+                        "phone": "2182",
+                    },
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "coordinate",
+                    "agent": {
+                        "id": "coordinator-first-role",
+                        "name": "Shared Coordinator",
+                        "phone": "2183",
+                        "git_branch": "agent/coordinator-first",
+                    },
+                    "tasks": [{"task_id": "COORD-1", "message": "Plan the fix."}],
+                    "transitions": {"DONE": "record-merge"},
+                },
+                {
+                    "id": "record-merge",
+                    "agent": {
+                        "id": "coordinator-second-role",
+                        "name": "Shared Coordinator",
+                        "phone": "2183",
+                        "git_branch": "agent/coordinator-second",
+                    },
+                    "tasks": [
+                        {"task_id": "COORD-2", "message": "Record the merge."}
+                    ],
+                    "transitions": {"DONE": "finished"},
+                },
+                {"id": "finished", "type": "terminal", "status": "DONE"},
+            ],
+        }
+
+        import_status, imported = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+
+        self.assertEqual(import_status, 201, imported)
+        self.assertIsInstance(imported, dict)
+        assert isinstance(imported, dict)
+        first_role = next(
+            agent
+            for agent in imported["imported_agents"]
+            if agent["id"] == "coordinator-first-role"
+        )
+        second_role = next(
+            agent
+            for agent in imported["imported_agents"]
+            if agent["id"] == "coordinator-second-role"
+        )
+        self.assertEqual(first_role["name"], "Shared Coordinator")
+        self.assertEqual(first_role["phone"], "2183")
+        self.assertNotEqual(second_role["name"], first_role["name"])
+        self.assertNotEqual(second_role["phone"], first_role["phone"])
+        for role in (first_role, second_role):
+            self.assertEqual(
+                role["parameters"]["workflow_logical_agent_name"],
+                "Shared Coordinator",
+            )
+            self.assertEqual(
+                role["parameters"]["workflow_logical_agent_phone"],
+                "2183",
+            )
+            self.assertEqual(
+                role["parameters"]["workflow_identity_group"],
+                "coordinator-first-role",
+            )
+        workflow_nodes = imported["assignment"]["workflow"]["nodes"]
+        self.assertEqual(
+            [node["agent_name"] for node in workflow_nodes],
+            ["Shared Coordinator", "Shared Coordinator"],
+        )
+
+        work_status, first_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2183/whoami",
+            method="POST",
+            payload={
+                "assignment_id": imported["assignment"]["current_assignment_id"],
+                "status": "DONE",
+                "result": "Coordination complete.",
+            },
+        )
+        self.assertEqual(work_status, 200, first_review)
+        self.assertIsInstance(first_review, dict)
+        assert isinstance(first_review, dict)
+        approval_one_status, second_review = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2181/whoami",
+            method="POST",
+            payload={
+                "assignment_id": first_review["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(approval_one_status, 200, second_review)
+        self.assertIsInstance(second_review, dict)
+        assert isinstance(second_review, dict)
+        approval_two_status, next_node = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/2182/whoami",
+            method="POST",
+            payload={
+                "assignment_id": second_review["current_assignment_id"],
+                "status": "APPROVE",
+            },
+        )
+        self.assertEqual(approval_two_status, 200, next_node)
+        self.assertIsInstance(next_node, dict)
+        assert isinstance(next_node, dict)
+        self.assertEqual(next_node["agent"]["id"], "coordinator-second-role")
+        self.assertEqual(next_node["agent"]["phone"], second_role["phone"])
+        self.assertEqual(next_node["agent"]["git_branch"], "agent/coordinator-second")
+        self.assertEqual(
+            main.queue_item_metadata(main.queues["worker-all"][0])["tasks"][0][
+                "task_id"
+            ],
+            "COORD-2",
+        )
+
     async def test_sequential_telegram_url_starts_first_graph_node(self) -> None:
         status_code, body = await asgi_request(
             "/api/v1/telegram/agents/sequential",
@@ -2865,6 +3001,42 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(body, dict)
         assert isinstance(body, dict)
         self.assertEqual(body["detail"]["error"], "project_not_found")
+        agent_ids = {agent["id"] for agent in main.read_agents_file()}
+        self.assertIn("old-project-actor", agent_ids)
+        self.assertNotIn("must-not-be-imported", agent_ids)
+
+    async def test_telegram_validation_error_is_replied_to_and_acknowledged(self) -> None:
+        actor_json = {
+            "git_address": "https://github.com/example/not-registered.git",
+            "agents": {
+                "overwrite": True,
+                "items": [{"name": "Must Not Be Imported", "tasks": []}],
+            },
+        }
+        update = {
+            "update_id": 123456,
+            "message": {
+                "message_id": 77,
+                "chat": {"id": 99},
+                "text": json.dumps(actor_json),
+            },
+        }
+
+        with patch.object(main, "send_telegram_import_error_reply") as send_error:
+            status_code, body = await asgi_request(
+                "/api/v1/telegram/agents",
+                method="POST",
+                payload=update,
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertFalse(body["ok"])
+        self.assertTrue(body["accepted"])
+        self.assertEqual(body["status_code"], 404)
+        self.assertEqual(body["error"]["error"], "project_not_found")
+        send_error.assert_called_once()
         agent_ids = {agent["id"] for agent in main.read_agents_file()}
         self.assertIn("old-project-actor", agent_ids)
         self.assertNotIn("must-not-be-imported", agent_ids)

@@ -71,6 +71,13 @@ reviewers. Set `execution.initialize_reviewers` to `true` when their persistent
 cards must be delivered before the entry node; otherwise they are activated
 only when the first transition is ready for review.
 
+In the explicit graph form, one logical worker may appear in several nodes.
+Use a unique `agent.id` and `git_branch` for each node, while repeating that
+worker's `name` and four-digit `phone`. The service will allocate distinct
+internal role endpoints and retain the repeated name/phone as logical identity
+metadata. Keep both reviewers distinct from each other and from graph-node
+roles.
+
 Do not include bot tokens, passwords, private Git credentials, or other secrets
 in this file. Replacing the team with `overwrite: true` also replaces the
 previous sprint's imported agents and removes their pending queue items.
