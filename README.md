@@ -335,6 +335,11 @@ a real bot token directly in either tracked launcher. If a token has appeared
 in chat or Git history, revoke it with BotFather before saving its replacement
 in `.env`.
 
+`run.bat` also monitors the FastAPI process. A non-zero exit is printed, appended
+to `runtime_state/server-monitor.log`, and restarted after five seconds. Set
+`NGINX_QA_AUTO_RESTART=0` to stop after an error, or override
+`NGINX_QA_RESTART_DELAY_SECONDS` and `NGINX_QA_RUNTIME_LOG` in `.env`.
+
 Run one application process per runtime directory. `run_8026.bat` is an
 alternative port launcher, not a second concurrent worker for the same local
 queue state.
