@@ -145,7 +145,10 @@ evidence_folders_path = base_dir / "evidence_folders"
 sequential_launch_prompt_path = (
     base_dir / "prompts" / "sequential_sprint_launch_standard.txt"
 )
-DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE = r"D:\prompts\{repository}"
+DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE = r"D:\Prompt\{repository}"
+DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE = (
+    r"D:\Prompt\{repository}_{agent_phone}-latest.prompt"
+)
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
 FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
@@ -8019,7 +8022,11 @@ def validate_sequential_prompt_directory_template(value: Any) -> str:
             detail="Prompt directory template is invalid",
         )
     placeholders = set(re.findall(r"\{([^{}]+)\}", directory_template))
-    unsupported = placeholders - {"repository", "project", "git_context_key"}
+    unsupported = placeholders - {
+        "repository",
+        "project",
+        "git_context_key",
+    }
     if unsupported:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -8028,7 +8035,120 @@ def validate_sequential_prompt_directory_template(value: Any) -> str:
                 + ", ".join(sorted(unsupported))
             ),
         )
+    remainder = directory_template
+    for placeholder in ("{repository}", "{project}", "{git_context_key}"):
+        remainder = remainder.replace(placeholder, "")
+    if "{" in remainder or "}" in remainder:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory template contains malformed placeholders",
+        )
+    expanded_template = os.path.expandvars(os.path.expanduser(directory_template))
+    normalized_separators = expanded_template.replace("/", "\\")
+    if normalized_separators.startswith("\\\\"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory must use a local path, not UNC/device path",
+        )
+    if any(
+        part == ".."
+        for part in re.split(r"[\\/]", expanded_template)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory template must not contain '..' segments",
+        )
+    if not Path(expanded_template).is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory template must resolve to an absolute path",
+        )
     return directory_template
+
+
+def validate_sequential_agent_latest_file_template(value: Any) -> str:
+    file_template = str(value or "").strip()
+    if not file_template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file template is empty",
+        )
+    if len(file_template) > 1000 or "\x00" in file_template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file template is invalid",
+        )
+    placeholders = set(re.findall(r"\{([^{}]+)\}", file_template))
+    unsupported = placeholders - {
+        "repository",
+        "project",
+        "git_context_key",
+        "agent_phone",
+    }
+    if unsupported:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unsupported agent response file placeholders: "
+                + ", ".join(sorted(unsupported))
+            ),
+        )
+    if "{agent_phone}" not in file_template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file template must contain {agent_phone}",
+        )
+    remainder = file_template
+    for placeholder in (
+        "{repository}",
+        "{project}",
+        "{git_context_key}",
+        "{agent_phone}",
+    ):
+        remainder = remainder.replace(placeholder, "")
+    if "{" in remainder or "}" in remainder:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file template has malformed placeholders",
+        )
+    expanded_template = os.path.expandvars(os.path.expanduser(file_template))
+    normalized_separators = expanded_template.replace("/", "\\")
+    if normalized_separators.startswith("\\\\"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Agent latest response file must use a local path, "
+                "not UNC/device path"
+            ),
+        )
+    if any(
+        part == ".."
+        for part in re.split(r"[\\/]", expanded_template)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file template must not contain '..' segments",
+        )
+    if not Path(expanded_template).is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Agent latest response file template must resolve to an absolute path"
+            ),
+        )
+    filename_template = re.split(r"[\\/]", expanded_template)[-1]
+    if (
+        "{agent_phone}" not in filename_template
+        or not filename_template.casefold().endswith(".prompt")
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Agent latest response filename must contain {agent_phone} "
+                "and end with .prompt"
+            ),
+        )
+    return file_template
 
 
 def read_sequential_prompt_settings_file() -> dict[str, str]:
@@ -8036,30 +8156,68 @@ def read_sequential_prompt_settings_file() -> dict[str, str]:
     if not settings_path.exists():
         return {
             "directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+            "agent_latest_file_template": (
+                DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE
+            ),
         }
+    data: Any = {}
     try:
         with settings_path.open("r", encoding="utf-8") as file:
             data = json.load(file)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        data = {}
+    try:
         directory_template = validate_sequential_prompt_directory_template(
             data.get("directory_template") if isinstance(data, dict) else None
         )
-    except (OSError, UnicodeError, json.JSONDecodeError, HTTPException):
+    except HTTPException:
         directory_template = DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE
-    return {"directory_template": directory_template}
+    try:
+        agent_latest_file_template = (
+            validate_sequential_agent_latest_file_template(
+                data.get("agent_latest_file_template")
+                if isinstance(data, dict)
+                else None
+            )
+        )
+    except HTTPException:
+        agent_latest_file_template = (
+            DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE
+        )
+    return {
+        "directory_template": directory_template,
+        "agent_latest_file_template": agent_latest_file_template,
+    }
 
 
-def write_sequential_prompt_settings_file(directory_template: str) -> dict[str, str]:
+def write_sequential_prompt_settings_file(
+    directory_template: str,
+    agent_latest_file_template: str | None = None,
+) -> dict[str, str]:
     normalized_template = validate_sequential_prompt_directory_template(
         directory_template
+    )
+    normalized_agent_file_template = (
+        validate_sequential_agent_latest_file_template(
+            agent_latest_file_template
+            if agent_latest_file_template is not None
+            else read_sequential_prompt_settings_file()[
+                "agent_latest_file_template"
+            ]
+        )
     )
     write_json_file_atomic(
         sequential_prompt_settings_path(),
         {
             "directory_template": normalized_template,
+            "agent_latest_file_template": normalized_agent_file_template,
             "updated_at": utc_now(),
         },
     )
-    return {"directory_template": normalized_template}
+    return {
+        "directory_template": normalized_template,
+        "agent_latest_file_template": normalized_agent_file_template,
+    }
 
 
 def sequential_prompt_path_segment(value: Any, fallback: str) -> str:
@@ -8087,6 +8245,9 @@ def resolve_sequential_prompt_directory(
     git_address: str,
     git_context_key: str,
 ) -> Path:
+    normalized_template = validate_sequential_prompt_directory_template(
+        directory_template
+    )
     replacements = {
         "{repository}": repository_name_for_prompt(git_address, project_name),
         "{project}": sequential_prompt_path_segment(project_name, "project"),
@@ -8095,7 +8256,7 @@ def resolve_sequential_prompt_directory(
             "git-context",
         ),
     }
-    resolved = os.path.expandvars(os.path.expanduser(directory_template))
+    resolved = os.path.expandvars(os.path.expanduser(normalized_template))
     for placeholder, replacement in replacements.items():
         resolved = resolved.replace(placeholder, replacement)
     prompt_directory = Path(resolved)
@@ -8105,6 +8266,41 @@ def resolve_sequential_prompt_directory(
             detail="Prompt directory must resolve to an absolute path",
         )
     return prompt_directory
+
+
+def resolve_sequential_agent_latest_file(
+    file_template: str,
+    *,
+    project_name: str,
+    git_address: str,
+    git_context_key: str,
+    agent_phone: str,
+) -> Path:
+    normalized_template = validate_sequential_agent_latest_file_template(
+        file_template
+    )
+    replacements = {
+        "{repository}": repository_name_for_prompt(git_address, project_name),
+        "{project}": sequential_prompt_path_segment(project_name, "project"),
+        "{git_context_key}": sequential_prompt_path_segment(
+            git_context_key,
+            "git-context",
+        ),
+        "{agent_phone}": sequential_prompt_path_segment(
+            agent_phone,
+            "unknown-phone",
+        ),
+    }
+    resolved = os.path.expandvars(os.path.expanduser(normalized_template))
+    for placeholder, replacement in replacements.items():
+        resolved = resolved.replace(placeholder, replacement)
+    latest_file = Path(resolved)
+    if not latest_file.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Agent latest response file must resolve to an absolute path",
+        )
+    return latest_file
 
 
 def write_prompt_text_if_changed(target_path: Path, prompt: str) -> None:
@@ -8164,6 +8360,7 @@ def materialize_sequential_launch_prompt(
     *,
     prompt: str,
     directory_template: str,
+    agent_latest_file_template: str,
     project_name: str,
     git_address: str,
     git_context_key: str,
@@ -8189,12 +8386,34 @@ def materialize_sequential_launch_prompt(
     prompt_id = hashlib.sha256(prompt_fingerprint.encode("utf-8")).hexdigest()[:20]
     prompt_path = prompt_directory / f"sequential-sprint-prompt-{prompt_id}.txt"
     latest_path = prompt_directory / "latest.txt"
+    agent_latest_file_hint = os.path.expandvars(
+        os.path.expanduser(
+            validate_sequential_agent_latest_file_template(
+                agent_latest_file_template
+            )
+        )
+    )
+    for placeholder, replacement in {
+        "{repository}": repository_name_for_prompt(git_address, project_name),
+        "{project}": sequential_prompt_path_segment(project_name, "project"),
+        "{git_context_key}": sequential_prompt_path_segment(
+            git_context_key,
+            "git-context",
+        ),
+    }.items():
+        agent_latest_file_hint = agent_latest_file_hint.replace(
+            placeholder,
+            replacement,
+        )
     delivery_header = (
         "ВАЖНО: этот пользовательский запрос сохранён полностью на локальном диске.\n"
         f"Prompt ID: {prompt_id}\n"
         f"Полный файл: {prompt_path}\n"
-        "Если полученный текст обрезан, прочитай этот UTF-8 файл целиком и "
-        "используй его как полный запрос пользователя.\n\n"
+        "Если пользовательский запрос обрезан, прочитай UTF-8 файл из строки "
+        "«Полный файл» целиком и используй его как полный запрос.\n"
+        f"Последний ответ агента: {agent_latest_file_hint}\n"
+        "Если обрезан ответ API, прочитай этот стабильный .prompt файл, "
+        "подставив свой номер вместо {agent_phone}.\n\n"
         "--- НАЧАЛО ПОЛНОГО ЗАПРОСА ---\n\n"
     )
     stored_prompt = f"{delivery_header}{prompt.rstrip()}\n"
@@ -8208,6 +8427,8 @@ def materialize_sequential_launch_prompt(
         ) from exc
     return {
         "directory_template": directory_template,
+        "agent_latest_file_template": agent_latest_file_template,
+        "agent_latest_file_hint": agent_latest_file_hint,
         "directory": str(prompt_directory),
         "prompt_id": prompt_id,
         "prompt_file_path": str(prompt_path),
@@ -8223,7 +8444,9 @@ def materialize_sequential_graph_response(
     *,
     response: dict[str, Any],
     directory_template: str,
+    agent_latest_file_template: str,
     response_kind: str,
+    request_agent_phone: str = "",
 ) -> dict[str, Any]:
     project = response.get("project")
     project_data = project if isinstance(project, dict) else {}
@@ -8241,7 +8464,10 @@ def materialize_sequential_graph_response(
         git_context_key=git_context_key,
     )
     canonical_response = json.dumps(
-        response,
+        {
+            "request_agent_phone": str(request_agent_phone or "").strip(),
+            "response": response,
+        },
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -8250,23 +8476,106 @@ def materialize_sequential_graph_response(
     safe_kind = sequential_prompt_path_segment(response_kind, "graph-response")
     response_path = prompt_directory / f"{safe_kind}-{response_id}.json"
     latest_path = prompt_directory / "latest-response.json"
+    response_agent = response.get("agent")
+    response_agent_data = response_agent if isinstance(response_agent, dict) else {}
+    active_task = response.get("active_task")
+    active_task_data = active_task if isinstance(active_task, dict) else {}
+    task_metadata = active_task_data.get("metadata")
+    metadata = task_metadata if isinstance(task_metadata, dict) else {}
+    completed_assignment = response.get("completed_assignment")
+    completed_assignment_data = (
+        completed_assignment if isinstance(completed_assignment, dict) else {}
+    )
+    phone_candidates = (
+        (request_agent_phone,)
+        if str(request_agent_phone or "").strip()
+        else (
+            response_agent_data.get("phone"),
+            metadata.get("logical_to_phone"),
+            metadata.get("to_phone"),
+            metadata.get("agent_phone"),
+            completed_assignment_data.get("agent_phone"),
+        )
+    )
+    agent_phones: list[str] = []
+    for raw_phone in phone_candidates:
+        phone = str(raw_phone or "").strip()
+        if phone:
+            agent_phones.append(phone)
+            break
+    agent_latest_paths = {
+        phone: str(
+            resolve_sequential_agent_latest_file(
+                agent_latest_file_template,
+                project_name=project_name,
+                git_address=git_address,
+                git_context_key=git_context_key,
+                agent_phone=phone,
+            )
+        )
+        for phone in agent_phones
+    }
+    primary_agent_latest_path = (
+        agent_latest_paths[agent_phones[0]] if agent_phones else ""
+    )
     storage_fields = {
         "response_id": response_id,
+        "latest_agent_prompt_file_path": primary_agent_latest_path,
+        "agent_prompt_file_paths": agent_latest_paths,
         "response_file_path": str(response_path),
         "latest_response_file_path": str(latest_path),
         "full_response_instructions": (
-            "Если HTTP-ответ обрезан, прочитай response_file_path как UTF-8 JSON; "
-            "этот файл содержит полный ответ текущего шага графа."
+            "Если HTTP-ответ обрезан или не получен полностью, прочитай "
+            "latest_agent_prompt_file_path как UTF-8 текст; файл содержит "
+            "полный JSON-ответ последнего запроса этого агента."
         ),
     }
-    stored_response = {**storage_fields, **deepcopy(response)}
+    response_payload = deepcopy(response)
+    for storage_key in storage_fields:
+        response_payload.pop(storage_key, None)
+    stored_response = {**storage_fields, **response_payload}
     response_json = json.dumps(
         stored_response,
         ensure_ascii=False,
         indent=2,
     ) + "\n"
-    write_prompt_text_if_changed(response_path, response_json)
-    write_prompt_text_if_changed(latest_path, response_json)
+    destinations: list[tuple[str, Path]] = [
+        *(
+            (f"agent_latest:{phone}", Path(path))
+            for phone, path in agent_latest_paths.items()
+        ),
+        ("response_archive", response_path),
+        ("project_latest", latest_path),
+    ]
+    successful_destinations: list[Path] = []
+    storage_errors: dict[str, str] = {}
+    seen_destinations: set[Path] = set()
+    for destination_name, destination_path in destinations:
+        if destination_path in seen_destinations:
+            continue
+        seen_destinations.add(destination_path)
+        try:
+            write_prompt_text_if_changed(destination_path, response_json)
+        except (OSError, UnicodeError) as exc:
+            storage_errors[destination_name] = str(exc)
+        else:
+            successful_destinations.append(destination_path)
+    if storage_errors:
+        stored_response["response_storage_errors"] = storage_errors
+        response_json = json.dumps(
+            stored_response,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        for destination_path in successful_destinations:
+            try:
+                write_prompt_text_if_changed(destination_path, response_json)
+            except (OSError, UnicodeError):
+                # The first successful write already contains the complete graph
+                # response. The returned warning still identifies every original
+                # destination failure without turning a completed transition into
+                # an HTTP error.
+                pass
     return stored_response
 
 
@@ -8274,6 +8583,7 @@ async def attach_sequential_graph_response_storage(
     response: dict[str, Any],
     *,
     response_kind: str,
+    request_agent_phone: str = "",
 ) -> dict[str, Any]:
     try:
         async with sequential_prompt_storage_lock:
@@ -8282,7 +8592,11 @@ async def attach_sequential_graph_response_storage(
                 materialize_sequential_graph_response,
                 response=response,
                 directory_template=settings["directory_template"],
+                agent_latest_file_template=settings[
+                    "agent_latest_file_template"
+                ],
                 response_kind=response_kind,
+                request_agent_phone=request_agent_phone,
             )
     except (HTTPException, OSError, UnicodeError) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
@@ -13483,9 +13797,14 @@ def render_index_v2() -> str:
             <input id="launchPromptWhoamiUrl" readonly>
           </div>
           <div class="full-width">
-            <label for="launchPromptDirectoryTemplate">Каталог полных запросов и ответов</label>
-            <input id="launchPromptDirectoryTemplate" placeholder="D:\\prompts\\{repository}">
+            <label for="launchPromptDirectoryTemplate">Каталог архивных копий</label>
+            <input id="launchPromptDirectoryTemplate" placeholder="D:\\Prompt\\{repository}">
             <div class="subtle">Можно использовать {repository}, {project} и {git_context_key}. Настройка сохраняется локально.</div>
+          </div>
+          <div class="full-width">
+            <label for="launchPromptAgentLatestFileTemplate">Файл последнего ответа каждого агента</label>
+            <input id="launchPromptAgentLatestFileTemplate" placeholder="D:\\Prompt\\{repository}_{agent_phone}-latest.prompt">
+            <div class="subtle">Укажите локальный абсолютный путь, оставьте {agent_phone} в имени и расширение .prompt. При каждом запросе движения графа файл атомарно заменяется полным UTF-8 JSON-ответом.</div>
           </div>
           <div>
             <label for="launchPromptId">Prompt ID</label>
@@ -13496,14 +13815,14 @@ def render_index_v2() -> str:
             <input id="launchPromptFilePath" readonly>
           </div>
           <div class="full-width">
-            <label for="launchPromptLatestResponsePath">Последний полный ответ перехода графа</label>
+            <label for="launchPromptLatestResponsePath">Последний полный ответ проекта</label>
             <input id="launchPromptLatestResponsePath" readonly>
           </div>
         </div>
         <div class="actions">
           <button class="primary" id="copyLaunchPromptButton" type="button" disabled>Скопировать промпт</button>
           <button class="secondary" id="refreshLaunchPromptButton" type="button">Обновить</button>
-          <button class="secondary" id="saveLaunchPromptDirectoryButton" type="button">Сохранить каталог</button>
+          <button class="secondary" id="saveLaunchPromptDirectoryButton" type="button">Сохранить пути</button>
           <button class="secondary" id="copyLaunchPromptPathButton" type="button" disabled>Скопировать путь запроса</button>
           <button class="secondary" id="copyLaunchResponsePathButton" type="button" disabled>Скопировать путь ответа</button>
         </div>
@@ -13984,7 +14303,7 @@ def render_index_v2() -> str:
       "page:launch-prompt": {
         title: "Промпт запуска",
         purpose: "Создает готовую инструкцию запуска sequential sprint для выбранного проекта.",
-        logic: "Система подставляет проект и адрес Cloudflare, сохраняет полный пользовательский запрос в UTF-8 файл, а ответы identity/переходов — в latest-response.json. Каталог можно настроить."
+        logic: "Система подставляет проект и адрес Cloudflare. Каждый агент получает стабильный резервный файл вида D:\\\\Prompt\\\\repository_phone-latest.prompt с полным ответом identity/перехода; оба шаблона пути можно настроить."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -14866,6 +15185,7 @@ def render_index_v2() -> str:
     const launchPromptEndpointModeEl = document.getElementById("launchPromptEndpointMode");
     const launchPromptWhoamiUrlEl = document.getElementById("launchPromptWhoamiUrl");
     const launchPromptDirectoryTemplateEl = document.getElementById("launchPromptDirectoryTemplate");
+    const launchPromptAgentLatestFileTemplateEl = document.getElementById("launchPromptAgentLatestFileTemplate");
     const launchPromptIdEl = document.getElementById("launchPromptId");
     const launchPromptFilePathEl = document.getElementById("launchPromptFilePath");
     const launchPromptLatestResponsePathEl = document.getElementById("launchPromptLatestResponsePath");
@@ -15517,21 +15837,32 @@ def render_index_v2() -> str:
       if (document.activeElement !== launchPromptDirectoryTemplateEl) {
         launchPromptDirectoryTemplateEl.value = data.directory_template || "";
       }
+      if (document.activeElement !== launchPromptAgentLatestFileTemplateEl) {
+        launchPromptAgentLatestFileTemplateEl.value = data.agent_latest_file_template || "";
+      }
       launchPromptSettingsLoaded = true;
       return data;
     }
 
     async function saveLaunchPromptDirectory() {
       const directoryTemplate = launchPromptDirectoryTemplateEl.value.trim();
+      const agentLatestFileTemplate = launchPromptAgentLatestFileTemplateEl.value.trim();
       if (!directoryTemplate) {
         setLaunchPromptStatus("Укажите каталог для полных запросов.", "error");
+        return;
+      }
+      if (!agentLatestFileTemplate || !agentLatestFileTemplate.includes("{agent_phone}") || !agentLatestFileTemplate.toLowerCase().endsWith(".prompt")) {
+        setLaunchPromptStatus("Шаблон файла ответа должен содержать {agent_phone} и заканчиваться на .prompt.", "error");
         return;
       }
       setLaunchPromptStatus("Сохраняю каталог...");
       const response = await fetch("/api/v1/sequential-sprint-prompt/settings", {
         method: "PUT",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({directory_template: directoryTemplate})
+        body: JSON.stringify({
+          directory_template: directoryTemplate,
+          agent_latest_file_template: agentLatestFileTemplate
+        })
       });
       const data = await response.json();
       if (!response.ok) {
@@ -15542,6 +15873,7 @@ def render_index_v2() -> str:
         return;
       }
       launchPromptDirectoryTemplateEl.value = data.directory_template || directoryTemplate;
+      launchPromptAgentLatestFileTemplateEl.value = data.agent_latest_file_template || agentLatestFileTemplate;
       launchPromptSettingsLoaded = true;
       await refreshLaunchPrompt();
     }
@@ -15595,6 +15927,9 @@ def render_index_v2() -> str:
       launchPromptWhoamiUrlEl.value = data.selected_whoami_url || "";
       if (document.activeElement !== launchPromptDirectoryTemplateEl) {
         launchPromptDirectoryTemplateEl.value = data.prompt_directory_template || "";
+      }
+      if (document.activeElement !== launchPromptAgentLatestFileTemplateEl) {
+        launchPromptAgentLatestFileTemplateEl.value = data.agent_latest_file_template || "";
       }
       launchPromptIdEl.value = data.prompt_id || "";
       launchPromptFilePathEl.value = data.prompt_file_path || "";
@@ -25873,6 +26208,7 @@ async def identify_project_agent(
             return await attach_sequential_graph_response_storage(
                 response,
                 response_kind="transition-response",
+                request_agent_phone=agent_phone,
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -26634,10 +26970,24 @@ async def get_sequential_sprint_prompt_settings() -> dict[str, Any]:
     return {
         **settings,
         "default_directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+        "default_agent_latest_file_template": (
+            DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE
+        ),
+        "directory_supported_placeholders": [
+            "{repository}",
+            "{project}",
+            "{git_context_key}",
+        ],
         "supported_placeholders": [
             "{repository}",
             "{project}",
             "{git_context_key}",
+        ],
+        "agent_file_supported_placeholders": [
+            "{repository}",
+            "{project}",
+            "{git_context_key}",
+            "{agent_phone}",
         ],
         "settings_path": str(sequential_prompt_settings_path()),
     }
@@ -26659,14 +27009,34 @@ async def put_sequential_sprint_prompt_settings(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="directory_template must be a string",
         )
+    agent_latest_file_template = payload.get("agent_latest_file_template")
+    if agent_latest_file_template is not None and not isinstance(
+        agent_latest_file_template,
+        str,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="agent_latest_file_template must be a string",
+        )
     async with sequential_prompt_storage_lock:
+        current_settings = await asyncio.to_thread(
+            read_sequential_prompt_settings_file
+        )
         settings = await asyncio.to_thread(
             write_sequential_prompt_settings_file,
             directory_template,
+            (
+                agent_latest_file_template
+                if agent_latest_file_template is not None
+                else current_settings["agent_latest_file_template"]
+            ),
         )
     return {
         **settings,
         "default_directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+        "default_agent_latest_file_template": (
+            DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE
+        ),
         "settings_path": str(sequential_prompt_settings_path()),
     }
 
@@ -26732,6 +27102,9 @@ async def get_sequential_sprint_prompt(
             materialize_sequential_launch_prompt,
             prompt=base_prompt,
             directory_template=prompt_settings["directory_template"],
+            agent_latest_file_template=prompt_settings[
+                "agent_latest_file_template"
+            ],
             project_name=project_name,
             git_address=git_address,
             git_context_key=str(project.get("git_context_key") or git_context_key),
@@ -26755,6 +27128,10 @@ async def get_sequential_sprint_prompt(
         "warning": warning,
         "prompt_id": stored_prompt["prompt_id"],
         "prompt_directory_template": stored_prompt["directory_template"],
+        "agent_latest_file_template": stored_prompt[
+            "agent_latest_file_template"
+        ],
+        "agent_latest_file_hint": stored_prompt["agent_latest_file_hint"],
         "prompt_directory": stored_prompt["directory"],
         "prompt_file_path": stored_prompt["prompt_file_path"],
         "latest_prompt_file_path": stored_prompt["latest_file_path"],

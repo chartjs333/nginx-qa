@@ -82,6 +82,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         temp_path = Path(self.temp_dir.name)
+        self.temp_path = temp_path
+        self.sequential_agent_latest_file_template = str(
+            temp_path
+            / "agent-latest"
+            / "{repository}_{agent_phone}-latest.prompt"
+        )
         self.original_values = {
             "git_config_path": main.git_config_path,
             "agents_path": main.agents_path,
@@ -117,7 +123,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         for name in self.TELEGRAM_ENV_NAMES:
             os.environ.pop(name, None)
         main.write_sequential_prompt_settings_file(
-            str(temp_path / "prompts" / "{repository}")
+            str(temp_path / "prompts" / "{repository}"),
+            self.sequential_agent_latest_file_template,
         )
         self.write_project()
         self.write_agents()
@@ -1455,6 +1462,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first_body["agent"]["id"], "sequential-role-a")
         self.assertEqual(first_body["git_branch"], "agent/sequential-a")
         self.assertEqual(first_body["graph_position"]["queue"], "worker-all")
+        first_agent_prompt = (
+            self.temp_path
+            / "agent-latest"
+            / "actor-import_2121-latest.prompt"
+        )
+        self.assertEqual(
+            first_body["latest_agent_prompt_file_path"],
+            str(first_agent_prompt),
+        )
+        self.assertEqual(
+            json.loads(first_agent_prompt.read_text(encoding="utf-8")),
+            first_body,
+        )
         self.assertEqual(len(first_body["team"]), 2)
         self.assertIn("send_endpoints", first_body["communication"])
         self.assertFalse(first_body["identity_reused"])
@@ -1913,6 +1933,24 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(node_body, dict)
         assert isinstance(node_body, dict)
         self.assertEqual(node_body["agent"]["id"], "graph-analyst")
+        graph_agent_prompt = (
+            self.temp_path
+            / "agent-latest"
+            / "actor-import_2153-latest.prompt"
+        )
+        reviewer_one_prompt = (
+            self.temp_path
+            / "agent-latest"
+            / "actor-import_2151-latest.prompt"
+        )
+        self.assertEqual(
+            node_body["latest_agent_prompt_file_path"],
+            str(graph_agent_prompt),
+        )
+        self.assertEqual(
+            json.loads(graph_agent_prompt.read_text(encoding="utf-8")),
+            node_body,
+        )
         node_assignment_id = node_body["active_task"]["metadata"]["assignment_id"]
 
         from_commit = "a" * 40
@@ -1947,6 +1985,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(first_review, dict)
         assert isinstance(first_review, dict)
         self.assertEqual(first_review["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            first_review["latest_agent_prompt_file_path"],
+            str(graph_agent_prompt),
+        )
+        self.assertEqual(
+            first_review["agent_prompt_file_paths"],
+            {"2153": str(graph_agent_prompt)},
+        )
+        self.assertFalse(reviewer_one_prompt.exists())
+        self.assertEqual(
+            json.loads(graph_agent_prompt.read_text(encoding="utf-8")),
+            first_review,
+        )
         self.assertEqual(first_review["assignment"]["phase"], "review")
         self.assertTrue(first_review["identity_request_required"])
         self.assertEqual(
@@ -1999,6 +2050,14 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(reviewer_body, dict)
         assert isinstance(reviewer_body, dict)
         self.assertEqual(reviewer_body["agent"]["id"], "reviewer-one")
+        self.assertEqual(
+            reviewer_body["latest_agent_prompt_file_path"],
+            str(reviewer_one_prompt),
+        )
+        self.assertEqual(
+            json.loads(reviewer_one_prompt.read_text(encoding="utf-8")),
+            reviewer_body,
+        )
         self.assertEqual(
             reviewer_body["next_identity_request"]["url"],
             "http://testserver:8025/api/v1/agents/whoami",
