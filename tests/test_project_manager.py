@@ -246,6 +246,57 @@ class ProjectManagerTests(unittest.IsolatedAsyncioTestCase):
             context_key,
         )
 
+    async def test_existing_project_promotes_unique_legacy_project_phone(self) -> None:
+        context_key = "github.com/example/legacy#java-app"
+        git_address = "https://github.com/example/legacy.git"
+        legacy_entry = {
+            "project_name": "Legacy Java App",
+            "git_address": git_address,
+            "git_context_key": context_key,
+            "updated_at": "2025-01-02T03:04:05+00:00",
+        }
+        self.write_config(
+            {
+                main.PROJECTS_KEY: {context_key: legacy_entry},
+                main.PHONE_GIT_CONTEXTS_KEY: {
+                    "9004": {
+                        **legacy_entry,
+                        "phone": "9004",
+                        "fastapi_port": 8025,
+                    }
+                },
+            }
+        )
+        self.write_agents([])
+
+        first = await self.resolve(
+            {
+                "git_address": git_address,
+                "git_context_key": context_key,
+            }
+        )
+        second = await self.resolve(
+            {
+                "git_address": git_address,
+                "git_context_key": context_key,
+            }
+        )
+
+        self.assertFalse(first["created"])
+        self.assertTrue(first["phone_assigned"])
+        self.assertEqual(first["project_phone"], "9004")
+        self.assertFalse(second["phone_assigned"])
+        self.assertEqual(second["project_phone"], "9004")
+        config = json.loads(main.git_config_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            config[main.PROJECTS_KEY][context_key]["project_phone"],
+            "9004",
+        )
+        self.assertEqual(
+            config[main.PHONE_GIT_CONTEXTS_KEY]["9004"]["project_phone"],
+            "9004",
+        )
+
     async def test_self_hosted_paths_keep_case_and_generic_scp_agents_match(self) -> None:
         upper_context = "git.example/Org/Repo"
         self.write_config(

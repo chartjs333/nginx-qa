@@ -3154,6 +3154,41 @@ def resolve_or_create_project_transaction(
 
         if phone_assigned:
             with agents_file_lock():
+                stored_agent_phones = {
+                    normalize_phone_key(agent.get("phone"))
+                    for agent in read_agents_file()
+                    if normalize_phone_key(agent.get("phone"))
+                }
+                canonical_phone_owners = {
+                    phone: str(entry.get("git_context_key") or "").strip()
+                    for entry in project_registry_from_config(config).values()
+                    if (phone := normalize_project_phone(entry.get("project_phone")))
+                }
+                legacy_project_phone_candidates: list[str] = []
+                for raw_phone, raw_mapping in phone_map.items():
+                    candidate_phone = normalize_project_phone(raw_phone)
+                    mapping = raw_mapping if isinstance(raw_mapping, dict) else {}
+                    normalized_mapping = normalize_git_context_config_entry(mapping)
+                    if (
+                        not candidate_phone
+                        or normalized_mapping is None
+                        or str(normalized_mapping.get("git_context_key") or "").strip()
+                        != context_key
+                        or str(mapping.get("agent_id") or "").strip()
+                        or candidate_phone in stored_agent_phones
+                    ):
+                        continue
+                    canonical_owner = canonical_phone_owners.get(candidate_phone)
+                    if canonical_owner and canonical_owner != context_key:
+                        continue
+                    legacy_project_phone_candidates.append(candidate_phone)
+
+                if len(legacy_project_phone_candidates) == 1:
+                    # Older configurations stored the project number only as a
+                    # phone-to-context mapping. Promote that unambiguous number
+                    # instead of silently allocating a different canonical id.
+                    project_phone = legacy_project_phone_candidates[0]
+
                 used_phones = {
                     normalize_phone_key(phone)
                     for phone in phone_map
@@ -3165,18 +3200,17 @@ def resolve_or_create_project_transaction(
                     if normalize_project_phone(entry.get("project_phone"))
                 )
                 used_phones.update(
-                    normalize_phone_key(agent.get("phone"))
-                    for agent in read_agents_file()
-                    if normalize_phone_key(agent.get("phone"))
+                    stored_agent_phones
                 )
                 used_phones.update(DEFAULT_AGENT_PHONES.values())
                 used_phones.add(PROJECT_MANAGER_PHONE)
 
-                for candidate in range(PROJECT_PHONE_MIN, PROJECT_PHONE_MAX + 1):
-                    candidate_phone = f"{candidate:04d}"
-                    if candidate_phone not in used_phones:
-                        project_phone = candidate_phone
-                        break
+                if not project_phone:
+                    for candidate in range(PROJECT_PHONE_MIN, PROJECT_PHONE_MAX + 1):
+                        candidate_phone = f"{candidate:04d}"
+                        if candidate_phone not in used_phones:
+                            project_phone = candidate_phone
+                            break
                 if not project_phone:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
