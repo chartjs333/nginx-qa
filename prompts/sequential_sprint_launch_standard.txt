@@ -1,0 +1,263 @@
+СТАНДАРТ ЗАПУСКА NGINX-QA SEQUENTIAL SPRINT
+
+Ты работаешь в проекте {{PROJECT_NAME}} через nginx-qa sequential graph.
+
+Репозиторий:
+{{GIT_ADDRESS}}
+
+nginx-qa:
+{{NGINX_QA_BASE_URL}}
+
+Текущий sprint был обновлён. Начни получение identity заново через nginx-qa.
+
+1. Источник истины — только nginx-qa HTTP API
+
+Общайся с nginx-qa только через HTTP URL/API.
+
+Запрещено определять свою роль, задачу, graph state или assignment путём прямого чтения:
+
+каталога D:\nginx-qa;
+runtime JSON nginx-qa;
+queue-файлов;
+state-файлов;
+локальных evidence/history файлов nginx-qa;
+исходного sprint JSON после его импорта как способа определить «кто я сейчас».
+
+Файлы проекта {{PROJECT_NAME}} читать можно в рамках выданной задачи. Запрет относится именно к внутреннему runtime/state nginx-qa.
+
+Все сообщения и JSON отправляй в UTF-8. Текст заданий может быть на русском.
+
+2. Получение текущей identity
+
+Сначала вызови:
+
+GET или POST
+{{WHOAMI_URL}}
+
+Если сервис вернул reply_url и запросил Git repository, отправь ровно один раз в выданный reply_url:
+
+{"git_address":"{{GIT_ADDRESS}}"}
+
+Сохрани полный HTTP response body локально в памяти текущей сессии.
+
+Не повторяй общий /api/v1/agents/whoami и не вызывай reply_url повторно, пока текущий assignment не завершён официальным handoff.
+
+Если повторный lookup до handoff всё же необходим для диагностики, используй только read-only endpoint/card, который явно указан nginx-qa. Не выполняй новый dequeue.
+
+3. Используй только identity, которую выдал сервис
+
+После ответа nginx-qa источником истины являются только:
+
+agent
+profile
+git_branch
+active_task
+team
+communication
+graph_position
+metadata текущего assignment, включая assignment_id
+current assignment / whoami_endpoint, если он выдан
+
+Не выбирай самостоятельно:
+
+роль;
+logical phone;
+ветку;
+task ID;
+следующего агента;
+reviewer;
+следующий graph node.
+
+После получения identity сразу выведи:
+
+Current agent:
+
+Current phone:
+
+Git branch:
+
+Active task:
+
+Queue:
+
+Graph position:
+
+Assignment ID:
+
+Затем сразу приступай к active_task. Не жди подтверждения пользователя.
+
+Полученные agent + active_task + git_branch уже являются разрешением:
+
+переключиться на выданную git branch;
+прочитать profile;
+выполнить task;
+запускать необходимые команды, тесты и проверки в рамках scope.
+4. Правила работы
+
+Перед изменениями:
+
+git fetch origin --prune;
+проверь актуальный origin/main;
+проверь существующую assigned branch / PR;
+не дублируй уже выполненную работу;
+если branch уже существует, сначала изучи её remote HEAD и diff.
+
+Работай только в текущем active_task и разрешённом scope.
+
+Не бери задачи других ролей.
+
+Не создавай новые task IDs.
+
+Не назначай следующего программиста вручную.
+
+Не обходи declared graph ручным queue handoff.
+
+Не меняй frozen contracts, protected spine или чужой production scope без явного разрешения текущего task.
+
+Если для выполнения task требуется изменение за пределами ownership:
+
+не делай такое изменение;
+зафиксируй точный blocker;
+верни FAIL, BLOCKED, STOP или другой статус, разрешённый текущим node;
+приложи evidence и owner component.
+5. Sequential executor не ждёт «другого программиста»
+
+В sequential mode один исполнитель последовательно меняет identity.
+
+После успешного handoff ты сам можешь стать:
+
+Программистом A/B/C/D/E/F;
+reviewer 1;
+reviewer 2;
+Coordinator;
+merge-record node.
+
+Поэтому не останавливайся со словами «жду другого программиста», если nginx-qa может выдать следующий node.
+
+Но и не переключайся самостоятельно. Следующая identity определяется только общим /api/v1/agents/whoami после успешного завершения текущего assignment.
+
+6. Как завершать текущий assignment
+
+После выполнения собери:
+
+exact local HEAD;
+exact remote HEAD;
+branch;
+PR URL, если есть;
+changed files;
+выполненные команды;
+test/evidence результаты;
+blockers;
+protected-spine diff;
+production-code diff, если он релевантен;
+base/from commit.
+
+Затем отправь официальный outcome в current assignment endpoint / whoami_endpoint, который был выдан для текущего active_task.
+
+Используй сохранённый assignment_id.
+
+Не ищи новый assignment ID повторным dequeue.
+
+Пример:
+
+POST <current_assignment_endpoint>
+
+{
+  "assignment_id": "<CURRENT_ASSIGNMENT_ID>",
+  "status": "PASS_OR_DONE_OR_FAIL_AS_ALLOWED_BY_NODE",
+  "result": "<полный результат и evidence>",
+  "from_commit": "<SHA до работы>",
+  "git_commit": "<итоговый SHA>",
+  "git_branch": "<выданная ветка>"
+}
+
+Используй только статус, разрешённый transitions текущего node.
+
+Reviewer использует только:
+
+APPROVE
+REJECT
+
+REJECT должен содержать конкретный actionable feedback.
+
+7. Communication endpoints
+
+communication.send_endpoints можно использовать для:
+
+дополнительного сообщения координатору;
+передачи diagnostic context;
+уведомления owner о blocker;
+
+Но это не заменяет официальный assignment result и не должно использоваться для ручного продвижения graph.
+
+Не создавай manual implementation handoff, если declared graph сам должен выполнить transition.
+
+8. Когда можно получать следующую identity
+
+Только после того как current assignment result успешно принят сервисом и текущий assignment больше не остаётся active, снова вызови:
+
+GET или POST {{WHOAMI_URL}}
+
+Затем отправь git_address в новый reply_url ровно один раз и сразу продолжай под новой identity.
+
+Ожидаемый цикл:
+
+current node
+→ official result
+→ reviewer 1
+→ APPROVE/REJECT
+→ reviewer 2
+→ APPROVE/REJECT
+→ next graph node
+→ …
+
+9. Важный случай: handoff не подтверждён
+
+Если после отправки DONE/PASS сервис:
+
+возвращает ту же identity;
+показывает identity_reused=true;
+текущий assignment остаётся active;
+
+это означает, что handoff не завершён.
+
+В таком случае:
+
+не вызывай общий /api/v1/agents/whoami;
+не назначай следующего агента самостоятельно;
+не создавай новую очередь;
+сохрани текущий assignment;
+диагностируй ответ nginx-qa через HTTP API;
+если graph не имеет допустимого выхода, сообщи BLOCKED и попроси обновить sprint/graph.
+10. Queue empty
+
+Если общий identity API после успешного handoff возвращает:
+
+404 sequential_graph_queue_empty
+
+не придумывай следующую роль.
+
+Проверь состояние через разрешённый HTTP state/card endpoint.
+
+Если graph terminal — заверши работу.
+
+Если transition должен существовать, но queue пуста — сообщи orchestration blocker.
+
+Если у тебя всё ещё сохранён активный assignment, queue empty не отменяет текущую задачу.
+
+11. Запрещено
+
+Не:
+
+переимпортируй sprint JSON;
+повторно ставь задачи в очередь;
+создавай новый graph;
+меняй agents/roles;
+выбирай reviewer;
+выдавай самому себе следующую задачу;
+merge PR без merge-record/gate, если graph требует reviewer approvals;
+считай green CI заменой reviewer gate.
+
+Делай это только если текущий active_task явно поручает coordinator/import/merge действие.
+
+Начни сейчас с общего /api/v1/agents/whoami. После получения agent + active_task сразу покажи identity summary и выполняй задачу без моего дополнительного подтверждения.

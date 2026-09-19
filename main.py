@@ -141,6 +141,9 @@ specializations_path = base_dir / "specializations.json"
 attachments_path = base_dir / "attachments"
 screenshot_folders_path = base_dir / "screenshot_folders"
 evidence_folders_path = base_dir / "evidence_folders"
+sequential_launch_prompt_path = (
+    base_dir / "prompts" / "sequential_sprint_launch_standard.txt"
+)
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
 FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
@@ -7940,6 +7943,99 @@ def runtime_state_directory() -> Path:
     return history_path.parent / "runtime_state"
 
 
+def normalize_public_nginx_qa_base_url(value: Any) -> str:
+    raw_url = str(value or "").strip()
+    if not raw_url:
+        return ""
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+        port = parsed.port
+    except ValueError:
+        return ""
+    hostname = str(parsed.hostname or "").strip().casefold()
+    if (
+        parsed.scheme.casefold() != "https"
+        or not hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or hostname in {"your_public_host", "replace-me.example", "example.com"}
+    ):
+        return ""
+
+    host = parsed.hostname or ""
+    if ":" in host and not host.startswith("["):
+        host = f"[{host}]"
+    if port is not None:
+        host = f"{host}:{port}"
+
+    path = parsed.path.rstrip("/")
+    for suffix in (
+        "/api/v1/telegram/agents/sequential",
+        "/api/v1/telegram/agents/parallel",
+        "/api/v1/agents/whoami",
+    ):
+        if path.casefold().endswith(suffix.casefold()):
+            path = path[: -len(suffix)].rstrip("/")
+            break
+    return urllib.parse.urlunsplit(("https", host, path, "", ""))
+
+
+def cloudflared_public_base_url() -> str:
+    quick_tunnel_path = runtime_state_directory() / "cloudflared-quick-tunnel.url"
+    candidates: list[str] = []
+    try:
+        candidates.append(quick_tunnel_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError):
+        pass
+    candidates.extend(
+        (
+            os.getenv("CLOUDFLARED_PUBLIC_URL", ""),
+            os.getenv("TELEGRAM_WEBHOOK_URL", ""),
+        )
+    )
+    for candidate in candidates:
+        base_url = normalize_public_nginx_qa_base_url(candidate)
+        if base_url:
+            return base_url
+    return ""
+
+
+def render_sequential_launch_prompt(
+    *,
+    project_name: str,
+    git_address: str,
+    nginx_qa_base_url: str,
+) -> str:
+    try:
+        template = sequential_launch_prompt_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Sequential sprint prompt template is unavailable",
+        ) from exc
+
+    replacements = {
+        "{{PROJECT_NAME}}": project_name,
+        "{{GIT_ADDRESS}}": git_address,
+        "{{NGINX_QA_BASE_URL}}": nginx_qa_base_url.rstrip("/"),
+        "{{WHOAMI_URL}}": (
+            f"{nginx_qa_base_url.rstrip('/')}/api/v1/agents/whoami"
+        ),
+    }
+    missing = [placeholder for placeholder in replacements if placeholder not in template]
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=(
+                "Sequential sprint prompt template is missing placeholders: "
+                + ", ".join(missing)
+            ),
+        )
+    for placeholder, replacement in replacements.items():
+        template = template.replace(placeholder, replacement)
+    return template
+
+
 def queue_runtime_state_path(queue_name: str) -> Path:
     if queue_name not in QUEUE_DEFINITIONS:
         raise RuntimeError(f"Unknown persisted queue: {queue_name}")
@@ -11136,7 +11232,8 @@ def render_index_v2() -> str:
       display: none;
     }
     main.agents-view,
-    main.consultants-view {
+    main.consultants-view,
+    main.launch-prompt-view {
       grid-template-columns: minmax(0, 1fr);
     }
     section {
@@ -12344,6 +12441,25 @@ def render_index_v2() -> str:
       overflow: auto;
       padding-right: 4px;
     }
+    .launch-prompt-meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .launch-prompt-meta label {
+      margin-top: 0;
+    }
+    .launch-prompt-meta .full-width {
+      grid-column: 1 / -1;
+    }
+    textarea.launch-prompt-output {
+      min-height: 58vh;
+      white-space: pre;
+      overflow: auto;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
     main.cycle-graph-view {
       grid-template-columns: minmax(280px, 350px) minmax(0, 1fr);
       align-items: start;
@@ -12810,8 +12926,12 @@ def render_index_v2() -> str:
         grid-template-columns: 1fr;
       }
       .clone-form-grid,
-      .clone-preview-fields {
+      .clone-preview-fields,
+      .launch-prompt-meta {
         grid-template-columns: 1fr;
+      }
+      .launch-prompt-meta .full-width {
+        grid-column: auto;
       }
       .inline-control {
         grid-template-columns: 1fr;
@@ -12835,6 +12955,8 @@ def render_index_v2() -> str:
       <button class="help-button" data-help-topic="page:messages" type="button" title="Что это?" aria-label="Подсказка: Сообщения">?</button>
       <button class="page-tab" data-view="git-context" type="button">Git context</button>
       <button class="help-button" data-help-topic="page:git-context" type="button" title="Что это?" aria-label="Подсказка: Git context">?</button>
+      <button class="page-tab" data-view="launch-prompt" type="button">Промпт запуска</button>
+      <button class="help-button" data-help-topic="page:launch-prompt" type="button" title="Что это?" aria-label="Подсказка: Промпт запуска">?</button>
       <button class="page-tab" data-view="cycles" type="button">Граф группы и циклы</button>
       <button class="help-button" data-help-topic="page:cycles" type="button" title="Что это?" aria-label="Подсказка: Граф группы и циклы">?</button>
       <button class="page-tab" data-view="screenshots" type="button">Скриншоты</button>
@@ -13076,6 +13198,42 @@ def render_index_v2() -> str:
             <strong id="activeGitContextCommit">не задан</strong>
           </div>
         </div>
+      </div>
+    </section>
+  </main>
+  <main class="view launch-prompt-view" data-view="launch-prompt">
+    <section>
+      <div class="panel">
+        <h2>Промпт запуска sequential sprint</h2>
+        <div class="subtle">Название и Git address берутся из активного Git context. Публичный вариант использует текущий адрес quick tunnel Cloudflare.</div>
+        <div class="launch-prompt-meta">
+          <div>
+            <label for="launchPromptProjectName">Проект</label>
+            <input id="launchPromptProjectName" readonly>
+          </div>
+          <div>
+            <label for="launchPromptEndpointMode">Адрес nginx-qa</label>
+            <select id="launchPromptEndpointMode">
+              <option value="public" selected>Публичный Cloudflare</option>
+              <option value="local">Локальный localhost</option>
+            </select>
+          </div>
+          <div class="full-width">
+            <label for="launchPromptGitAddress">Git address</label>
+            <input id="launchPromptGitAddress" readonly>
+          </div>
+          <div class="full-width">
+            <label for="launchPromptWhoamiUrl">Identity endpoint</label>
+            <input id="launchPromptWhoamiUrl" readonly>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="primary" id="copyLaunchPromptButton" type="button" disabled>Скопировать промпт</button>
+          <button class="secondary" id="refreshLaunchPromptButton" type="button">Обновить</button>
+        </div>
+        <div class="status" id="launchPromptStatus"></div>
+        <label for="launchPromptText">Готовый промпт</label>
+        <textarea class="launch-prompt-output" id="launchPromptText" readonly spellcheck="false"></textarea>
       </div>
     </section>
   </main>
@@ -13546,6 +13704,11 @@ def render_index_v2() -> str:
         title: "Git context",
         purpose: "Здесь выбирают активный проект/телефон и управляют связями phone -> Git repository.",
         logic: "После выбора активного номера остальные вкладки показывают очереди, историю и файлы только этого Git context."
+      },
+      "page:launch-prompt": {
+        title: "Промпт запуска",
+        purpose: "Создает готовую инструкцию запуска sequential sprint для выбранного проекта.",
+        logic: "Система подставляет название проекта, Git address и публичный адрес текущего Cloudflare tunnel. При работе на этом компьютере можно выбрать localhost."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -14422,6 +14585,13 @@ def render_index_v2() -> str:
     const activeGitContextPhoneEl = document.getElementById("activeGitContextPhone");
     const activeGitContextProjectEl = document.getElementById("activeGitContextProject");
     const activeGitContextCommitEl = document.getElementById("activeGitContextCommit");
+    const launchPromptProjectNameEl = document.getElementById("launchPromptProjectName");
+    const launchPromptGitAddressEl = document.getElementById("launchPromptGitAddress");
+    const launchPromptEndpointModeEl = document.getElementById("launchPromptEndpointMode");
+    const launchPromptWhoamiUrlEl = document.getElementById("launchPromptWhoamiUrl");
+    const launchPromptTextEl = document.getElementById("launchPromptText");
+    const launchPromptStatusEl = document.getElementById("launchPromptStatus");
+    const copyLaunchPromptButtonEl = document.getElementById("copyLaunchPromptButton");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -14508,6 +14678,7 @@ def render_index_v2() -> str:
     let allAgents = [];
     let projectSprints = [];
     let projectSprintsProjectPhone = "";
+    let launchPromptRequestVersion = 0;
     let telegramHistoryForwarding = {enabled: false, destination_configured: false};
     let telegramHistoryForwardingProjectPhone = "";
     let pendingSpecializations = {};
@@ -15031,6 +15202,85 @@ def render_index_v2() -> str:
       return context ? String(context.git_context_key || "").trim() : "";
     }
 
+    function launchPromptViewIsActive() {
+      const view = document.querySelector('main[data-view="launch-prompt"]');
+      return Boolean(view && view.classList.contains("active"));
+    }
+
+    function setLaunchPromptStatus(message, kind = "") {
+      launchPromptStatusEl.textContent = message || "";
+      launchPromptStatusEl.className = `status ${kind}`.trim();
+    }
+
+    function clearLaunchPrompt() {
+      launchPromptProjectNameEl.value = "";
+      launchPromptGitAddressEl.value = "";
+      launchPromptWhoamiUrlEl.value = "";
+      launchPromptTextEl.value = "";
+      copyLaunchPromptButtonEl.disabled = true;
+    }
+
+    async function refreshLaunchPrompt() {
+      const context = activeProjectContext();
+      const gitContextKey = activeGitContextKey();
+      if (!context || !gitContextKey) {
+        launchPromptRequestVersion += 1;
+        clearLaunchPrompt();
+        setLaunchPromptStatus(activeGitContextRequiredMessage(), "error");
+        return;
+      }
+
+      launchPromptProjectNameEl.value = context.project_name || "Project";
+      launchPromptGitAddressEl.value = context.git_address || "";
+      launchPromptWhoamiUrlEl.value = "";
+      launchPromptTextEl.value = "";
+      copyLaunchPromptButtonEl.disabled = true;
+      setLaunchPromptStatus("Формирую промпт...");
+      const requestVersion = ++launchPromptRequestVersion;
+      const params = new URLSearchParams({
+        git_context_key: gitContextKey,
+        endpoint_mode: launchPromptEndpointModeEl.value || "public"
+      });
+      const response = await fetch(`/api/v1/sequential-sprint-prompt?${params.toString()}`);
+      const data = await response.json();
+      if (requestVersion !== launchPromptRequestVersion) {
+        return;
+      }
+      if (!response.ok) {
+        const detail = typeof data.detail === "string"
+          ? data.detail
+          : JSON.stringify(data.detail || data);
+        clearLaunchPrompt();
+        setLaunchPromptStatus(detail || "Не удалось сформировать промпт.", "error");
+        return;
+      }
+
+      const project = data.project || {};
+      launchPromptProjectNameEl.value = project.project_name || "Project";
+      launchPromptGitAddressEl.value = project.git_address || "";
+      launchPromptWhoamiUrlEl.value = data.selected_whoami_url || "";
+      launchPromptTextEl.value = data.prompt || "";
+      copyLaunchPromptButtonEl.disabled = !launchPromptTextEl.value;
+      if (data.warning) {
+        setLaunchPromptStatus(data.warning, "error");
+      } else {
+        const modeLabel = data.endpoint_mode === "public"
+          ? "публичным адресом Cloudflare"
+          : "локальным адресом";
+        setLaunchPromptStatus(`Промпт готов с ${modeLabel}.`, "ok");
+      }
+    }
+
+    async function copyLaunchPrompt() {
+      const prompt = launchPromptTextEl.value;
+      if (!prompt) {
+        setLaunchPromptStatus("Сначала сформируйте промпт.", "error");
+        return;
+      }
+      await copyTextToClipboard(prompt);
+      setLaunchPromptStatus("Промпт скопирован.", "ok");
+    }
+
     function contextKeyList(rawValue) {
       if (Array.isArray(rawValue)) {
         return uniqueList(rawValue.map((value) => String(value || "").trim()).filter(Boolean));
@@ -15099,6 +15349,9 @@ def render_index_v2() -> str:
       renderAgentsForActiveContext(selectedAgentId);
       if (cycleGraphViewIsActive()) {
         refreshCycleGraph({force: true}).catch((error) => setCycleGraphStatus(error.message, "error"));
+      }
+      if (launchPromptViewIsActive()) {
+        refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
       }
     }
 
@@ -19283,6 +19536,9 @@ ${data.patch || ""}
       if (cycleGraphViewIsActive()) {
         refreshTasks.push(refreshCycleGraph({silent: true}));
       }
+      if (launchPromptViewIsActive()) {
+        refreshTasks.push(refreshLaunchPrompt());
+      }
       await Promise.all(refreshTasks);
     }
 
@@ -19309,6 +19565,9 @@ ${data.patch || ""}
         cycleGraphAbortController = null;
         cycleGraphRefreshInFlight = false;
       }
+      if (view === "launch-prompt") {
+        refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
+      }
     }
 
     queueEl.addEventListener("change", applyQueueDefaults);
@@ -19316,6 +19575,15 @@ ${data.patch || ""}
     scheduleDelayMinutesEl.addEventListener("input", () => setStatus(""));
     document.querySelectorAll(".page-tab").forEach((button) => {
       button.addEventListener("click", () => setActiveView(button.dataset.view));
+    });
+    launchPromptEndpointModeEl.addEventListener("change", () => {
+      refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
+    });
+    document.getElementById("refreshLaunchPromptButton").addEventListener("click", () => {
+      refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
+    });
+    copyLaunchPromptButtonEl.addEventListener("click", () => {
+      copyLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
     cycleGraphCycleSelectEl.addEventListener("change", () => {
       cycleGraphSelectedCycleId = cycleGraphCycleSelectEl.value;
@@ -25934,6 +26202,78 @@ async def post_project_manager_0001(request: Request) -> dict[str, Any]:
         if isinstance(project_context.get("groups"), list)
         else 0,
         "cycle_count": len(cycle_summaries_from_records(cycle_records)),
+    }
+
+
+@app.get("/api/v1/sequential-sprint-prompt")
+async def get_sequential_sprint_prompt(
+    request: Request,
+    git_context_key: str,
+    endpoint_mode: str = "public",
+) -> dict[str, Any]:
+    requested_mode = endpoint_mode.strip().casefold()
+    if requested_mode not in {"public", "local"}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="endpoint_mode must be public or local",
+        )
+
+    config = await read_git_config()
+    context = configured_git_context_for_key(
+        config,
+        git_context_key,
+        request_port(request),
+    )
+    if context is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Git context was not found",
+        )
+    project = public_project_context(context)
+    project_name = str(project.get("project_name") or "Project").strip()
+    git_address = str(project.get("git_address") or "").strip()
+    if not git_address:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="The selected Git context has no usable Git address",
+        )
+
+    local_port = request_port(request) or 8025
+    local_base_url = f"http://localhost:{local_port}"
+    public_base_url = cloudflared_public_base_url()
+    effective_mode = requested_mode
+    warning = ""
+    if requested_mode == "public" and not public_base_url:
+        effective_mode = "local"
+        warning = (
+            "Публичный адрес Cloudflare пока недоступен; "
+            "сформирован локальный вариант."
+        )
+    selected_base_url = (
+        public_base_url if effective_mode == "public" else local_base_url
+    )
+    selected_whoami_url = f"{selected_base_url}/api/v1/agents/whoami"
+    return {
+        "project": project,
+        "requested_endpoint_mode": requested_mode,
+        "endpoint_mode": effective_mode,
+        "public_endpoint_available": bool(public_base_url),
+        "local_base_url": local_base_url,
+        "local_whoami_url": f"{local_base_url}/api/v1/agents/whoami",
+        "public_base_url": public_base_url,
+        "public_whoami_url": (
+            f"{public_base_url}/api/v1/agents/whoami"
+            if public_base_url
+            else ""
+        ),
+        "selected_base_url": selected_base_url,
+        "selected_whoami_url": selected_whoami_url,
+        "warning": warning,
+        "prompt": render_sequential_launch_prompt(
+            project_name=project_name,
+            git_address=git_address,
+            nginx_qa_base_url=selected_base_url,
+        ),
     }
 
 
