@@ -126,6 +126,7 @@ evidence_folders_lock = asyncio.Lock()
 scheduled_tasks_lock = asyncio.Lock()
 group_task_submission_lock = asyncio.Lock()
 sprint_history_lock = asyncio.Lock()
+sequential_prompt_storage_lock = asyncio.Lock()
 scheduled_tasks: dict[str, dict[str, Any]] = {}
 scheduled_timer_tasks: dict[str, asyncio.Task[Any]] = {}
 base_dir = Path(__file__).resolve().parent
@@ -144,6 +145,7 @@ evidence_folders_path = base_dir / "evidence_folders"
 sequential_launch_prompt_path = (
     base_dir / "prompts" / "sequential_sprint_launch_standard.txt"
 )
+DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE = r"D:\prompts\{repository}"
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
 FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
@@ -8000,6 +8002,128 @@ def cloudflared_public_base_url() -> str:
     return ""
 
 
+def sequential_prompt_settings_path() -> Path:
+    return runtime_state_directory() / "sequential-prompt-settings.json"
+
+
+def validate_sequential_prompt_directory_template(value: Any) -> str:
+    directory_template = str(value or "").strip()
+    if not directory_template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory template is empty",
+        )
+    if len(directory_template) > 1000 or "\x00" in directory_template:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory template is invalid",
+        )
+    placeholders = set(re.findall(r"\{([^{}]+)\}", directory_template))
+    unsupported = placeholders - {"repository", "project", "git_context_key"}
+    if unsupported:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Unsupported prompt directory placeholders: "
+                + ", ".join(sorted(unsupported))
+            ),
+        )
+    return directory_template
+
+
+def read_sequential_prompt_settings_file() -> dict[str, str]:
+    settings_path = sequential_prompt_settings_path()
+    if not settings_path.exists():
+        return {
+            "directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+        }
+    try:
+        with settings_path.open("r", encoding="utf-8") as file:
+            data = json.load(file)
+        directory_template = validate_sequential_prompt_directory_template(
+            data.get("directory_template") if isinstance(data, dict) else None
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError, HTTPException):
+        directory_template = DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE
+    return {"directory_template": directory_template}
+
+
+def write_sequential_prompt_settings_file(directory_template: str) -> dict[str, str]:
+    normalized_template = validate_sequential_prompt_directory_template(
+        directory_template
+    )
+    write_json_file_atomic(
+        sequential_prompt_settings_path(),
+        {
+            "directory_template": normalized_template,
+            "updated_at": utc_now(),
+        },
+    )
+    return {"directory_template": normalized_template}
+
+
+def sequential_prompt_path_segment(value: Any, fallback: str) -> str:
+    segment = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(value or "").strip())
+    segment = re.sub(r"\s+", "-", segment).strip(" .-")
+    return (segment[:120].strip(" .-") or fallback)
+
+
+def repository_name_for_prompt(git_address: str, project_name: str) -> str:
+    address = str(git_address or "").strip().replace("\\", "/").rstrip("/")
+    parsed = urllib.parse.urlparse(address)
+    path = parsed.path if parsed.scheme else address
+    if not parsed.scheme and re.match(r"^[^/]+:[^/]+", address):
+        path = address.split(":", 1)[1]
+    repository_name = path.rstrip("/").rsplit("/", 1)[-1]
+    if repository_name.casefold().endswith(".git"):
+        repository_name = repository_name[:-4]
+    return sequential_prompt_path_segment(repository_name, project_name or "repository")
+
+
+def resolve_sequential_prompt_directory(
+    directory_template: str,
+    *,
+    project_name: str,
+    git_address: str,
+    git_context_key: str,
+) -> Path:
+    replacements = {
+        "{repository}": repository_name_for_prompt(git_address, project_name),
+        "{project}": sequential_prompt_path_segment(project_name, "project"),
+        "{git_context_key}": sequential_prompt_path_segment(
+            git_context_key,
+            "git-context",
+        ),
+    }
+    resolved = os.path.expandvars(os.path.expanduser(directory_template))
+    for placeholder, replacement in replacements.items():
+        resolved = resolved.replace(placeholder, replacement)
+    prompt_directory = Path(resolved)
+    if not prompt_directory.is_absolute():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Prompt directory must resolve to an absolute path",
+        )
+    return prompt_directory
+
+
+def write_prompt_text_if_changed(target_path: Path, prompt: str) -> None:
+    try:
+        if target_path.exists() and target_path.read_text(encoding="utf-8") == prompt:
+            return
+    except (OSError, UnicodeError):
+        pass
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path = target_path.with_name(
+        f".{target_path.name}.{uuid4().hex}.tmp"
+    )
+    try:
+        temporary_path.write_text(prompt, encoding="utf-8")
+        os.replace(temporary_path, target_path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
 def render_sequential_launch_prompt(
     *,
     project_name: str,
@@ -8034,6 +8158,138 @@ def render_sequential_launch_prompt(
     for placeholder, replacement in replacements.items():
         template = template.replace(placeholder, replacement)
     return template
+
+
+def materialize_sequential_launch_prompt(
+    *,
+    prompt: str,
+    directory_template: str,
+    project_name: str,
+    git_address: str,
+    git_context_key: str,
+    nginx_qa_base_url: str,
+) -> dict[str, str]:
+    prompt_directory = resolve_sequential_prompt_directory(
+        directory_template,
+        project_name=project_name,
+        git_address=git_address,
+        git_context_key=git_context_key,
+    )
+    prompt_fingerprint = json.dumps(
+        {
+            "project_name": project_name,
+            "git_address": git_address,
+            "git_context_key": git_context_key,
+            "nginx_qa_base_url": nginx_qa_base_url,
+            "prompt": prompt,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    prompt_id = hashlib.sha256(prompt_fingerprint.encode("utf-8")).hexdigest()[:20]
+    prompt_path = prompt_directory / f"sequential-sprint-prompt-{prompt_id}.txt"
+    latest_path = prompt_directory / "latest.txt"
+    delivery_header = (
+        "ВАЖНО: этот пользовательский запрос сохранён полностью на локальном диске.\n"
+        f"Prompt ID: {prompt_id}\n"
+        f"Полный файл: {prompt_path}\n"
+        "Если полученный текст обрезан, прочитай этот UTF-8 файл целиком и "
+        "используй его как полный запрос пользователя.\n\n"
+        "--- НАЧАЛО ПОЛНОГО ЗАПРОСА ---\n\n"
+    )
+    stored_prompt = f"{delivery_header}{prompt.rstrip()}\n"
+    try:
+        write_prompt_text_if_changed(prompt_path, stored_prompt)
+        write_prompt_text_if_changed(latest_path, stored_prompt)
+    except OSError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not save the full prompt to {prompt_directory}: {exc}",
+        ) from exc
+    return {
+        "directory_template": directory_template,
+        "directory": str(prompt_directory),
+        "prompt_id": prompt_id,
+        "prompt_file_path": str(prompt_path),
+        "latest_file_path": str(latest_path),
+        "latest_response_file_path": str(
+            prompt_directory / "latest-response.json"
+        ),
+        "prompt": stored_prompt,
+    }
+
+
+def materialize_sequential_graph_response(
+    *,
+    response: dict[str, Any],
+    directory_template: str,
+    response_kind: str,
+) -> dict[str, Any]:
+    project = response.get("project")
+    project_data = project if isinstance(project, dict) else {}
+    project_name = str(project_data.get("project_name") or "Project").strip()
+    git_address = str(project_data.get("git_address") or "").strip()
+    git_context_key = str(
+        project_data.get("git_context_key")
+        or response.get("context_key")
+        or ""
+    ).strip()
+    prompt_directory = resolve_sequential_prompt_directory(
+        directory_template,
+        project_name=project_name,
+        git_address=git_address,
+        git_context_key=git_context_key,
+    )
+    canonical_response = json.dumps(
+        response,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    response_id = hashlib.sha256(canonical_response.encode("utf-8")).hexdigest()[:20]
+    safe_kind = sequential_prompt_path_segment(response_kind, "graph-response")
+    response_path = prompt_directory / f"{safe_kind}-{response_id}.json"
+    latest_path = prompt_directory / "latest-response.json"
+    storage_fields = {
+        "response_id": response_id,
+        "response_file_path": str(response_path),
+        "latest_response_file_path": str(latest_path),
+        "full_response_instructions": (
+            "Если HTTP-ответ обрезан, прочитай response_file_path как UTF-8 JSON; "
+            "этот файл содержит полный ответ текущего шага графа."
+        ),
+    }
+    stored_response = {**storage_fields, **deepcopy(response)}
+    response_json = json.dumps(
+        stored_response,
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    write_prompt_text_if_changed(response_path, response_json)
+    write_prompt_text_if_changed(latest_path, response_json)
+    return stored_response
+
+
+async def attach_sequential_graph_response_storage(
+    response: dict[str, Any],
+    *,
+    response_kind: str,
+) -> dict[str, Any]:
+    try:
+        async with sequential_prompt_storage_lock:
+            settings = await asyncio.to_thread(read_sequential_prompt_settings_file)
+            return await asyncio.to_thread(
+                materialize_sequential_graph_response,
+                response=response,
+                directory_template=settings["directory_template"],
+                response_kind=response_kind,
+            )
+    except (HTTPException, OSError, UnicodeError) as exc:
+        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+        return {
+            "response_storage_error": str(detail),
+            **response,
+        }
 
 
 def queue_runtime_state_path(queue_name: str) -> Path:
@@ -13205,7 +13461,7 @@ def render_index_v2() -> str:
     <section>
       <div class="panel">
         <h2>Промпт запуска sequential sprint</h2>
-        <div class="subtle">Название и Git address берутся из активного Git context. Публичный вариант использует текущий адрес quick tunnel Cloudflare.</div>
+        <div class="subtle">Название и Git address берутся из активного Git context. Полный пользовательский запрос и полные JSON-ответы переходов сохраняются на диске, чтобы агент мог восстановить обрезанные данные.</div>
         <div class="launch-prompt-meta">
           <div>
             <label for="launchPromptProjectName">Проект</label>
@@ -13226,10 +13482,30 @@ def render_index_v2() -> str:
             <label for="launchPromptWhoamiUrl">Identity endpoint</label>
             <input id="launchPromptWhoamiUrl" readonly>
           </div>
+          <div class="full-width">
+            <label for="launchPromptDirectoryTemplate">Каталог полных запросов и ответов</label>
+            <input id="launchPromptDirectoryTemplate" placeholder="D:\\prompts\\{repository}">
+            <div class="subtle">Можно использовать {repository}, {project} и {git_context_key}. Настройка сохраняется локально.</div>
+          </div>
+          <div>
+            <label for="launchPromptId">Prompt ID</label>
+            <input id="launchPromptId" readonly>
+          </div>
+          <div>
+            <label for="launchPromptFilePath">Полный пользовательский запрос</label>
+            <input id="launchPromptFilePath" readonly>
+          </div>
+          <div class="full-width">
+            <label for="launchPromptLatestResponsePath">Последний полный ответ перехода графа</label>
+            <input id="launchPromptLatestResponsePath" readonly>
+          </div>
         </div>
         <div class="actions">
           <button class="primary" id="copyLaunchPromptButton" type="button" disabled>Скопировать промпт</button>
           <button class="secondary" id="refreshLaunchPromptButton" type="button">Обновить</button>
+          <button class="secondary" id="saveLaunchPromptDirectoryButton" type="button">Сохранить каталог</button>
+          <button class="secondary" id="copyLaunchPromptPathButton" type="button" disabled>Скопировать путь запроса</button>
+          <button class="secondary" id="copyLaunchResponsePathButton" type="button" disabled>Скопировать путь ответа</button>
         </div>
         <div class="status" id="launchPromptStatus"></div>
         <label for="launchPromptText">Готовый промпт</label>
@@ -13708,7 +13984,7 @@ def render_index_v2() -> str:
       "page:launch-prompt": {
         title: "Промпт запуска",
         purpose: "Создает готовую инструкцию запуска sequential sprint для выбранного проекта.",
-        logic: "Система подставляет название проекта, Git address и публичный адрес текущего Cloudflare tunnel. При работе на этом компьютере можно выбрать localhost."
+        logic: "Система подставляет проект и адрес Cloudflare, сохраняет полный пользовательский запрос в UTF-8 файл, а ответы identity/переходов — в latest-response.json. Каталог можно настроить."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -14589,9 +14865,15 @@ def render_index_v2() -> str:
     const launchPromptGitAddressEl = document.getElementById("launchPromptGitAddress");
     const launchPromptEndpointModeEl = document.getElementById("launchPromptEndpointMode");
     const launchPromptWhoamiUrlEl = document.getElementById("launchPromptWhoamiUrl");
+    const launchPromptDirectoryTemplateEl = document.getElementById("launchPromptDirectoryTemplate");
+    const launchPromptIdEl = document.getElementById("launchPromptId");
+    const launchPromptFilePathEl = document.getElementById("launchPromptFilePath");
+    const launchPromptLatestResponsePathEl = document.getElementById("launchPromptLatestResponsePath");
     const launchPromptTextEl = document.getElementById("launchPromptText");
     const launchPromptStatusEl = document.getElementById("launchPromptStatus");
     const copyLaunchPromptButtonEl = document.getElementById("copyLaunchPromptButton");
+    const copyLaunchPromptPathButtonEl = document.getElementById("copyLaunchPromptPathButton");
+    const copyLaunchResponsePathButtonEl = document.getElementById("copyLaunchResponsePathButton");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -14679,6 +14961,7 @@ def render_index_v2() -> str:
     let projectSprints = [];
     let projectSprintsProjectPhone = "";
     let launchPromptRequestVersion = 0;
+    let launchPromptSettingsLoaded = false;
     let telegramHistoryForwarding = {enabled: false, destination_configured: false};
     let telegramHistoryForwardingProjectPhone = "";
     let pendingSpecializations = {};
@@ -15216,11 +15499,57 @@ def render_index_v2() -> str:
       launchPromptProjectNameEl.value = "";
       launchPromptGitAddressEl.value = "";
       launchPromptWhoamiUrlEl.value = "";
+      launchPromptIdEl.value = "";
+      launchPromptFilePathEl.value = "";
+      launchPromptLatestResponsePathEl.value = "";
       launchPromptTextEl.value = "";
       copyLaunchPromptButtonEl.disabled = true;
+      copyLaunchPromptPathButtonEl.disabled = true;
+      copyLaunchResponsePathButtonEl.disabled = true;
+    }
+
+    async function refreshLaunchPromptSettings() {
+      const response = await fetch("/api/v1/sequential-sprint-prompt/settings");
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Не удалось загрузить каталог промптов.");
+      }
+      if (document.activeElement !== launchPromptDirectoryTemplateEl) {
+        launchPromptDirectoryTemplateEl.value = data.directory_template || "";
+      }
+      launchPromptSettingsLoaded = true;
+      return data;
+    }
+
+    async function saveLaunchPromptDirectory() {
+      const directoryTemplate = launchPromptDirectoryTemplateEl.value.trim();
+      if (!directoryTemplate) {
+        setLaunchPromptStatus("Укажите каталог для полных запросов.", "error");
+        return;
+      }
+      setLaunchPromptStatus("Сохраняю каталог...");
+      const response = await fetch("/api/v1/sequential-sprint-prompt/settings", {
+        method: "PUT",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({directory_template: directoryTemplate})
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        const detail = typeof data.detail === "string"
+          ? data.detail
+          : JSON.stringify(data.detail || data);
+        setLaunchPromptStatus(detail || "Не удалось сохранить каталог.", "error");
+        return;
+      }
+      launchPromptDirectoryTemplateEl.value = data.directory_template || directoryTemplate;
+      launchPromptSettingsLoaded = true;
+      await refreshLaunchPrompt();
     }
 
     async function refreshLaunchPrompt() {
+      if (!launchPromptSettingsLoaded) {
+        await refreshLaunchPromptSettings();
+      }
       const context = activeProjectContext();
       const gitContextKey = activeGitContextKey();
       if (!context || !gitContextKey) {
@@ -15233,8 +15562,13 @@ def render_index_v2() -> str:
       launchPromptProjectNameEl.value = context.project_name || "Project";
       launchPromptGitAddressEl.value = context.git_address || "";
       launchPromptWhoamiUrlEl.value = "";
+      launchPromptIdEl.value = "";
+      launchPromptFilePathEl.value = "";
+      launchPromptLatestResponsePathEl.value = "";
       launchPromptTextEl.value = "";
       copyLaunchPromptButtonEl.disabled = true;
+      copyLaunchPromptPathButtonEl.disabled = true;
+      copyLaunchResponsePathButtonEl.disabled = true;
       setLaunchPromptStatus("Формирую промпт...");
       const requestVersion = ++launchPromptRequestVersion;
       const params = new URLSearchParams({
@@ -15259,8 +15593,16 @@ def render_index_v2() -> str:
       launchPromptProjectNameEl.value = project.project_name || "Project";
       launchPromptGitAddressEl.value = project.git_address || "";
       launchPromptWhoamiUrlEl.value = data.selected_whoami_url || "";
+      if (document.activeElement !== launchPromptDirectoryTemplateEl) {
+        launchPromptDirectoryTemplateEl.value = data.prompt_directory_template || "";
+      }
+      launchPromptIdEl.value = data.prompt_id || "";
+      launchPromptFilePathEl.value = data.prompt_file_path || "";
+      launchPromptLatestResponsePathEl.value = data.latest_response_file_path || "";
       launchPromptTextEl.value = data.prompt || "";
       copyLaunchPromptButtonEl.disabled = !launchPromptTextEl.value;
+      copyLaunchPromptPathButtonEl.disabled = !launchPromptFilePathEl.value;
+      copyLaunchResponsePathButtonEl.disabled = !launchPromptLatestResponsePathEl.value;
       if (data.warning) {
         setLaunchPromptStatus(data.warning, "error");
       } else {
@@ -15279,6 +15621,15 @@ def render_index_v2() -> str:
       }
       await copyTextToClipboard(prompt);
       setLaunchPromptStatus("Промпт скопирован.", "ok");
+    }
+
+    async function copyLaunchStoragePath(path, label) {
+      if (!path) {
+        setLaunchPromptStatus("Путь ещё не сформирован.", "error");
+        return;
+      }
+      await copyTextToClipboard(path);
+      setLaunchPromptStatus(`${label} скопирован.`, "ok");
     }
 
     function contextKeyList(rawValue) {
@@ -19585,6 +19936,17 @@ ${data.patch || ""}
     copyLaunchPromptButtonEl.addEventListener("click", () => {
       copyLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
+    document.getElementById("saveLaunchPromptDirectoryButton").addEventListener("click", () => {
+      saveLaunchPromptDirectory().catch((error) => setLaunchPromptStatus(error.message, "error"));
+    });
+    copyLaunchPromptPathButtonEl.addEventListener("click", () => {
+      copyLaunchStoragePath(launchPromptFilePathEl.value, "Путь полного запроса")
+        .catch((error) => setLaunchPromptStatus(error.message, "error"));
+    });
+    copyLaunchResponsePathButtonEl.addEventListener("click", () => {
+      copyLaunchStoragePath(launchPromptLatestResponsePathEl.value, "Путь ответа графа")
+        .catch((error) => setLaunchPromptStatus(error.message, "error"));
+    });
     cycleGraphCycleSelectEl.addEventListener("change", () => {
       cycleGraphSelectedCycleId = cycleGraphCycleSelectEl.value;
       refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
@@ -20843,6 +21205,10 @@ async def enqueue_sequential_agent_node(
     git_branch = str(
         agent.get("git_branch") or agent_parameters.get("git_branch") or ""
     ).strip()
+    next_identity_request = sequential_next_identity_request(
+        "",
+        queue_context.get("git_address"),
+    )
     role_agent_ids = [
         str(agent_id_value).strip()
         for agent_id_value in assignment.get("role_agent_ids", [])
@@ -21070,6 +21436,12 @@ async def enqueue_sequential_agent_node(
                 ),
                 f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
                 decision_example,
+                (
+                    "После успешного принятия решения снова запросите identity: "
+                    "POST /api/v1/agents/whoami, затем отправьте git_address в "
+                    "новый reply_url. Только этот новый запрос выдаёт следующего "
+                    "ревьювера или узел графа."
+                ),
             ]
         )
     else:
@@ -21146,6 +21518,11 @@ async def enqueue_sequential_agent_node(
                 ),
                 f"POST /api/v1/projects/{project_phone}/agents/{logical_agent_phone}/whoami",
                 completion_example,
+                (
+                    "После успешного принятия результата снова запросите identity: "
+                    "POST /api/v1/agents/whoami, затем отправьте git_address в "
+                    "новый reply_url. Выполняйте этот цикл на каждом переходе графа."
+                ),
             ]
         )
     queued = await enqueue_phone_channel(
@@ -21174,6 +21551,7 @@ async def enqueue_sequential_agent_node(
             "to_agent_git_branch": git_branch,
             "git_branch": git_branch,
             "from_commit": queue_context.get("git_commit"),
+            "next_identity_request": next_identity_request,
             "graph_node_index": node_index,
             "graph_node_count": node_count,
             "graph_node_id": current_node_id,
@@ -23732,6 +24110,10 @@ async def identify_sequential_project_agent(
             isinstance(completed_assignment, dict)
             and completed_assignment.get("kind") == "graph_node"
         )
+        assignment_result_accepted = bool(
+            isinstance(completed_assignment, dict)
+            and completed_assignment.get("assignment_id")
+        )
         completion_git_context = deepcopy(result["queue_context"])
         if submitted_git_commit:
             completion_git_context.update(
@@ -23894,6 +24276,8 @@ async def identify_sequential_project_agent(
                 "terminal_node": assignment.get("terminal_node"),
                 "last_transition": assignment.get("last_transition"),
                 "transition_applied": result.get("transition_applied"),
+                "identity_request_required": False,
+                "next_identity_request": None,
                 "completed_assignments": assignment.get("assignments", []),
                 "removed_pending_tasks": removed_tasks,
             }
@@ -24003,6 +24387,20 @@ async def identify_sequential_project_agent(
             ),
             communication_reminder,
         )
+    transition_identity_request = (
+        sequential_next_identity_request(
+            str(request.base_url).rstrip("/"),
+            result["project"].get("git_address"),
+        )
+        if assignment_result_accepted
+        else None
+    )
+    if transition_identity_request is not None:
+        answer += (
+            " Текущий результат принят. Для перехода обязательно снова вызовите "
+            "общий /api/v1/agents/whoami и затем отправьте git_address в новый "
+            "reply_url; не переключайтесь на следующую роль напрямую."
+        )
     return {
         "answer": answer,
         "identity_request": request_message or "Кто я?",
@@ -24027,6 +24425,8 @@ async def identify_sequential_project_agent(
         "pending_transition": assignment.get("pending_transition"),
         "last_transition": assignment.get("last_transition"),
         "transition_applied": result.get("transition_applied"),
+        "identity_request_required": transition_identity_request is not None,
+        "next_identity_request": transition_identity_request,
         "current_assignment_id": assignment_id,
         "next_whoami_endpoint": (
             f"/api/v1/projects/{result['project_phone']}/agents/{agent_phone}/whoami"
@@ -24766,6 +25166,27 @@ async def sequential_runtime_agent_message_reminder(
     )
 
 
+def sequential_next_identity_request(
+    base_url: str,
+    git_address: Any,
+) -> dict[str, Any]:
+    normalized_base_url = str(base_url or "").rstrip("/")
+    whoami_url = f"{normalized_base_url}/api/v1/agents/whoami"
+    repository_url = f"{normalized_base_url}/api/v1/agents/whoami/repository"
+    return {
+        "when": "after_current_assignment_result_is_accepted",
+        "required_for_every_graph_transition": True,
+        "method": "POST",
+        "url": whoami_url,
+        "follow_reply_url": True,
+        "reply": {
+            "method": "POST",
+            "url": repository_url,
+            "json": {"git_address": str(git_address or "").strip()},
+        },
+    }
+
+
 def sequential_runtime_response(
     runtime: dict[str, Any],
     request: Request,
@@ -24781,7 +25202,6 @@ def sequential_runtime_response(
         or ""
     ).strip()
     project_phone = runtime["project_phone"]
-    reply_path = "/api/v1/agents/whoami/repository"
     git_address = runtime["project"].get("git_address")
     metadata = runtime["task"]["metadata"]
     identity_kind = str(metadata.get("identity_kind") or "graph_node")
@@ -24877,11 +25297,7 @@ def sequential_runtime_response(
         "next_identity_request": (
             None
             if reviewer_bootstrap
-            else {
-                "method": "POST",
-                "url": f"{base_url}{reply_path}",
-                "json": {"git_address": git_address},
-            }
+            else sequential_next_identity_request(base_url, git_address)
         ),
     }
 
@@ -24961,7 +25377,10 @@ async def identify_sequential_agent_from_repository(
         f"{str(request.base_url).rstrip('/')}"
         f"/api/v1/projects/{project_phone}/state.json"
     )
-    return response
+    return await attach_sequential_graph_response_storage(
+        response,
+        response_kind="identity-response",
+    )
 
 
 @app.get("/api/v1/projects/{project_id}/state")
@@ -25451,7 +25870,10 @@ async def identify_project_agent(
                 f"{str(request.base_url).rstrip('/')}"
                 f"/api/v1/projects/{snapshot['project_phone']}/state.json"
             )
-            return response
+            return await attach_sequential_graph_response_storage(
+                response,
+                response_kind="transition-response",
+            )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -26205,6 +26627,50 @@ async def post_project_manager_0001(request: Request) -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/sequential-sprint-prompt/settings")
+async def get_sequential_sprint_prompt_settings() -> dict[str, Any]:
+    async with sequential_prompt_storage_lock:
+        settings = await asyncio.to_thread(read_sequential_prompt_settings_file)
+    return {
+        **settings,
+        "default_directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+        "supported_placeholders": [
+            "{repository}",
+            "{project}",
+            "{git_context_key}",
+        ],
+        "settings_path": str(sequential_prompt_settings_path()),
+    }
+
+
+@app.put("/api/v1/sequential-sprint-prompt/settings")
+async def put_sequential_sprint_prompt_settings(
+    request: Request,
+) -> dict[str, Any]:
+    payload = await read_message(request)
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Expected JSON object",
+        )
+    directory_template = payload.get("directory_template")
+    if not isinstance(directory_template, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="directory_template must be a string",
+        )
+    async with sequential_prompt_storage_lock:
+        settings = await asyncio.to_thread(
+            write_sequential_prompt_settings_file,
+            directory_template,
+        )
+    return {
+        **settings,
+        "default_directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+        "settings_path": str(sequential_prompt_settings_path()),
+    }
+
+
 @app.get("/api/v1/sequential-sprint-prompt")
 async def get_sequential_sprint_prompt(
     request: Request,
@@ -26253,6 +26719,24 @@ async def get_sequential_sprint_prompt(
         public_base_url if effective_mode == "public" else local_base_url
     )
     selected_whoami_url = f"{selected_base_url}/api/v1/agents/whoami"
+    base_prompt = render_sequential_launch_prompt(
+        project_name=project_name,
+        git_address=git_address,
+        nginx_qa_base_url=selected_base_url,
+    )
+    async with sequential_prompt_storage_lock:
+        prompt_settings = await asyncio.to_thread(
+            read_sequential_prompt_settings_file
+        )
+        stored_prompt = await asyncio.to_thread(
+            materialize_sequential_launch_prompt,
+            prompt=base_prompt,
+            directory_template=prompt_settings["directory_template"],
+            project_name=project_name,
+            git_address=git_address,
+            git_context_key=str(project.get("git_context_key") or git_context_key),
+            nginx_qa_base_url=selected_base_url,
+        )
     return {
         "project": project,
         "requested_endpoint_mode": requested_mode,
@@ -26269,11 +26753,15 @@ async def get_sequential_sprint_prompt(
         "selected_base_url": selected_base_url,
         "selected_whoami_url": selected_whoami_url,
         "warning": warning,
-        "prompt": render_sequential_launch_prompt(
-            project_name=project_name,
-            git_address=git_address,
-            nginx_qa_base_url=selected_base_url,
-        ),
+        "prompt_id": stored_prompt["prompt_id"],
+        "prompt_directory_template": stored_prompt["directory_template"],
+        "prompt_directory": stored_prompt["directory"],
+        "prompt_file_path": stored_prompt["prompt_file_path"],
+        "latest_prompt_file_path": stored_prompt["latest_file_path"],
+        "latest_response_file_path": stored_prompt[
+            "latest_response_file_path"
+        ],
+        "prompt": stored_prompt["prompt"],
     }
 
 

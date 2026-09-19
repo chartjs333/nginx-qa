@@ -186,11 +186,21 @@ the request before a handoff returns the same identity and `active_task` with
 from older versions can recover the active task from project history and set
 `active_task_recovered_from_history: true`.
 
-After finishing the node, send the result or the next task to a team member
-through an endpoint from `communication.send_endpoints`, then post the Git
-address to the same `reply_url` again. The next queue item can select any role,
+After the current assignment result is accepted, start identity discovery again
+with `GET` or `POST /api/v1/agents/whoami`, then send the Git address to the new
+`reply_url`. Do this for every graph transition, including both reviewer steps;
+do not reuse an old `reply_url` or switch roles directly. The response and queue
+item expose `identity_request_required`/`next_identity_request` so an executor
+can follow this contract mechanically. The next queue item can select any role,
 including a previous one, so cycles and conditional graph paths are supported.
 JSON order does not control later transitions.
+
+The `Промпт запуска` UI tab stores the complete UTF-8 launch request and every
+sequential identity/transition JSON response on local disk. The default
+directory template is `D:\prompts\{repository}` and can be changed on that tab.
+Generated requests expose a `Prompt ID` and file path. Sequential responses put
+`response_id`, `response_file_path`, and `latest_response_file_path` first so an
+executor can recover a response if its HTTP body or chat context was truncated.
 
 An architect can also declare the complete graph with top-level `execution`
 and `nodes`; see
@@ -230,6 +240,12 @@ happen immediately. The common identity queue first returns reviewer 1 and then
 reviewer 2. Both must independently send `APPROVE`. A single `REJECT` cancels
 the proposed transition and returns the source node for rework with the review
 feedback. This gate also applies to transitions into terminal nodes.
+
+Every sequential identity and transition response is also written as complete
+UTF-8 JSON in the configured prompt directory. The response starts with
+`response_file_path` for that exact step and `latest_response_file_path` for the
+latest step. An agent must read `response_file_path` when an HTTP client or chat
+surface truncates the returned node, review context, history, or diff.
 
 Submit a node result to the `whoami_endpoint` from the active queue item:
 

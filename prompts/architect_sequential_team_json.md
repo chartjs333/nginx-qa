@@ -64,6 +64,13 @@ own `from_phone` and the next role's `to_phone`. The next queue item makes the
 single executor assume that target role. This permits loops such as Tester ->
 Backend Developer -> Tester without running roles in parallel.
 
+After every accepted assignment result or review decision, the executor must
+make a new request to `GET` or `POST /api/v1/agents/whoami`, then send the
+project `git_address` to the newly returned `reply_url`. This request cycle is
+required for every graph edge: current node -> reviewer 1 -> reviewer 2 -> next
+node. The executor must not reuse an earlier `reply_url` or infer the next role
+from the graph JSON.
+
 If the sprint requires fixed outcomes and guarded transitions, use the explicit
 `execution` + `nodes` form from
 `examples/project_sequential_graph_import.json`. It requires exactly two

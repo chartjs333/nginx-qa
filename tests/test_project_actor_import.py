@@ -92,6 +92,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "history_lock": main.history_lock,
             "sprint_history_lock": main.sprint_history_lock,
             "group_task_submission_lock": main.group_task_submission_lock,
+            "sequential_prompt_storage_lock": main.sequential_prompt_storage_lock,
             "project_state_patch_cache": main.project_state_patch_cache,
             "queues": main.queues,
             "locks": main.locks,
@@ -105,6 +106,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.history_lock = asyncio.Lock()
         main.sprint_history_lock = asyncio.Lock()
         main.group_task_submission_lock = asyncio.Lock()
+        main.sequential_prompt_storage_lock = asyncio.Lock()
         main.project_state_patch_cache = {}
         main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
         main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
@@ -114,6 +116,9 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         }
         for name in self.TELEGRAM_ENV_NAMES:
             os.environ.pop(name, None)
+        main.write_sequential_prompt_settings_file(
+            str(temp_path / "prompts" / "{repository}")
+        )
         self.write_project()
         self.write_agents()
 
@@ -1456,6 +1461,15 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(first_body["communication_reminder"]["required"])
         self.assertTrue(first_body["execution_authorized"])
         self.assertFalse(first_body["requires_additional_confirmation"])
+        self.assertEqual(
+            first_body["next_identity_request"]["url"],
+            "http://testserver:8025/api/v1/agents/whoami",
+        )
+        self.assertTrue(first_body["next_identity_request"]["follow_reply_url"])
+        self.assertEqual(
+            first_body["next_identity_request"]["reply"]["url"],
+            "http://testserver:8025/api/v1/agents/whoami/repository",
+        )
         self.assertIn("activity_with_patches", first_body["project_state"])
         self.assertGreaterEqual(
             first_body["project_state"]["code_patch_summary"]["activity_count"],
@@ -1934,6 +1948,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(first_review, dict)
         self.assertEqual(first_review["agent"]["id"], "reviewer-one")
         self.assertEqual(first_review["assignment"]["phase"], "review")
+        self.assertTrue(first_review["identity_request_required"])
+        self.assertEqual(
+            first_review["next_identity_request"]["url"],
+            "http://testserver:8025/api/v1/agents/whoami",
+        )
         self.assertEqual(
             patch_calls,
             [
@@ -1981,6 +2000,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(reviewer_body, dict)
         self.assertEqual(reviewer_body["agent"]["id"], "reviewer-one")
         self.assertEqual(
+            reviewer_body["next_identity_request"]["url"],
+            "http://testserver:8025/api/v1/agents/whoami",
+        )
+        self.assertTrue(
+            reviewer_body["active_task"]["metadata"]["next_identity_request"][
+                "required_for_every_graph_transition"
+            ]
+        )
+        self.assertIn(
+            "POST /api/v1/agents/whoami",
+            reviewer_body["active_task"]["message"],
+        )
+        self.assertEqual(
             reviewer_body["active_task"]["message"].count(
                 "[PATCH BETWEEN COMMITS]"
             ),
@@ -2004,6 +2036,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(reviewer_one_status, 200)
         self.assertIsInstance(reviewer_one_result, dict)
+        assert isinstance(reviewer_one_result, dict)
+        self.assertTrue(reviewer_one_result["identity_request_required"])
+        self.assertEqual(
+            reviewer_one_result["next_identity_request"]["url"],
+            "http://testserver:8025/api/v1/agents/whoami",
+        )
 
         reviewer_two_status, reviewer_two_body = await asgi_request(
             "/api/v1/agents/whoami/repository",
