@@ -6,10 +6,12 @@ import binascii
 import hashlib
 import hmac
 import html
+import ipaddress
 import json
 import os
 import random
 import re
+import secrets
 import shutil
 import subprocess
 import time as time_module
@@ -126,6 +128,7 @@ evidence_folders_lock = asyncio.Lock()
 scheduled_tasks_lock = asyncio.Lock()
 group_task_submission_lock = asyncio.Lock()
 sprint_history_lock = asyncio.Lock()
+pending_sprints_lock = asyncio.Lock()
 sequential_prompt_storage_lock = asyncio.Lock()
 scheduled_tasks: dict[str, dict[str, Any]] = {}
 scheduled_timer_tasks: dict[str, asyncio.Task[Any]] = {}
@@ -138,6 +141,7 @@ group_templates_path = base_dir / "group_templates.json"
 email_routes_path = base_dir / "email_routes.json"
 agents_path = base_dir / "agents.json"
 sprint_history_path = base_dir / "project_sprints.json"
+pending_sprints_path = base_dir / "pending_project_sprints.json"
 specializations_path = base_dir / "specializations.json"
 attachments_path = base_dir / "attachments"
 screenshot_folders_path = base_dir / "screenshot_folders"
@@ -188,6 +192,8 @@ GROUP_AGENT_PHONE_MAX = 8999
 IMPORTED_ACTOR_PHONE_MIN = 2000
 IMPORTED_ACTOR_PHONE_MAX = 2999
 MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
+PENDING_SPRINT_TOKEN_HEADER = "X-Pending-Sprints-Token"
+PENDING_SPRINT_ACTIVATION_LEASE = timedelta(minutes=15)
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
@@ -411,6 +417,15 @@ def sprint_history_file_lock(timeout_seconds: float = 30.0):
         yield
 
 
+@contextmanager
+def pending_sprints_file_lock(timeout_seconds: float = 30.0):
+    lock_path = pending_sprints_path.with_name(
+        f"{pending_sprints_path.name}.lock"
+    )
+    with interprocess_file_lock(lock_path, timeout_seconds):
+        yield
+
+
 def write_json_file_atomic(target_path: Path, data: Any) -> None:
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target_path.with_name(
@@ -466,6 +481,32 @@ def read_sprint_history_file() -> dict[str, Any]:
 
 def write_sprint_history_file(data: dict[str, Any]) -> None:
     write_json_file_atomic(sprint_history_path, data)
+
+
+def empty_pending_sprints() -> dict[str, Any]:
+    return {"schema_version": 1, "projects": {}}
+
+
+def read_pending_sprints_file() -> dict[str, Any]:
+    if not pending_sprints_path.exists():
+        return empty_pending_sprints()
+    with pending_sprints_path.open("r", encoding="utf-8") as file:
+        try:
+            data = json.load(file)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"Pending sprints file is invalid JSON: {pending_sprints_path}"
+            ) from exc
+    if not isinstance(data, dict) or not isinstance(data.get("projects"), dict):
+        raise RuntimeError(
+            f"Pending sprints file has an invalid structure: {pending_sprints_path}"
+        )
+    data.setdefault("schema_version", 1)
+    return data
+
+
+def write_pending_sprints_file(data: dict[str, Any]) -> None:
+    write_json_file_atomic(pending_sprints_path, data)
 
 
 def normalize_email_route(raw_route: Any) -> dict[str, str] | None:
@@ -11803,7 +11844,8 @@ def render_index_v2() -> str:
     }
     main.agents-view,
     main.consultants-view,
-    main.launch-prompt-view {
+    main.launch-prompt-view,
+    main.pending-sprints-view {
       grid-template-columns: minmax(0, 1fr);
     }
     section {
@@ -12631,6 +12673,65 @@ def render_index_v2() -> str:
       background: #f1f3f5;
       color: #57606a;
     }
+    .pending-sprints-toolbar {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) auto;
+      gap: 10px;
+      align-items: end;
+      margin-bottom: 12px;
+    }
+    .pending-sprints-layout {
+      display: grid;
+      grid-template-columns: minmax(320px, 0.8fr) minmax(0, 1.2fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .pending-sprints-list,
+    .pending-sprint-preview {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 12px;
+    }
+    .pending-sprints-list-items {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .pending-sprint-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfd;
+      padding: 12px;
+    }
+    .pending-sprint-card.selected {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px var(--accent);
+      background: #f5f9ff;
+    }
+    .pending-sprint-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .pending-sprint-card .actions {
+      margin-top: 10px;
+    }
+    .pending-sprint-preview h3,
+    .pending-sprints-list h3 {
+      margin: 0;
+      font-size: 14px;
+    }
+    textarea.pending-sprint-json {
+      min-height: 420px;
+      margin-top: 10px;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 12px;
+      white-space: pre;
+    }
     .agent-editor {
       margin-top: 12px;
     }
@@ -13441,6 +13542,9 @@ def render_index_v2() -> str:
       .cycle-graph-metrics {
         justify-content: flex-start;
       }
+      .pending-sprints-layout {
+        grid-template-columns: 1fr;
+      }
       .email-route-row {
         grid-template-columns: 1fr;
       }
@@ -13527,6 +13631,8 @@ def render_index_v2() -> str:
       <button class="help-button" data-help-topic="page:git-context" type="button" title="Что это?" aria-label="Подсказка: Git context">?</button>
       <button class="page-tab" data-view="launch-prompt" type="button">Промпт запуска</button>
       <button class="help-button" data-help-topic="page:launch-prompt" type="button" title="Что это?" aria-label="Подсказка: Промпт запуска">?</button>
+      <button class="page-tab" data-view="pending-sprints" type="button">Ожидающие спринты</button>
+      <button class="help-button" data-help-topic="page:pending-sprints" type="button" title="Что это?" aria-label="Подсказка: Ожидающие спринты">?</button>
       <button class="page-tab" data-view="cycles" type="button">Граф группы и циклы</button>
       <button class="help-button" data-help-topic="page:cycles" type="button" title="Что это?" aria-label="Подсказка: Граф группы и циклы">?</button>
       <button class="page-tab" data-view="screenshots" type="button">Скриншоты</button>
@@ -13829,6 +13935,36 @@ def render_index_v2() -> str:
         <div class="status" id="launchPromptStatus"></div>
         <label for="launchPromptText">Готовый промпт</label>
         <textarea class="launch-prompt-output" id="launchPromptText" readonly spellcheck="false"></textarea>
+      </div>
+    </section>
+  </main>
+  <main class="view pending-sprints-view" data-view="pending-sprints">
+    <section>
+      <div class="panel">
+        <h2>Спринты, ожидающие запуска</h2>
+        <div class="subtle">Спринт, полученный через Telegram, хранится как черновик и не меняет агентов или очереди, пока вы явно не запустите его здесь.</div>
+        <div class="pending-sprints-toolbar">
+          <div>
+            <label for="pendingSprintsProjectSelect">Проект</label>
+            <select id="pendingSprintsProjectSelect" disabled>
+              <option value="">Нет доступных проектов</option>
+            </select>
+          </div>
+          <button class="secondary" id="refreshPendingSprintsButton" type="button" disabled>Обновить</button>
+        </div>
+        <div class="subtle" id="pendingSprintsProjectSummary">Выберите проект, чтобы увидеть ожидающие спринты.</div>
+        <div class="status" id="pendingSprintsStatus"></div>
+        <div class="pending-sprints-layout">
+          <div class="pending-sprints-list">
+            <h3>Не запущены</h3>
+            <div class="pending-sprints-list-items" id="pendingSprints"></div>
+          </div>
+          <div class="pending-sprint-preview">
+            <h3 id="pendingSprintPreviewTitle">JSON спринта</h3>
+            <div class="subtle">Выберите спринт слева, чтобы проверить полный исходный JSON перед запуском.</div>
+            <textarea class="pending-sprint-json" id="pendingSprintJsonPreview" readonly spellcheck="false" placeholder="JSON выбранного спринта появится здесь"></textarea>
+          </div>
+        </div>
       </div>
     </section>
   </main>
@@ -14304,6 +14440,11 @@ def render_index_v2() -> str:
         title: "Промпт запуска",
         purpose: "Создает готовую инструкцию запуска sequential sprint для выбранного проекта.",
         logic: "Система подставляет проект и адрес Cloudflare. Каждый агент получает стабильный резервный файл вида D:\\\\Prompt\\\\repository_phone-latest.prompt с полным ответом identity/перехода; оба шаблона пути можно настроить."
+      },
+      "page:pending-sprints": {
+        title: "Ожидающие спринты",
+        purpose: "Показывает JSON-спринты, полученные через Telegram, но еще не запущенные в выбранном проекте.",
+        logic: "Откройте исходный JSON, проверьте проект и задачи, затем нажмите «Запустить». Только после подтверждения система заменит агентов при overwrite и поставит задачи в очереди."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -15194,6 +15335,13 @@ def render_index_v2() -> str:
     const copyLaunchPromptButtonEl = document.getElementById("copyLaunchPromptButton");
     const copyLaunchPromptPathButtonEl = document.getElementById("copyLaunchPromptPathButton");
     const copyLaunchResponsePathButtonEl = document.getElementById("copyLaunchResponsePathButton");
+    const pendingSprintsProjectSelectEl = document.getElementById("pendingSprintsProjectSelect");
+    const pendingSprintsProjectSummaryEl = document.getElementById("pendingSprintsProjectSummary");
+    const refreshPendingSprintsButtonEl = document.getElementById("refreshPendingSprintsButton");
+    const pendingSprintsStatusEl = document.getElementById("pendingSprintsStatus");
+    const pendingSprintsEl = document.getElementById("pendingSprints");
+    const pendingSprintPreviewTitleEl = document.getElementById("pendingSprintPreviewTitle");
+    const pendingSprintJsonPreviewEl = document.getElementById("pendingSprintJsonPreview");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -15280,6 +15428,25 @@ def render_index_v2() -> str:
     let allAgents = [];
     let projectSprints = [];
     let projectSprintsProjectPhone = "";
+    const initialPageParams = new URLSearchParams(window.location.search);
+    const pendingSprintsDeepLink = {
+      view: initialPageParams.get("view") || "",
+      projectPhone: initialPageParams.get("project_phone") || "",
+      sprintId: initialPageParams.get("sprint_id") || "",
+      pendingToken: initialPageParams.get("pending_token") || ""
+    };
+    const pendingSprintsPublicToken = pendingSprintsDeepLink.view === "pending-sprints"
+      ? pendingSprintsDeepLink.pendingToken
+      : "";
+    let pendingSprints = [];
+    let pendingSprintsProjectPhone = "";
+    let pendingSprintsSelectedId = pendingSprintsDeepLink.view === "pending-sprints"
+      ? pendingSprintsDeepLink.sprintId
+      : "";
+    let pendingSprintsRequestVersion = 0;
+    let pendingSprintPreviewRequestVersion = 0;
+    let pendingSprintStartInFlightId = "";
+    let pendingSprintsDeepLinkApplied = false;
     let launchPromptRequestVersion = 0;
     let launchPromptSettingsLoaded = false;
     let telegramHistoryForwarding = {enabled: false, destination_configured: false};
@@ -15967,6 +16134,364 @@ def render_index_v2() -> str:
       setLaunchPromptStatus(`${label} скопирован.`, "ok");
     }
 
+    function pendingSprintsViewIsActive() {
+      const view = document.querySelector('main[data-view="pending-sprints"]');
+      return Boolean(view && view.classList.contains("active"));
+    }
+
+    function pendingSprintsActiveProjectPhone() {
+      const context = activeProjectContext();
+      const projectPhone = String((context && context.project_phone) || "").trim();
+      const tokenProjectPhone = String(pendingSprintsDeepLink.projectPhone || "").trim();
+      if (pendingSprintsPublicToken && projectPhone !== tokenProjectPhone) {
+        return "";
+      }
+      return projectPhone;
+    }
+
+    function setPendingSprintsStatus(message, kind = "") {
+      pendingSprintsStatusEl.textContent = message || "";
+      pendingSprintsStatusEl.className = `status ${kind}`.trim();
+    }
+
+    function pendingSprintErrorMessage(data, fallback) {
+      if (data && typeof data.detail === "string") {
+        return data.detail;
+      }
+      if (data && data.detail) {
+        return formatMessage(data.detail);
+      }
+      return fallback;
+    }
+
+    function pendingSprintsFetchOptions(options = {}) {
+      const requestOptions = {...options};
+      const headers = new Headers(options.headers || {});
+      if (pendingSprintsPublicToken) {
+        headers.set("X-Pending-Sprints-Token", pendingSprintsPublicToken);
+      }
+      requestOptions.headers = headers;
+      return requestOptions;
+    }
+
+    function pendingSprintProjectChoices() {
+      const seen = new Set();
+      return gitContexts.flatMap((context) => {
+        const projectPhone = String((context && context.project_phone) || "").trim();
+        const tokenProjectPhone = String(pendingSprintsDeepLink.projectPhone || "").trim();
+        if (
+          !projectPhone
+          || seen.has(projectPhone)
+          || (pendingSprintsPublicToken && projectPhone !== tokenProjectPhone)
+        ) {
+          return [];
+        }
+        seen.add(projectPhone);
+        return [{
+          phone: projectPhone,
+          name: String(context.project_name || context.git_context_key || "Project"),
+          context
+        }];
+      });
+    }
+
+    function renderPendingSprintsProjectOptions() {
+      const choices = pendingSprintProjectChoices();
+      const activePhone = pendingSprintsActiveProjectPhone();
+      const hasActiveChoice = choices.some((choice) => choice.phone === activePhone);
+      pendingSprintsProjectSelectEl.innerHTML = choices.length
+        ? (hasActiveChoice ? "" : `<option value="" selected>Выберите доступный проект</option>`) + choices.map((choice) => {
+          const selected = choice.phone === activePhone ? " selected" : "";
+          return `<option value="${escapeHtml(choice.phone)}"${selected}>${escapeHtml(choice.name)} · phone ${escapeHtml(choice.phone)}</option>`;
+        }).join("")
+        : `<option value="">Нет доступных проектов</option>`;
+      pendingSprintsProjectSelectEl.disabled = !choices.length || Boolean(pendingSprintStartInFlightId);
+      if (activePhone && hasActiveChoice) {
+        pendingSprintsProjectSelectEl.value = activePhone;
+      }
+      refreshPendingSprintsButtonEl.disabled = !activePhone || Boolean(pendingSprintStartInFlightId);
+      const context = activeProjectContext();
+      pendingSprintsProjectSummaryEl.textContent = activePhone && context
+        ? `Проект: ${context.project_name || context.git_context_key || "Project"} · phone ${activePhone}`
+        : "Выберите проект с каноническим телефоном, чтобы увидеть ожидающие спринты.";
+    }
+
+    function clearPendingSprintPreview() {
+      pendingSprintPreviewRequestVersion += 1;
+      pendingSprintPreviewTitleEl.textContent = "JSON спринта";
+      pendingSprintJsonPreviewEl.value = "";
+    }
+
+    function pendingSprintStatusLabel(sprint) {
+      const statusValue = String((sprint && sprint.status) || "pending").trim().toLowerCase();
+      if (statusValue === "activating") {
+        if (sprint && sprint.startable === true) {
+          return "можно повторить запуск";
+        }
+        return "запускается";
+      }
+      return "ожидает запуска";
+    }
+
+    function renderPendingSprints() {
+      renderPendingSprintsProjectOptions();
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      if (!projectPhone) {
+        pendingSprintsEl.innerHTML = `<div class="subtle">Проект не выбран.</div>`;
+        return;
+      }
+      if (pendingSprintsProjectPhone !== projectPhone) {
+        pendingSprintsEl.innerHTML = `<div class="subtle">Загружаю ожидающие спринты...</div>`;
+        return;
+      }
+      if (!pendingSprints.length) {
+        pendingSprintsEl.innerHTML = `<div class="subtle">Для этого проекта нет спринтов, ожидающих запуска.</div>`;
+        return;
+      }
+      pendingSprintsEl.innerHTML = pendingSprints.map((sprint) => {
+        const sprintId = String(sprint.id || "");
+        const selected = sprintId === pendingSprintsSelectedId ? " selected" : "";
+        const receivedAt = sprint.received_at ? formatLocalDateTime(sprint.received_at) : "дата неизвестна";
+        const source = sprint.source_filename ? ` · файл: ${sprint.source_filename}` : "";
+        const mode = sprint.assignment_mode || "sequential";
+        const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}`;
+        const isStartingLocally = sprintId === pendingSprintStartInFlightId;
+        const isActivating = String(sprint.status || "").trim().toLowerCase() === "activating";
+        const canRetry = isActivating && sprint.startable === true;
+        const startDisabled = isStartingLocally || (isActivating && !canRetry);
+        const startLabel = isStartingLocally || (isActivating && !canRetry)
+          ? "Запускается..."
+          : canRetry
+            ? "Повторить запуск"
+            : "Запустить";
+        return `<article class="pending-sprint-card${selected}" data-pending-sprint-id="${escapeHtml(sprintId)}">
+          <div class="pending-sprint-card-head">
+            <div>
+              <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence || ""}`)}<span class="sprint-history-badge">${escapeHtml(pendingSprintStatusLabel(sprint))}</span></div>
+              <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button">Показать JSON</button>
+            <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startDisabled ? " disabled" : ""}>${startLabel}</button>
+          </div>
+        </article>`;
+      }).join("");
+    }
+
+    function syncPendingSprintsUrl() {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("view");
+      url.searchParams.delete("project_phone");
+      url.searchParams.delete("sprint_id");
+      url.searchParams.delete("pending_token");
+      if (pendingSprintsViewIsActive()) {
+        url.searchParams.set("view", "pending-sprints");
+        const projectPhone = pendingSprintsActiveProjectPhone()
+          || (pendingSprintsPublicToken ? pendingSprintsDeepLink.projectPhone : "");
+        if (projectPhone) {
+          url.searchParams.set("project_phone", projectPhone);
+        }
+        if (pendingSprintsSelectedId) {
+          url.searchParams.set("sprint_id", pendingSprintsSelectedId);
+        }
+        if (pendingSprintsPublicToken) {
+          url.searchParams.set("pending_token", pendingSprintsPublicToken);
+        }
+      }
+      window.history.replaceState(null, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+
+    async function loadPendingSprintPreview(sprintId, {syncUrl = true} = {}) {
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      const selectedId = String(sprintId || "").trim();
+      if (!projectPhone || !selectedId) {
+        clearPendingSprintPreview();
+        return;
+      }
+      pendingSprintsSelectedId = selectedId;
+      renderPendingSprints();
+      if (syncUrl) {
+        syncPendingSprintsUrl();
+      }
+      pendingSprintPreviewTitleEl.textContent = "Загружаю JSON...";
+      pendingSprintJsonPreviewEl.value = "";
+      const requestVersion = ++pendingSprintPreviewRequestVersion;
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}`,
+        pendingSprintsFetchOptions()
+      );
+      const data = await response.json();
+      if (
+        requestVersion !== pendingSprintPreviewRequestVersion
+        || projectPhone !== pendingSprintsActiveProjectPhone()
+        || selectedId !== pendingSprintsSelectedId
+      ) {
+        return;
+      }
+      if (!response.ok) {
+        pendingSprintPreviewTitleEl.textContent = "JSON недоступен";
+        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить JSON спринта."));
+      }
+      const summary = data.pending_sprint || {};
+      pendingSprintPreviewTitleEl.textContent = summary.title || "JSON спринта";
+      pendingSprintJsonPreviewEl.value = JSON.stringify(data.import_payload || {}, null, 2);
+      setPendingSprintsStatus("Полный JSON выбранного спринта загружен.", "ok");
+      const selectedCard = Array.from(
+        pendingSprintsEl.querySelectorAll("[data-pending-sprint-id]")
+      ).find((card) => card.dataset.pendingSprintId === selectedId);
+      if (selectedCard) {
+        selectedCard.scrollIntoView({block: "nearest"});
+      }
+    }
+
+    async function refreshPendingSprints() {
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      if (!projectPhone) {
+        pendingSprintsRequestVersion += 1;
+        pendingSprints = [];
+        pendingSprintsProjectPhone = "";
+        clearPendingSprintPreview();
+        renderPendingSprints();
+        setPendingSprintsStatus("Выберите проект с каноническим телефоном.", "error");
+        return;
+      }
+      const requestVersion = ++pendingSprintsRequestVersion;
+      pendingSprintsProjectPhone = "";
+      renderPendingSprints();
+      setPendingSprintsStatus("Загружаю ожидающие спринты...");
+      const response = await fetch(
+        `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints`,
+        pendingSprintsFetchOptions()
+      );
+      const data = await response.json();
+      if (
+        requestVersion !== pendingSprintsRequestVersion
+        || projectPhone !== pendingSprintsActiveProjectPhone()
+      ) {
+        return;
+      }
+      if (!response.ok) {
+        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить ожидающие спринты."));
+      }
+      pendingSprintsProjectPhone = projectPhone;
+      pendingSprints = Array.isArray(data.pending_sprints) ? data.pending_sprints : [];
+      renderPendingSprints();
+      const selectedExists = pendingSprints.some(
+        (sprint) => String(sprint.id || "") === pendingSprintsSelectedId
+      );
+      if (pendingSprintsSelectedId && selectedExists) {
+        await loadPendingSprintPreview(pendingSprintsSelectedId, {syncUrl: false});
+        return;
+      }
+      clearPendingSprintPreview();
+      if (pendingSprintsSelectedId && !selectedExists) {
+        setPendingSprintsStatus("Указанный спринт уже запущен или больше не ожидает запуска.", "error");
+        return;
+      }
+      setPendingSprintsStatus(
+        pendingSprints.length
+          ? `Ожидают запуска: ${pendingSprints.length}.`
+          : "Для выбранного проекта нет спринтов, ожидающих запуска.",
+        "ok"
+      );
+    }
+
+    async function startPendingSprint(sprintId) {
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      const selectedId = String(sprintId || "").trim();
+      const sprint = pendingSprints.find((item) => String(item.id || "") === selectedId);
+      if (!projectPhone || !selectedId || !sprint || pendingSprintStartInFlightId) {
+        return;
+      }
+      const isRetry = String(sprint.status || "").trim().toLowerCase() === "activating";
+      if (isRetry && sprint.startable !== true) {
+        setPendingSprintsStatus("Спринт уже запускается. Дождитесь завершения текущей попытки.", "error");
+        return;
+      }
+      const title = sprint.title || `Спринт ${sprint.sequence || ""}`;
+      const confirmation = isRetry
+        ? `Повторить запуск спринта «${title}» в проекте phone ${projectPhone}?\n\nПредыдущая попытка запуска не завершилась. Сервер разрешил повтор, но перед подтверждением проверьте JSON и состояние проекта.`
+        : `Запустить спринт «${title}» в проекте phone ${projectPhone}?\n\nПосле запуска агенты и задачи станут доступны. Если в JSON указан agents.overwrite: true, текущие агенты проекта будут заменены.`;
+      const confirmed = window.confirm(
+        confirmation
+      );
+      if (!confirmed) {
+        setPendingSprintsStatus("Запуск отменён.");
+        return;
+      }
+      pendingSprintStartInFlightId = selectedId;
+      renderPendingSprints();
+      setPendingSprintsStatus(`${isRetry ? "Повторяю запуск" : "Запускаю"} «${title}»...`);
+      try {
+        const response = await fetch(
+          `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}/start`,
+          pendingSprintsFetchOptions({method: "POST"})
+        );
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(pendingSprintErrorMessage(data, "Не удалось запустить спринт."));
+        }
+        if (projectPhone !== pendingSprintsActiveProjectPhone()) {
+          return;
+        }
+        pendingSprintsSelectedId = "";
+        clearPendingSprintPreview();
+        syncPendingSprintsUrl();
+        await refreshAgents();
+        await Promise.all([
+          refreshPendingSprints(),
+          refreshQueues(),
+          refreshScheduledTasks(),
+          refreshHistory(),
+          refreshProjectSprints()
+        ]);
+        if (data.reconciled === true && data.superseded === true) {
+          setPendingSprintsStatus(
+            `Спринт «${title}» уже запускался ранее, но после него был запущен другой спринт. Повторный импорт не выполнялся.`,
+            "ok"
+          );
+        } else if (data.reconciled === true) {
+          setPendingSprintsStatus(
+            `Спринт «${title}» уже был запущен. Статус восстановлен без повторного импорта.`,
+            "ok"
+          );
+        } else {
+          setPendingSprintsStatus(`Спринт «${title}» запущен. Агенты и задачи доступны.`, "ok");
+        }
+      } finally {
+        if (pendingSprintStartInFlightId === selectedId) {
+          pendingSprintStartInFlightId = "";
+        }
+        renderPendingSprints();
+      }
+    }
+
+    function applyPendingSprintsDeepLink() {
+      if (pendingSprintsDeepLinkApplied) {
+        return;
+      }
+      pendingSprintsDeepLinkApplied = true;
+      if (pendingSprintsDeepLink.view !== "pending-sprints") {
+        return;
+      }
+      const requestedPhone = String(pendingSprintsDeepLink.projectPhone || "").trim();
+      if (requestedPhone) {
+        const phoneContext = phoneContextByPhone(requestedPhone)
+          || phoneGitContexts.find((context) => {
+            return String(context.project_phone || "").trim() === requestedPhone;
+          });
+        if (phoneContext) {
+          applySelectedGitPhone(String(phoneContext.phone || requestedPhone), false);
+        }
+      }
+      setActiveView("pending-sprints", {refreshView: false, syncUrl: false});
+      renderPendingSprintsProjectOptions();
+      if (requestedPhone && requestedPhone !== pendingSprintsActiveProjectPhone()) {
+        setPendingSprintsStatus(`Проект с phone ${requestedPhone} не найден.`, "error");
+      }
+    }
+
     function contextKeyList(rawValue) {
       if (Array.isArray(rawValue)) {
         return uniqueList(rawValue.map((value) => String(value || "").trim()).filter(Boolean));
@@ -16024,6 +16549,17 @@ def render_index_v2() -> str:
       refreshProjectSprints().catch((error) => {
         projectSprintsStatusEl.textContent = error.message;
       });
+      pendingSprintsRequestVersion += 1;
+      pendingSprintPreviewRequestVersion += 1;
+      pendingSprints = [];
+      pendingSprintsProjectPhone = "";
+      pendingSprintsSelectedId = "";
+      clearPendingSprintPreview();
+      renderPendingSprints();
+      if (pendingSprintsViewIsActive()) {
+        syncPendingSprintsUrl();
+        refreshPendingSprints().catch((error) => setPendingSprintsStatus(error.message, "error"));
+      }
       telegramHistoryForwardingProjectPhone = "";
       renderTelegramHistoryForwarding();
       refreshTelegramHistoryForwarding().catch((error) => {
@@ -16140,6 +16676,7 @@ def render_index_v2() -> str:
         renderGitContextOptions("");
       }
       renderGitContextProjectList();
+      renderPendingSprintsProjectOptions();
       if (refreshViews) {
         refreshContextScopedViews();
       }
@@ -16172,6 +16709,7 @@ def render_index_v2() -> str:
       renderGitContextOptions(context.git_context_key || "");
       updateActiveGitContextDisplay();
       renderGitContextProjectList();
+      renderPendingSprintsProjectOptions();
       setGitStatus(`Проект ${context.project_name || context.git_context_key} зарегистрирован без phone. Укажите новый номер и сохраните привязку.`, "ok");
       if (refreshViews) {
         refreshContextScopedViews();
@@ -16234,6 +16772,7 @@ def render_index_v2() -> str:
       gitPhoneEl.value = selectedPhone;
       updateActiveGitContextDisplay();
       renderGitContextProjectList();
+      renderPendingSprintsProjectOptions();
     }
 
     function renderPhoneAgentOptions(selectEl, preferredName = "") {
@@ -20211,6 +20750,7 @@ ${data.patch || ""}
 
     async function refresh() {
       await refreshGitConfig();
+      applyPendingSprintsDeepLink();
       await refreshAgents();
       const refreshTasks = [
         refreshQueues(),
@@ -20225,10 +20765,13 @@ ${data.patch || ""}
       if (launchPromptViewIsActive()) {
         refreshTasks.push(refreshLaunchPrompt());
       }
+      if (pendingSprintsViewIsActive()) {
+        refreshTasks.push(refreshPendingSprints());
+      }
       await Promise.all(refreshTasks);
     }
 
-    function setActiveView(view) {
+    function setActiveView(view, {refreshView = true, syncUrl = true} = {}) {
       document.querySelectorAll(".page-tab").forEach((button) => {
         button.classList.toggle("active", button.dataset.view === view);
       });
@@ -20254,6 +20797,15 @@ ${data.patch || ""}
       if (view === "launch-prompt") {
         refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
       }
+      if (view === "pending-sprints") {
+        renderPendingSprintsProjectOptions();
+        if (refreshView) {
+          refreshPendingSprints().catch((error) => setPendingSprintsStatus(error.message, "error"));
+        }
+      }
+      if (syncUrl) {
+        syncPendingSprintsUrl();
+      }
     }
 
     queueEl.addEventListener("change", applyQueueDefaults);
@@ -20261,6 +20813,37 @@ ${data.patch || ""}
     scheduleDelayMinutesEl.addEventListener("input", () => setStatus(""));
     document.querySelectorAll(".page-tab").forEach((button) => {
       button.addEventListener("click", () => setActiveView(button.dataset.view));
+    });
+    pendingSprintsProjectSelectEl.addEventListener("change", () => {
+      const requestedProjectPhone = pendingSprintsProjectSelectEl.value;
+      const phoneContext = phoneContextByPhone(requestedProjectPhone)
+        || phoneGitContexts.find((context) => {
+          return String(context.project_phone || "").trim() === requestedProjectPhone;
+        });
+      if (!phoneContext) {
+        setPendingSprintsStatus("Выбранный проект больше не зарегистрирован.", "error");
+        return;
+      }
+      pendingSprintsSelectedId = "";
+      clearPendingSprintPreview();
+      applySelectedGitPhone(String(phoneContext.phone || requestedProjectPhone), true);
+      syncPendingSprintsUrl();
+    });
+    refreshPendingSprintsButtonEl.addEventListener("click", () => {
+      refreshPendingSprints().catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintsEl.addEventListener("click", (event) => {
+      const target = event.target.closest("button[data-action]");
+      if (!target) {
+        return;
+      }
+      const sprintId = target.dataset.sprintId || "";
+      if (target.dataset.action === "preview-pending-sprint") {
+        loadPendingSprintPreview(sprintId).catch((error) => setPendingSprintsStatus(error.message, "error"));
+      }
+      if (target.dataset.action === "start-pending-sprint") {
+        startPendingSprint(sprintId).catch((error) => setPendingSprintsStatus(error.message, "error"));
+      }
     });
     launchPromptEndpointModeEl.addEventListener("change", () => {
       refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
@@ -21089,6 +21672,8 @@ ${data.patch || ""}
     renderEvidenceTrash();
     renderEmailSenderOptions();
     renderQueueOptions();
+    renderPendingSprintsProjectOptions();
+    renderPendingSprints();
     setTemplate("task");
     refreshAgents().catch((error) => setAgentsStatus(error.message, "error"));
     refreshEmailRoutes().catch((error) => setEmailRoutesStatus(error.message, "error"));
@@ -22132,6 +22717,9 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
             "external_id",
             "title",
             "status",
+            "project_phone",
+            "project_name",
+            "git_context_key",
             "source",
             "source_filename",
             "imported_at",
@@ -22140,6 +22728,7 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
             "agent_count",
             "task_count",
             "legacy",
+            "pending_sprint_id",
         )
     }
     code_history = record.get("final_code_history")
@@ -22156,6 +22745,487 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
+    summary = {
+        key: deepcopy(record.get(key))
+        for key in (
+            "id",
+            "sequence",
+            "external_id",
+            "title",
+            "status",
+            "project_phone",
+            "project_name",
+            "git_context_key",
+            "source",
+            "source_filename",
+            "received_at",
+            "assignment_mode",
+            "agent_count",
+            "task_count",
+            "payload_sha256",
+            "git_address",
+            "repository_key",
+            "telegram_update_id",
+            "activation_attempts",
+            "activation_attempt_id",
+            "activating_at",
+            "activated_at",
+            "activated_sprint_id",
+            "last_activation_failed_at",
+            "last_activation_error",
+        )
+    }
+    record_status = str(record.get("status") or "pending").strip().lower()
+    retry_at: datetime | None = None
+    if record_status == "activating":
+        activating_at = parse_utc_datetime(record.get("activating_at"))
+        if activating_at is not None:
+            retry_at = activating_at + PENDING_SPRINT_ACTIVATION_LEASE
+    summary["retry_at"] = retry_at.isoformat() if retry_at is not None else None
+    summary["startable"] = bool(
+        record_status == "pending"
+        or (
+            record_status == "activating"
+            and retry_at is not None
+            and datetime.now(timezone.utc) >= retry_at
+        )
+    )
+    return summary
+
+
+def pending_sprint_payload_sha256(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def stage_project_sprint_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    project_name: str,
+    git_address: str,
+    repository_key: str,
+    payload: dict[str, Any],
+    source: str,
+    source_filename: str,
+    assignment_mode: str,
+    agent_count: int,
+    task_count: int,
+    telegram_update_id: str = "",
+    telegram_chat_id: str = "",
+    telegram_message_id: str = "",
+) -> dict[str, Any]:
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        raw_project = projects.get(context_key)
+        project = dict(raw_project) if isinstance(raw_project, dict) else {}
+        project_access_token = str(project.get("access_token") or "").strip()
+        if not project_access_token:
+            project_access_token = secrets.token_urlsafe(32)
+        raw_records = project.get("sprints")
+        records = [
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+        ] if isinstance(raw_records, list) else []
+
+        clean_update_id = str(telegram_update_id or "").strip()
+        payload_hash = pending_sprint_payload_sha256(payload)
+        if clean_update_id:
+            duplicate_project_key = ""
+            duplicate: dict[str, Any] | None = None
+            for candidate_project_key, raw_candidate_project in projects.items():
+                if not isinstance(raw_candidate_project, dict):
+                    continue
+                raw_candidate_records = raw_candidate_project.get("sprints")
+                if not isinstance(raw_candidate_records, list):
+                    continue
+                duplicate = next(
+                    (
+                        candidate
+                        for candidate in raw_candidate_records
+                        if isinstance(candidate, dict)
+                        and str(candidate.get("telegram_update_id") or "").strip()
+                        == clean_update_id
+                    ),
+                    None,
+                )
+                if duplicate is not None:
+                    duplicate_project_key = str(candidate_project_key)
+                    break
+            if duplicate is not None:
+                if duplicate_project_key != context_key:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "telegram_update_project_conflict",
+                            "message": (
+                                "The same Telegram update_id was already stored "
+                                "for another project"
+                            ),
+                        },
+                    )
+                if str(duplicate.get("payload_sha256") or "") != payload_hash:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "telegram_update_payload_conflict",
+                            "message": (
+                                "The same Telegram update_id was already stored "
+                                "with different JSON"
+                            ),
+                        },
+                    )
+                if str(project.get("access_token") or "").strip() != project_access_token:
+                    project["access_token"] = project_access_token
+                    projects[context_key] = project
+                    storage["projects"] = projects
+                    write_pending_sprints_file(storage)
+                return {
+                    **pending_sprint_summary(duplicate),
+                    "deduplicated": True,
+                    "_project_access_token": project_access_token,
+                }
+
+        sequence = max(
+            (int(record.get("sequence") or 0) for record in records),
+            default=0,
+        ) + 1
+        external_id, title = sprint_payload_identity(
+            payload,
+            source_filename,
+            sequence,
+        )
+        received_at = utc_now()
+        record = {
+            "id": f"pending-{uuid4().hex}",
+            "sequence": sequence,
+            "external_id": external_id,
+            "title": title,
+            "status": "pending",
+            "project_phone": project_phone,
+            "project_name": project_name,
+            "git_context_key": context_key,
+            "source": str(source or "telegram").strip() or "telegram",
+            "source_filename": source_filename,
+            "received_at": received_at,
+            "assignment_mode": assignment_mode,
+            "agent_count": agent_count,
+            "task_count": task_count,
+            "payload_sha256": payload_hash,
+            "git_address": git_address,
+            "repository_key": repository_key,
+            "telegram_update_id": clean_update_id,
+            "telegram_chat_id": str(telegram_chat_id or "").strip(),
+            "telegram_message_id": str(telegram_message_id or "").strip(),
+            "activation_attempts": 0,
+            "activation_attempt_id": None,
+            "activating_at": None,
+            "activated_at": None,
+            "activated_sprint_id": None,
+            "last_activation_failed_at": None,
+            "last_activation_error": None,
+            "import_payload": deepcopy(payload),
+        }
+        records.append(record)
+        project.update(
+            {
+                "project_phone": project_phone,
+                "project_name": project_name,
+                "git_context_key": context_key,
+                "access_token": project_access_token,
+                "updated_at": received_at,
+                "sprints": records,
+            }
+        )
+        projects[context_key] = project
+        storage["schema_version"] = 1
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {
+            **pending_sprint_summary(record),
+            "deduplicated": False,
+            "_project_access_token": project_access_token,
+        }
+
+
+async def stage_project_sprint(
+    project_id: str,
+    payload: dict[str, Any],
+    *,
+    source: str,
+    source_filename: str,
+    expected_git_context_key: str,
+    expected_repository_key: str,
+    telegram_update_id: str = "",
+    telegram_chat_id: str = "",
+    telegram_message_id: str = "",
+) -> dict[str, Any]:
+    options = actor_import_options(payload)
+    config = await read_git_config()
+    _, context_key, project_entry, context = project_for_group_api(
+        config,
+        project_id,
+    )
+    normalized_expected_context = normalize_project_context_reference(
+        expected_git_context_key
+    )
+    if normalized_expected_context and context_key != normalized_expected_context:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_context_changed",
+                "message": "The project Git context changed before staging",
+            },
+        )
+    current_repository_key = project_repository_key_for_context(context)
+    if expected_repository_key and current_repository_key != expected_repository_key:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "project_repository_changed",
+                "message": "The project Git repository changed before staging",
+            },
+        )
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    project_name = normalize_project_name(
+        project_entry.get("project_name"),
+        str(project_entry.get("git_address") or ""),
+    )
+    async with pending_sprints_lock:
+        return await asyncio.to_thread(
+            stage_project_sprint_file,
+            context_key=context_key,
+            project_phone=project_phone,
+            project_name=project_name,
+            git_address=str(project_entry.get("git_address") or "").strip(),
+            repository_key=current_repository_key,
+            payload=payload,
+            source=source,
+            source_filename=(
+                safe_attachment_filename(source_filename)
+                if source_filename
+                else ""
+            ),
+            assignment_mode=str(options.get("assignment_mode") or "parallel"),
+            agent_count=len(options.get("actors") or []),
+            task_count=int(options.get("task_count") or 0),
+            telegram_update_id=telegram_update_id,
+            telegram_chat_id=telegram_chat_id,
+            telegram_message_id=telegram_message_id,
+        )
+
+
+def project_pending_sprints_file_snapshot(
+    context_key: str,
+    project_phone: str = "",
+    sprint_id: str = "",
+) -> dict[str, Any] | None:
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = raw_projects if isinstance(raw_projects, dict) else {}
+        clean_phone = str(project_phone or "").strip()
+        candidates: list[dict[str, Any]] = []
+        direct_project = projects.get(context_key)
+        if isinstance(direct_project, dict):
+            candidates.append(direct_project)
+        if clean_phone:
+            candidates.extend(
+                candidate
+                for candidate_key, candidate in projects.items()
+                if candidate_key != context_key
+                and isinstance(candidate, dict)
+                and str(candidate.get("project_phone") or "").strip() == clean_phone
+            )
+        if not candidates:
+            return None
+        clean_sprint_id = str(sprint_id or "").strip()
+        if clean_sprint_id:
+            for candidate in candidates:
+                if pending_sprint_record_from_project(candidate, clean_sprint_id):
+                    return deepcopy(candidate)
+            return None
+        if isinstance(direct_project, dict):
+            return deepcopy(direct_project)
+        candidates.sort(key=lambda item: str(item.get("updated_at") or ""))
+        return deepcopy(candidates[-1])
+
+
+def pending_sprint_record_from_project(
+    project: dict[str, Any] | None,
+    sprint_id: str,
+) -> dict[str, Any] | None:
+    raw_records = project.get("sprints") if isinstance(project, dict) else []
+    if not isinstance(raw_records, list):
+        return None
+    clean_id = str(sprint_id or "").strip()
+    return next(
+        (
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+            and str(record.get("id") or "").strip() == clean_id
+        ),
+        None,
+    )
+
+
+def update_pending_sprint_activation_file(
+    context_key: str,
+    sprint_id: str,
+    *,
+    action: str,
+    activated_sprint_id: str = "",
+    activated_at: str = "",
+    activation_attempt_id: str = "",
+    error: Any = None,
+) -> dict[str, Any]:
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        raw_project = projects.get(context_key)
+        project = dict(raw_project) if isinstance(raw_project, dict) else None
+        if project is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Pending sprint was not found for this project",
+            )
+        raw_records = project.get("sprints")
+        records = [
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+        ] if isinstance(raw_records, list) else []
+        record = next(
+            (
+                item
+                for item in records
+                if str(item.get("id") or "").strip() == sprint_id.strip()
+            ),
+            None,
+        )
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Pending sprint was not found for this project",
+            )
+        now = utc_now()
+        current_status = str(record.get("status") or "pending").strip()
+        if action == "claim":
+            other_activating = next(
+                (
+                    item
+                    for item in records
+                    if item is not record
+                    and str(item.get("status") or "").strip() == "activating"
+                ),
+                None,
+            )
+            if other_activating is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "project_sprint_activation_in_progress",
+                        "message": (
+                            "Another sprint for this project is already being started"
+                        ),
+                        "pending_sprint_id": other_activating.get("id"),
+                    },
+                )
+            if current_status == "activated":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "pending_sprint_already_started",
+                        "activated_sprint_id": record.get("activated_sprint_id"),
+                    },
+                )
+            if current_status == "activating":
+                activating_at = parse_utc_datetime(record.get("activating_at"))
+                if (
+                    activating_at is not None
+                    and datetime.now(timezone.utc) - activating_at
+                    < PENDING_SPRINT_ACTIVATION_LEASE
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "pending_sprint_activation_in_progress",
+                            "message": "This sprint is already being started",
+                        },
+                    )
+                record["status"] = "pending"
+                current_status = "pending"
+            if current_status != "pending":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "pending_sprint_not_startable"},
+                )
+            record["status"] = "activating"
+            record["activating_at"] = now
+            record["activation_attempt_id"] = uuid4().hex
+            record["activation_attempts"] = int(
+                record.get("activation_attempts") or 0
+            ) + 1
+            record["last_activation_error"] = None
+        elif action == "complete":
+            if current_status != "activating":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "pending_sprint_not_activating"},
+                )
+            if not hmac.compare_digest(
+                str(record.get("activation_attempt_id") or ""),
+                str(activation_attempt_id or ""),
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "pending_sprint_activation_superseded"},
+                )
+            record["status"] = "activated"
+            record["activating_at"] = None
+            record["activation_attempt_id"] = None
+            record["activated_at"] = str(activated_at or "").strip() or now
+            record["activated_sprint_id"] = activated_sprint_id
+            record["last_activation_error"] = None
+            # The canonical sprint archive now owns the full import JSON. Keep
+            # only the fingerprint/source metadata here for Telegram dedupe.
+            record["import_payload"] = None
+        elif action == "fail":
+            if current_status == "activating":
+                if not hmac.compare_digest(
+                    str(record.get("activation_attempt_id") or ""),
+                    str(activation_attempt_id or ""),
+                ):
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={"error": "pending_sprint_activation_superseded"},
+                    )
+                record["status"] = "pending"
+                record["activating_at"] = None
+                record["activation_attempt_id"] = None
+                record["last_activation_failed_at"] = now
+                record["last_activation_error"] = deepcopy(error)
+        else:
+            raise ValueError(f"Unsupported pending sprint action: {action}")
+        project["updated_at"] = now
+        project["sprints"] = records
+        projects[context_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return pending_sprint_summary(record)
+
+
 def record_project_sprint_import_file(
     *,
     context_key: str,
@@ -22170,6 +23240,7 @@ def record_project_sprint_import_file(
     assignment_mode: str,
     agent_count: int,
     task_count: int,
+    pending_sprint_id: str = "",
 ) -> dict[str, Any]:
     with sprint_history_file_lock():
         history = read_sprint_history_file()
@@ -22183,6 +23254,36 @@ def record_project_sprint_import_file(
             for record in raw_records
             if isinstance(record, dict)
         ] if isinstance(raw_records, list) else []
+        clean_pending_sprint_id = str(pending_sprint_id or "").strip()
+        existing_pending_record = next(
+            (
+                record
+                for record in reversed(records)
+                if clean_pending_sprint_id
+                and str(record.get("pending_sprint_id") or "").strip()
+                == clean_pending_sprint_id
+            ),
+            None,
+        )
+        if existing_pending_record is not None:
+            existing_payload = existing_pending_record.get("import_payload")
+            if (
+                isinstance(existing_payload, dict)
+                and pending_sprint_payload_sha256(existing_payload)
+                != pending_sprint_payload_sha256(payload)
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "pending_sprint_id_conflict",
+                        "message": (
+                            "The pending sprint id is already associated with a "
+                            "different import payload"
+                        ),
+                        "pending_sprint_id": clean_pending_sprint_id,
+                    },
+                )
+            return sprint_record_summary(existing_pending_record)
         now = utc_now()
         current_record = next(
             (
@@ -22254,6 +23355,7 @@ def record_project_sprint_import_file(
             "agent_count": agent_count,
             "task_count": task_count,
             "legacy": False,
+            "pending_sprint_id": clean_pending_sprint_id or None,
             "import_payload": deepcopy(payload),
             "initial_state": deepcopy(current_state),
             "final_state": None,
@@ -22290,6 +23392,7 @@ async def record_project_sprint_import(
     assignment_mode: str,
     agent_count: int,
     task_count: int,
+    pending_sprint_id: str = "",
 ) -> dict[str, Any]:
     previous_project = previous_state.get("project")
     previous_git_address = str(
@@ -22322,6 +23425,7 @@ async def record_project_sprint_import(
             assignment_mode=assignment_mode,
             agent_count=agent_count,
             task_count=task_count,
+            pending_sprint_id=pending_sprint_id,
         )
 
 
@@ -22335,6 +23439,8 @@ async def import_project_actors_data(
     activate_sequential: bool = True,
     expected_git_context_key: str = "",
     expected_repository_key: str = "",
+    pending_sprint_id: str = "",
+    reconcile_existing_pending_sprint: bool = False,
 ) -> dict[str, Any]:
     options = actor_import_options(payload)
     options["source"] = source
@@ -22342,6 +23448,53 @@ async def import_project_actors_data(
     options["expected_repository_key"] = expected_repository_key
     async with group_task_submission_lock:
         previous_state = await project_state_json(project_id, history_limit=10000)
+        if pending_sprint_id and reconcile_existing_pending_sprint:
+            reconciliation_context_key = str(
+                expected_git_context_key
+                or (
+                    (previous_state.get("project") or {}).get("git_context_key")
+                    if isinstance(previous_state.get("project"), dict)
+                    else ""
+                )
+                or ""
+            ).strip()
+            if reconciliation_context_key:
+                async with sprint_history_lock:
+                    existing_sprint = await asyncio.to_thread(
+                        project_sprint_for_pending_id_file,
+                        reconciliation_context_key,
+                        pending_sprint_id,
+                    )
+                if existing_sprint is not None:
+                    previous_agents = previous_state.get("agents")
+                    return {
+                        "reconciled": True,
+                        "source": source,
+                        "project_id": previous_state.get("project_id") or project_id,
+                        "project_phone": (
+                            previous_state.get("project_phone") or project_id
+                        ),
+                        "project": deepcopy(previous_state.get("project")),
+                        "assignment_mode": str(
+                            (previous_state.get("execution") or {}).get("mode")
+                            if isinstance(previous_state.get("execution"), dict)
+                            else "parallel"
+                        ),
+                        "agents": deepcopy(previous_agents)
+                        if isinstance(previous_agents, list)
+                        else [],
+                        "removed_agent_count": 0,
+                        "imported_agent_count": 0,
+                        "removed_actor_count": 0,
+                        "imported_actor_count": 0,
+                        "removed_task_count": 0,
+                        "queued_task_count": 0,
+                        "queued_queue_item_count": 0,
+                        "deferred_task_count": 0,
+                        "removed_tasks": [],
+                        "queued_tasks": [],
+                        "sprint": existing_sprint,
+                    }
         result = await run_group_write_transaction(
             project_actor_mutation_transaction,
             project_id,
@@ -22560,6 +23713,7 @@ async def import_project_actors_data(
                 len(agent.get("tasks") or [])
                 for agent in result["imported_agents"]
             ),
+            pending_sprint_id=pending_sprint_id,
         )
         return response
 
@@ -23082,13 +24236,43 @@ def send_telegram_import_reply(message: dict[str, Any], result: dict[str, Any]) 
     chat_id = chat.get("id") if isinstance(chat, dict) else None
     if not token or chat_id is None:
         return
-    reply = (
-        f"Agents imported: {result['imported_agent_count']}; "
-        f"removed: {result['removed_agent_count']}; "
-        f"tasks queued: {result['queued_task_count']}."
+    pending = (
+        result.get("pending_sprint")
+        if isinstance(result.get("pending_sprint"), dict)
+        else {}
     )
+    title = str(pending.get("title") or "Новый спринт").strip()
+    if str(pending.get("status") or "") == "activated":
+        lines = [f"Спринт «{title}» уже был запущен."]
+    else:
+        lines = [
+            f"Спринт «{title}» сохранён и ожидает запуска.",
+            (
+                f"Агентов: {int(pending.get('agent_count') or 0)}; "
+                f"задач: {int(pending.get('task_count') or 0)}."
+            ),
+        ]
+    pending_url = str(result.get("pending_sprints_url") or "").strip()
+    if pending_url:
+        lines.extend(["Открыть список и запустить:", pending_url])
+    else:
+        lines.append(
+            "Публичный адрес пока недоступен; откройте вкладку «Спринты» "
+            "в локальном интерфейсе nginx-qa."
+        )
+    request_data: dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": "\n".join(lines),
+        "disable_web_page_preview": "true",
+    }
+    message_thread_id = message.get("message_thread_id")
+    if message_thread_id is not None:
+        request_data["message_thread_id"] = message_thread_id
+    message_id = message.get("message_id")
+    if message_id is not None:
+        request_data["reply_to_message_id"] = message_id
     try:
-        telegram_api_json(token, "sendMessage", {"chat_id": chat_id, "text": reply})
+        telegram_api_json(token, "sendMessage", request_data)
     except HTTPException:
         return
 
@@ -23139,6 +24323,7 @@ async def index() -> HTMLResponse:
         headers={
             "Cache-Control": "no-store, max-age=0",
             "Pragma": "no-cache",
+            "Referrer-Policy": "no-referrer",
         },
     )
 
@@ -25736,6 +26921,36 @@ def project_sprint_history_file_snapshot(
         return deepcopy(project) if isinstance(project, dict) else None
 
 
+def project_sprint_for_pending_id_file(
+    context_key: str,
+    pending_sprint_id: str,
+) -> dict[str, Any] | None:
+    clean_pending_id = str(pending_sprint_id or "").strip()
+    if not clean_pending_id:
+        return None
+    with sprint_history_file_lock():
+        history = read_sprint_history_file()
+        raw_projects = history.get("projects")
+        project = (
+            raw_projects.get(context_key)
+            if isinstance(raw_projects, dict)
+            else None
+        )
+        raw_records = project.get("sprints") if isinstance(project, dict) else []
+        if not isinstance(raw_records, list):
+            return None
+        return next(
+            (
+                sprint_record_summary(record)
+                for record in reversed(raw_records)
+                if isinstance(record, dict)
+                and str(record.get("pending_sprint_id") or "").strip()
+                == clean_pending_id
+            ),
+            None,
+        )
+
+
 async def project_sprint_history_snapshot(
     project_id: str,
 ) -> tuple[str, str, dict[str, Any] | None]:
@@ -25748,6 +26963,366 @@ async def project_sprint_history_snapshot(
             context_key,
         )
     return project_phone, context_key, project
+
+
+async def project_pending_sprints_snapshot(
+    project_id: str,
+    sprint_id: str = "",
+) -> tuple[str, str, dict[str, Any] | None]:
+    config = await read_git_config()
+    _, context_key, project_entry, _ = project_for_group_api(config, project_id)
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    async with pending_sprints_lock:
+        project = await asyncio.to_thread(
+            project_pending_sprints_file_snapshot,
+            context_key,
+            project_phone,
+            sprint_id,
+        )
+    return project_phone, context_key, project
+
+
+def pending_sprints_request_hostname(request: Request) -> str:
+    raw_host = str(request.headers.get("host") or "").strip()
+    if raw_host:
+        try:
+            return str(urllib.parse.urlsplit(f"//{raw_host}").hostname or "").casefold()
+        except ValueError:
+            return ""
+    return str(request.url.hostname or "").strip().casefold()
+
+
+def pending_sprints_request_is_local(request: Request) -> bool:
+    local_hostnames = {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        "testserver",
+    }
+    if request.headers.get("cf-connecting-ip") or request.headers.get("x-forwarded-for"):
+        return False
+    client_host = str(request.client.host if request.client is not None else "").strip()
+    try:
+        client_ip = ipaddress.ip_address(client_host.split("%", 1)[0])
+    except ValueError:
+        return False
+    if not (
+        client_ip.is_loopback
+        or (
+            isinstance(client_ip, ipaddress.IPv6Address)
+            and client_ip.ipv4_mapped is not None
+            and client_ip.ipv4_mapped.is_loopback
+        )
+    ):
+        return False
+    if pending_sprints_request_hostname(request) not in local_hostnames:
+        return False
+    forwarded_host = str(
+        request.headers.get("x-forwarded-host") or ""
+    ).split(",", 1)[0].strip()
+    if not forwarded_host:
+        return True
+    try:
+        forwarded_hostname = str(
+            urllib.parse.urlsplit(f"//{forwarded_host}").hostname or ""
+        ).casefold()
+    except ValueError:
+        return False
+    return forwarded_hostname in local_hostnames
+
+
+def ensure_pending_sprints_access(
+    request: Request,
+    project: dict[str, Any] | None,
+) -> None:
+    if pending_sprints_request_is_local(request):
+        return
+    expected_token = (
+        str(project.get("access_token") or "").strip()
+        if isinstance(project, dict)
+        else ""
+    )
+    supplied_token = str(
+        request.headers.get(PENDING_SPRINT_TOKEN_HEADER) or ""
+    ).strip()
+    if (
+        not expected_token
+        or not supplied_token
+        or not hmac.compare_digest(expected_token, supplied_token)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "pending_sprints_access_denied",
+                "message": (
+                    "Open the project-specific pending-sprints link sent by "
+                    "the Telegram bot"
+                ),
+            },
+        )
+
+
+def pending_sprint_urls(project_phone: str, sprint_id: str) -> dict[str, str]:
+    base = (
+        f"/api/v1/projects/{urllib.parse.quote(project_phone, safe='')}"
+        "/pending-sprints"
+    )
+    encoded_id = urllib.parse.quote(sprint_id, safe="")
+    return {
+        "detail_url": f"{base}/{encoded_id}",
+        "start_url": f"{base}/{encoded_id}/start",
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/pending-sprints")
+async def get_project_pending_sprints(
+    project_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    project_phone, context_key, project = await project_pending_sprints_snapshot(
+        project_id,
+    )
+    ensure_pending_sprints_access(request, project)
+    raw_records = project.get("sprints") if isinstance(project, dict) else []
+    records = [
+        pending_sprint_summary(record)
+        for record in raw_records
+        if isinstance(record, dict)
+        and str(record.get("status") or "pending") in {"pending", "activating"}
+    ] if isinstance(raw_records, list) else []
+    records.sort(
+        key=lambda record: int(record.get("sequence") or 0),
+        reverse=True,
+    )
+    for record in records:
+        record.update(
+            pending_sprint_urls(project_phone, str(record.get("id") or ""))
+        )
+    return {
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_count": len(records),
+        "pending_sprints": records,
+    }
+
+
+@app.get("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}")
+async def get_project_pending_sprint(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    project_phone, context_key, project = await project_pending_sprints_snapshot(
+        project_id,
+        sprint_id,
+    )
+    ensure_pending_sprints_access(request, project)
+    record = pending_sprint_record_from_project(project, sprint_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending sprint was not found for this project",
+        )
+    summary = pending_sprint_summary(record)
+    summary.update(pending_sprint_urls(project_phone, sprint_id))
+    return {
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_sprint": summary,
+        "import_payload": deepcopy(record.get("import_payload")),
+    }
+
+
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start")
+async def start_project_pending_sprint(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    project_phone, context_key, project = await project_pending_sprints_snapshot(
+        project_id,
+        sprint_id,
+    )
+    ensure_pending_sprints_access(request, project)
+    record = pending_sprint_record_from_project(project, sprint_id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending sprint was not found for this project",
+        )
+    if str(record.get("status") or "") == "activated":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "pending_sprint_already_started",
+                "activated_sprint_id": record.get("activated_sprint_id"),
+            },
+        )
+    pending_context_key = str(
+        (project or {}).get("git_context_key") or record.get("git_context_key") or context_key
+    ).strip()
+    payload = record.get("import_payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Pending sprint has no valid import payload",
+        )
+    staged_repository_key = str(record.get("repository_key") or "").strip()
+    staged_context_key = str(record.get("git_context_key") or "").strip()
+    assignment_mode = str(
+        record.get("assignment_mode") or "sequential"
+    ).strip().lower()
+    payload = actor_payload_with_assignment_mode(payload, assignment_mode)
+    result: dict[str, Any] | None = None
+    if int(record.get("activation_attempts") or 0) > 0:
+        # Wait for any still-running attempt before deciding whether recovery
+        # requires a new import. This closes the lease-expiry race where the
+        # canonical marker is written while the retry is waiting.
+        async with group_task_submission_lock:
+            async with sprint_history_lock:
+                existing_sprint = await asyncio.to_thread(
+                    project_sprint_for_pending_id_file,
+                    pending_context_key,
+                    sprint_id,
+                )
+        if existing_sprint is not None:
+            result = {
+                "reconciled": True,
+                "source": str(record.get("source") or "telegram"),
+                "sprint": existing_sprint,
+            }
+
+    validated_project: dict[str, str] | None = None
+    if result is None:
+        current_config = await read_git_config()
+        _, current_context_key, _, current_context = project_for_group_api(
+            current_config,
+            project_phone,
+        )
+        current_repository_key = project_repository_key_for_context(
+            current_context
+        )
+        if staged_repository_key and staged_repository_key != current_repository_key:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "pending_sprint_repository_changed",
+                    "message": (
+                        "The project repository changed after this sprint was "
+                        "received; send a new Telegram JSON for the current "
+                        "repository"
+                    ),
+                    "expected_repository_key": staged_repository_key,
+                    "actual_repository_key": current_repository_key,
+                },
+            )
+        if staged_context_key and staged_context_key != current_context_key:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "pending_sprint_project_changed",
+                    "message": (
+                        "The project Git context changed after this sprint was "
+                        "received; send a new Telegram JSON for the selected "
+                        "project"
+                    ),
+                    "expected_git_context_key": staged_context_key,
+                    "actual_git_context_key": current_context_key,
+                },
+            )
+        validated_project = await ensure_actor_import_matches_route_project(
+            project_phone,
+            payload,
+            request_port(request),
+        )
+
+    async with pending_sprints_lock:
+        claimed = await asyncio.to_thread(
+            update_pending_sprint_activation_file,
+            pending_context_key,
+            sprint_id,
+            action="claim",
+        )
+    activation_attempt_id = str(
+        claimed.get("activation_attempt_id") or ""
+    ).strip()
+    if not activation_attempt_id:
+        raise RuntimeError("Pending sprint activation claim has no attempt id")
+    should_reconcile = int(claimed.get("activation_attempts") or 0) > 1
+    try:
+        if result is None:
+            assert validated_project is not None
+            result = await import_project_actors_data(
+                project_phone,
+                payload,
+                source=str(record.get("source") or "telegram"),
+                source_filename=str(record.get("source_filename") or ""),
+                port=request_port(request),
+                activate_sequential=assignment_mode == "sequential",
+                expected_git_context_key=validated_project["git_context_key"],
+                expected_repository_key=(
+                    staged_repository_key or validated_project["repository_key"]
+                ),
+                pending_sprint_id=sprint_id,
+                reconcile_existing_pending_sprint=should_reconcile,
+            )
+    except Exception as exc:
+        if isinstance(exc, HTTPException):
+            error: Any = deepcopy(exc.detail)
+        else:
+            error = str(exc)
+        try:
+            async with pending_sprints_lock:
+                await asyncio.to_thread(
+                    update_pending_sprint_activation_file,
+                    pending_context_key,
+                    sprint_id,
+                    action="fail",
+                    activation_attempt_id=activation_attempt_id,
+                    error=error,
+                )
+        except Exception:
+            pass
+        raise
+    assert result is not None
+    reconciled = result.get("reconciled") is True
+    reconciled_sprint = result.get("sprint")
+    reconciled_from_status = str(
+        reconciled_sprint.get("status")
+        if reconciled and isinstance(reconciled_sprint, dict)
+        else ""
+    ).strip()
+    async with pending_sprints_lock:
+        completed = await asyncio.to_thread(
+            update_pending_sprint_activation_file,
+            pending_context_key,
+            sprint_id,
+            action="complete",
+            activation_attempt_id=activation_attempt_id,
+            activated_sprint_id=str(
+                (result.get("sprint") or {}).get("id") or ""
+            ),
+            activated_at=(
+                str((result.get("sprint") or {}).get("imported_at") or "")
+                if reconciled
+                else ""
+            ),
+        )
+    return {
+        "started": True,
+        "reconciled": reconciled,
+        "reconciled_from_status": reconciled_from_status or None,
+        "superseded": bool(reconciled and reconciled_from_status != "current"),
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_sprint": completed,
+        "claimed_sprint": claimed,
+        "sprint": deepcopy(result.get("sprint")),
+        "import_result": result,
+    }
 
 
 @app.get("/api/v1/projects/{project_id}/sprints")
@@ -26375,6 +27950,23 @@ async def _telegram_actor_import_for_mode(
     payload, message = await asyncio.to_thread(actor_payload_from_telegram_update, update)
     ensure_telegram_sender_allowed(message)
     payload = actor_payload_with_assignment_mode(payload, assignment_mode)
+    effective_options = actor_import_options(payload)
+    effective_assignment_mode = str(
+        effective_options.get("assignment_mode") or "parallel"
+    ).strip().lower()
+    if effective_assignment_mode != assignment_mode:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "telegram_assignment_mode_conflict",
+                "message": (
+                    "This JSON defines a sequential graph and cannot be sent to "
+                    "the parallel Telegram endpoint"
+                ),
+                "endpoint_assignment_mode": assignment_mode,
+                "effective_assignment_mode": effective_assignment_mode,
+            },
+        )
     project_id = await project_phone_for_actor_import(
         payload,
         request_port(request),
@@ -26390,16 +27982,61 @@ async def _telegram_actor_import_for_mode(
         if isinstance(document, dict)
         else ""
     )
-    result = await import_project_actors_data(
+    chat = message.get("chat") if isinstance(message, dict) else None
+    pending_sprint = await stage_project_sprint(
         project_id,
         payload,
         source="telegram",
         source_filename=source_filename or "telegram-message.json",
-        port=request_port(request),
-        activate_sequential=assignment_mode == "sequential",
         expected_git_context_key=validated_project["git_context_key"],
         expected_repository_key=validated_project["repository_key"],
+        telegram_update_id=(
+            ""
+            if not isinstance(update, dict) or update.get("update_id") is None
+            else str(update.get("update_id")).strip()
+        ),
+        telegram_chat_id=(
+            ""
+            if not isinstance(chat, dict) or chat.get("id") is None
+            else str(chat.get("id")).strip()
+        ),
+        telegram_message_id=(
+            ""
+            if not isinstance(message, dict) or message.get("message_id") is None
+            else str(message.get("message_id")).strip()
+        ),
     )
+    project_access_token = str(
+        pending_sprint.pop("_project_access_token", "") or ""
+    ).strip()
+    if not project_access_token:
+        raise RuntimeError("Pending sprint project access token was not created")
+    public_base_url = cloudflared_public_base_url()
+    if not public_base_url:
+        public_base_url = normalize_public_nginx_qa_base_url(
+            str(request.base_url)
+        )
+    pending_sprints_url = ""
+    if public_base_url:
+        query = urllib.parse.urlencode(
+            {
+                "view": "pending-sprints",
+                "project_phone": project_id,
+                "sprint_id": pending_sprint["id"],
+                "pending_token": project_access_token,
+            }
+        )
+        pending_sprints_url = f"{public_base_url.rstrip('/')}/?{query}"
+    result = {
+        "staged": True,
+        "activated": str(pending_sprint.get("status") or "") == "activated",
+        "assignment_mode": assignment_mode,
+        "project_id": project_id,
+        "project_phone": project_id,
+        "git_context_key": validated_project["git_context_key"],
+        "pending_sprint": pending_sprint,
+        "pending_sprints_url": pending_sprints_url,
+    }
     await asyncio.to_thread(send_telegram_import_reply, message, result)
     return {"ok": True, **result}
 

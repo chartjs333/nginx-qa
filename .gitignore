@@ -27,6 +27,9 @@ port_git_map.json.lock
 /.port_git_map.json.*.tmp
 project_sprints.json
 project_sprints.json.lock
+pending_project_sprints.json
+pending_project_sprints.json.lock
+/.pending_project_sprints.json.*.tmp
 queue_backup_before_restart_*.json
 runtime_state/
 attachments/

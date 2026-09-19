@@ -51,6 +51,11 @@ canonical four-digit project phone:
 POST /api/v1/projects/{project_phone}/agents/import
 ```
 
+This direct API route, and the matching JSON upload control in the Agents tab,
+perform the import immediately. They are intentionally different from the
+Telegram workflow described below, which first saves a sprint for explicit
+confirmation.
+
 Use `agents.overwrite: true` to replace the project's existing non-group
 agents before importing. Set `agents.include_managed: true` as well only when
 group-managed agents should be removed and their active groups archived.
@@ -309,15 +314,17 @@ There are two fixed Telegram import URLs. The URL determines the execution
 model; an `assignment_mode` value inside the JSON cannot switch it.
 
 Sequential graph traversal with one executor that changes identity at each
-node:
+node after the pending sprint is started:
 
 ```text
 POST /api/v1/telegram/agents/sequential
 ```
 
-The first graph node is queued immediately. Use the common
-`/api/v1/agents/whoami` flow above to receive it together with the resolved
-identity and team JSON. The legacy shared queue URL
+Uploading JSON to this endpoint does not immediately replace agents or enqueue
+the first graph node. The service first stores it as a pending sprint. After a
+user starts that sprint in the UI, use the common `/api/v1/agents/whoami` flow
+above to receive the first node together with the resolved identity and team
+JSON. The legacy shared queue URL
 `/worker/all/{project_phone}?to_phone={project_phone}` remains available for a
 low-level client, but it does not enrich arbitrary handoffs with the full agent
 card.
@@ -328,9 +335,12 @@ Parallel execution with permanent roles and no identity switching:
 POST /api/v1/telegram/agents/parallel
 ```
 
-All agents' tasks are queued immediately to their own phones. The legacy
-`/api/v1/telegram/agents` and `/api/v1/telegram/actors` endpoints remain
-parallel aliases for compatibility.
+After the pending sprint is started, all agents' tasks are queued to their own
+phones. The legacy `/api/v1/telegram/agents` and
+`/api/v1/telegram/actors` endpoints remain parallel aliases for compatibility;
+they also stage the received sprint instead of activating it immediately.
+JSON that defines a sequential graph must be sent to the sequential endpoint;
+the parallel endpoint rejects it instead of silently changing execution mode.
 
 Send the same JSON either as message text or as a `.json` document. The JSON
 should include `git_address`; the service finds the already registered project
@@ -339,6 +349,34 @@ contexts use the same repository, also include the exact `git_context_key`
 returned by Project Manager 0001. The legacy `project_id`/`project_phone`
 fields remain accepted when no Git reference is supplied. Unknown repositories
 are rejected and are not created by the Telegram import.
+
+A valid Telegram JSON is written durably to `pending_project_sprints.json`
+without changing the project's agents or queues. The bot replies with a public
+deep-link to the **Pending sprints** (`Ожидающие спринты`) tab. That tab shows
+only records for the currently selected project. Press **Start** (`Запустить`)
+to perform the real agent import and enqueue its work; until
+that confirmation, agents cannot receive anything from the uploaded sprint.
+The public link contains a random project-scoped `pending_token`. Remote list,
+detail, and start requests must send it in the `X-Pending-Sprints-Token`
+header; localhost access remains available without the token. Treat the link
+as an administrative access link and do not forward it to untrusted users.
+Pending records can also be inspected and started through:
+
+```text
+GET  /api/v1/projects/{project_phone}/pending-sprints
+GET  /api/v1/projects/{project_phone}/pending-sprints/{pending_sprint_id}
+POST /api/v1/projects/{project_phone}/pending-sprints/{pending_sprint_id}/start
+```
+
+The pending store is partitioned by the project's exact `git_context_key`, so
+sprints from another selected project are neither listed nor startable through
+the current project. Re-delivery of the same Telegram update reuses its existing
+pending record rather than creating a second sprint. The repository identity is
+also fixed when the sprint is received; if that project's Git repository later
+changes, the old pending sprint is rejected and must be sent again. Only one
+sprint per project may be activating at a time. If a process stops during
+activation, the UI offers an explicit retry after the 15-minute activation
+lease expires.
 
 The programmer can therefore send a file shaped like
 [`examples/project_agents_import.json`](examples/project_agents_import.json)

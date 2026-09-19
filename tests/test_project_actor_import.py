@@ -17,6 +17,9 @@ async def asgi_request(
     method: str = "GET",
     payload: object | None = None,
     headers: list[tuple[bytes, bytes]] | None = None,
+    host: str = "testserver:8025",
+    scheme: str = "http",
+    client_host: str = "127.0.0.1",
 ) -> tuple[int, object]:
     parsed = urllib.parse.urlsplit(target)
     body = json.dumps(payload).encode("utf-8") if payload is not None else b""
@@ -33,7 +36,7 @@ async def asgi_request(
     async def send(message: dict[str, object]) -> None:
         messages.append(message)
 
-    request_headers = [(b"host", b"testserver:8025")]
+    request_headers = [(b"host", host.encode("ascii"))]
     if payload is not None:
         request_headers.append((b"content-type", b"application/json"))
     request_headers.extend(headers or [])
@@ -42,14 +45,14 @@ async def asgi_request(
         "asgi": {"version": "3.0"},
         "http_version": "1.1",
         "method": method,
-        "scheme": "http",
+        "scheme": scheme,
         "path": parsed.path,
         "raw_path": parsed.path.encode("ascii"),
         "query_string": parsed.query.encode("ascii"),
         "root_path": "",
         "headers": request_headers,
-        "client": ("127.0.0.1", 12345),
-        "server": ("testserver", 8025),
+        "client": (client_host, 12345),
+        "server": (host.partition(":")[0], 8025),
     }
     await main.app(scope, receive, send)
     response_start = next(
@@ -93,10 +96,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "agents_path": main.agents_path,
             "history_path": main.history_path,
             "sprint_history_path": main.sprint_history_path,
+            "pending_sprints_path": main.pending_sprints_path,
             "git_config_lock": main.git_config_lock,
             "agents_lock": main.agents_lock,
             "history_lock": main.history_lock,
             "sprint_history_lock": main.sprint_history_lock,
+            "pending_sprints_lock": main.pending_sprints_lock,
             "group_task_submission_lock": main.group_task_submission_lock,
             "sequential_prompt_storage_lock": main.sequential_prompt_storage_lock,
             "project_state_patch_cache": main.project_state_patch_cache,
@@ -107,10 +112,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.agents_path = temp_path / "agents.json"
         main.history_path = temp_path / "conversation_log.jsonl"
         main.sprint_history_path = temp_path / "project_sprints.json"
+        main.pending_sprints_path = temp_path / "pending_project_sprints.json"
         main.git_config_lock = asyncio.Lock()
         main.agents_lock = asyncio.Lock()
         main.history_lock = asyncio.Lock()
         main.sprint_history_lock = asyncio.Lock()
+        main.pending_sprints_lock = asyncio.Lock()
         main.group_task_submission_lock = asyncio.Lock()
         main.sequential_prompt_storage_lock = asyncio.Lock()
         main.project_state_patch_cache = {}
@@ -187,6 +194,57 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             json.dumps({"agents": agents}, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
+
+    def register_project(
+        self,
+        *,
+        context_key: str,
+        project_phone: str,
+        git_address: str,
+        project_name: str,
+    ) -> None:
+        project = {
+            "project_name": project_name,
+            "git_address": git_address,
+            "git_context_key": context_key,
+            "project_phone": project_phone,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config = main.read_git_config_file()
+        config.setdefault(main.PROJECTS_KEY, {})[context_key] = project
+        config.setdefault(main.PHONE_GIT_CONTEXTS_KEY, {})[project_phone] = {
+            **project,
+            "phone": project_phone,
+        }
+        main.write_git_config_file(config)
+
+    async def start_staged_sprint(
+        self,
+        staged: dict[str, object],
+        *,
+        project_phone: str | None = None,
+    ) -> dict[str, object]:
+        pending = staged.get("pending_sprint")
+        self.assertIsInstance(pending, dict)
+        assert isinstance(pending, dict)
+        sprint_id = str(pending.get("id") or "")
+        self.assertTrue(sprint_id)
+        status_code, body = await asgi_request(
+            (
+                f"/api/v1/projects/{project_phone or self.PROJECT_PHONE}"
+                f"/pending-sprints/{urllib.parse.quote(sprint_id, safe='')}/start"
+            ),
+            method="POST",
+        )
+        self.assertEqual(status_code, 200, body)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        raw_result = body.get("result") or body.get("import_result") or body
+        self.assertIsInstance(raw_result, dict)
+        assert isinstance(raw_result, dict)
+        return raw_result
 
     async def test_overwrite_import_replaces_project_actors_and_queues_tasks(self) -> None:
         payload = {
@@ -2260,7 +2318,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "COORD-2",
         )
 
-    async def test_sequential_telegram_url_starts_first_graph_node(self) -> None:
+    async def test_sequential_telegram_url_stages_then_starts_first_graph_node(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
         status_code, body = await asgi_request(
             "/api/v1/telegram/agents/sequential",
             method="POST",
@@ -2296,19 +2355,55 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status_code, 200)
         self.assertIsInstance(body, dict)
         assert isinstance(body, dict)
-        self.assertEqual(body["assignment_mode"], "sequential")
-        self.assertEqual(body["active_agent"]["id"], "url-sequential-a")
-        self.assertEqual(body["queued_task_count"], 1)
-        self.assertEqual(body["queued_queue_item_count"], 1)
-        self.assertEqual(body["deferred_task_count"], 1)
+        self.assertTrue(body["staged"])
+        self.assertEqual(body["pending_sprint"]["assignment_mode"], "sequential")
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        self.assertFalse(main.sprint_history_path.exists())
+        self.assertTrue(main.pending_sprints_path.exists())
+
+        pending_id = body["pending_sprint"]["id"]
+        list_status, pending_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(pending_list, dict)
+        assert isinstance(pending_list, dict)
         self.assertEqual(
-            body["sequential_poll_endpoint"],
+            [sprint["id"] for sprint in pending_list["pending_sprints"]],
+            [pending_id],
+        )
+        detail_status, pending_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{pending_id}"
+        )
+        self.assertEqual(detail_status, 200)
+        self.assertIsInstance(pending_detail, dict)
+        assert isinstance(pending_detail, dict)
+        detail_record = pending_detail.get("pending_sprint") or pending_detail
+        self.assertEqual(detail_record["id"], pending_id)
+
+        activated = await self.start_staged_sprint(body)
+        self.assertEqual(activated["assignment_mode"], "sequential")
+        self.assertEqual(activated["active_agent"]["id"], "url-sequential-a")
+        self.assertEqual(activated["queued_task_count"], 1)
+        self.assertEqual(activated["queued_queue_item_count"], 1)
+        self.assertEqual(activated["deferred_task_count"], 1)
+        self.assertEqual(
+            activated["sequential_poll_endpoint"],
             f"/worker/all/{self.PROJECT_PHONE}?to_phone={self.PROJECT_PHONE}",
         )
         self.assertEqual(len(main.queues["worker-all"]), 1)
         self.assertEqual(len(main.queues["tester-all"]), 0)
+        after_start_status, after_start = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        self.assertEqual(after_start_status, 200)
+        self.assertIsInstance(after_start, dict)
+        assert isinstance(after_start, dict)
+        self.assertEqual(after_start["pending_count"], 0)
+        self.assertEqual(after_start["pending_sprints"], [])
 
-        poll_status, node = await asgi_request(body["sequential_poll_endpoint"])
+        poll_status, node = await asgi_request(activated["sequential_poll_endpoint"])
         self.assertEqual(poll_status, 200)
         self.assertIsInstance(node, dict)
         assert isinstance(node, dict)
@@ -2774,6 +2869,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_parallel_telegram_url_never_switches_roles(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
         status_code, body = await asgi_request(
             "/api/v1/telegram/agents/parallel",
             method="POST",
@@ -2803,10 +2899,16 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status_code, 200)
         self.assertIsInstance(body, dict)
         assert isinstance(body, dict)
-        self.assertEqual(body["assignment_mode"], "parallel")
-        self.assertEqual(body["queued_task_count"], 2)
-        self.assertEqual(body["deferred_task_count"], 0)
-        self.assertIsNone(body["sequential_poll_endpoint"])
+        self.assertTrue(body["staged"])
+        self.assertEqual(body["pending_sprint"]["assignment_mode"], "parallel")
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        activated = await self.start_staged_sprint(body)
+        self.assertEqual(activated["assignment_mode"], "parallel")
+        self.assertEqual(activated["queued_task_count"], 2)
+        self.assertEqual(activated["deferred_task_count"], 0)
+        self.assertIsNone(activated["sequential_poll_endpoint"])
         queued_phones = {
             main.queue_item_metadata(item)["to_phone"]
             for item in main.queues["worker-all"]
@@ -3011,6 +3113,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(len(state["recent_activity"]), 1)
 
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
         actor_json = {
             "project_id": self.PROJECT_PHONE,
             "actors": {
@@ -3042,9 +3145,15 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(body, dict)
         assert isinstance(body, dict)
         self.assertTrue(body["ok"])
-        self.assertEqual(body["source"], "telegram")
-        self.assertEqual(body["imported_actor_count"], 1)
-        self.assertEqual(body["queued_task_count"], 1)
+        self.assertTrue(body["staged"])
+        self.assertEqual(body["pending_sprint"]["source"], "telegram")
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        activated = await self.start_staged_sprint(body)
+        self.assertEqual(activated["source"], "telegram")
+        self.assertEqual(activated["imported_actor_count"], 1)
+        self.assertEqual(activated["queued_task_count"], 1)
 
     async def test_telegram_agents_json_resolves_project_from_git_address(self) -> None:
         agent_json = {
@@ -3076,10 +3185,1121 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status_code, 200)
         self.assertIsInstance(body, dict)
         assert isinstance(body, dict)
+        self.assertTrue(body["staged"])
         self.assertEqual(body["project_phone"], self.PROJECT_PHONE)
-        self.assertEqual(body["project"]["git_context_key"], self.PROJECT_CONTEXT)
-        self.assertEqual(body["imported_agent_count"], 1)
-        self.assertEqual(body["queued_task_count"], 1)
+        self.assertEqual(body["git_context_key"], self.PROJECT_CONTEXT)
+        activated = await self.start_staged_sprint(body)
+        self.assertEqual(activated["project_phone"], self.PROJECT_PHONE)
+        self.assertEqual(activated["project"]["git_context_key"], self.PROJECT_CONTEXT)
+        self.assertEqual(activated["imported_agent_count"], 1)
+        self.assertEqual(activated["queued_task_count"], 1)
+
+    async def test_pending_telegram_sprint_survives_storage_reload(self) -> None:
+        status_code, staged = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": 12001,
+                "message": {
+                    "message_id": 81,
+                    "chat": {"id": 73},
+                    "text": json.dumps(
+                        {
+                            "git_address": "https://github.com/example/actor-import.git",
+                            "sprint": {"id": "persistent-pending", "title": "Persistent Pending"},
+                            "agents": {
+                                "overwrite": True,
+                                "items": [
+                                    {
+                                        "id": "persistent-pending-agent",
+                                        "name": "Persistent Pending Agent",
+                                        "phone": "2061",
+                                        "tasks": ["Start only after confirmation."],
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                },
+            },
+        )
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+        self.assertTrue(main.pending_sprints_path.exists())
+        self.assertIn(
+            sprint_id,
+            main.pending_sprints_path.read_text(encoding="utf-8"),
+        )
+
+        # Model a process restart: no in-memory object may be required to list
+        # or open the staged sprint; the file remains the source of truth.
+        main.pending_sprints_lock = asyncio.Lock()
+        list_status, pending_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        detail_status, detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertEqual(detail_status, 200)
+        self.assertIsInstance(pending_list, dict)
+        self.assertIsInstance(detail, dict)
+        assert isinstance(pending_list, dict) and isinstance(detail, dict)
+        self.assertEqual(
+            [item["id"] for item in pending_list["pending_sprints"]],
+            [sprint_id],
+        )
+        detail_record = detail.get("pending_sprint") or detail
+        self.assertEqual(detail_record["id"], sprint_id)
+
+    async def test_pending_telegram_sprints_are_isolated_by_project(self) -> None:
+        second_context = "github.com/example/pending-second-project"
+        second_phone = "9009"
+        second_project = {
+            "project_name": "Pending Second Project",
+            "git_address": "https://github.com/example/pending-second-project.git",
+            "git_context_key": second_context,
+            "project_phone": second_phone,
+            "groups": [],
+            "group_relationships": [],
+            "customer_reporting": {},
+        }
+        config = main.read_git_config_file()
+        config[main.PROJECTS_KEY][second_context] = second_project
+        config[main.PHONE_GIT_CONTEXTS_KEY][second_phone] = {
+            **second_project,
+            "phone": second_phone,
+        }
+        main.write_git_config_file(config)
+
+        staged_results: list[dict[str, object]] = []
+        for update_id, git_address, title, actor_id, phone in (
+            (
+                12101,
+                "https://github.com/example/actor-import.git",
+                "Primary Pending Sprint",
+                "primary-pending-agent",
+                "2062",
+            ),
+            (
+                12102,
+                second_project["git_address"],
+                "Second Pending Sprint",
+                "second-pending-agent",
+                "2063",
+            ),
+        ):
+            stage_status, stage_body = await asgi_request(
+                "/api/v1/telegram/agents",
+                method="POST",
+                payload={
+                    "update_id": update_id,
+                    "message": {
+                        "message_id": update_id,
+                        "chat": {"id": 74},
+                        "text": json.dumps(
+                            {
+                                "git_address": git_address,
+                                "sprint": {"title": title},
+                                "agents": {
+                                    "overwrite": True,
+                                    "items": [
+                                        {
+                                            "id": actor_id,
+                                            "name": title + " Agent",
+                                            "phone": phone,
+                                            "tasks": [title + " task"],
+                                        }
+                                    ],
+                                },
+                            }
+                        ),
+                    },
+                },
+            )
+            self.assertEqual(stage_status, 200)
+            self.assertIsInstance(stage_body, dict)
+            assert isinstance(stage_body, dict)
+            staged_results.append(stage_body)
+
+        primary_id = staged_results[0]["pending_sprint"]["id"]
+        second_id = staged_results[1]["pending_sprint"]["id"]
+        primary_status, primary = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        second_status, second = await asgi_request(
+            f"/api/v1/projects/{second_phone}/pending-sprints"
+        )
+        self.assertEqual(primary_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(primary, dict)
+        self.assertIsInstance(second, dict)
+        assert isinstance(primary, dict) and isinstance(second, dict)
+        self.assertEqual(
+            {item["id"] for item in primary["pending_sprints"]},
+            {primary_id},
+        )
+        self.assertEqual(
+            {item["id"] for item in second["pending_sprints"]},
+            {second_id},
+        )
+        foreign_status, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{second_id}"
+        )
+        self.assertEqual(foreign_status, 404)
+
+    async def test_telegram_update_id_is_deduplicated_without_mutation(self) -> None:
+        update = {
+            "update_id": 12201,
+            "message": {
+                "message_id": 91,
+                "chat": {"id": 75},
+                "text": json.dumps(
+                    {
+                        "git_address": "https://github.com/example/actor-import.git",
+                        "sprint": {"title": "Deduplicated Pending Sprint"},
+                        "agents": {
+                            "overwrite": True,
+                            "items": [
+                                {
+                                    "id": "deduplicated-pending-agent",
+                                    "name": "Deduplicated Pending Agent",
+                                    "phone": "2064",
+                                    "tasks": ["Queue exactly once after start."],
+                                }
+                            ],
+                        },
+                    }
+                ),
+            },
+        }
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        first_status, first = await asgi_request(
+            "/api/v1/telegram/agents", method="POST", payload=update
+        )
+        second_status, second = await asgi_request(
+            "/api/v1/telegram/agents", method="POST", payload=update
+        )
+        self.assertEqual(first_status, 200)
+        self.assertEqual(second_status, 200)
+        self.assertIsInstance(first, dict)
+        self.assertIsInstance(second, dict)
+        assert isinstance(first, dict) and isinstance(second, dict)
+        self.assertEqual(
+            first["pending_sprint"]["id"],
+            second["pending_sprint"]["id"],
+        )
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        list_status, pending_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(pending_list, dict)
+        assert isinstance(pending_list, dict)
+        self.assertEqual(len(pending_list["pending_sprints"]), 1)
+
+    async def test_telegram_update_id_cannot_move_to_another_project(self) -> None:
+        second_context = "github.com/example/update-id-second"
+        second_phone = "9009"
+        second_git_address = "https://github.com/example/update-id-second.git"
+        self.register_project(
+            context_key=second_context,
+            project_phone=second_phone,
+            git_address=second_git_address,
+            project_name="Update ID Second",
+        )
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        shared_update_id = 12202
+        first_status, first = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": shared_update_id,
+                "git_address": "https://github.com/example/actor-import.git",
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "global-update-primary-agent",
+                            "name": "Global Update Primary Agent",
+                            "phone": "2068",
+                            "tasks": [],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(first_status, 200)
+        self.assertIsInstance(first, dict)
+        assert isinstance(first, dict)
+
+        second_status, second = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": shared_update_id,
+                "git_address": second_git_address,
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "global-update-second-agent",
+                            "name": "Global Update Second Agent",
+                            "phone": "2069",
+                            "tasks": [],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(second_status, 409, second)
+        self.assertIsInstance(second, dict)
+        assert isinstance(second, dict)
+        self.assertEqual(
+            second["detail"]["error"],
+            "telegram_update_project_conflict",
+        )
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        storage = main.read_pending_sprints_file()["projects"]
+        primary_records = storage[self.PROJECT_CONTEXT]["sprints"]
+        second_records = storage.get(second_context, {}).get("sprints", [])
+        self.assertEqual(len(primary_records), 1)
+        self.assertEqual(primary_records[0]["id"], first["pending_sprint"]["id"])
+        self.assertEqual(second_records, [])
+
+    async def test_pending_sprint_cannot_be_started_twice(self) -> None:
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "sprint": {"title": "Start Once"},
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "start-once-agent",
+                            "name": "Start Once Agent",
+                            "phone": "2065",
+                            "tasks": ["This task must be queued once."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        await self.start_staged_sprint(staged)
+        queue_sizes = {name: len(queue) for name, queue in main.queues.items()}
+        sprint_id = staged["pending_sprint"]["id"]
+
+        repeated_status, repeated = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}/start",
+            method="POST",
+        )
+        self.assertEqual(repeated_status, 409, repeated)
+        self.assertEqual(
+            {name: len(queue) for name, queue in main.queues.items()},
+            queue_sizes,
+        )
+
+    async def test_failed_pending_activation_remains_pending(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "sprint": {"title": "Retry After Conflict"},
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "conflicting-pending-agent",
+                            "name": "Conflicting Pending Agent",
+                            "phone": "2066",
+                            "tasks": ["Wait until the conflict is resolved."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        agents_data = main.read_agents_file()
+        agents_data.append(
+            {
+                "id": "outside-phone-conflict",
+                "name": "Outside Phone Conflict",
+                "phone": "2066",
+                "profile": "Belongs to another project.",
+                "parameters": {"git_context_key": "github.com/example/outside-conflict"},
+            }
+        )
+        main.agents_path.write_text(
+            json.dumps({"agents": agents_data}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        state_before_start = main.agents_path.read_text(encoding="utf-8")
+        sprint_id = staged["pending_sprint"]["id"]
+
+        start_status, _ = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}/start",
+            method="POST",
+        )
+        self.assertEqual(start_status, 409)
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), state_before_start)
+        self.assertNotEqual(state_before_start, agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        list_status, pending_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(pending_list, dict)
+        assert isinstance(pending_list, dict)
+        record = next(
+            item
+            for item in pending_list["pending_sprints"]
+            if item["id"] == sprint_id
+        )
+        self.assertEqual(record["status"], "pending")
+
+    async def test_telegram_stage_reply_contains_public_pending_sprint_url(self) -> None:
+        os.environ["TELEGRAM_BOT_TOKEN"] = "test-token"
+        telegram_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def fake_telegram_api(
+            token: str,
+            method: str,
+            data: dict[str, object],
+        ) -> dict[str, object]:
+            telegram_calls.append((token, method, data))
+            return {"ok": True, "result": {}}
+
+        with patch.object(
+            main,
+            "cloudflared_public_base_url",
+            return_value="https://pending.example.test",
+        ), patch.object(main, "telegram_api_json", side_effect=fake_telegram_api):
+            status_code, body = await asgi_request(
+                "/api/v1/telegram/agents",
+                method="POST",
+                payload={
+                    "update_id": 12301,
+                    "message": {
+                        "message_id": 101,
+                        "message_thread_id": 17,
+                        "chat": {"id": 76},
+                        "text": json.dumps(
+                            {
+                                "git_address": "https://github.com/example/actor-import.git",
+                                "sprint": {"title": "Public Pending Sprint"},
+                                "agents": {
+                                    "overwrite": True,
+                                    "items": [
+                                        {
+                                            "id": "public-pending-agent",
+                                            "name": "Public Pending Agent",
+                                            "phone": "2067",
+                                            "tasks": [],
+                                        }
+                                    ],
+                                },
+                            }
+                        ),
+                    },
+                },
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertTrue(body["staged"])
+        public_url = body["pending_sprints_url"]
+        parsed = urllib.parse.urlsplit(public_url)
+        query = urllib.parse.parse_qs(parsed.query)
+        self.assertEqual(parsed.scheme, "https")
+        self.assertEqual(parsed.netloc, "pending.example.test")
+        self.assertEqual(query["view"], ["pending-sprints"])
+        self.assertEqual(query["project_phone"], [self.PROJECT_PHONE])
+        self.assertEqual(query["sprint_id"], [body["pending_sprint"]["id"]])
+        self.assertEqual(len(telegram_calls), 1)
+        token, method, request_data = telegram_calls[0]
+        self.assertEqual(token, "test-token")
+        self.assertEqual(method, "sendMessage")
+        self.assertEqual(request_data["chat_id"], 76)
+        self.assertIn(public_url, str(request_data["text"]))
+
+    async def test_public_pending_sprint_api_requires_project_scoped_token(self) -> None:
+        second_context = "github.com/example/pending-token-second"
+        second_phone = "9009"
+        second_git_address = "https://github.com/example/pending-token-second.git"
+        self.register_project(
+            context_key=second_context,
+            project_phone=second_phone,
+            git_address=second_git_address,
+            project_name="Pending Token Second",
+        )
+
+        async def stage(
+            project_phone: str,
+            git_address: str,
+            actor_id: str,
+            actor_phone: str,
+        ) -> dict[str, object]:
+            with patch.object(
+                main,
+                "cloudflared_public_base_url",
+                return_value="https://pending.example.test",
+            ):
+                stage_status, stage_body = await asgi_request(
+                    "/api/v1/telegram/agents/parallel",
+                    method="POST",
+                    payload={
+                        "project_phone": project_phone,
+                        "git_address": git_address,
+                        "sprint": {"title": f"Pending token {project_phone}"},
+                        "agents": {
+                            "overwrite": True,
+                            "items": [
+                                {
+                                    "id": actor_id,
+                                    "name": f"Pending Token Agent {project_phone}",
+                                    "phone": actor_phone,
+                                    "tasks": ["Start through the protected public API."],
+                                }
+                            ],
+                        },
+                    },
+                )
+            self.assertEqual(stage_status, 200)
+            self.assertIsInstance(stage_body, dict)
+            assert isinstance(stage_body, dict)
+            return stage_body
+
+        primary = await stage(
+            self.PROJECT_PHONE,
+            "https://github.com/example/actor-import.git",
+            "primary-token-agent",
+            "2071",
+        )
+        second = await stage(
+            second_phone,
+            second_git_address,
+            "second-token-agent",
+            "2072",
+        )
+        primary_query = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(primary["pending_sprints_url"]).query
+        )
+        second_query = urllib.parse.parse_qs(
+            urllib.parse.urlsplit(second["pending_sprints_url"]).query
+        )
+        primary_token = primary_query["pending_token"][0]
+        second_token = second_query["pending_token"][0]
+        self.assertTrue(primary_token)
+        self.assertTrue(second_token)
+        self.assertNotEqual(primary_token, second_token)
+        self.assertEqual(primary_query["project_phone"], [self.PROJECT_PHONE])
+        self.assertEqual(
+            primary_query["sprint_id"],
+            [primary["pending_sprint"]["id"]],
+        )
+
+        primary_id = primary["pending_sprint"]["id"]
+        list_url = f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        detail_url = f"{list_url}/{primary_id}"
+        start_url = f"{detail_url}/start"
+        public_request = {
+            "host": "pending.example.test",
+            "scheme": "https",
+        }
+        for target, method in (
+            (list_url, "GET"),
+            (detail_url, "GET"),
+            (start_url, "POST"),
+        ):
+            denied_status, denied = await asgi_request(
+                target,
+                method=method,
+                **public_request,
+            )
+            self.assertEqual(denied_status, 403, denied)
+            self.assertIsInstance(denied, dict)
+            assert isinstance(denied, dict)
+            self.assertEqual(
+                denied["detail"]["error"],
+                "pending_sprints_access_denied",
+            )
+
+        wrong_status, wrong = await asgi_request(
+            list_url,
+            headers=[(b"x-pending-sprints-token", b"wrong-token")],
+            **public_request,
+        )
+        self.assertEqual(wrong_status, 403, wrong)
+
+        spoofed_local_status, spoofed_local = await asgi_request(
+            list_url,
+            host="localhost:8025",
+            client_host="192.0.2.10",
+        )
+        self.assertEqual(spoofed_local_status, 403, spoofed_local)
+        self.assertEqual(
+            spoofed_local["detail"]["error"],
+            "pending_sprints_access_denied",
+        )
+
+        token_headers = [
+            (b"x-pending-sprints-token", primary_token.encode("ascii"))
+        ]
+        local_list_status, _ = await asgi_request(list_url)
+        local_detail_status, _ = await asgi_request(detail_url)
+        public_list_status, _ = await asgi_request(
+            list_url,
+            headers=token_headers,
+            **public_request,
+        )
+        public_detail_status, _ = await asgi_request(
+            detail_url,
+            headers=token_headers,
+            **public_request,
+        )
+        self.assertEqual(local_list_status, 200)
+        self.assertEqual(local_detail_status, 200)
+        self.assertEqual(public_list_status, 200)
+        self.assertEqual(public_detail_status, 200)
+
+        foreign_status, foreign = await asgi_request(
+            f"/api/v1/projects/{second_phone}/pending-sprints",
+            headers=token_headers,
+            **public_request,
+        )
+        self.assertEqual(foreign_status, 403, foreign)
+        second_token_status, _ = await asgi_request(
+            f"/api/v1/projects/{second_phone}/pending-sprints",
+            headers=[
+                (b"x-pending-sprints-token", second_token.encode("ascii"))
+            ],
+            **public_request,
+        )
+        self.assertEqual(second_token_status, 200)
+
+        start_status, started = await asgi_request(
+            start_url,
+            method="POST",
+            headers=token_headers,
+            **public_request,
+        )
+        self.assertEqual(start_status, 200, started)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
+    async def test_pending_sprint_rejects_start_after_repository_changes(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "sprint": {"title": "Repository Identity"},
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "repository-identity-agent",
+                            "name": "Repository Identity Agent",
+                            "phone": "2073",
+                            "tasks": ["Do not start after repository drift."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        pending = staged["pending_sprint"]
+        self.assertEqual(
+            pending["git_address"],
+            "https://github.com/example/actor-import.git",
+        )
+        self.assertEqual(
+            pending["repository_key"],
+            "github.com/example/actor-import",
+        )
+
+        moved_address = "https://github.com/example/repository-moved.git"
+        moved_context = "github.com/example/repository-moved"
+        config = main.read_git_config_file()
+        moved_project = {
+            **config[main.PROJECTS_KEY].pop(self.PROJECT_CONTEXT),
+            "git_address": moved_address,
+            "git_context_key": moved_context,
+        }
+        config[main.PROJECTS_KEY][moved_context] = moved_project
+        config[main.PHONE_GIT_CONTEXTS_KEY][self.PROJECT_PHONE] = {
+            **moved_project,
+            "phone": self.PROJECT_PHONE,
+        }
+        main.write_git_config_file(config)
+
+        sprint_id = pending["id"]
+        start_status, start_body = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}/start",
+            method="POST",
+        )
+        self.assertEqual(start_status, 409, start_body)
+        self.assertIsInstance(start_body, dict)
+        assert isinstance(start_body, dict)
+        self.assertEqual(
+            start_body["detail"]["error"],
+            "pending_sprint_repository_changed",
+        )
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        self.assertFalse(main.sprint_history_path.exists())
+        stored = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ][0]
+        self.assertEqual(stored["status"], "pending")
+        self.assertEqual(stored["activation_attempts"], 0)
+
+    async def test_parallel_telegram_endpoint_rejects_sequential_graph(self) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+        status_code, body = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "agents": {"overwrite": True},
+                "execution": {
+                    "mode": "sequential",
+                    "start_node": "build",
+                    "required_approvals": 2,
+                    "reviewers": [
+                        {
+                            "id": "mode-reviewer-one",
+                            "name": "Mode Reviewer One",
+                            "phone": "2074",
+                        },
+                        {
+                            "id": "mode-reviewer-two",
+                            "name": "Mode Reviewer Two",
+                            "phone": "2075",
+                        },
+                    ],
+                },
+                "nodes": [
+                    {
+                        "id": "build",
+                        "agent": {
+                            "id": "mode-builder",
+                            "name": "Mode Builder",
+                            "phone": "2076",
+                        },
+                        "tasks": ["This graph requires sequential execution."],
+                        "transitions": {"DONE": "finished"},
+                    },
+                    {"id": "finished", "type": "terminal", "status": "DONE"},
+                ],
+            },
+        )
+        self.assertEqual(status_code, 400, body)
+        self.assertIsInstance(body, dict)
+        assert isinstance(body, dict)
+        self.assertEqual(
+            body["detail"]["error"],
+            "telegram_assignment_mode_conflict",
+        )
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        self.assertFalse(main.pending_sprints_path.exists())
+
+    async def test_concurrent_pending_sprint_start_has_single_winner(self) -> None:
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "sprint": {"title": "Concurrent Start"},
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "concurrent-start-agent",
+                            "name": "Concurrent Start Agent",
+                            "phone": "2077",
+                            "tasks": ["Queue exactly once."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{sprint_id}/start"
+        )
+
+        first, second = await asyncio.gather(
+            asgi_request(start_url, method="POST"),
+            asgi_request(start_url, method="POST"),
+        )
+        self.assertEqual(sorted((first[0], second[0])), [200, 409])
+        winner = first[1] if first[0] == 200 else second[1]
+        loser = first[1] if first[0] == 409 else second[1]
+        self.assertIsInstance(winner, dict)
+        self.assertIsInstance(loser, dict)
+        assert isinstance(winner, dict) and isinstance(loser, dict)
+        self.assertTrue(winner["started"])
+        self.assertIn(
+            loser["detail"]["error"],
+            {
+                "pending_sprint_activation_in_progress",
+                "pending_sprint_already_started",
+            },
+        )
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(
+            main.queue_item_message(main.queues["worker-all"][0]),
+            "Queue exactly once.",
+        )
+
+    async def test_another_pending_sprint_cannot_start_during_project_activation(
+        self,
+    ) -> None:
+        agents_before = main.agents_path.read_text(encoding="utf-8")
+
+        async def stage(
+            sprint_title: str,
+            actor_id: str,
+            actor_phone: str,
+        ) -> dict[str, object]:
+            status_code, body = await asgi_request(
+                "/api/v1/telegram/agents/parallel",
+                method="POST",
+                payload={
+                    "git_address": "https://github.com/example/actor-import.git",
+                    "sprint": {"title": sprint_title},
+                    "agents": {
+                        "overwrite": True,
+                        "items": [
+                            {
+                                "id": actor_id,
+                                "name": sprint_title + " Agent",
+                                "phone": actor_phone,
+                                "tasks": [sprint_title + " task"],
+                            }
+                        ],
+                    },
+                },
+            )
+            self.assertEqual(status_code, 200)
+            self.assertIsInstance(body, dict)
+            assert isinstance(body, dict)
+            return body
+
+        first = await stage("Held Project Start", "held-project-agent", "2079")
+        second = await stage("Blocked Project Start", "blocked-project-agent", "2080")
+        first_id = first["pending_sprint"]["id"]
+        second_id = second["pending_sprint"]["id"]
+        first_claim = main.update_pending_sprint_activation_file(
+            self.PROJECT_CONTEXT,
+            first_id,
+            action="claim",
+        )
+        self.assertEqual(first_claim["status"], "activating")
+        self.assertTrue(first_claim["activation_attempt_id"])
+
+        blocked_status, blocked = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{second_id}/start",
+            method="POST",
+        )
+        self.assertEqual(blocked_status, 409, blocked)
+        self.assertIsInstance(blocked, dict)
+        assert isinstance(blocked, dict)
+        self.assertEqual(
+            blocked["detail"]["error"],
+            "project_sprint_activation_in_progress",
+        )
+        self.assertEqual(blocked["detail"]["pending_sprint_id"], first_id)
+        self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+        self.assertFalse(main.sprint_history_path.exists())
+
+        storage = main.read_pending_sprints_file()
+        records = {
+            item["id"]: item
+            for item in storage["projects"][self.PROJECT_CONTEXT]["sprints"]
+        }
+        self.assertEqual(records[first_id]["status"], "activating")
+        self.assertEqual(records[second_id]["status"], "pending")
+        self.assertEqual(records[second_id]["activation_attempts"], 0)
+
+    async def test_stale_pending_activation_can_be_reclaimed_with_new_attempt(self) -> None:
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "git_address": "https://github.com/example/actor-import.git",
+                "sprint": {"title": "Recover Stale Activation"},
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "stale-activation-agent",
+                            "name": "Stale Activation Agent",
+                            "phone": "2078",
+                            "tasks": ["Recover and queue this once."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+        first_claim = main.update_pending_sprint_activation_file(
+            self.PROJECT_CONTEXT,
+            sprint_id,
+            action="claim",
+        )
+        first_attempt_id = first_claim["activation_attempt_id"]
+        self.assertTrue(first_attempt_id)
+
+        storage = main.read_pending_sprints_file()
+        stored = next(
+            item
+            for item in storage["projects"][self.PROJECT_CONTEXT]["sprints"]
+            if item["id"] == sprint_id
+        )
+        stored["activating_at"] = "2000-01-01T00:00:00+00:00"
+        stored["retry_at"] = "2000-01-01T00:01:00+00:00"
+        main.write_pending_sprints_file(storage)
+
+        detail_status, detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}"
+        )
+        self.assertEqual(detail_status, 200)
+        self.assertIsInstance(detail, dict)
+        assert isinstance(detail, dict)
+        summary = detail["pending_sprint"]
+        self.assertEqual(summary["status"], "activating")
+        self.assertTrue(summary["startable"])
+        self.assertTrue(summary["retry_at"])
+
+        retry_status, retried = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}/start",
+            method="POST",
+        )
+        self.assertEqual(retry_status, 200, retried)
+        self.assertIsInstance(retried, dict)
+        assert isinstance(retried, dict)
+        second_attempt_id = retried["claimed_sprint"]["activation_attempt_id"]
+        self.assertTrue(second_attempt_id)
+        self.assertNotEqual(first_attempt_id, second_attempt_id)
+        self.assertEqual(retried["claimed_sprint"]["activation_attempts"], 2)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
+    async def test_stale_activation_reconciles_completed_import_without_duplicates(self) -> None:
+        payload = {
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"title": "Reconcile Completed Import"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "reconciled-activation-agent",
+                        "name": "Reconciled Activation Agent",
+                        "phone": "2081",
+                        "tasks": ["Queue this task exactly once."],
+                    }
+                ],
+            },
+        }
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+
+        first_claim = main.update_pending_sprint_activation_file(
+            self.PROJECT_CONTEXT,
+            sprint_id,
+            action="claim",
+        )
+        self.assertEqual(first_claim["status"], "activating")
+        imported = await main.import_project_actors_data(
+            self.PROJECT_PHONE,
+            payload,
+            source="telegram",
+            source_filename="telegram-message.json",
+            activate_sequential=False,
+            expected_git_context_key=self.PROJECT_CONTEXT,
+            expected_repository_key="github.com/example/actor-import",
+            pending_sprint_id=sprint_id,
+        )
+        imported_sprint_id = imported["sprint"]["id"]
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        original_queue_item_id = main.queue_item_id(main.queues["worker-all"][0])
+
+        storage = main.read_pending_sprints_file()
+        stored = next(
+            item
+            for item in storage["projects"][self.PROJECT_CONTEXT]["sprints"]
+            if item["id"] == sprint_id
+        )
+        stored["activating_at"] = "2000-01-01T00:00:00+00:00"
+        stored["retry_at"] = "2000-01-01T00:01:00+00:00"
+        main.write_pending_sprints_file(storage)
+
+        retry_status, retried = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}/start",
+            method="POST",
+        )
+        self.assertEqual(retry_status, 200, retried)
+        self.assertIsInstance(retried, dict)
+        assert isinstance(retried, dict)
+        self.assertTrue(retried["reconciled"])
+        self.assertEqual(retried["sprint"]["id"], imported_sprint_id)
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(
+            main.queue_item_id(main.queues["worker-all"][0]),
+            original_queue_item_id,
+        )
+
+        list_status, pending_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints"
+        )
+        self.assertEqual(list_status, 200)
+        self.assertIsInstance(pending_list, dict)
+        assert isinstance(pending_list, dict)
+        self.assertEqual(pending_list["pending_count"], 0)
+
+    async def test_reclaimed_activation_waits_for_inflight_import_marker(self) -> None:
+        payload = {
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"title": "Inflight Reconciliation"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "inflight-reconciliation-agent",
+                        "name": "Inflight Reconciliation Agent",
+                        "phone": "2082",
+                        "tasks": ["Do not duplicate this inflight task."],
+                    }
+                ],
+            },
+        }
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(stage_status, 200)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+        main.update_pending_sprint_activation_file(
+            self.PROJECT_CONTEXT,
+            sprint_id,
+            action="claim",
+        )
+        storage = main.read_pending_sprints_file()
+        stored = next(
+            item
+            for item in storage["projects"][self.PROJECT_CONTEXT]["sprints"]
+            if item["id"] == sprint_id
+        )
+        stored["activating_at"] = "2000-01-01T00:00:00+00:00"
+        stored["retry_at"] = "2000-01-01T00:01:00+00:00"
+        main.write_pending_sprints_file(storage)
+
+        reached_history_write = asyncio.Event()
+        release_history_write = asyncio.Event()
+        original_record_import = main.record_project_sprint_import
+
+        async def delayed_record_import(**kwargs: object) -> dict[str, object]:
+            reached_history_write.set()
+            await release_history_write.wait()
+            return await original_record_import(**kwargs)
+
+        with patch.object(
+            main,
+            "record_project_sprint_import",
+            new=delayed_record_import,
+        ):
+            first_import_task = asyncio.create_task(
+                main.import_project_actors_data(
+                    self.PROJECT_PHONE,
+                    payload,
+                    source="telegram",
+                    source_filename="telegram-message.json",
+                    activate_sequential=False,
+                    expected_git_context_key=self.PROJECT_CONTEXT,
+                    expected_repository_key="github.com/example/actor-import",
+                    pending_sprint_id=sprint_id,
+                )
+            )
+            await asyncio.wait_for(reached_history_write.wait(), timeout=2)
+            self.assertEqual(len(main.queues["worker-all"]), 1)
+            original_queue_item_id = main.queue_item_id(
+                main.queues["worker-all"][0]
+            )
+            retry_task = asyncio.create_task(
+                asgi_request(
+                    f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                    f"{sprint_id}/start",
+                    method="POST",
+                )
+            )
+            try:
+                await asyncio.sleep(0.05)
+                self.assertFalse(retry_task.done())
+            finally:
+                release_history_write.set()
+
+            imported, retry_response = await asyncio.gather(
+                first_import_task,
+                retry_task,
+            )
+
+        retry_status, retried = retry_response
+        self.assertEqual(retry_status, 200, retried)
+        self.assertIsInstance(retried, dict)
+        assert isinstance(retried, dict)
+        self.assertTrue(retried["reconciled"])
+        self.assertEqual(retried["claimed_sprint"]["activation_attempts"], 2)
+        self.assertEqual(retried["sprint"]["id"], imported["sprint"]["id"])
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+        self.assertEqual(
+            main.queue_item_id(main.queues["worker-all"][0]),
+            original_queue_item_id,
+        )
+        history = main.read_sprint_history_file()
+        matching_records = [
+            item
+            for item in history["projects"][self.PROJECT_CONTEXT]["sprints"]
+            if item.get("pending_sprint_id") == sprint_id
+        ]
+        self.assertEqual(len(matching_records), 1)
 
     async def test_telegram_unknown_git_repository_does_not_mutate_agents(self) -> None:
         status_code, body = await asgi_request(
@@ -3197,11 +4417,9 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(selected_status, 200)
         self.assertIsInstance(selected_body, dict)
         assert isinstance(selected_body, dict)
+        self.assertTrue(selected_body["staged"])
         self.assertEqual(selected_body["project_phone"], "9009")
-        self.assertEqual(
-            selected_body["project"]["git_context_key"],
-            frontend_context,
-        )
+        self.assertEqual(selected_body["git_context_key"], frontend_context)
 
     async def test_telegram_webhook_enforces_secret_and_chat_allowlist(self) -> None:
         os.environ["TELEGRAM_WEBHOOK_SECRET"] = "test-secret"
@@ -3253,7 +4471,9 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(allowed_status, 200)
         self.assertIsInstance(allowed_body, dict)
         assert isinstance(allowed_body, dict)
-        self.assertEqual(allowed_body["imported_actor_count"], 1)
+        self.assertTrue(allowed_body["staged"])
+        activated = await self.start_staged_sprint(allowed_body)
+        self.assertEqual(activated["imported_actor_count"], 1)
 
     def test_ui_exposes_actor_import_and_bulk_delete_controls(self) -> None:
         html = main.render_index_v2()
@@ -3264,10 +4484,29 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             'id="projectSprints"',
             'id="refreshProjectSprintsButton"',
             'id="projectTelegramHistoryForwarding"',
+            'class="page-tab" data-view="pending-sprints"',
+            'class="view pending-sprints-view" data-view="pending-sprints"',
+            'id="pendingSprintsProjectSelect"',
+            'id="pendingSprintsProjectSummary"',
+            'id="refreshPendingSprintsButton"',
+            'id="pendingSprintsStatus"',
+            'id="pendingSprints"',
+            'id="pendingSprintPreviewTitle"',
+            'id="pendingSprintJsonPreview"',
             "async function importProjectActorsFromJson()",
             "async function deleteAllProjectActors()",
             "async function refreshProjectSprints()",
             "async function updateTelegramHistoryForwarding()",
+            "pendingSprintsViewIsActive",
+            "renderPendingSprintsProjectOptions",
+            "renderPendingSprints",
+            "refreshPendingSprints",
+            "loadPendingSprintPreview",
+            "startPendingSprint",
+            "applyPendingSprintsDeepLink",
+            "syncPendingSprintsUrl",
+            'data-action="preview-pending-sprint"',
+            'data-action="start-pending-sprint"',
             "download-project-sprint",
             "agents.overwrite: true",
             "/agents/import",
