@@ -153,6 +153,16 @@ DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE = r"D:\Prompt\{repository}"
 DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE = (
     r"D:\Prompt\{repository}_{agent_phone}-latest.prompt"
 )
+SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS = (
+    "HTTP-ответ и latest_agent_prompt_file_path содержат компактный, но "
+    "полный для выполнения задачи JSON: текст active_task.message сохранён "
+    "целиком вместе с необходимыми управляющими полями. Дублирующие metadata "
+    "и project_state исключены намеренно, а не из-за "
+    "обрезки; актуальное состояние доступно по project_state_url, полный "
+    "диагностический JSON — в response_file_path. Если response_compact=true, "
+    "считай ответ полным, не загружай архив только ради active_task и не "
+    "сообщай пользователю об обрезке."
+)
 SCREENSHOT_FOLDER_PREFIX = "screenshot_folder_"
 EVIDENCE_FOLDER_PREFIX = "evidence_folder_"
 FOLDER_GIT_CONTEXT_FILENAME = ".git_context.json"
@@ -181,6 +191,7 @@ MAX_SCREENSHOT_SIZE = 25 * 1024 * 1024
 MAX_EVIDENCE_SIZE = 100 * 1024 * 1024
 MAX_PATCH_SIZE = 5 * 1024 * 1024
 PROJECT_STATE_PATCH_CACHE_MAX = 512
+SPRINT_HISTORY_ACTIVITY_LIMIT = 500
 project_state_patch_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
 PROJECT_MANAGER_PHONE = "0001"
 PROJECT_MANAGER_AGENT_ID = "agent-project-manager"
@@ -459,6 +470,71 @@ def write_git_config_file(data: dict[str, Any]) -> None:
 
 def empty_sprint_history() -> dict[str, Any]:
     return {"schema_version": 1, "projects": {}}
+
+
+def compact_sprint_state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
+    """Keep a useful sprint snapshot without embedding duplicated patch bodies."""
+    heavy_fields = (
+        "history_with_patches",
+        "activity_with_patches",
+        "code_patches",
+    )
+    omitted_fields = [field_name for field_name in heavy_fields if field_name in state]
+    recent_activity = state.get("recent_activity")
+    recent_activity_total = (
+        len(recent_activity) if isinstance(recent_activity, list) else None
+    )
+    snapshot: dict[str, Any] = {}
+    for key, value in state.items():
+        if key in heavy_fields:
+            continue
+        if (
+            key == "recent_activity"
+            and isinstance(value, list)
+            and len(value) > SPRINT_HISTORY_ACTIVITY_LIMIT
+        ):
+            snapshot[key] = deepcopy(value[-SPRINT_HISTORY_ACTIVITY_LIMIT:])
+        else:
+            snapshot[key] = deepcopy(value)
+
+    if omitted_fields or (
+        recent_activity_total is not None
+        and recent_activity_total > SPRINT_HISTORY_ACTIVITY_LIMIT
+    ):
+        raw_compaction = snapshot.get("snapshot_compaction")
+        compaction = (
+            deepcopy(raw_compaction) if isinstance(raw_compaction, dict) else {}
+        )
+        compaction.update(
+            {
+                "compacted": True,
+                "omitted_fields": omitted_fields,
+                "recent_activity_total": recent_activity_total,
+                "recent_activity_stored": len(
+                    snapshot.get("recent_activity") or []
+                ),
+            }
+        )
+        snapshot["snapshot_compaction"] = compaction
+    return snapshot
+
+
+def compact_sprint_code_history(code_history: dict[str, Any]) -> dict[str, Any]:
+    """Store code-history counts and provenance, but not repeated diff text."""
+    heavy_fields = ("text", "timeline", "patches")
+    omitted_fields = [
+        field_name for field_name in heavy_fields if field_name in code_history
+    ]
+    compact = {
+        key: deepcopy(value)
+        for key, value in code_history.items()
+        if key not in heavy_fields
+    }
+    if omitted_fields:
+        compact["compacted"] = True
+        compact["content_included"] = False
+        compact["omitted_fields"] = omitted_fields
+    return compact
 
 
 def read_sprint_history_file() -> dict[str, Any]:
@@ -8454,7 +8530,8 @@ def materialize_sequential_launch_prompt(
         "«Полный файл» целиком и используй его как полный запрос.\n"
         f"Последний ответ агента: {agent_latest_file_hint}\n"
         "Если обрезан ответ API, прочитай этот стабильный .prompt файл, "
-        "подставив свой номер вместо {agent_phone}.\n\n"
+        "подставив свой номер вместо {agent_phone}; файл компактен, но "
+        "содержит полный текст active_task.message и управляющие поля.\n\n"
         "--- НАЧАЛО ПОЛНОГО ЗАПРОСА ---\n\n"
     )
     stored_prompt = f"{delivery_header}{prompt.rstrip()}\n"
@@ -8479,6 +8556,252 @@ def materialize_sequential_launch_prompt(
         ),
         "prompt": stored_prompt,
     }
+
+
+def compact_sequential_agent_prompt_response(
+    response: dict[str, Any],
+) -> dict[str, Any]:
+    compact_response = dict(response)
+    omitted_fields: list[str] = []
+    project_state = compact_response.pop("project_state", None)
+    if isinstance(project_state, dict):
+        omitted_fields.append("project_state")
+    if "full_response_instructions" in compact_response:
+        compact_response["full_response_instructions"] = (
+            SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS
+        )
+
+    project = compact_response.get("project")
+    if isinstance(project, dict):
+        compact_response["project"] = {
+            key: project[key]
+            for key in (
+                "project_name",
+                "git_address",
+                "git_context_key",
+                "project_phone",
+                "project_id",
+            )
+            if key in project
+        }
+        omitted_fields.append("project.extended_configuration")
+
+    agent = compact_response.get("agent")
+    if isinstance(agent, dict):
+        compact_response["agent"] = {
+            key: agent[key]
+            for key in (
+                "id",
+                "name",
+                "phone",
+                "git_branch",
+                "status",
+                "parameters",
+                "template_source",
+            )
+            if key in agent
+        }
+        omitted_fields.append("agent.duplicated_profile_tasks_presence")
+
+    team = compact_response.get("team")
+    if isinstance(team, list):
+        compact_response["team"] = [
+            {
+                key: member[key]
+                for key in ("id", "name", "phone", "git_branch", "status")
+                if key in member
+            }
+            for member in team
+            if isinstance(member, dict)
+        ]
+        omitted_fields.append("team[*].profile_tasks_presence")
+
+    active_task = compact_response.get("active_task")
+    if isinstance(active_task, dict):
+        compact_active_task = dict(active_task)
+        metadata = active_task.get("metadata")
+        if isinstance(metadata, dict):
+            compact_metadata = dict(metadata)
+            for duplicate_key in ("agent", "tasks", "workflow"):
+                if duplicate_key in compact_metadata:
+                    compact_metadata.pop(duplicate_key)
+                    omitted_fields.append(
+                        f"active_task.metadata.{duplicate_key}"
+                    )
+            compact_active_task["metadata"] = compact_metadata
+        compact_response["active_task"] = compact_active_task
+
+    def compact_transition(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        compact_value = {
+            key: value[key]
+            for key in (
+                "transition_id",
+                "source_node_id",
+                "source_agent_id",
+                "source_agent_name",
+                "source_agent_phone",
+                "source_git_branch",
+                "source_assignment_id",
+                "outcome",
+                "target_node_id",
+                "status",
+                "proposed_at",
+                "resolved_at",
+                "applied_target_node_id",
+                "feedback",
+            )
+            if key in value
+        }
+        reviews = value.get("reviews")
+        if isinstance(reviews, list):
+            compact_value["reviews"] = [
+                {
+                    key: review[key]
+                    for key in (
+                        "reviewer_index",
+                        "reviewer_agent_id",
+                        "reviewer_agent_name",
+                        "reviewer_agent_phone",
+                        "reviewer_name",
+                        "reviewer_phone",
+                        "assignment_id",
+                        "decision",
+                        "feedback",
+                        "reviewed_at",
+                    )
+                    if key in review
+                }
+                for review in reviews
+                if isinstance(review, dict)
+            ]
+        result = value.get("result")
+        if result not in (None, ""):
+            compact_value["result_available"] = True
+            compact_value["result_chars"] = len(str(result))
+        return compact_value
+
+    assignment = compact_response.get("assignment")
+    if isinstance(assignment, dict):
+        compact_assignment = {
+            key: assignment[key]
+            for key in (
+                "mode",
+                "strategy",
+                "status",
+                "revision",
+                "created_at",
+                "updated_at",
+                "current_agent_id",
+                "current_node_id",
+                "phase",
+                "current_started_at",
+                "completed_agent_ids",
+                "role_agent_ids",
+                "rework_cycle_count",
+                "visit_counts",
+                "current_assignment_id",
+                "blocked_reason",
+            )
+            if key in assignment
+        }
+        workflow = assignment.get("workflow")
+        if isinstance(workflow, dict):
+            compact_assignment["workflow"] = {
+                key: workflow[key]
+                for key in (
+                    "enabled",
+                    "start_node_id",
+                    "terminal_node_ids",
+                    "reviewer_agent_ids",
+                    "max_rework_cycles",
+                )
+                if key in workflow
+            }
+        if "pending_transition" in assignment:
+            compact_assignment["pending_transition"] = compact_transition(
+                assignment.get("pending_transition")
+            )
+        if "last_transition" in assignment:
+            compact_assignment["last_transition"] = compact_transition(
+                assignment.get("last_transition")
+            )
+        compact_response["assignment"] = compact_assignment
+        omitted_fields.append("assignment.history_and_full_transition_context")
+
+    for transition_key in (
+        "pending_transition",
+        "last_transition",
+        "transition_applied",
+    ):
+        if transition_key in compact_response:
+            compact_response[transition_key] = compact_transition(
+                compact_response.get(transition_key)
+            )
+            omitted_fields.append(f"{transition_key}.full_review_context")
+
+    completed_assignment_fields = (
+        "assignment_id",
+        "kind",
+        "phase",
+        "node_id",
+        "agent_id",
+        "agent_name",
+        "agent_phone",
+        "git_branch",
+        "task_ids",
+        "review_index",
+        "status",
+        "started_at",
+        "completed_at",
+        "delivered_at",
+        "queue_item_id",
+        "queue",
+        "outcome",
+        "feedback",
+    )
+
+    def compact_completed_assignment(value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: value[key]
+            for key in completed_assignment_fields
+            if key in value
+        }
+
+    if "completed_assignment" in compact_response:
+        compact_response["completed_assignment"] = compact_completed_assignment(
+            compact_response.get("completed_assignment")
+        )
+    completed_assignments = compact_response.get("completed_assignments")
+    if isinstance(completed_assignments, list):
+        compact_response["completed_assignments"] = [
+            compact_completed_assignment(item)
+            for item in completed_assignments
+            if isinstance(item, dict)
+        ]
+        omitted_fields.append("completed_assignments.full_results")
+
+    work_history = compact_response.pop("work_history", None)
+    if isinstance(work_history, list):
+        compact_response["work_history_omitted_count"] = len(work_history)
+        omitted_fields.append("work_history")
+
+    compact_response["response_compact"] = True
+    compact_response["active_task_message_complete"] = (
+        not isinstance(active_task, dict) or "message" in active_task
+    )
+    compact_response["omitted_response_fields"] = omitted_fields
+    if isinstance(project_state, dict):
+        code_patch_summary = project_state.get("code_patch_summary")
+        compact_response["project_state_summary"] = (
+            dict(code_patch_summary)
+            if isinstance(code_patch_summary, dict)
+            else {}
+        )
+    return compact_response
 
 
 def materialize_sequential_graph_response(
@@ -8566,9 +8889,7 @@ def materialize_sequential_graph_response(
         "response_file_path": str(response_path),
         "latest_response_file_path": str(latest_path),
         "full_response_instructions": (
-            "Если HTTP-ответ обрезан или не получен полностью, прочитай "
-            "latest_agent_prompt_file_path как UTF-8 текст; файл содержит "
-            "полный JSON-ответ последнего запроса этого агента."
+            SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS
         ),
     }
     response_payload = deepcopy(response)
@@ -8580,27 +8901,38 @@ def materialize_sequential_graph_response(
         ensure_ascii=False,
         indent=2,
     ) + "\n"
-    destinations: list[tuple[str, Path]] = [
+    agent_prompt_response = compact_sequential_agent_prompt_response(
+        stored_response
+    )
+    agent_prompt_json = json.dumps(
+        agent_prompt_response,
+        ensure_ascii=False,
+        indent=2,
+    ) + "\n"
+    destinations: list[tuple[str, Path, bool]] = [
         *(
-            (f"agent_latest:{phone}", Path(path))
+            (f"agent_latest:{phone}", Path(path), True)
             for phone, path in agent_latest_paths.items()
         ),
-        ("response_archive", response_path),
-        ("project_latest", latest_path),
+        ("response_archive", response_path, False),
+        ("project_latest", latest_path, False),
     ]
-    successful_destinations: list[Path] = []
+    successful_destinations: list[tuple[Path, bool]] = []
     storage_errors: dict[str, str] = {}
     seen_destinations: set[Path] = set()
-    for destination_name, destination_path in destinations:
+    for destination_name, destination_path, is_agent_prompt in destinations:
         if destination_path in seen_destinations:
             continue
         seen_destinations.add(destination_path)
         try:
-            write_prompt_text_if_changed(destination_path, response_json)
+            write_prompt_text_if_changed(
+                destination_path,
+                agent_prompt_json if is_agent_prompt else response_json,
+            )
         except (OSError, UnicodeError) as exc:
             storage_errors[destination_name] = str(exc)
         else:
-            successful_destinations.append(destination_path)
+            successful_destinations.append((destination_path, is_agent_prompt))
     if storage_errors:
         stored_response["response_storage_errors"] = storage_errors
         response_json = json.dumps(
@@ -8608,16 +8940,27 @@ def materialize_sequential_graph_response(
             ensure_ascii=False,
             indent=2,
         ) + "\n"
-        for destination_path in successful_destinations:
+        agent_prompt_response = compact_sequential_agent_prompt_response(
+            stored_response
+        )
+        agent_prompt_json = json.dumps(
+            agent_prompt_response,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        for destination_path, is_agent_prompt in successful_destinations:
             try:
-                write_prompt_text_if_changed(destination_path, response_json)
+                write_prompt_text_if_changed(
+                    destination_path,
+                    agent_prompt_json if is_agent_prompt else response_json,
+                )
             except (OSError, UnicodeError):
-                # The first successful write already contains the complete graph
-                # response. The returned warning still identifies every original
-                # destination failure without turning a completed transition into
-                # an HTTP error.
+                # The first successful write already contains the intended full
+                # or compact variant. The returned warning still identifies every
+                # original destination failure without turning a completed
+                # transition into an HTTP error.
                 pass
-    return stored_response
+    return agent_prompt_response
 
 
 async def attach_sequential_graph_response_storage(
@@ -8641,10 +8984,12 @@ async def attach_sequential_graph_response_storage(
             )
     except (HTTPException, OSError, UnicodeError) as exc:
         detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-        return {
-            "response_storage_error": str(detail),
-            **response,
-        }
+        return compact_sequential_agent_prompt_response(
+            {
+                "response_storage_error": str(detail),
+                **response,
+            }
+        )
 
 
 def queue_runtime_state_path(queue_name: str) -> Path:
@@ -9547,6 +9892,8 @@ def history_patch_block_header(
 def history_with_patches_context(
     records: list[dict[str, Any]],
     git_address: str,
+    *,
+    include_patch_content: bool = True,
 ) -> dict[str, Any]:
     sections: list[str] = []
     timeline: list[dict[str, Any]] = []
@@ -9606,23 +9953,24 @@ def history_with_patches_context(
                             "source": patch_data.get("source"),
                             "patch_url": patch_data.get("patch_url"),
                             "local_repo": patch_data.get("local_repo"),
-                            "patch": patch_text,
                         }
                     )
-                    sections.append(
-                        "\n\n".join(
-                            [
-                                history_patch_block_header(
-                                    previous_commit,
-                                    current_commit,
-                                    git_address,
-                                    patch_data,
-                                ),
-                                patch_text,
-                            ]
+                    if include_patch_content:
+                        patch_entry["patch"] = patch_text
+                        sections.append(
+                            "\n\n".join(
+                                [
+                                    history_patch_block_header(
+                                        previous_commit,
+                                        current_commit,
+                                        git_address,
+                                        patch_data,
+                                    ),
+                                    patch_text,
+                                ]
+                            )
+                            + "\n[END PATCH]"
                         )
-                        + "\n[END PATCH]"
-                    )
                     patch_count += 1
                 except Exception as exc:
                     reason: Any = exc
@@ -9635,29 +9983,32 @@ def history_with_patches_context(
                         {
                             "status": "unavailable",
                             "reason": reason_text,
-                            "patch": "",
                         }
                     )
-                    sections.append(
-                        history_patch_block_header(
-                            previous_commit,
-                            current_commit,
-                            git_address,
+                    if include_patch_content:
+                        patch_entry["patch"] = ""
+                        sections.append(
+                            history_patch_block_header(
+                                previous_commit,
+                                current_commit,
+                                git_address,
+                            )
+                            + "\nStatus: unavailable\n"
+                            + f"Reason: {reason_text}\n[END PATCH]"
                         )
-                        + "\nStatus: unavailable\n"
-                        + f"Reason: {reason_text}\n[END PATCH]"
-                    )
                     patch_error_count += 1
-                patches.append(patch_entry)
-                timeline.append(deepcopy(patch_entry))
+                if include_patch_content:
+                    patches.append(patch_entry)
+                    timeline.append(deepcopy(patch_entry))
 
-        sections.append(format_history_record_for_context(record))
-        timeline.append(
-            {
-                "type": "activity",
-                "activity": deepcopy(record),
-            }
-        )
+        if include_patch_content:
+            sections.append(format_history_record_for_context(record))
+            timeline.append(
+                {
+                    "type": "activity",
+                    "activity": deepcopy(record),
+                }
+            )
         if current_commit["full"]:
             previous_commit = current_commit
 
@@ -9667,6 +10018,8 @@ def history_with_patches_context(
         "patch_count": patch_count,
         "patch_error_count": patch_error_count,
         "deduplicated_by_commit_pair": True,
+        "content_included": include_patch_content,
+        "compacted": not include_patch_content,
         "timeline": timeline,
         "patches": patches,
     }
@@ -11253,6 +11606,30 @@ def render_index() -> str:
       color: #24292f;
       border-color: #d0d7de;
     }}
+    .refresh-control {{
+      min-width: 112px;
+      display: grid;
+      gap: 5px;
+    }}
+    .refresh-control button {{
+      width: 100%;
+    }}
+    .refresh-control button:disabled {{
+      cursor: wait;
+      opacity: 0.7;
+    }}
+    .auto-refresh-track {{
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--line);
+    }}
+    .auto-refresh-progress {{
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }}
     .status {{
       margin-top: 10px;
       min-height: 20px;
@@ -11360,7 +11737,12 @@ def render_index() -> str:
         <h1>QA Queue Control</h1>
         <div class="subtle">Отправка задач в /work и /test, журнал сохраняется в {escaped_history_path}</div>
       </div>
-      <button class="secondary" id="refreshButton" type="button">Обновить</button>
+      <div class="refresh-control">
+        <button class="secondary" id="refreshButton" type="button">Обновить</button>
+        <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+          <div class="auto-refresh-progress"></div>
+        </div>
+      </div>
     </div>
   </header>
   <main>
@@ -11509,6 +11891,11 @@ def render_index() -> str:
     const testSizeEl = document.getElementById("testSize");
     const gitAddressEl = document.getElementById("gitAddress");
     const gitStatusEl = document.getElementById("gitStatus");
+    const refreshButtonEl = document.getElementById("refreshButton");
+    const autoRefreshProgressEls = Array.from(document.querySelectorAll(".auto-refresh-progress"));
+    const AUTO_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+    let refreshInFlight = null;
+    let autoRefreshTimerId = null;
 
     function setStatus(text, state = "") {{
       sendStatusEl.textContent = text;
@@ -11712,8 +12099,65 @@ TEST TASK FOR ANALYST:
       }}).join("") || `<div class="panel subtle">История пока пустая.</div>`;
     }}
 
+    function stopAutoRefreshCountdown() {{
+      if (autoRefreshTimerId !== null) {{
+        window.clearTimeout(autoRefreshTimerId);
+        autoRefreshTimerId = null;
+      }}
+      autoRefreshProgressEls.forEach((progressEl) => {{
+        progressEl.style.transition = "none";
+        progressEl.style.width = "0%";
+      }});
+    }}
+
+    function startAutoRefreshCountdown() {{
+      if (autoRefreshTimerId !== null) {{
+        window.clearTimeout(autoRefreshTimerId);
+      }}
+      autoRefreshProgressEls.forEach((progressEl) => {{
+        progressEl.style.transition = "none";
+        progressEl.style.width = "100%";
+      }});
+      if (autoRefreshProgressEls.length) {{
+        autoRefreshProgressEls[0].getBoundingClientRect();
+      }}
+      autoRefreshProgressEls.forEach((progressEl) => {{
+        progressEl.style.transition = `width ${{AUTO_REFRESH_INTERVAL_MS}}ms linear`;
+        progressEl.style.width = "0%";
+      }});
+      autoRefreshTimerId = window.setTimeout(() => {{
+        refresh().catch((error) => setStatus(error.message, "error"));
+      }}, AUTO_REFRESH_INTERVAL_MS);
+    }}
+
+    async function settleRefreshTasks(tasks) {{
+      const results = await Promise.allSettled(tasks);
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) {{
+        throw failed.reason;
+      }}
+    }}
+
     async function refresh() {{
-      await Promise.all([refreshQueues(), refreshHistory(), refreshGitConfig()]);
+      if (refreshInFlight) {{
+        return refreshInFlight;
+      }}
+      stopAutoRefreshCountdown();
+      refreshButtonEl.disabled = true;
+      refreshButtonEl.textContent = "Обновляю...";
+      refreshInFlight = settleRefreshTasks([
+        refreshQueues(),
+        refreshHistory(),
+        refreshGitConfig()
+      ]);
+      try {{
+        await refreshInFlight;
+      }} finally {{
+        refreshInFlight = null;
+        refreshButtonEl.disabled = false;
+        refreshButtonEl.textContent = "Обновить";
+        startAutoRefreshCountdown();
+      }}
     }}
 
     document.getElementById("sendButton").addEventListener("click", () => {{
@@ -11722,7 +12166,9 @@ TEST TASK FOR ANALYST:
     document.getElementById("taskTemplateButton").addEventListener("click", () => setTemplate("task"));
     document.getElementById("failTemplateButton").addEventListener("click", () => setTemplate("fail"));
     document.getElementById("readyTemplateButton").addEventListener("click", () => setTemplate("ready"));
-    document.getElementById("refreshButton").addEventListener("click", refresh);
+    refreshButtonEl.addEventListener("click", () => {{
+      refresh().catch((error) => setStatus(error.message, "error"));
+    }});
     document.getElementById("saveGitButton").addEventListener("click", () => {{
       saveGitConfig().then(refreshHistory).catch((error) => setGitStatus(error.message, "error"));
     }});
@@ -11731,8 +12177,7 @@ TEST TASK FOR ANALYST:
     }});
 
     setTemplate("task");
-    refresh();
-    setInterval(refresh, 5000);
+    refresh().catch((error) => setStatus(error.message, "error"));
   </script>
 </body>
 </html>"""
@@ -11996,6 +12441,30 @@ def render_index_v2() -> str:
       background: #eef2f6;
       color: #24292f;
       border-color: #d0d7de;
+    }
+    .refresh-control {
+      min-width: 112px;
+      display: grid;
+      gap: 5px;
+    }
+    .refresh-control button {
+      width: 100%;
+    }
+    .refresh-control button:disabled {
+      cursor: wait;
+      opacity: 0.7;
+    }
+    .auto-refresh-track {
+      height: 4px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--line);
+    }
+    .auto-refresh-progress {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
     }
     button.danger {
       background: #fff1f0;
@@ -13620,7 +14089,12 @@ def render_index_v2() -> str:
         <h1>QA Queue Control</h1>
         <div class="subtle">Два контура разработки, журнал: __HISTORY_PATH__</div>
       </div>
-      <button class="secondary" id="refreshButton" type="button">Обновить</button>
+      <div class="refresh-control">
+        <button class="secondary" id="refreshButton" type="button">Обновить</button>
+        <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+          <div class="auto-refresh-progress"></div>
+        </div>
+      </div>
     </div>
   </header>
   <div class="page-tabs-shell">
@@ -13704,7 +14178,12 @@ def render_index_v2() -> str:
             </div>
             <button class="secondary" id="copyAttachmentFolderPathButton" type="button">Скопировать путь</button>
             <button class="secondary" id="copyAttachmentMessageButton" type="button">Скопировать сообщение</button>
-            <button class="secondary" id="refreshAttachmentFoldersButton" type="button">Обновить список</button>
+            <div class="refresh-control">
+              <button class="secondary" id="refreshAttachmentFoldersButton" type="button">Обновить список</button>
+              <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+                <div class="auto-refresh-progress"></div>
+              </div>
+            </div>
           </div>
           <div class="subtle attachment-hint">Выберите папку со скриншотами или доказательствами. Сообщение копируется в формате: текст пояснения : абсолютный путь к папке.</div>
           <div class="status" id="attachmentStatus"></div>
@@ -13910,7 +14389,7 @@ def render_index_v2() -> str:
           <div class="full-width">
             <label for="launchPromptAgentLatestFileTemplate">Файл последнего ответа каждого агента</label>
             <input id="launchPromptAgentLatestFileTemplate" placeholder="D:\\Prompt\\{repository}_{agent_phone}-latest.prompt">
-            <div class="subtle">Укажите локальный абсолютный путь, оставьте {agent_phone} в имени и расширение .prompt. При каждом запросе движения графа файл атомарно заменяется полным UTF-8 JSON-ответом.</div>
+            <div class="subtle">Укажите локальный абсолютный путь, оставьте {agent_phone} в имени и расширение .prompt. При каждом запросе движения графа файл атомарно заменяется компактным UTF-8 JSON-ответом с полным текстом active_task.message и управляющими полями.</div>
           </div>
           <div>
             <label for="launchPromptId">Prompt ID</label>
@@ -13927,7 +14406,12 @@ def render_index_v2() -> str:
         </div>
         <div class="actions">
           <button class="primary" id="copyLaunchPromptButton" type="button" disabled>Скопировать промпт</button>
-          <button class="secondary" id="refreshLaunchPromptButton" type="button">Обновить</button>
+          <div class="refresh-control">
+            <button class="secondary" id="refreshLaunchPromptButton" type="button">Обновить</button>
+            <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+              <div class="auto-refresh-progress"></div>
+            </div>
+          </div>
           <button class="secondary" id="saveLaunchPromptDirectoryButton" type="button">Сохранить пути</button>
           <button class="secondary" id="copyLaunchPromptPathButton" type="button" disabled>Скопировать путь запроса</button>
           <button class="secondary" id="copyLaunchResponsePathButton" type="button" disabled>Скопировать путь ответа</button>
@@ -13950,7 +14434,12 @@ def render_index_v2() -> str:
               <option value="">Нет доступных проектов</option>
             </select>
           </div>
-          <button class="secondary" id="refreshPendingSprintsButton" type="button" disabled>Обновить</button>
+          <div class="refresh-control">
+            <button class="secondary" id="refreshPendingSprintsButton" type="button" disabled>Обновить</button>
+            <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+              <div class="auto-refresh-progress"></div>
+            </div>
+          </div>
         </div>
         <div class="subtle" id="pendingSprintsProjectSummary">Выберите проект, чтобы увидеть ожидающие спринты.</div>
         <div class="status" id="pendingSprintsStatus"></div>
@@ -13980,7 +14469,12 @@ def render_index_v2() -> str:
               <option value="">Нет доступных циклов</option>
             </select>
           </div>
-          <button class="secondary" id="refreshCycleGraphButton" type="button">Обновить</button>
+          <div class="refresh-control">
+            <button class="secondary" id="refreshCycleGraphButton" type="button">Обновить</button>
+            <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+              <div class="auto-refresh-progress"></div>
+            </div>
+          </div>
         </div>
         <div class="status" id="cycleGraphStatus"></div>
         <div class="cycle-list" id="cycleGraphCycleList"></div>
@@ -14024,7 +14518,12 @@ def render_index_v2() -> str:
         <div class="subtle">Базовый каталог: __SCREENSHOT_FOLDERS_PATH__</div>
         <div class="actions">
           <button class="primary" id="createScreenshotFolderButton" type="button">Создать папку</button>
-          <button class="secondary" id="refreshScreenshotFoldersButton" type="button">Обновить список</button>
+          <div class="refresh-control">
+            <button class="secondary" id="refreshScreenshotFoldersButton" type="button">Обновить список</button>
+            <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+              <div class="auto-refresh-progress"></div>
+            </div>
+          </div>
         </div>
         <div class="status" id="screenshotFoldersStatus"></div>
       </div>
@@ -14094,7 +14593,12 @@ def render_index_v2() -> str:
         <div class="subtle">Базовый каталог: __EVIDENCE_FOLDERS_PATH__</div>
         <div class="actions">
           <button class="primary" id="createEvidenceFolderButton" type="button">Создать папку</button>
-          <button class="secondary" id="refreshEvidenceFoldersButton" type="button">Обновить список</button>
+          <div class="refresh-control">
+            <button class="secondary" id="refreshEvidenceFoldersButton" type="button">Обновить список</button>
+            <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+              <div class="auto-refresh-progress"></div>
+            </div>
+          </div>
         </div>
         <div class="status" id="evidenceFoldersStatus"></div>
       </div>
@@ -14202,7 +14706,12 @@ def render_index_v2() -> str:
           <div class="sprint-history-panel">
             <div class="sprint-history-head">
               <h3>История спринтов</h3>
-              <button class="secondary" id="refreshProjectSprintsButton" type="button">Обновить</button>
+              <div class="refresh-control">
+                <button class="secondary" id="refreshProjectSprintsButton" type="button">Обновить</button>
+                <div class="auto-refresh-track" title="До следующего автоматического обновления" aria-hidden="true">
+                  <div class="auto-refresh-progress"></div>
+                </div>
+              </div>
             </div>
             <div class="subtle" id="projectSprintsStatus">Выберите проект, чтобы увидеть сохранённые спринты.</div>
             <div class="sprint-history-items" id="projectSprints"></div>
@@ -15229,6 +15738,13 @@ def render_index_v2() -> str:
     };
 
     const queueEl = document.getElementById("queue");
+    const refreshButtonEl = document.getElementById("refreshButton");
+    const autoRefreshProgressEls = Array.from(document.querySelectorAll(".auto-refresh-progress"));
+    const AUTO_REFRESH_INTERVAL_MS = 2 * 60 * 1000;
+    let refreshInFlight = null;
+    let sectionRefreshInFlight = null;
+    let queuedFullRefresh = null;
+    let autoRefreshTimerId = null;
     const statusEl = document.getElementById("status");
     const senderEl = document.getElementById("sender");
     const receiverEl = document.getElementById("receiver");
@@ -15691,7 +16207,11 @@ def render_index_v2() -> str:
         return;
       }
       element.dataset.helpReady = "true";
-      element.insertAdjacentElement("afterend", makeHelpButton(topic, label, element));
+      const refreshControl = element.closest(".refresh-control");
+      (refreshControl || element).insertAdjacentElement(
+        "afterend",
+        makeHelpButton(topic, label, element)
+      );
     }
 
     function headingHelpTopic(heading) {
@@ -17553,7 +18073,16 @@ def render_index_v2() -> str:
         return;
       }
       const response = await fetch(`/api/v1/projects/${encodeURIComponent(projectPhone)}/sprints`);
-      const data = await response.json();
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (_error) {
+        throw new Error(
+          response.ok
+            ? "История спринтов вернула некорректный JSON."
+            : `Ошибка загрузки истории спринтов: HTTP ${response.status}.`
+        );
+      }
       if (!response.ok) {
         throw new Error(formatMessage(data.detail || "Ошибка загрузки истории спринтов."));
       }
@@ -20748,27 +21277,130 @@ ${data.patch || ""}
       setHistoryStatus("");
     }
 
+    function stopAutoRefreshCountdown() {
+      if (autoRefreshTimerId !== null) {
+        window.clearTimeout(autoRefreshTimerId);
+        autoRefreshTimerId = null;
+      }
+      autoRefreshProgressEls.forEach((progressEl) => {
+        progressEl.style.transition = "none";
+        progressEl.style.width = "0%";
+      });
+    }
+
+    function startAutoRefreshCountdown() {
+      if (autoRefreshTimerId !== null) {
+        window.clearTimeout(autoRefreshTimerId);
+      }
+      autoRefreshProgressEls.forEach((progressEl) => {
+        progressEl.style.transition = "none";
+        progressEl.style.width = "100%";
+      });
+      if (autoRefreshProgressEls.length) {
+        autoRefreshProgressEls[0].getBoundingClientRect();
+      }
+      autoRefreshProgressEls.forEach((progressEl) => {
+        progressEl.style.transition = `width ${AUTO_REFRESH_INTERVAL_MS}ms linear`;
+        progressEl.style.width = "0%";
+      });
+      autoRefreshTimerId = window.setTimeout(() => {
+        refresh().catch((error) => setStatus(error.message, "error"));
+      }, AUTO_REFRESH_INTERVAL_MS);
+    }
+
+    async function settleRefreshTasks(tasks) {
+      const results = await Promise.allSettled(tasks);
+      const failed = results.find((result) => result.status === "rejected");
+      if (failed) {
+        throw failed.reason;
+      }
+    }
+
+    async function refreshSectionManually(refreshAction) {
+      if (refreshInFlight) {
+        return refreshInFlight;
+      }
+      if (sectionRefreshInFlight) {
+        if (!queuedFullRefresh) {
+          queuedFullRefresh = sectionRefreshInFlight
+            .catch(() => undefined)
+            .then(() => refresh())
+            .finally(() => {
+              queuedFullRefresh = null;
+            });
+        }
+        return queuedFullRefresh;
+      }
+      stopAutoRefreshCountdown();
+      sectionRefreshInFlight = Promise.resolve().then(refreshAction);
+      try {
+        await sectionRefreshInFlight;
+      } finally {
+        sectionRefreshInFlight = null;
+        startAutoRefreshCountdown();
+      }
+    }
+
     async function refresh() {
-      await refreshGitConfig();
-      applyPendingSprintsDeepLink();
-      await refreshAgents();
-      const refreshTasks = [
-        refreshQueues(),
-        refreshScheduledTasks(),
-        refreshHistory(),
-        refreshProjectSprints(),
-        refreshTelegramHistoryForwarding()
-      ];
-      if (cycleGraphViewIsActive()) {
-        refreshTasks.push(refreshCycleGraph({silent: true}));
+      if (refreshInFlight) {
+        return refreshInFlight;
       }
-      if (launchPromptViewIsActive()) {
-        refreshTasks.push(refreshLaunchPrompt());
+      if (sectionRefreshInFlight) {
+        return sectionRefreshInFlight;
       }
-      if (pendingSprintsViewIsActive()) {
-        refreshTasks.push(refreshPendingSprints());
+      stopAutoRefreshCountdown();
+      refreshButtonEl.disabled = true;
+      refreshButtonEl.textContent = "Обновляю...";
+      refreshInFlight = (async () => {
+        await refreshGitConfig();
+        applyPendingSprintsDeepLink();
+        await refreshAgents();
+        const activeView = document.querySelector("main.view.active");
+        const activeViewName = String((activeView && activeView.dataset.view) || "messages");
+        const refreshTasks = [];
+        if (activeViewName === "messages") {
+          refreshTasks.push(
+            refreshQueues(),
+            refreshScheduledTasks(),
+            refreshHistory(),
+            refreshAttachmentFolderChoices(),
+            refreshEmailRoutes()
+          );
+        }
+        if (activeViewName === "consultants") {
+          refreshTasks.push(refreshQueues());
+        }
+        if (activeViewName === "agents") {
+          refreshTasks.push(
+            refreshProjectSprints(),
+            refreshTelegramHistoryForwarding()
+          );
+        }
+        if (activeViewName === "cycles") {
+          refreshTasks.push(refreshCycleGraph({silent: true}));
+        }
+        if (activeViewName === "launch-prompt") {
+          refreshTasks.push(refreshLaunchPrompt());
+        }
+        if (activeViewName === "pending-sprints") {
+          refreshTasks.push(refreshPendingSprints());
+        }
+        if (activeViewName === "screenshots") {
+          refreshTasks.push(refreshScreenshotFolders());
+        }
+        if (activeViewName === "evidence") {
+          refreshTasks.push(refreshEvidenceFolders());
+        }
+        await settleRefreshTasks(refreshTasks);
+      })();
+      try {
+        await refreshInFlight;
+      } finally {
+        refreshInFlight = null;
+        refreshButtonEl.disabled = false;
+        refreshButtonEl.textContent = "Обновить";
+        startAutoRefreshCountdown();
       }
-      await Promise.all(refreshTasks);
     }
 
     function setActiveView(view, {refreshView = true, syncUrl = true} = {}) {
@@ -20780,6 +21412,12 @@ ${data.patch || ""}
       });
       if ((view === "agents" || view === "consultants") && !agents.length) {
         refreshAgents().catch((error) => setAgentsStatus(error.message, "error"));
+      }
+      if (view === "agents" && refreshView) {
+        refreshSectionManually(() => settleRefreshTasks([
+          refreshProjectSprints(),
+          refreshTelegramHistoryForwarding()
+        ])).catch((error) => setAgentsStatus(error.message, "error"));
       }
       if (view === "screenshots") {
         refreshScreenshotFolders().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
@@ -20830,7 +21468,8 @@ ${data.patch || ""}
       syncPendingSprintsUrl();
     });
     refreshPendingSprintsButtonEl.addEventListener("click", () => {
-      refreshPendingSprints().catch((error) => setPendingSprintsStatus(error.message, "error"));
+      refreshSectionManually(refreshPendingSprints)
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
     });
     pendingSprintsEl.addEventListener("click", (event) => {
       const target = event.target.closest("button[data-action]");
@@ -20849,7 +21488,8 @@ ${data.patch || ""}
       refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
     document.getElementById("refreshLaunchPromptButton").addEventListener("click", () => {
-      refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
+      refreshSectionManually(refreshLaunchPrompt)
+        .catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
     copyLaunchPromptButtonEl.addEventListener("click", () => {
       copyLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
@@ -20878,7 +21518,8 @@ ${data.patch || ""}
       refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
     });
     document.getElementById("refreshCycleGraphButton").addEventListener("click", () => {
-      refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}).catch((error) => setCycleGraphStatus(error.message, "error"));
+      refreshSectionManually(() => refreshCycleGraph({force: true, cycleId: cycleGraphSelectedCycleId}))
+        .catch((error) => setCycleGraphStatus(error.message, "error"));
     });
     document.querySelectorAll(".tab").forEach((button) => {
       button.addEventListener("click", () => setActiveContext(button.dataset.context));
@@ -20893,7 +21534,8 @@ ${data.patch || ""}
       copyAttachmentFolderMessage().catch((error) => setAttachmentStatus(error.message, "error"));
     });
     document.getElementById("refreshAttachmentFoldersButton").addEventListener("click", () => {
-      refreshAttachmentFolderChoices().catch((error) => setAttachmentStatus(error.message, "error"));
+      refreshSectionManually(refreshAttachmentFolderChoices)
+        .catch((error) => setAttachmentStatus(error.message, "error"));
     });
     attachmentFolderSelectEl.addEventListener("change", () => {
       updateAttachmentDescriptionForSelection();
@@ -20903,7 +21545,9 @@ ${data.patch || ""}
       createScreenshotFolder().catch((error) => setScreenshotFoldersStatus(error.message, "error"));
     });
     document.getElementById("refreshScreenshotFoldersButton").addEventListener("click", () => {
-      refreshScreenshotFolders().then(() => setScreenshotFoldersStatus("Список обновлен.", "ok")).catch((error) => setScreenshotFoldersStatus(error.message, "error"));
+      refreshSectionManually(refreshScreenshotFolders)
+        .then(() => setScreenshotFoldersStatus("Список обновлен.", "ok"))
+        .catch((error) => setScreenshotFoldersStatus(error.message, "error"));
     });
     document.getElementById("applyScreenshotFolderFilterButton").addEventListener("click", () => {
       expandedScreenshotFolderIds = new Set();
@@ -21104,7 +21748,9 @@ ${data.patch || ""}
       createEvidenceFolder().catch((error) => setEvidenceFoldersStatus(error.message, "error"));
     });
     document.getElementById("refreshEvidenceFoldersButton").addEventListener("click", () => {
-      refreshEvidenceFolders().then(() => setEvidenceFoldersStatus("Список обновлен.", "ok")).catch((error) => setEvidenceFoldersStatus(error.message, "error"));
+      refreshSectionManually(refreshEvidenceFolders)
+        .then(() => setEvidenceFoldersStatus("Список обновлен.", "ok"))
+        .catch((error) => setEvidenceFoldersStatus(error.message, "error"));
     });
     document.getElementById("applyEvidenceFolderFilterButton").addEventListener("click", () => {
       expandedEvidenceFolderIds = new Set();
@@ -21322,7 +21968,9 @@ ${data.patch || ""}
     document.getElementById("taskTemplateButton").addEventListener("click", () => setTemplate("task"));
     document.getElementById("failTemplateButton").addEventListener("click", () => setTemplate("fail"));
     document.getElementById("readyTemplateButton").addEventListener("click", () => setTemplate("ready"));
-    document.getElementById("refreshButton").addEventListener("click", refresh);
+    refreshButtonEl.addEventListener("click", () => {
+      refresh().catch((error) => setStatus(error.message, "error"));
+    });
     document.getElementById("saveGitButton").addEventListener("click", () => {
       saveGitConfig()
         .then(() => Promise.all([refreshQueues(), refreshScheduledTasks(), refreshHistory()]))
@@ -21392,9 +22040,10 @@ ${data.patch || ""}
     });
     refreshProjectSprintsButtonEl.addEventListener("click", () => {
       projectSprintsStatusEl.textContent = "Обновляю историю спринтов...";
-      refreshProjectSprints().catch((error) => {
-        projectSprintsStatusEl.textContent = error.message;
-      });
+      refreshSectionManually(refreshProjectSprints)
+        .catch((error) => {
+          projectSprintsStatusEl.textContent = error.message;
+        });
     });
     deleteAllProjectActorsButtonEl.addEventListener("click", () => {
       deleteAllProjectActors().catch((error) => setAgentsStatus(error.message, "error"));
@@ -21677,10 +22326,7 @@ ${data.patch || ""}
     setTemplate("task");
     refreshAgents().catch((error) => setAgentsStatus(error.message, "error"));
     refreshEmailRoutes().catch((error) => setEmailRoutesStatus(error.message, "error"));
-    refresh()
-      .then(() => refreshAttachmentFolderChoices())
-      .catch((error) => setStatus(error.message, "error"));
-    setInterval(refresh, 5000);
+    refresh().catch((error) => setStatus(error.message, "error"));
   </script>
 </body>
 </html>"""
@@ -23296,8 +23942,12 @@ def record_project_sprint_import_file(
         if current_record is not None:
             current_record["status"] = "archived"
             current_record["archived_at"] = now
-            current_record["final_state"] = deepcopy(previous_state)
-            current_record["final_code_history"] = deepcopy(previous_code_history)
+            current_record["final_state"] = compact_sprint_state_snapshot(
+                previous_state
+            )
+            current_record["final_code_history"] = compact_sprint_code_history(
+                previous_code_history
+            )
         elif project_state_has_sprint_content(previous_state):
             legacy_sequence = max(
                 (int(record.get("sequence") or 0) for record in records),
@@ -23327,8 +23977,10 @@ def record_project_sprint_import_file(
                     "legacy": True,
                     "import_payload": None,
                     "initial_state": None,
-                    "final_state": deepcopy(previous_state),
-                    "final_code_history": deepcopy(previous_code_history),
+                    "final_state": compact_sprint_state_snapshot(previous_state),
+                    "final_code_history": compact_sprint_code_history(
+                        previous_code_history
+                    ),
                 }
             )
 
@@ -23357,7 +24009,7 @@ def record_project_sprint_import_file(
             "legacy": False,
             "pending_sprint_id": clean_pending_sprint_id or None,
             "import_payload": deepcopy(payload),
-            "initial_state": deepcopy(current_state),
+            "initial_state": compact_sprint_state_snapshot(current_state),
             "final_state": None,
             "final_code_history": None,
         }
@@ -23447,7 +24099,11 @@ async def import_project_actors_data(
     options["expected_git_context_key"] = expected_git_context_key
     options["expected_repository_key"] = expected_repository_key
     async with group_task_submission_lock:
-        previous_state = await project_state_json(project_id, history_limit=10000)
+        previous_state = await project_state_json(
+            project_id,
+            history_limit=SPRINT_HISTORY_ACTIVITY_LIMIT,
+            include_patch_content=False,
+        )
         if pending_sprint_id and reconcile_existing_pending_sprint:
             reconciliation_context_key = str(
                 expected_git_context_key
@@ -23694,7 +24350,11 @@ async def import_project_actors_data(
             "removed_tasks": removed_tasks,
             "queued_tasks": queued_tasks,
         }
-        current_state = await project_state_json(project_id, history_limit=10000)
+        current_state = await project_state_json(
+            project_id,
+            history_limit=SPRINT_HISTORY_ACTIVITY_LIMIT,
+            include_patch_content=False,
+        )
         context_key = git_context_key_from_metadata(result["queue_context"])
         response["sprint"] = await record_project_sprint_import(
             context_key=context_key,
@@ -26013,6 +26673,7 @@ async def project_state_json(
     project_id: str,
     *,
     history_limit: int = 200,
+    include_patch_content: bool = True,
 ) -> dict[str, Any]:
     snapshot = await run_group_write_transaction(
         sequential_runtime_project_snapshot_transaction,
@@ -26027,6 +26688,7 @@ async def project_state_json(
         history_with_patches_context,
         recent_activity,
         str(snapshot["project"].get("git_address") or ""),
+        include_patch_content=include_patch_content,
     )
     pending_work: dict[str, list[dict[str, Any]]] = {}
     acquired: list[asyncio.Lock] = []
@@ -27387,7 +28049,14 @@ async def download_project_sprint(
         runtime_code_history = runtime_state.get("history_with_patches")
         if isinstance(runtime_code_history, dict):
             code_history = runtime_code_history
-    if not isinstance(code_history, dict):
+    code_history_needs_rebuild = (
+        not isinstance(code_history, dict)
+        or code_history.get("compacted") is True
+        or code_history.get("content_included") is False
+        or not isinstance(code_history.get("timeline"), list)
+        or not isinstance(code_history.get("patches"), list)
+    )
+    if code_history_needs_rebuild:
         runtime_project = (
             runtime_state.get("project")
             if isinstance(runtime_state, dict)
@@ -27400,11 +28069,21 @@ async def download_project_sprint(
             and isinstance(runtime_state.get("recent_activity"), list)
             else []
         )
-        code_history = await asyncio.to_thread(
-            history_with_patches_context,
-            runtime_records,
-            str(runtime_project.get("git_address") or "").strip(),
-        )
+        if runtime_records or not isinstance(code_history, dict):
+            code_history = await asyncio.to_thread(
+                history_with_patches_context,
+                runtime_records,
+                str(runtime_project.get("git_address") or "").strip(),
+            )
+        else:
+            code_history = {
+                **deepcopy(code_history),
+                "text": "",
+                "timeline": [],
+                "patches": [],
+                "content_available": False,
+                "compacted": True,
+            }
     metadata = sprint_record_summary(record)
     archive = {
         "schema_version": 1,
@@ -27418,6 +28097,7 @@ async def download_project_sprint(
         "initial_state": deepcopy(record.get("initial_state")),
         "runtime_state": deepcopy(runtime_state),
         "code_history": deepcopy(code_history),
+        "full_archive_backup": record.get("full_archive_backup"),
     }
     sequence = int(record.get("sequence") or 0)
     filename = f"project-{project_phone}-sprint-{sequence:04d}.json"

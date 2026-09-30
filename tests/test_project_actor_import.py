@@ -361,6 +361,58 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(main.queues["tester-all"]), 0)
         self.assertEqual(len(main.queues["worker-all"]), 1)
 
+    def test_sprint_history_compaction_drops_duplicate_patch_payloads(self) -> None:
+        activity = [
+            {"id": f"activity-{index}", "message": f"message-{index}"}
+            for index in range(main.SPRINT_HISTORY_ACTIVITY_LIMIT + 3)
+        ]
+        state = {
+            "project_id": self.PROJECT_PHONE,
+            "history_with_patches": {"text": "large-history"},
+            "activity_with_patches": [{"patch": "duplicate-one"}],
+            "code_patches": [{"patch": "duplicate-two"}],
+            "recent_activity": activity,
+            "code_patch_summary": {"available_patch_count": 7},
+        }
+        code_history = {
+            "text": "large-history",
+            "record_count": len(activity),
+            "patch_count": 7,
+            "patch_error_count": 1,
+            "timeline": [{"patch": "duplicate-three"}],
+            "patches": [{"patch": "duplicate-four"}],
+        }
+
+        snapshot = main.compact_sprint_state_snapshot(state)
+        compact_code_history = main.compact_sprint_code_history(code_history)
+
+        for field_name in (
+            "history_with_patches",
+            "activity_with_patches",
+            "code_patches",
+        ):
+            self.assertNotIn(field_name, snapshot)
+            self.assertIn(field_name, state)
+        self.assertEqual(
+            len(snapshot["recent_activity"]),
+            main.SPRINT_HISTORY_ACTIVITY_LIMIT,
+        )
+        self.assertEqual(
+            snapshot["snapshot_compaction"]["recent_activity_total"],
+            len(activity),
+        )
+        self.assertEqual(
+            snapshot["code_patch_summary"],
+            {"available_patch_count": 7},
+        )
+        self.assertEqual(compact_code_history["patch_count"], 7)
+        self.assertEqual(compact_code_history["patch_error_count"], 1)
+        self.assertTrue(compact_code_history["compacted"])
+        self.assertNotIn("text", compact_code_history)
+        self.assertNotIn("timeline", compact_code_history)
+        self.assertNotIn("patches", compact_code_history)
+        self.assertIn("timeline", code_history)
+
     async def test_new_import_archives_previous_sprint_state_and_downloads_it(self) -> None:
         first_payload = {
             "project_id": self.PROJECT_PHONE,
@@ -501,6 +553,28 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sprint_one["code_patch_error_count"], 0)
         self.assertEqual(len(patch_calls), 1, patch_calls)
 
+        stored_history = main.read_sprint_history_file()
+        stored_records = stored_history["projects"][self.PROJECT_CONTEXT]["sprints"]
+        stored_sprint_one = next(
+            item for item in stored_records if item.get("external_id") == "sprint-one"
+        )
+        stored_sprint_two = next(
+            item for item in stored_records if item.get("external_id") == "sprint-two"
+        )
+        for snapshot in (
+            stored_sprint_one["final_state"],
+            stored_sprint_two["initial_state"],
+        ):
+            for field_name in (
+                "history_with_patches",
+                "activity_with_patches",
+                "code_patches",
+            ):
+                self.assertNotIn(field_name, snapshot)
+        self.assertTrue(stored_sprint_one["final_code_history"]["compacted"])
+        self.assertNotIn("timeline", stored_sprint_one["final_code_history"])
+        self.assertNotIn("patches", stored_sprint_one["final_code_history"])
+
         download_status, archive = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/sprints/{sprint_one['id']}/download"
         )
@@ -525,6 +599,64 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                 for record in archive["runtime_state"]["recent_activity"]
             )
         )
+
+    async def test_summary_only_sprint_archive_download_is_truthful(self) -> None:
+        sprint_id = "sprint-0001-compacted"
+        main.write_sprint_history_file(
+            {
+                "schema_version": 1,
+                "projects": {
+                    self.PROJECT_CONTEXT: {
+                        "project_phone": self.PROJECT_PHONE,
+                        "project_name": "Actor Import Project",
+                        "git_context_key": self.PROJECT_CONTEXT,
+                        "current_sprint_id": None,
+                        "sprints": [
+                            {
+                                "id": sprint_id,
+                                "sequence": 1,
+                                "title": "Recovered compact archive",
+                                "status": "archived",
+                                "source": "recovery",
+                                "assignment_mode": "sequential",
+                                "agent_count": 1,
+                                "task_count": 1,
+                                "import_payload": {"sprint_id": "recovered"},
+                                "initial_state": None,
+                                "final_state": {
+                                    "project": {
+                                        "git_address": (
+                                            "https://github.com/example/actor-import.git"
+                                        )
+                                    },
+                                    "recent_activity": [],
+                                },
+                                "final_code_history": {
+                                    "record_count": 25,
+                                    "patch_count": 4,
+                                    "patch_error_count": 1,
+                                    "compacted": True,
+                                    "content_included": False,
+                                },
+                            }
+                        ],
+                    }
+                },
+            }
+        )
+
+        download_status, archive = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints/{sprint_id}/download"
+        )
+
+        self.assertEqual(download_status, 200)
+        self.assertIsInstance(archive, dict)
+        assert isinstance(archive, dict)
+        self.assertEqual(archive["code_history"]["patch_count"], 4)
+        self.assertEqual(archive["code_history"]["patch_error_count"], 1)
+        self.assertFalse(archive["code_history"]["content_available"])
+        self.assertEqual(archive["code_history"]["timeline"], [])
+        self.assertEqual(archive["code_history"]["patches"], [])
 
     async def test_sprint_history_is_isolated_by_project(self) -> None:
         second_context = "github.com/example/second-project"
@@ -1529,10 +1661,12 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             first_body["latest_agent_prompt_file_path"],
             str(first_agent_prompt),
         )
-        self.assertEqual(
-            json.loads(first_agent_prompt.read_text(encoding="utf-8")),
-            first_body,
+        first_agent_prompt_body = json.loads(
+            first_agent_prompt.read_text(encoding="utf-8")
         )
+        self.assertEqual(first_agent_prompt_body, first_body)
+        self.assertNotIn("project_state", first_body)
+        self.assertTrue(first_body["response_compact"])
         self.assertEqual(len(first_body["team"]), 2)
         self.assertIn("send_endpoints", first_body["communication"])
         self.assertFalse(first_body["identity_reused"])
@@ -1548,9 +1682,15 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             first_body["next_identity_request"]["reply"]["url"],
             "http://testserver:8025/api/v1/agents/whoami/repository",
         )
-        self.assertIn("activity_with_patches", first_body["project_state"])
+        state_status, first_project_state = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
+        )
+        self.assertEqual(state_status, 200)
+        self.assertIsInstance(first_project_state, dict)
+        assert isinstance(first_project_state, dict)
+        self.assertIn("activity_with_patches", first_project_state)
         self.assertGreaterEqual(
-            first_body["project_state"]["code_patch_summary"]["activity_count"],
+            first_project_state["code_patch_summary"]["activity_count"],
             1,
         )
         self.assertTrue(
@@ -1558,7 +1698,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                 entry.get("type") == "activity"
                 and "Complete sequential task A"
                 in str(entry.get("activity", {}).get("message") or "")
-                for entry in first_body["project_state"]["activity_with_patches"]
+                for entry in first_project_state["activity_with_patches"]
             )
         )
         self.assertIn(
@@ -2005,10 +2145,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             node_body["latest_agent_prompt_file_path"],
             str(graph_agent_prompt),
         )
-        self.assertEqual(
-            json.loads(graph_agent_prompt.read_text(encoding="utf-8")),
-            node_body,
+        node_agent_prompt_body = json.loads(
+            graph_agent_prompt.read_text(encoding="utf-8")
         )
+        self.assertEqual(node_agent_prompt_body, node_body)
+        self.assertNotIn("project_state", node_body)
         node_assignment_id = node_body["active_task"]["metadata"]["assignment_id"]
 
         from_commit = "a" * 40
@@ -2052,10 +2193,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             {"2153": str(graph_agent_prompt)},
         )
         self.assertFalse(reviewer_one_prompt.exists())
-        self.assertEqual(
-            json.loads(graph_agent_prompt.read_text(encoding="utf-8")),
-            first_review,
+        first_review_agent_prompt = json.loads(
+            graph_agent_prompt.read_text(encoding="utf-8")
         )
+        self.assertEqual(first_review_agent_prompt, first_review)
+        self.assertNotIn("project_state", first_review)
         self.assertEqual(first_review["assignment"]["phase"], "review")
         self.assertTrue(first_review["identity_request_required"])
         self.assertEqual(
@@ -2072,9 +2214,18 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
                 )
             ],
         )
-        review_context = first_review["assignment"]["pending_transition"][
-            "review_context"
-        ]
+        self.assertNotIn(
+            "review_context",
+            first_review["assignment"]["pending_transition"],
+        )
+        archived_first_review = json.loads(
+            Path(first_review["response_file_path"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        review_context = archived_first_review["assignment"][
+            "pending_transition"
+        ]["review_context"]
         self.assertEqual(review_context["patch_count"], 1)
         self.assertIn("diff --git", review_context["text"])
         self.assertEqual(
@@ -2112,10 +2263,11 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             reviewer_body["latest_agent_prompt_file_path"],
             str(reviewer_one_prompt),
         )
-        self.assertEqual(
-            json.loads(reviewer_one_prompt.read_text(encoding="utf-8")),
-            reviewer_body,
+        reviewer_agent_prompt = json.loads(
+            reviewer_one_prompt.read_text(encoding="utf-8")
         )
+        self.assertEqual(reviewer_agent_prompt, reviewer_body)
+        self.assertNotIn("project_state", reviewer_body)
         self.assertEqual(
             reviewer_body["next_identity_request"]["url"],
             "http://testserver:8025/api/v1/agents/whoami",
@@ -3027,7 +3179,19 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(identities[0]["identity_persistent"])
         self.assertTrue(identities[1]["identity_persistent"])
         self.assertFalse(identities[2]["identity_persistent"])
-        reviewer_state = identities[1]["project_state"]
+        self.assertTrue(
+            all(
+                identity.get("response_compact") is True
+                and "project_state" not in identity
+                for identity in identities
+            )
+        )
+        reviewer_state_status, reviewer_state = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
+        )
+        self.assertEqual(reviewer_state_status, 200)
+        self.assertIsInstance(reviewer_state, dict)
+        assert isinstance(reviewer_state, dict)
         self.assertEqual(len(reviewer_state["agents"]), 3)
         self.assertEqual(
             reviewer_state["workflow"]["start_node_id"],
@@ -3056,10 +3220,15 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(work_result, dict)
         self.assertEqual(work_result["phase"], "review")
         self.assertEqual(work_result["agent"]["id"], "reviewer-one")
+        self.assertNotIn("project_state", work_result)
+        work_state_status, work_state = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
+        )
+        self.assertEqual(work_state_status, 200)
+        self.assertIsInstance(work_state, dict)
+        assert isinstance(work_state, dict)
         self.assertEqual(
-            work_result["project_state"]["execution"]["pending_transition"][
-                "result"
-            ],
+            work_state["execution"]["pending_transition"]["result"],
             "Implemented the change and all tests passed.",
         )
 
@@ -3090,18 +3259,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(second_review, dict)
         assert isinstance(second_review, dict)
         self.assertTrue(second_review["all_completed"])
-        self.assertEqual(
-            second_review["project_state"]["execution"]["status"],
-            "completed",
-        )
-        self.assertEqual(
-            len(
-                second_review["project_state"]["execution"]["last_transition"][
-                    "reviews"
-                ]
-            ),
-            2,
-        )
+        self.assertNotIn("project_state", second_review)
 
         state_status, state = await asgi_request(
             f"/api/v1/projects/{self.PROJECT_PHONE}/state.json"
@@ -3110,6 +3268,10 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(state, dict)
         assert isinstance(state, dict)
         self.assertEqual(state["execution"]["status"], "completed")
+        self.assertEqual(
+            len(state["execution"]["last_transition"]["reviews"]),
+            2,
+        )
         self.assertGreaterEqual(len(state["recent_activity"]), 1)
 
     async def test_telegram_text_json_imports_actors_and_tasks(self) -> None:
@@ -4496,6 +4658,8 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "async function importProjectActorsFromJson()",
             "async function deleteAllProjectActors()",
             "async function refreshProjectSprints()",
+            "История спринтов вернула некорректный JSON.",
+            "Ошибка загрузки истории спринтов: HTTP ${response.status}.",
             "async function updateTelegramHistoryForwarding()",
             "pendingSprintsViewIsActive",
             "renderPendingSprintsProjectOptions",

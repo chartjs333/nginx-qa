@@ -200,17 +200,18 @@ can follow this contract mechanically. The next queue item can select any role,
 including a previous one, so cycles and conditional graph paths are supported.
 JSON order does not control later transitions.
 
-The `Промпт запуска` UI tab stores the complete UTF-8 launch request and every
-sequential identity/transition JSON response on local disk. The default
-archive directory is `D:\Prompt\{repository}`. In addition, every agent gets a
-stable latest-response file named
+The `Промпт запуска` UI tab stores the complete UTF-8 launch request and full
+diagnostic identity/transition archives on local disk. The default archive
+directory is `D:\Prompt\{repository}`. In addition, every agent gets a stable
+compact latest-response file named
 `D:\Prompt\{repository}_{agent_phone}-latest.prompt`; both templates can be
-changed on that tab. Generated requests expose a `Prompt ID` and file path.
-Sequential responses put `response_id` and `latest_agent_prompt_file_path`
-first so an executor can recover a response if its HTTP body or chat context
-was truncated. Configured paths must be absolute local paths; UNC/device paths
-and `..` segments are rejected, and the per-agent filename must retain
-`{agent_phone}` and the `.prompt` suffix.
+changed on that tab. The compact HTTP response and per-agent file keep the full
+`active_task.message` and required control fields while intentionally omitting
+duplicated metadata and the large `project_state`. Current state remains
+available through `project_state_url`.
+Configured paths must be absolute local paths; UNC/device paths and `..`
+segments are rejected, and the per-agent filename must retain `{agent_phone}`
+and the `.prompt` suffix.
 
 An architect can also declare the complete graph with top-level `execution`
 and `nodes`; see
@@ -251,16 +252,17 @@ reviewer 2. Both must independently send `APPROVE`. A single `REJECT` cancels
 the proposed transition and returns the source node for rework with the review
 feedback. This gate also applies to transitions into terminal nodes.
 
-Every sequential identity and transition response is also written as complete
-UTF-8 JSON in the configured prompt directory. The response starts with
-`latest_agent_prompt_file_path` for the caller's stable `.prompt` file,
-`response_file_path` for that exact step, and `latest_response_file_path` for
-the project-wide latest step. An agent must read its `.prompt` file when an HTTP
-client or chat surface truncates the returned node, review context, history, or
-diff. A transition result is written under the phone from the request URL, not
-under the phone of the next reviewer returned in the response. The per-agent
-file is attempted before either archive target, so an archive failure does not
-remove the primary recovery copy.
+Every sequential identity and transition produces a compact HTTP response and
+matching per-agent `.prompt`, plus a full diagnostic UTF-8 JSON archive. The
+response starts with `latest_agent_prompt_file_path` for the caller's stable
+compact file, `response_file_path` for the full exact-step archive, and
+`latest_response_file_path` for the full project-wide latest step. The compact
+payload is marked with `response_compact=true`; absence of `project_state` is
+intentional and must not be reported as truncation. A transition result is
+written under the phone from the request URL, not under the phone of the next
+reviewer returned in the response. The per-agent file is attempted before
+either archive target, so an archive failure does not remove the primary
+recovery copy.
 
 Submit a node result to the `whoami_endpoint` from the active queue item:
 

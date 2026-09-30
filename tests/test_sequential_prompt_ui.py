@@ -182,6 +182,15 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
         self.assertIn(result["agent_latest_file_hint"], result["prompt"])
+        self.assertIn("компактный JSON", result["prompt"])
+        self.assertIn("project_state_url", result["prompt"])
+        self.assertIn("намеренно не", result["prompt"])
+        self.assertIn("включаются в HTTP-ответ", result["prompt"])
+        self.assertIn("response_compact=true", result["prompt"])
+        self.assertNotIn(
+            "используй его как полный ответ текущего шага",
+            result["prompt"],
+        )
         self.assertIn(
             "Выполняйте этот цикл при каждом переходе графа",
             result["prompt"],
@@ -216,7 +225,25 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
                 "git_context_key": "github.com/acme/omega",
             },
             "agent": {"name": "Reviewer 1", "phone": "4102"},
-            "active_task": {"id": "task-1"},
+            "active_task": {
+                "id": "task-1",
+                "message": "Полное назначение 🚀",
+            },
+            "project_state": {
+                "schema_version": 1,
+                "history_with_patches": {
+                    "text": "HEAVY_PATCH_MARKER" * 1000,
+                },
+                "activity_with_patches": [
+                    {"patch": "HEAVY_PATCH_MARKER" * 1000},
+                ],
+                "code_patches": [
+                    {"patch": "HEAVY_PATCH_MARKER" * 1000},
+                ],
+            },
+            "project_state_url": (
+                "https://qa.example/api/v1/projects/9001/state.json"
+            ),
         }
 
         stored = await main.attach_sequential_graph_response_storage(
@@ -237,16 +264,20 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         )
         response_file = Path(stored["response_file_path"])
         self.assertTrue(response_file.is_file())
+        archived_response = json.loads(
+            response_file.read_text(encoding="utf-8")
+        )
+        latest_archived_response = json.loads(
+            Path(stored["latest_response_file_path"]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(latest_archived_response, archived_response)
         self.assertEqual(
-            json.loads(response_file.read_text(encoding="utf-8")),
-            stored,
+            archived_response["project_state"], response["project_state"]
         )
         self.assertEqual(
-            json.loads(
-                Path(stored["latest_response_file_path"]).read_text(
-                    encoding="utf-8"
-                )
-            ),
+            main.compact_sequential_agent_prompt_response(archived_response),
             stored,
         )
         expected_agent_file = (
@@ -260,9 +291,126 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             stored["agent_prompt_file_paths"],
             {"4102": str(expected_agent_file)},
         )
+        agent_prompt = json.loads(
+            expected_agent_file.read_text(encoding="utf-8")
+        )
+        self.assertEqual(agent_prompt, stored)
+        self.assertNotIn("project_state", agent_prompt)
+        self.assertTrue(agent_prompt["response_compact"])
+        self.assertIn(
+            "project_state", agent_prompt["omitted_response_fields"]
+        )
         self.assertEqual(
-            json.loads(expected_agent_file.read_text(encoding="utf-8")),
-            stored,
+            agent_prompt["project_state_summary"],
+            response["project_state"].get("code_patch_summary", {}),
+        )
+        self.assertEqual(agent_prompt["active_task"], stored["active_task"])
+        self.assertEqual(
+            agent_prompt["project_state_url"], stored["project_state_url"]
+        )
+        self.assertIn("намеренно", stored["full_response_instructions"])
+        self.assertLess(
+            expected_agent_file.stat().st_size,
+            response_file.stat().st_size,
+        )
+
+    def test_compact_response_keeps_task_body_and_removes_duplicate_context(
+        self,
+    ) -> None:
+        task_message = "Точное тело назначения 🚀\n" * 500
+        heavy_marker = "HEAVY_DUPLICATE_CONTEXT" * 2000
+        response = {
+            "project": {
+                "project_name": "Omega",
+                "git_address": "https://github.com/acme/omega.git",
+                "git_context_key": "github.com/acme/omega",
+                "groups": [{"payload": heavy_marker}],
+            },
+            "agent": {
+                "id": "agent-1",
+                "name": "Agent",
+                "phone": "4102",
+                "git_branch": "agent/one",
+                "profile": heavy_marker,
+                "tasks": [{"message": heavy_marker}],
+            },
+            "profile": "Required current profile",
+            "active_task": {
+                "id": "task-1",
+                "message": task_message,
+                "metadata": {
+                    "assignment_id": "assignment-1",
+                    "whoami_endpoint": "/api/v1/agents/4102/whoami",
+                    "agent": {"profile": heavy_marker},
+                    "tasks": [{"message": heavy_marker}],
+                    "workflow": {"text": heavy_marker},
+                },
+            },
+            "team": [
+                {
+                    "id": "agent-2",
+                    "name": "Teammate",
+                    "phone": "4103",
+                    "git_branch": "agent/two",
+                    "profile": heavy_marker,
+                }
+            ],
+            "assignment": {
+                "status": "active",
+                "phase": "review",
+                "current_assignment_id": "assignment-1",
+                "pending_transition": {
+                    "transition_id": "transition-1",
+                    "target_node_id": "next",
+                    "reviews": [
+                        {
+                            "reviewer_index": 1,
+                            "reviewer_agent_id": "reviewer-1",
+                            "reviewer_name": "Reviewer",
+                            "decision": "APPROVE",
+                        }
+                    ],
+                    "review_context": {"text": heavy_marker},
+                },
+            },
+            "work_history": [{"message": heavy_marker}],
+            "project_state": {
+                "history_with_patches": {"text": heavy_marker},
+                "code_patch_summary": {"available_patch_count": 1},
+            },
+            "project_state_url": "https://qa.example/state.json",
+        }
+
+        compact = main.compact_sequential_agent_prompt_response(response)
+
+        self.assertEqual(compact["active_task"]["message"], task_message)
+        self.assertEqual(
+            compact["active_task"]["metadata"]["assignment_id"],
+            "assignment-1",
+        )
+        for duplicate_key in ("agent", "tasks", "workflow"):
+            self.assertNotIn(
+                duplicate_key,
+                compact["active_task"]["metadata"],
+            )
+        self.assertNotIn("groups", compact["project"])
+        self.assertNotIn("profile", compact["agent"])
+        self.assertNotIn("profile", compact["team"][0])
+        self.assertNotIn("work_history", compact)
+        self.assertNotIn(
+            "review_context",
+            compact["assignment"]["pending_transition"],
+        )
+        self.assertEqual(
+            compact["assignment"]["pending_transition"]["reviews"][0][
+                "reviewer_name"
+            ],
+            "Reviewer",
+        )
+        self.assertTrue(compact["active_task_message_complete"])
+        self.assertLess(
+            len(json.dumps(compact, ensure_ascii=False).encode("utf-8")),
+            64 * 1024,
         )
 
     async def test_transition_uses_caller_phone_and_terminal_response_still_persists(
@@ -326,7 +474,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             stored_terminal,
         )
 
-    async def test_agent_latest_files_overwrite_independently_with_full_utf8_json(
+    async def test_agent_latest_files_overwrite_independently_with_compact_utf8_json(
         self,
     ) -> None:
         project = {
@@ -375,8 +523,11 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             json.loads(first_agent_file.read_text(encoding="utf-8")),
             second,
         )
+        archived_first = json.loads(
+            first_archive_file.read_text(encoding="utf-8")
+        )
         self.assertEqual(
-            json.loads(first_archive_file.read_text(encoding="utf-8")),
+            main.compact_sequential_agent_prompt_response(archived_first),
             first,
         )
 
@@ -519,6 +670,15 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
                         "git_context_key": "github.com/acme/omega",
                     },
                     "agent": {"name": "Agent", "phone": "4301"},
+                    "active_task": {
+                        "id": "task-4301",
+                        "message": "Полное назначение агента",
+                    },
+                    "project_state": {
+                        "history_with_patches": {
+                            "text": "HEAVY_PATCH_MARKER" * 1000,
+                        },
+                    },
                 },
                 response_kind="identity-response",
             )
@@ -531,9 +691,14 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(Path(stored["latest_response_file_path"]).exists())
         agent_latest = Path(stored["latest_agent_prompt_file_path"])
         self.assertTrue(agent_latest.is_file())
+        agent_prompt = json.loads(agent_latest.read_text(encoding="utf-8"))
+        self.assertEqual(agent_prompt, stored)
+        self.assertNotIn("project_state", agent_prompt)
+        self.assertTrue(agent_prompt["response_compact"])
+        self.assertEqual(agent_prompt["active_task"], stored["active_task"])
         self.assertEqual(
-            json.loads(agent_latest.read_text(encoding="utf-8")),
-            stored,
+            agent_prompt["response_storage_errors"],
+            stored["response_storage_errors"],
         )
 
     def test_directory_template_supports_repository_project_and_context(self) -> None:
