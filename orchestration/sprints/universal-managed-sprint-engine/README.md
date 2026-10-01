@@ -35,7 +35,7 @@ child port pool 18100-18199
 - `branch-map.md` — ветви и роли;
 - `bootstrap-ru.md` — запуск текущим sequential nginx-qa;
 - `sequential-sprint.json` — import manifest;
-- `SHA256SUMS.json` — контроль sprint-файлов.
+- `FILE-MANIFEST.json` — Git blob SHA-1 и размеры sprint-файлов; сам manifest из списка исключён.
 
 ## Promotion
 
