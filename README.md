@@ -13,6 +13,7 @@ FastAPI service for coordinating QA and development queues between project roles
 - [Project Manager 0001 agent contract](prompts/project_management_client_0001.md) - resolves or creates a project by Git address and returns its assigned project phone.
 - [Declarative Groups and Development Cycles API agent contract](prompts/group_management_api.md) - creates idempotent project groups, routes tasks through declared connections, and exposes the cycle audit trail and lineage graph.
 - [Sequential sprint team JSON architect contract](prompts/architect_sequential_team_json.md) - defines the once-per-sprint team file and queue-driven identity transitions.
+- [Universal managed sprint architecture contract](docs/universal-managed-sprint-contract.md) - freezes optional `sprint_type` dispatch, provenance, schemas, migration, preflight, and activation boundaries; machine-readable v1 contracts are in `schemas/`.
 - helper scripts for posting and polling queue messages.
 
 Runtime files such as queue history, agent state, email routes, screenshots,
@@ -287,6 +288,11 @@ commits that have not been pushed. For a repository configured as a local path,
 the final HEAD and branch can be detected automatically. Supplying all three
 fields is recommended for a remote repository. Each reviewer uses the same
 endpoint shape:
+
+That optional/detected behavior describes the existing legacy sequential
+engine. Managed-workspace assignments require the commit/branch members and
+apply the stricter ancestry/HEAD rules in the
+[managed sprint architecture contract](docs/universal-managed-sprint-contract.md#45-durable-assignment-result-and-review).
 
 ```json
 {

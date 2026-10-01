@@ -1,0 +1,1953 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-runtime-state-v1.schema.json",
+  "title": "Managed sprint durable runtime state v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "manifest_schema_version",
+    "sprint_type",
+    "sprint_id",
+    "identity",
+    "workspace_source_commit",
+    "requested_ref",
+    "repository",
+    "runtime_config",
+    "status",
+    "graph_revision",
+    "graph_revisions",
+    "workflow",
+    "active_assignment_ids",
+    "allowed_outcomes_by_assignment",
+    "import_attempts",
+    "assignments",
+    "result_receipts",
+    "review_assignments",
+    "reviews",
+    "reworks",
+    "integrations",
+    "integration_workspaces",
+    "branch_leases",
+    "workspaces",
+    "port_leases",
+    "processes",
+    "transition_journal",
+    "outbox",
+    "repairs",
+    "coordinator_contexts",
+    "blocker_observations",
+    "recovery_records"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract_version": {"const": 1},
+    "manifest_schema_version": {"const": 1},
+    "sprint_type": {"const": "managed_workspace_v1"},
+    "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+    "identity": {"$ref": "#/$defs/sprintIdentity"},
+    "workspace_source_commit": {"$ref": "#/$defs/gitObjectId"},
+    "requested_ref": {"type": "string", "minLength": 1},
+    "repository": {"$ref": "#/$defs/repository"},
+    "runtime_config": {"$ref": "managed-runtime-config-v1.schema.json"},
+    "status": {"enum": ["preparing", "active", "completed", "failed", "blocked"]},
+    "graph_revision": {"type": "integer", "minimum": 1},
+    "graph_revisions": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/graphRevision"}
+    },
+    "workflow": {
+      "oneOf": [
+        {"$ref": "#/$defs/workflowState"},
+        {"type": "null"}
+      ]
+    },
+    "active_assignment_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "allowed_outcomes_by_assignment": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {"type": "string", "minLength": 1}
+      }
+    },
+    "import_attempts": {"type": "array", "items": {"$ref": "#/$defs/importAttempt"}},
+    "assignments": {"type": "array", "items": {"$ref": "#/$defs/assignment"}},
+    "result_receipts": {"type": "array", "items": {"$ref": "#/$defs/resultReceipt"}},
+    "review_assignments": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/reviewAssignment"}
+    },
+    "reviews": {"type": "array", "items": {"$ref": "#/$defs/review"}},
+    "reworks": {"type": "array", "items": {"$ref": "#/$defs/reworkRecord"}},
+    "integrations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/integrationProvenance"}
+    },
+    "integration_workspaces": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/integrationWorkspaceArtifact"}
+    },
+    "branch_leases": {"type": "array", "items": {"$ref": "#/$defs/branchLease"}},
+    "workspaces": {"type": "array", "items": {"$ref": "#/$defs/workspace"}},
+    "port_leases": {"type": "array", "items": {"$ref": "#/$defs/portLease"}},
+    "processes": {"type": "array", "items": {"$ref": "#/$defs/process"}},
+    "transition_journal": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/transitionJournalEntry"}
+    },
+    "outbox": {"type": "array", "items": {"$ref": "#/$defs/outboxRecord"}},
+    "repairs": {"type": "array", "items": {"$ref": "#/$defs/repairRecord"}},
+    "coordinator_contexts": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/coordinatorContext"}
+    },
+    "blocker_observations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/blockerObservation"}
+    },
+    "recovery_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/recoveryRecord"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "preparing"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "workflow": {"type": "null"},
+          "active_assignment_ids": {"maxItems": 0},
+          "allowed_outcomes_by_assignment": {"maxProperties": 0},
+          "import_attempts": {"minItems": 1},
+          "assignments": {"maxItems": 0},
+          "result_receipts": {"maxItems": 0},
+          "review_assignments": {"maxItems": 0},
+          "reviews": {"maxItems": 0},
+          "reworks": {"maxItems": 0},
+          "integrations": {"maxItems": 0},
+          "integration_workspaces": {"maxItems": 0},
+          "branch_leases": {"maxItems": 0},
+          "workspaces": {"maxItems": 0},
+          "port_leases": {"maxItems": 0},
+          "processes": {"maxItems": 0},
+          "transition_journal": {"maxItems": 0},
+          "outbox": {"maxItems": 0},
+          "repairs": {"maxItems": 0},
+          "coordinator_contexts": {"maxItems": 0},
+          "blocker_observations": {"maxItems": 0},
+          "recovery_records": {"maxItems": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"const": "active"}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "workflow": {"$ref": "#/$defs/workflowState"},
+          "import_attempts": {"minItems": 1},
+          "assignments": {"minItems": 1}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {"enum": ["completed", "failed", "blocked"]}
+        },
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {
+          "active_assignment_ids": {"maxItems": 0},
+          "allowed_outcomes_by_assignment": {"maxProperties": 0}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"status": {"enum": ["failed", "blocked"]}},
+        "required": ["status"]
+      },
+      "then": {
+        "properties": {"coordinator_contexts": {"minItems": 1}}
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "$defs": {
+    "gitObjectId": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "pathSegmentId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$"
+    },
+    "repositoryId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,94}[A-Za-z0-9_-])?$"
+    },
+    "timestamp": {"type": "string", "format": "date-time"},
+    "sprintIdentity": {
+      "type": "object",
+      "required": ["project_id", "repository_id", "commit", "manifest_path", "manifest_sha256"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/pathSegmentId"},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
+        "commit": {"$ref": "#/$defs/gitObjectId"},
+        "manifest_path": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "repository": {
+      "type": "object",
+      "required": [
+        "repository_id",
+        "repository_key",
+        "canonical_remote",
+        "mirror_storage_key",
+        "mirror_path"
+      ],
+      "properties": {
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
+        "repository_key": {"type": "string", "minLength": 1},
+        "canonical_remote": {"type": "string", "minLength": 1},
+        "mirror_storage_key": {"type": "string", "pattern": "^mirror-[0-9a-f]{64}$"},
+        "mirror_path": {"type": "string", "minLength": 1},
+        "credential_reference": {"type": ["string", "null"]}
+      },
+      "additionalProperties": true
+    },
+    "graphRevision": {
+      "type": "object",
+      "required": [
+        "revision",
+        "definition_sha256",
+        "definition",
+        "artifact_source_commit",
+        "created_at",
+        "source",
+        "repair_id"
+      ],
+      "properties": {
+        "revision": {"type": "integer", "minimum": 1},
+        "definition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "definition": {"$ref": "managed-workspace-sprint-v1.schema.json"},
+        "artifact_source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "source": {"enum": ["activation", "repair"]},
+        "repair_id": {"type": ["string", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"source": {"const": "activation"}},
+            "required": ["source"]
+          },
+          "then": {"properties": {"repair_id": {"type": "null"}}},
+          "else": {"properties": {"repair_id": {"type": "string", "minLength": 1}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "workflowState": {
+      "type": "object",
+      "required": [
+        "graph_revision",
+        "execution_mode",
+        "entry_node_ids",
+        "entry_occurrence_ids",
+        "occurrences",
+        "transition_tokens"
+      ],
+      "properties": {
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "execution_mode": {"enum": ["sequential", "parallel"]},
+        "entry_node_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "entry_occurrence_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^occ-[0-9a-f]{64}$"}
+        },
+        "occurrences": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/nodeOccurrence"}
+        },
+        "transition_tokens": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/transitionToken"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "nodeOccurrence": {
+      "type": "object",
+      "required": [
+        "occurrence_id",
+        "node_id",
+        "graph_revision",
+        "generation",
+        "activation_policy",
+        "trigger_token_ids",
+        "state",
+        "assignment_ids",
+        "created_at",
+        "completed_at"
+      ],
+      "properties": {
+        "occurrence_id": {"type": "string", "pattern": "^occ-[0-9a-f]{64}$"},
+        "node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "generation": {"type": "integer", "minimum": 1},
+        "activation_policy": {"enum": ["entry", "any_parent", "all_parents"]},
+        "trigger_token_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^token-[0-9a-f]{64}$"}
+        },
+        "state": {
+          "enum": ["prepared", "active", "reviews_pending", "completed", "blocked"]
+        },
+        "assignment_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/pathSegmentId"}
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"activation_policy": {"const": "entry"}},
+            "required": ["activation_policy"]
+          },
+          "then": {
+            "properties": {
+              "generation": {"const": 1},
+              "trigger_token_ids": {"maxItems": 0}
+            }
+          },
+          "else": {"properties": {"trigger_token_ids": {"minItems": 1}}}
+        },
+        {"properties": {"assignment_ids": {"minItems": 1}}},
+        {
+          "if": {
+            "properties": {
+              "state": {"enum": ["prepared", "active", "reviews_pending"]}
+            },
+            "required": ["state"]
+          },
+          "then": {"properties": {"completed_at": {"type": "null"}}},
+          "else": {"properties": {"completed_at": {"$ref": "#/$defs/timestamp"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "transitionToken": {
+      "type": "object",
+      "required": [
+        "token_id",
+        "source_occurrence_id",
+        "source_node_id",
+        "source_graph_revision",
+        "result_key",
+        "target_node_id",
+        "target_graph_revision",
+        "status",
+        "consumed_by_occurrence_id",
+        "created_at"
+      ],
+      "properties": {
+        "token_id": {"type": "string", "pattern": "^token-[0-9a-f]{64}$"},
+        "source_occurrence_id": {"type": "string", "pattern": "^occ-[0-9a-f]{64}$"},
+        "source_node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "source_graph_revision": {"type": "integer", "minimum": 1},
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "target_node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "target_graph_revision": {"type": ["integer", "null"], "minimum": 1},
+        "status": {"enum": ["available", "consumed", "terminal"]},
+        "consumed_by_occurrence_id": {
+          "type": ["string", "null"],
+          "pattern": "^occ-[0-9a-f]{64}$"
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "consumed"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"consumed_by_occurrence_id": {"type": "string"}}},
+          "else": {"properties": {"consumed_by_occurrence_id": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "available"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"target_graph_revision": {"type": "null"}}},
+          "else": {"properties": {"target_graph_revision": {"type": "integer"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "importAttempt": {
+      "type": "object",
+      "required": [
+        "attempt_id",
+        "idempotency_key",
+        "request_fingerprint",
+        "identity",
+        "contract_version",
+        "manifest_schema_version",
+        "phase",
+        "status",
+        "preflight",
+        "prepared_artifact_ids",
+        "activation_response",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "attempt_id": {"type": "string", "minLength": 1},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "identity": {"$ref": "#/$defs/sprintIdentity"},
+        "contract_version": {"const": 1},
+        "manifest_schema_version": {"const": 1},
+        "phase": {"enum": ["VALIDATE", "PREPARE", "ACTIVATE"]},
+        "status": {"enum": ["running", "succeeded", "failed"]},
+        "preflight": {"$ref": "sprint-preflight-report-v1.schema.json"},
+        "prepared_artifact_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/pathSegmentId"}
+        },
+        "activation_response": {
+          "oneOf": [
+            {"$ref": "start-sprint-from-git-response-v1.schema.json"},
+            {"type": "null"}
+          ]
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "updated_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": true
+    },
+    "assignment": {
+      "type": "object",
+      "required": [
+        "assignment_id",
+        "occurrence_id",
+        "node_id",
+        "agent_id",
+        "agent_phone",
+        "graph_revision",
+        "source_kind",
+        "source_result_keys",
+        "source_commit",
+        "initial_head_commit",
+        "integration_id",
+        "rework_cycle",
+        "status",
+        "workspace_id",
+        "allowed_outcomes",
+        "created_at"
+      ],
+      "properties": {
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "occurrence_id": {"type": "string", "pattern": "^occ-[0-9a-f]{64}$"},
+        "node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "agent_id": {"$ref": "#/$defs/pathSegmentId"},
+        "agent_phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "source_kind": {
+          "enum": ["sprint_source", "accepted_result", "rework_result", "integration"]
+        },
+        "source_result_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"}
+        },
+        "source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "initial_head_commit": {"$ref": "#/$defs/gitObjectId"},
+        "integration_id": {"type": ["string", "null"], "minLength": 1},
+        "rework_cycle": {"type": "integer", "minimum": 0, "maximum": 100},
+        "result_commit": {
+          "oneOf": [{"$ref": "#/$defs/gitObjectId"}, {"type": "null"}]
+        },
+        "outcome": {"type": ["string", "null"]},
+        "status": {
+          "enum": ["prepared", "active", "reviews_pending", "completed", "failed", "blocked"]
+        },
+        "workspace_id": {"$ref": "#/$defs/pathSegmentId"},
+        "branch_lease_id": {"type": ["string", "null"]},
+        "allowed_outcomes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"enum": ["prepared", "active"]}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "result_commit": {"type": "null"},
+              "outcome": {"type": "null"},
+              "completed_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "reviews_pending"}},
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["result_commit", "outcome", "completed_at"],
+            "properties": {
+              "result_commit": {"$ref": "#/$defs/gitObjectId"},
+              "outcome": {"type": "string", "minLength": 1},
+              "completed_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"source_kind": {"const": "sprint_source"}},
+            "required": ["source_kind"]
+          },
+          "then": {
+            "properties": {
+              "source_result_keys": {"maxItems": 0},
+              "integration_id": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {"source_result_keys": {"minItems": 1}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"source_kind": {"const": "integration"}},
+            "required": ["source_kind"]
+          },
+          "then": {
+            "properties": {
+              "source_result_keys": {"minItems": 2},
+              "integration_id": {"type": "string", "minLength": 1}
+            }
+          },
+          "else": {"properties": {"integration_id": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "completed"}},
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["result_commit", "outcome", "completed_at"],
+            "properties": {
+              "result_commit": {"$ref": "#/$defs/gitObjectId"},
+              "outcome": {"type": "string", "minLength": 1},
+              "completed_at": {"$ref": "#/$defs/timestamp"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"enum": ["failed", "blocked"]}},
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["completed_at"],
+            "properties": {"completed_at": {"$ref": "#/$defs/timestamp"}}
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "integrationProvenance": {
+      "type": "object",
+      "required": [
+        "integration_id",
+        "target_node_id",
+        "target_graph_revision",
+        "trigger_token_ids",
+        "workspace_artifact_id",
+        "strategy",
+        "status",
+        "parents",
+        "author_name",
+        "author_email",
+        "author_timestamp",
+        "committer_name",
+        "committer_email",
+        "committer_timestamp",
+        "commit_message",
+        "integration_commit",
+        "target_occurrence_id",
+        "assignment_id",
+        "normalized_error",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "integration_id": {"type": "string", "pattern": "^integration-[0-9a-f]{64}$"},
+        "target_node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "target_graph_revision": {"type": "integer", "minimum": 1},
+        "trigger_token_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^token-[0-9a-f]{64}$"}
+        },
+        "workspace_artifact_id": {"type": "string", "minLength": 1},
+        "strategy": {"const": "merge_no_ff"},
+        "status": {"enum": ["PREPARED", "COMMITTED", "CONFLICT", "FAILED"]},
+        "parents": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["source_node_id", "result_key", "commit"],
+            "properties": {
+              "source_node_id": {"$ref": "#/$defs/pathSegmentId"},
+              "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+              "commit": {"$ref": "#/$defs/gitObjectId"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "author_name": {"const": "nginx-qa managed integration"},
+        "author_email": {"const": "managed-integration@localhost"},
+        "author_timestamp": {"$ref": "#/$defs/timestamp"},
+        "committer_name": {"const": "nginx-qa managed integration"},
+        "committer_email": {"const": "managed-integration@localhost"},
+        "committer_timestamp": {"$ref": "#/$defs/timestamp"},
+        "commit_message": {"type": "string", "minLength": 1},
+        "integration_commit": {
+          "oneOf": [{"$ref": "#/$defs/gitObjectId"}, {"type": "null"}]
+        },
+        "target_occurrence_id": {
+          "type": ["string", "null"],
+          "pattern": "^occ-[0-9a-f]{64}$"
+        },
+        "assignment_id": {
+          "oneOf": [{"$ref": "#/$defs/pathSegmentId"}, {"type": "null"}]
+        },
+        "normalized_error": {"type": ["object", "null"]},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "updated_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "COMMITTED"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "integration_commit": {"$ref": "#/$defs/gitObjectId"},
+              "target_occurrence_id": {"type": "string"},
+              "assignment_id": {"type": "string"},
+              "normalized_error": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {
+              "integration_commit": {"type": "null"},
+              "target_occurrence_id": {"type": "null"},
+              "assignment_id": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"enum": ["CONFLICT", "FAILED"]}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"normalized_error": {"type": "object", "minProperties": 1}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "integrationWorkspaceArtifact": {
+      "type": "object",
+      "required": [
+        "workspace_artifact_id",
+        "integration_id",
+        "project_id",
+        "sprint_id",
+        "repository_id",
+        "repository_remote",
+        "mirror_storage_key",
+        "expected_root",
+        "actual_git_toplevel",
+        "actual_git_dir",
+        "base_commit",
+        "head_commit",
+        "artifact_status",
+        "working_tree_state",
+        "created_at",
+        "verified_at",
+        "released_at"
+      ],
+      "properties": {
+        "workspace_artifact_id": {
+          "type": "string",
+          "pattern": "^integration-workspace-[0-9a-f]{64}$"
+        },
+        "integration_id": {
+          "type": "string",
+          "pattern": "^integration-[0-9a-f]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/pathSegmentId"},
+        "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+        "repository_id": {"$ref": "#/$defs/pathSegmentId"},
+        "repository_remote": {"type": "string", "minLength": 1},
+        "mirror_storage_key": {
+          "type": "string",
+          "pattern": "^mirror-[0-9a-f]{64}$"
+        },
+        "expected_root": {"type": "string", "minLength": 1},
+        "actual_git_toplevel": {"type": "string", "minLength": 1},
+        "actual_git_dir": {"type": "string", "minLength": 1},
+        "base_commit": {"$ref": "#/$defs/gitObjectId"},
+        "head_commit": {"$ref": "#/$defs/gitObjectId"},
+        "artifact_status": {"enum": ["active", "preserved", "released"]},
+        "working_tree_state": {
+          "enum": ["clean", "merging", "conflicted", "unavailable"]
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "verified_at": {"$ref": "#/$defs/timestamp"},
+        "released_at": {
+          "oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"artifact_status": {"const": "released"}},
+            "required": ["artifact_status"]
+          },
+          "then": {
+            "properties": {
+              "working_tree_state": {"const": "unavailable"},
+              "released_at": {"$ref": "#/$defs/timestamp"}
+            }
+          },
+          "else": {
+            "properties": {
+              "working_tree_state": {
+                "enum": ["clean", "merging", "conflicted"]
+              },
+              "released_at": {"type": "null"}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "review": {
+      "type": "object",
+      "required": [
+        "assignment_id",
+        "source_assignment_id",
+        "result_key",
+        "result_commit",
+        "result_outcome",
+        "reviewer_id",
+        "reviewer_index",
+        "decision",
+        "feedback",
+        "request_fingerprint",
+        "response",
+        "decided_at"
+      ],
+      "properties": {
+        "assignment_id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The reviewer's queue assignment"
+        },
+        "source_assignment_id": {"type": "string", "minLength": 1},
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "result_commit": {"$ref": "#/$defs/gitObjectId"},
+        "result_outcome": {"type": "string", "minLength": 1},
+        "reviewer_id": {"type": "string", "minLength": 1},
+        "reviewer_index": {"enum": [1, 2]},
+        "decision": {"enum": ["APPROVE", "REJECT"]},
+        "feedback": {"type": "string"},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "response": {"$ref": "managed-review-decision-response-v1.schema.json"},
+        "decided_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"decision": {"const": "REJECT"}},
+            "required": ["decision"]
+          },
+          "then": {"properties": {"feedback": {"minLength": 1}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "reviewAssignment": {
+      "type": "object",
+      "required": [
+        "assignment_id",
+        "source_assignment_id",
+        "result_key",
+        "result_commit",
+        "result_outcome",
+        "reviewer_id",
+        "reviewer_phone",
+        "reviewer_index",
+        "status",
+        "decision",
+        "request_fingerprint",
+        "response",
+        "created_at",
+        "activated_at",
+        "decided_at"
+      ],
+      "properties": {
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "source_assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "result_commit": {"$ref": "#/$defs/gitObjectId"},
+        "result_outcome": {"type": "string", "minLength": 1},
+        "reviewer_id": {"$ref": "#/$defs/pathSegmentId"},
+        "reviewer_phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "reviewer_index": {"enum": [1, 2]},
+        "status": {"enum": ["prepared", "active", "decided"]},
+        "decision": {"type": ["string", "null"], "enum": ["APPROVE", "REJECT", null]},
+        "request_fingerprint": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "response": {
+          "oneOf": [
+            {"$ref": "managed-review-decision-response-v1.schema.json"},
+            {"type": "null"}
+          ]
+        },
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "activated_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
+        "decided_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "prepared"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"activated_at": {"type": "null"}}},
+          "else": {"properties": {"activated_at": {"$ref": "#/$defs/timestamp"}}}
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "decided"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "decision": {"enum": ["APPROVE", "REJECT"]},
+              "request_fingerprint": {"type": "string"},
+              "response": {"$ref": "managed-review-decision-response-v1.schema.json"},
+              "decided_at": {"$ref": "#/$defs/timestamp"}
+            }
+          },
+          "else": {
+            "properties": {
+              "decision": {"type": "null"},
+              "request_fingerprint": {"type": "null"},
+              "response": {"type": "null"},
+              "decided_at": {"type": "null"}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "resultReceipt": {
+      "type": "object",
+      "required": [
+        "result_key",
+        "assignment_id",
+        "outcome",
+        "result_commit",
+        "from_commit",
+        "git_branch",
+        "result_summary_redacted",
+        "redaction_applied",
+        "request_fingerprint",
+        "response",
+        "accepted_at"
+      ],
+      "properties": {
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "assignment_id": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "minLength": 1},
+        "result_commit": {"$ref": "#/$defs/gitObjectId"},
+        "from_commit": {"$ref": "#/$defs/gitObjectId"},
+        "git_branch": {"type": ["string", "null"], "minLength": 1},
+        "result_summary_redacted": {"type": "string", "minLength": 1},
+        "redaction_applied": {"type": "boolean"},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "response": {"$ref": "managed-assignment-result-response-v1.schema.json"},
+        "accepted_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": true
+    },
+    "reworkRecord": {
+      "type": "object",
+      "required": [
+        "rework_id",
+        "rejected_result_key",
+        "reviewer_id",
+        "feedback",
+        "rework_cycle",
+        "new_assignment_id",
+        "committed_at"
+      ],
+      "properties": {
+        "rework_id": {"type": "string", "minLength": 1},
+        "rejected_result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "reviewer_id": {"type": "string", "minLength": 1},
+        "feedback": {"type": "string", "minLength": 1},
+        "rework_cycle": {"type": "integer", "minimum": 1, "maximum": 100},
+        "new_assignment_id": {"type": "string", "minLength": 1},
+        "committed_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": true
+    },
+    "branchLease": {
+      "type": "object",
+      "required": [
+        "lease_id",
+        "repository_id",
+        "repository_key",
+        "mirror_storage_key",
+        "branch",
+        "assignment_id",
+        "source_commit",
+        "initial_head_commit",
+        "mode",
+        "status",
+        "acquired_at",
+        "released_at"
+      ],
+      "properties": {
+        "lease_id": {"type": "string", "minLength": 1},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
+        "repository_key": {"type": "string", "minLength": 1},
+        "mirror_storage_key": {"type": "string", "pattern": "^mirror-[0-9a-f]{64}$"},
+        "branch": {"type": "string", "minLength": 1},
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "initial_head_commit": {"$ref": "#/$defs/gitObjectId"},
+        "mode": {"enum": ["read", "write"]},
+        "status": {"enum": ["active", "released"]},
+        "acquired_at": {"$ref": "#/$defs/timestamp"},
+        "released_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "released"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"released_at": {"$ref": "#/$defs/timestamp"}}},
+          "else": {"properties": {"released_at": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "workspace": {
+      "type": "object",
+      "required": [
+        "workspace_id",
+        "project_id",
+        "sprint_id",
+        "node_id",
+        "assignment_id",
+        "expected_root",
+        "actual_git_toplevel",
+        "actual_git_dir",
+        "repository_id",
+        "repository_remote",
+        "source_commit",
+        "initial_head_commit",
+        "assigned_branch",
+        "working_tree_state"
+      ],
+      "properties": {
+        "workspace_id": {"$ref": "#/$defs/pathSegmentId"},
+        "project_id": {"$ref": "#/$defs/pathSegmentId"},
+        "sprint_id": {"type": "string", "minLength": 1},
+        "node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "expected_root": {"type": "string", "minLength": 1},
+        "actual_git_toplevel": {"type": "string", "minLength": 1},
+        "actual_git_dir": {"type": "string", "minLength": 1},
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
+        "repository_remote": {"type": "string", "minLength": 1},
+        "source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "initial_head_commit": {"$ref": "#/$defs/gitObjectId"},
+        "assigned_branch": {"type": ["string", "null"]},
+        "working_tree_state": {"enum": ["clean", "dirty"]}
+      },
+      "additionalProperties": true
+    },
+    "portLease": {
+      "type": "object",
+      "required": [
+        "lease_id",
+        "instance_id",
+        "network_namespace_id",
+        "assignment_id",
+        "process_id",
+        "host",
+        "port",
+        "status",
+        "bind_verified",
+        "acquired_at",
+        "released_at"
+      ],
+      "properties": {
+        "lease_id": {"type": "string", "minLength": 1},
+        "instance_id": {"type": "string", "minLength": 1},
+        "network_namespace_id": {"const": "host"},
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "process_id": {
+          "oneOf": [{"$ref": "#/$defs/pathSegmentId"}, {"type": "null"}]
+        },
+        "host": {"const": "127.0.0.1"},
+        "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "status": {"enum": ["reserved", "bound", "released"]},
+        "bind_verified": {"type": "boolean"},
+        "acquired_at": {"$ref": "#/$defs/timestamp"},
+        "released_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"status": {"const": "reserved"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "bind_verified": {"const": false},
+              "released_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "bound"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "process_id": {"type": "string", "minLength": 1},
+              "bind_verified": {"const": true},
+              "released_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "released"}},
+            "required": ["status"]
+          },
+          "then": {"properties": {"released_at": {"$ref": "#/$defs/timestamp"}}},
+          "else": {"properties": {"released_at": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": true
+    },
+    "process": {
+      "type": "object",
+      "required": [
+        "process_id",
+        "assignment_id",
+        "workspace_id",
+        "runtime_root",
+        "state",
+        "launch_nonce",
+        "os_process_created_at",
+        "executable_path",
+        "job_object_id",
+        "pid",
+        "process_group_id",
+        "command_redacted",
+        "environment_redacted",
+        "cwd",
+        "stdout_log",
+        "stderr_log",
+        "health_endpoint",
+        "resource_limits",
+        "restart_policy",
+        "restart_attempt",
+        "restart_of_process_id",
+        "max_restart_attempts",
+        "restart_backoff_seconds",
+        "port_lease_id",
+        "started_at",
+        "stopped_at",
+        "failed_at"
+      ],
+      "properties": {
+        "process_id": {"$ref": "#/$defs/pathSegmentId"},
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "workspace_id": {"$ref": "#/$defs/pathSegmentId"},
+        "runtime_root": {"type": "string", "minLength": 1},
+        "state": {
+          "enum": ["PREPARED", "STARTING", "HEALTHY", "STOPPING", "STOPPED", "FAILED"]
+        },
+        "launch_nonce": {"type": "string", "pattern": "^[A-Za-z0-9._-]{16,128}$"},
+        "os_process_created_at": {
+          "oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]
+        },
+        "executable_path": {"type": "string", "minLength": 1},
+        "job_object_id": {"type": ["string", "null"]},
+        "pid": {"type": ["integer", "null"], "minimum": 1},
+        "process_group_id": {"type": ["string", "integer", "null"]},
+        "command_redacted": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "string"}
+        },
+        "environment_redacted": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "managed-workspace-sprint-v1.schema.json#/$defs/environmentValue"
+          }
+        },
+        "cwd": {"type": "string", "minLength": 1},
+        "stdout_log": {"type": "string", "minLength": 1},
+        "stderr_log": {"type": "string", "minLength": 1},
+        "health_endpoint": {
+          "type": "object",
+          "required": ["host", "port", "path"],
+          "properties": {
+            "host": {"const": "127.0.0.1"},
+            "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+            "path": {
+              "type": "string",
+              "pattern": "^/(?!/)[^?#\\u0000-\\u001F\\u007F]*$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "resource_limits": {"$ref": "#/$defs/effectiveResourceLimits"},
+        "restart_policy": {"enum": ["never", "on_failure"]},
+        "restart_attempt": {"type": "integer", "minimum": 0, "maximum": 20},
+        "restart_of_process_id": {
+          "oneOf": [{"$ref": "#/$defs/pathSegmentId"}, {"type": "null"}]
+        },
+        "max_restart_attempts": {"type": "integer", "minimum": 0, "maximum": 20},
+        "restart_backoff_seconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+        "port_lease_id": {"type": "string", "minLength": 1},
+        "started_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
+        "stopped_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
+        "failed_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"state": {"const": "PREPARED"}},
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "pid": {"type": "null"},
+              "process_group_id": {"type": "null"},
+              "os_process_created_at": {"type": "null"},
+              "started_at": {"type": "null"},
+              "stopped_at": {"type": "null"},
+              "failed_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {"enum": ["STARTING", "HEALTHY", "STOPPING", "STOPPED"]}
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "pid": {"type": "integer", "minimum": 1},
+              "process_group_id": {
+                "oneOf": [
+                  {"type": "integer", "minimum": 1},
+                  {"type": "string", "minLength": 1}
+                ]
+              },
+              "os_process_created_at": {"$ref": "#/$defs/timestamp"},
+              "started_at": {"$ref": "#/$defs/timestamp"},
+              "failed_at": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"state": {"const": "STOPPED"}},
+            "required": ["state"]
+          },
+          "then": {"properties": {"stopped_at": {"$ref": "#/$defs/timestamp"}}},
+          "else": {"properties": {"stopped_at": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"state": {"const": "FAILED"}},
+            "required": ["state"]
+          },
+          "then": {"properties": {"failed_at": {"$ref": "#/$defs/timestamp"}}}
+        },
+        {
+          "if": {
+            "properties": {"restart_attempt": {"const": 0}},
+            "required": ["restart_attempt"]
+          },
+          "then": {"properties": {"restart_of_process_id": {"type": "null"}}},
+          "else": {
+            "properties": {
+              "restart_of_process_id": {"$ref": "#/$defs/pathSegmentId"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"restart_policy": {"const": "on_failure"}},
+            "required": ["restart_policy"]
+          },
+          "then": {
+            "properties": {"max_restart_attempts": {"minimum": 1}}
+          },
+          "else": {
+            "properties": {
+              "restart_attempt": {"const": 0},
+              "restart_of_process_id": {"type": "null"},
+              "max_restart_attempts": {"const": 0}
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "effectiveResourceLimits": {
+      "type": "object",
+      "required": ["wall_time_seconds", "memory_bytes", "cpu_percent", "process_count"],
+      "properties": {
+        "wall_time_seconds": {"type": "integer", "minimum": 1, "maximum": 604800},
+        "memory_bytes": {"type": "integer", "minimum": 1048576},
+        "cpu_percent": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "process_count": {"type": "integer", "minimum": 1, "maximum": 1024}
+      },
+      "additionalProperties": false
+    },
+    "transitionJournalEntry": {
+      "type": "object",
+      "required": [
+        "journal_id",
+        "result_key",
+        "assignment_id",
+        "outcome",
+        "result_commit",
+        "state",
+        "disposition",
+        "rework_id",
+        "transition_token_ids",
+        "target_occurrence_ids",
+        "outbox_event_ids",
+        "updated_at"
+      ],
+      "properties": {
+        "journal_id": {"type": "string", "minLength": 1},
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "assignment_id": {"type": "string", "minLength": 1},
+        "outcome": {"type": "string", "minLength": 1},
+        "result_commit": {"$ref": "#/$defs/gitObjectId"},
+        "state": {
+          "enum": [
+            "RESULT_RECEIVED",
+            "RESULT_VALIDATED",
+            "REVIEWS_PENDING",
+            "REVIEWS_ACCEPTED",
+            "TRANSITION_COMMITTED",
+            "NEXT_ASSIGNMENT_ENQUEUED"
+          ]
+        },
+        "disposition": {"enum": ["open", "accepted", "reworked"]},
+        "rework_id": {"type": ["string", "null"]},
+        "transition_token_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "maxItems": 1,
+          "items": {"type": "string", "pattern": "^token-[0-9a-f]{64}$"}
+        },
+        "target_occurrence_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^occ-[0-9a-f]{64}$"}
+        },
+        "outbox_event_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "updated_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"disposition": {"const": "open"}},
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "enum": ["RESULT_RECEIVED", "RESULT_VALIDATED", "REVIEWS_PENDING"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"disposition": {"const": "accepted"}},
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "REVIEWS_ACCEPTED",
+                  "TRANSITION_COMMITTED",
+                  "NEXT_ASSIGNMENT_ENQUEUED"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"disposition": {"const": "reworked"}},
+            "required": ["disposition"]
+          },
+          "then": {
+            "properties": {
+              "state": {"const": "REVIEWS_PENDING"},
+              "rework_id": {"type": "string", "minLength": 1}
+            }
+          },
+          "else": {
+            "properties": {"rework_id": {"type": "null"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "RESULT_RECEIVED",
+                  "RESULT_VALIDATED",
+                  "REVIEWS_PENDING",
+                  "REVIEWS_ACCEPTED"
+                ]
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "transition_token_ids": {"maxItems": 0},
+              "target_occurrence_ids": {"maxItems": 0},
+              "outbox_event_ids": {"maxItems": 0}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": ["TRANSITION_COMMITTED", "NEXT_ASSIGNMENT_ENQUEUED"]
+              }
+            },
+            "required": ["state"]
+          },
+          "then": {"properties": {"transition_token_ids": {"minItems": 1}}}
+        },
+        {
+          "if": {
+            "properties": {"state": {"const": "NEXT_ASSIGNMENT_ENQUEUED"}},
+            "required": ["state"]
+          },
+          "then": {
+            "properties": {
+              "target_occurrence_ids": {"minItems": 1},
+              "outbox_event_ids": {"minItems": 1}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "outboxRecord": {
+      "type": "object",
+      "required": [
+        "event_id",
+        "dedupe_key",
+        "event_type",
+        "payload",
+        "status",
+        "created_at",
+        "delivered_at",
+        "queue_receipt_id"
+      ],
+      "properties": {
+        "event_id": {"type": "string", "minLength": 1},
+        "dedupe_key": {"type": "string", "minLength": 1},
+        "event_type": {"enum": ["ASSIGNMENT_ENQUEUE", "REVIEW_ENQUEUE", "COORDINATOR_ENQUEUE"]},
+        "payload": {
+          "oneOf": [
+            {"$ref": "#/$defs/assignmentEnqueuePayload"},
+            {"$ref": "#/$defs/reviewEnqueuePayload"},
+            {"$ref": "#/$defs/coordinatorEnqueuePayload"}
+          ]
+        },
+        "status": {"enum": ["pending", "delivered"]},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "delivered_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]},
+        "queue_receipt_id": {"type": ["string", "null"], "minLength": 1}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"event_type": {"const": "ASSIGNMENT_ENQUEUE"}},
+            "required": ["event_type"]
+          },
+          "then": {
+            "properties": {
+              "dedupe_key": {"pattern": "^enqueue:assignment:msv1-[0-9a-f]{64}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+              "payload": {"$ref": "#/$defs/assignmentEnqueuePayload"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"event_type": {"const": "REVIEW_ENQUEUE"}},
+            "required": ["event_type"]
+          },
+          "then": {
+            "properties": {
+              "dedupe_key": {"pattern": "^enqueue:review:msv1-[0-9a-f]{64}:result-[0-9a-f]{64}:[12]$"},
+              "payload": {"$ref": "#/$defs/reviewEnqueuePayload"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"event_type": {"const": "COORDINATOR_ENQUEUE"}},
+            "required": ["event_type"]
+          },
+          "then": {
+            "properties": {
+              "dedupe_key": {"pattern": "^enqueue:coordinator:msv1-[0-9a-f]{64}:[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+              "payload": {"$ref": "#/$defs/coordinatorEnqueuePayload"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "delivered"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "delivered_at": {"$ref": "#/$defs/timestamp"},
+              "queue_receipt_id": {"type": "string"}
+            }
+          },
+          "else": {
+            "properties": {
+              "delivered_at": {"type": "null"},
+              "queue_receipt_id": {"type": "null"}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "assignmentEnqueuePayload": {
+      "type": "object",
+      "required": ["sprint_id", "graph_revision", "assignment_id", "node_id", "agent_phone"],
+      "properties": {
+        "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "agent_phone": {"type": "string", "pattern": "^[0-9]{4}$"}
+      },
+      "additionalProperties": false
+    },
+    "reviewEnqueuePayload": {
+      "type": "object",
+      "required": [
+        "sprint_id",
+        "source_assignment_id",
+        "review_assignment_id",
+        "result_key",
+        "reviewer_phone",
+        "reviewer_index"
+      ],
+      "properties": {
+        "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+        "source_assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "review_assignment_id": {"$ref": "#/$defs/pathSegmentId"},
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "reviewer_phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "reviewer_index": {"enum": [1, 2]}
+      },
+      "additionalProperties": false
+    },
+    "coordinatorEnqueuePayload": {
+      "type": "object",
+      "required": ["sprint_id", "context_id", "coordinator_phone", "reason_code"],
+      "properties": {
+        "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+        "context_id": {"$ref": "#/$defs/pathSegmentId"},
+        "coordinator_phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"}
+      },
+      "additionalProperties": false
+    },
+    "repairRecord": {
+      "type": "object",
+      "required": [
+        "repair_id",
+        "from_revision",
+        "to_revision",
+        "repair_source_commit",
+        "idempotency_key",
+        "request_fingerprint",
+        "patch",
+        "response",
+        "created_at"
+      ],
+      "properties": {
+        "repair_id": {"type": "string", "minLength": 1},
+        "from_revision": {"type": "integer", "minimum": 1},
+        "to_revision": {"type": "integer", "minimum": 2},
+        "repair_source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "patch": {"$ref": "repair-sprint-v1.schema.json#/$defs/repairPatch"},
+        "response": {"$ref": "repair-sprint-response-v1.schema.json"},
+        "created_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": true
+    },
+    "coordinatorContext": {
+      "type": "object",
+      "required": [
+        "context_id",
+        "graph_revision",
+        "failure_scope",
+        "reason_code",
+        "import_attempt_id",
+        "failed_assignment_id",
+        "join_target",
+        "assigned_branch",
+        "source_commit",
+        "result_commit",
+        "diff_summary",
+        "workspace_status",
+        "process_records",
+        "port_records",
+        "test_evidence_summary",
+        "normalized_error",
+        "reviewer_feedback"
+      ],
+      "properties": {
+        "context_id": {"$ref": "#/$defs/pathSegmentId"},
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "failure_scope": {
+          "enum": ["validate", "prepare", "activate", "assignment", "process", "review", "integration", "recovery"]
+        },
+        "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "import_attempt_id": {"type": ["string", "null"], "minLength": 1},
+        "failed_assignment_id": {"type": ["string", "null"], "minLength": 1},
+        "join_target": {
+          "oneOf": [{"$ref": "#/$defs/joinTarget"}, {"type": "null"}]
+        },
+        "assigned_branch": {"type": ["string", "null"]},
+        "source_commit": {"oneOf": [{"$ref": "#/$defs/gitObjectId"}, {"type": "null"}]},
+        "result_commit": {"oneOf": [{"$ref": "#/$defs/gitObjectId"}, {"type": "null"}]},
+        "diff_summary": {"type": "object"},
+        "workspace_status": {"type": "object"},
+        "process_records": {"type": "array", "items": {"type": "object"}},
+        "port_records": {"type": "array", "items": {"type": "object"}},
+        "test_evidence_summary": {"type": "object"},
+        "normalized_error": {"type": "object", "minProperties": 1},
+        "reviewer_feedback": {"type": "array", "items": {"type": "object"}}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "import_attempt_id": {"type": "string"},
+            "failed_assignment_id": {"type": "null"},
+            "join_target": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "import_attempt_id": {"type": "null"},
+            "failed_assignment_id": {"type": "string"},
+            "join_target": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "import_attempt_id": {"type": "null"},
+            "failed_assignment_id": {"type": "null"},
+            "join_target": {"$ref": "#/$defs/joinTarget"}
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "joinTarget": {
+      "type": "object",
+      "required": [
+        "target_graph_revision",
+        "target_node_id",
+        "trigger_token_ids",
+        "integration_id"
+      ],
+      "properties": {
+        "target_graph_revision": {"type": "integer", "minimum": 1},
+        "target_node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "trigger_token_ids": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^token-[0-9a-f]{64}$"}
+        },
+        "integration_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^integration-[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "blockerObservation": {
+      "type": "object",
+      "required": ["fingerprint", "assignment_id", "count", "first_seen_at", "last_seen_at"],
+      "properties": {
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "assignment_id": {"type": "string", "minLength": 1},
+        "count": {"type": "integer", "minimum": 1},
+        "first_seen_at": {"$ref": "#/$defs/timestamp"},
+        "last_seen_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": true
+    },
+    "recoveryRecord": {
+      "type": "object",
+      "required": [
+        "recovery_id",
+        "coordinator_id",
+        "context_id",
+        "graph_revision",
+        "idempotency_key",
+        "request_fingerprint",
+        "action",
+        "parameters",
+        "import_attempt_id",
+        "assignment_id",
+        "join_target",
+        "produced_record_ids",
+        "response",
+        "normalized_error",
+        "evidence",
+        "status",
+        "created_at",
+        "completed_at"
+      ],
+      "properties": {
+        "recovery_id": {"type": "string", "minLength": 1},
+        "coordinator_id": {"type": "string", "minLength": 1},
+        "context_id": {"$ref": "#/$defs/pathSegmentId"},
+        "graph_revision": {"type": "integer", "minimum": 1},
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "action": {
+          "enum": [
+            "RETRY_IMPORT",
+            "RETRY_HANDOFF",
+            "CONTINUE_NODE",
+            "APPLY_REPAIR",
+            "ROUTE_REWORK",
+            "BLOCK_EXTERNAL"
+          ]
+        },
+        "parameters": {"type": "object"},
+        "import_attempt_id": {"type": ["string", "null"], "minLength": 1},
+        "assignment_id": {"type": ["string", "null"], "minLength": 1},
+        "join_target": {
+          "oneOf": [{"$ref": "#/$defs/joinTarget"}, {"type": "null"}]
+        },
+        "produced_record_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        },
+        "response": {
+          "oneOf": [
+            {"$ref": "#/$defs/recoveryResponse"},
+            {"type": "null"}
+          ]
+        },
+        "normalized_error": {"type": ["object", "null"]},
+        "evidence": {"type": "object"},
+        "status": {"enum": ["pending", "completed", "failed"]},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "completed_at": {"oneOf": [{"$ref": "#/$defs/timestamp"}, {"type": "null"}]}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "import_attempt_id": {"type": "string"},
+            "assignment_id": {"type": "null"},
+            "join_target": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "import_attempt_id": {"type": "null"},
+            "assignment_id": {"type": "string"},
+            "join_target": {"type": "null"}
+          }
+        },
+        {
+          "properties": {
+            "import_attempt_id": {"type": "null"},
+            "assignment_id": {"type": "null"},
+            "join_target": {"$ref": "#/$defs/joinTarget"}
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {"action": {"const": "RETRY_IMPORT"}},
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "parameters": {"$ref": "#/$defs/retryImportParameters"},
+              "import_attempt_id": {"type": "string"},
+              "assignment_id": {"type": "null"},
+              "join_target": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"action": {"const": "RETRY_HANDOFF"}},
+            "required": ["action"]
+          },
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/retryHandoffParameters"}}}
+        },
+        {
+          "if": {
+            "properties": {"action": {"const": "CONTINUE_NODE"}},
+            "required": ["action"]
+          },
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/continueNodeParameters"}}}
+        },
+        {
+          "if": {
+            "properties": {"action": {"const": "APPLY_REPAIR"}},
+            "required": ["action"]
+          },
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/applyRepairParameters"}}}
+        },
+        {
+          "if": {
+            "properties": {"action": {"const": "ROUTE_REWORK"}},
+            "required": ["action"]
+          },
+          "then": {"properties": {"parameters": {"$ref": "#/$defs/routeReworkParameters"}}}
+        },
+        {
+          "if": {
+            "properties": {"action": {"const": "BLOCK_EXTERNAL"}},
+            "required": ["action"]
+          },
+          "then": {
+            "properties": {
+              "parameters": {"$ref": "#/$defs/blockExternalParameters"},
+              "join_target": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "pending"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "completed_at": {"type": "null"},
+              "response": {"type": "null"},
+              "normalized_error": {"type": "null"}
+            }
+          },
+          "else": {
+            "properties": {"completed_at": {"$ref": "#/$defs/timestamp"}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "completed"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "response": {"type": "object"},
+              "normalized_error": {"type": "null"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "failed"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "response": {"type": "null"},
+              "normalized_error": {"type": "object", "minProperties": 1}
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "retryImportParameters": {
+      "type": "object",
+      "required": ["failed_attempt_id", "recovery_idempotency_key"],
+      "properties": {
+        "failed_attempt_id": {"type": "string", "minLength": 1},
+        "recovery_idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200}
+      },
+      "additionalProperties": false
+    },
+    "recoveryResponse": {
+      "type": "object",
+      "required": ["recovery_id", "action", "status", "produced_record_ids"],
+      "properties": {
+        "recovery_id": {"type": "string", "minLength": 1},
+        "action": {
+          "enum": [
+            "RETRY_IMPORT",
+            "RETRY_HANDOFF",
+            "CONTINUE_NODE",
+            "APPLY_REPAIR",
+            "ROUTE_REWORK",
+            "BLOCK_EXTERNAL"
+          ]
+        },
+        "status": {"const": "RECOVERY_COMPLETED"},
+        "produced_record_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1}
+        }
+      },
+      "additionalProperties": true
+    },
+    "retryHandoffParameters": {
+      "type": "object",
+      "required": ["result_key"],
+      "properties": {
+        "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "continueNodeParameters": {
+      "type": "object",
+      "required": ["node_id", "source_commit"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/pathSegmentId"},
+        "source_commit": {"$ref": "#/$defs/gitObjectId"}
+      },
+      "additionalProperties": false
+    },
+    "applyRepairParameters": {
+      "type": "object",
+      "required": ["request"],
+      "properties": {
+        "request": {"$ref": "repair-sprint-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "routeReworkParameters": {
+      "type": "object",
+      "required": ["rejected_result_key", "feedback"],
+      "properties": {
+        "rejected_result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+        "feedback": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    },
+    "blockExternalParameters": {
+      "type": "object",
+      "required": ["reason_code", "operator_action"],
+      "properties": {
+        "reason_code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "operator_action": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-api-error-v1.schema.json",
+  "title": "Managed sprint direct API error v1",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {
+    "detail": {
+      "type": "object",
+      "required": ["error", "correlation_id"],
+      "properties": {
+        "error": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+        "correlation_id": {"type": "string", "minLength": 1},
+        "field": {"type": "string"},
+        "supported": {"type": "array", "items": {"type": "string"}},
+        "phase": {"enum": ["VALIDATE", "PREPARE", "ACTIVATE"]},
+        "issues": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}
