@@ -76,9 +76,11 @@ TRANSITION_JOURNAL_STATES: tuple[str, ...] = (
 _GIT_FORBIDDEN_CHARACTERS = frozenset(" ~^:?*[\\")
 _WINDOWS_FORBIDDEN_CHARACTERS = frozenset('<>:"/\\|?*')
 _WINDOWS_RESERVED_BASENAMES = frozenset(
-    {"con", "prn", "aux", "nul"}
+    {"con", "prn", "aux", "nul", "conin$", "conout$"}
     | {f"com{number}" for number in range(1, 10)}
     | {f"lpt{number}" for number in range(1, 10)}
+    | {f"com{number}" for number in "¹²³"}
+    | {f"lpt{number}" for number in "¹²³"}
 )
 _CREDENTIAL_ENV_NAME = re.compile(
     r"(?:^|_)(?:AUTH|COOKIE|CREDENTIALS?|PASSWORD|PASSWD|PRIVATE_KEY|"
@@ -94,14 +96,25 @@ _SECRET_LITERAL = re.compile(
     r")",
     re.IGNORECASE,
 )
+_CREDENTIAL_REFERENCE = re.compile(
+    r"(?:env|keyring|secret-manager|vault|windows-credential):"
+    r"[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}\Z"
+)
+
+
+def _reference_value_valid(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and _CREDENTIAL_REFERENCE.fullmatch(value) is not None
+        and _SECRET_LITERAL.search(value) is None
+    )
 
 
 def _is_secret_reference(value: Any) -> bool:
     return (
         isinstance(value, Mapping)
         and set(value) == {"secret_ref"}
-        and isinstance(value.get("secret_ref"), str)
-        and bool(value.get("secret_ref"))
+        and _reference_value_valid(value.get("secret_ref"))
     )
 
 
@@ -119,6 +132,12 @@ def _environment_contains_secret_literal(environment: Any) -> bool:
         if not isinstance(value, str) and not is_reference:
             return True
     return False
+
+
+def _credential_reference_valid(value: Any) -> bool:
+    """Accept only provider-qualified registry references, never token literals."""
+
+    return value is None or _reference_value_valid(value)
 
 
 def _repository_assertion_key(value: Any) -> str | None:
@@ -693,7 +712,14 @@ def relative_git_path_valid(value: str) -> bool:
 def windows_path_segment_valid(value: str) -> bool:
     """Reject Windows aliases/devices for any value used as a path segment."""
 
-    if not isinstance(value, str) or not value or value.endswith((".", " ")):
+    if (
+        not isinstance(value, str)
+        or not value
+        or value.startswith(" ")
+        or value.endswith((".", " "))
+        or " ." in value
+        or "~" in value
+    ):
         return False
     try:
         value.encode("utf-8", errors="strict")
@@ -706,7 +732,8 @@ def windows_path_segment_valid(value: str) -> bool:
         for character in value
     ):
         return False
-    return value.split(".", 1)[0].casefold() not in _WINDOWS_RESERVED_BASENAMES
+    basename = value.split(".", 1)[0].rstrip(" ").casefold()
+    return basename not in _WINDOWS_RESERVED_BASENAMES
 
 
 def windows_absolute_path_key(value: str) -> str | None:
@@ -722,9 +749,15 @@ def windows_absolute_path_key(value: str) -> str | None:
     if not ntpath.isabs(normalized):
         return None
     drive, tail = ntpath.splitdrive(normalized)
-    if not drive or not tail.startswith(("\\", "/")):
+    if not re.fullmatch(r"[A-Za-z]:", drive) or not tail.startswith(("\\", "/")):
         return None
-    return ntpath.normcase(normalized).rstrip("\\/") or ntpath.normcase(normalized)
+    components = tail.replace("/", "\\").strip("\\").split("\\")
+    if components != [""] and not all(
+        windows_path_segment_valid(component) for component in components
+    ):
+        return None
+    key = ntpath.normcase(normalized)
+    return key if tail in {"\\", "/"} else key.rstrip("\\/")
 
 
 def windows_path_is_within(child: str, parent: str) -> bool:
@@ -1318,6 +1351,10 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             add("REPOSITORY_PROVENANCE_INVALID")
     else:
         add("SPRINT_IDENTITY_MISMATCH")
+    if isinstance(repository, Mapping) and not _credential_reference_valid(
+        repository.get("credential_reference")
+    ):
+        add("REPOSITORY_CREDENTIAL_REFERENCE_INVALID")
 
     assignment_by_id = records_by(
         "assignments", "assignment_id", "ASSIGNMENT_ID_DUPLICATE"
@@ -1486,6 +1523,42 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 ):
                     result.append(candidate["id"])
         return result
+
+    def definition_outcome_target(
+        definition: Any,
+        source_node_id: Any,
+        outcome: Any,
+    ) -> Any:
+        """Resolve an outcome using its pinned definition and reserved routes."""
+
+        if not isinstance(definition, Mapping):
+            return None
+        if not isinstance(outcome, str):
+            return None
+        if outcome in {"STOP", "NEED_DECISION"}:
+            coordinator = definition.get("coordinator")
+            routes = (
+                coordinator.get("routes")
+                if isinstance(coordinator, Mapping)
+                else None
+            )
+            return routes.get(outcome) if isinstance(routes, Mapping) else None
+        raw_nodes = definition.get("nodes")
+        nodes = raw_nodes if isinstance(raw_nodes, list) else []
+        source_node = next(
+            (
+                node
+                for node in nodes
+                if isinstance(node, Mapping) and node.get("id") == source_node_id
+            ),
+            None,
+        )
+        transitions = (
+            source_node.get("transitions")
+            if isinstance(source_node, Mapping)
+            else None
+        )
+        return transitions.get(outcome) if isinstance(transitions, Mapping) else None
 
     first_revision = revision_by_number.get(1)
     if isinstance(first_revision, Mapping) and (
@@ -1667,6 +1740,50 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         if isinstance(current_revision_record, Mapping)
         else None
     )
+    current_nodes = (
+        nodes_by_revision.get(graph_revision, {}) if valid_graph_revision else {}
+    )
+    for assignment in assignment_by_id.values():
+        assignment_status = assignment.get("status")
+        assignment_revision = assignment.get("graph_revision")
+        if assignment_status not in {"prepared", "active", "reviews_pending"}:
+            continue
+        source_node_id = assignment.get("node_id")
+        source_definition = (
+            revision_by_number.get(assignment_revision, {}).get("definition")
+            if isinstance(assignment_revision, int)
+            and not isinstance(assignment_revision, bool)
+            else None
+        )
+        possible_outcomes = (
+            [assignment.get("outcome")]
+            if assignment_status == "reviews_pending"
+            else assignment.get("allowed_outcomes")
+        )
+        if not isinstance(possible_outcomes, list):
+            possible_outcomes = []
+        for outcome in possible_outcomes:
+            target_node_id = definition_outcome_target(
+                source_definition,
+                source_node_id,
+                outcome,
+            )
+            target_node = (
+                current_nodes.get(target_node_id)
+                if isinstance(target_node_id, str)
+                else None
+            )
+            if not isinstance(target_node, Mapping):
+                add("REPAIR_LIVE_ASSIGNMENT_TARGET_INVALID")
+            elif (
+                target_node.get("type", "task") == "task"
+                and source_node_id
+                not in definition_inbound_parent_ids(
+                    current_definition,
+                    target_node_id,
+                )
+            ):
+                add("REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE")
     current_execution = (
         current_definition.get("execution")
         if isinstance(current_definition, Mapping)
@@ -2067,23 +2184,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         )
         source_definition = revision_by_number.get(source_revision, {}).get("definition")
         outcome = receipt.get("outcome") if isinstance(receipt, Mapping) else None
-        if outcome in {"STOP", "NEED_DECISION"} and isinstance(
-            source_definition, Mapping
-        ):
-            coordinator = source_definition.get("coordinator")
-            source_transition_target = (
-                coordinator.get("routes", {}).get(outcome)
-                if isinstance(coordinator, Mapping)
-                and isinstance(coordinator.get("routes"), Mapping)
-                else None
-            )
-        else:
-            source_transition_target = (
-                source_node.get("transitions", {}).get(outcome)
-                if isinstance(source_node, Mapping)
-                and isinstance(source_node.get("transitions"), Mapping)
-                else None
-            )
+        source_transition_target = definition_outcome_target(
+            source_definition,
+            source_occurrence.get("node_id")
+            if isinstance(source_occurrence, Mapping)
+            else None,
+            outcome,
+        )
         target_revision = token.get("target_graph_revision")
         target_node = (
             nodes_by_revision.get(target_revision, {}).get(target_node_id)
@@ -2464,6 +2571,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             or not isinstance(agent, Mapping)
             or assignment.get("agent_id") != agent.get("id")
             or assignment.get("agent_phone") != agent.get("phone")
+            or not isinstance(occurrence, Mapping)
+            or occurrence.get("graph_revision") != assignment_revision
         ):
             add("ASSIGNMENT_GRAPH_BINDING_INVALID")
         workspace_id = assignment.get("workspace_id")

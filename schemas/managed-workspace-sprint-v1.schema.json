@@ -403,9 +403,8 @@
       "properties": {
         "secret_ref": {
           "type": "string",
-          "minLength": 1,
-          "maxLength": 256,
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$"
+          "maxLength": 274,
+          "pattern": "^(?:env|keyring|secret-manager|vault|windows-credential):[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$"
         }
       },
       "additionalProperties": false

@@ -228,7 +228,16 @@
         "canonical_remote": {"type": "string", "minLength": 1},
         "mirror_storage_key": {"type": "string", "pattern": "^mirror-[0-9a-f]{64}$"},
         "mirror_path": {"type": "string", "minLength": 1},
-        "credential_reference": {"type": ["string", "null"]}
+        "credential_reference": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 274,
+              "pattern": "^(?:env|keyring|secret-manager|vault|windows-credential):[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$"
+            },
+            {"type": "null"}
+          ]
+        }
       },
       "additionalProperties": true
     },

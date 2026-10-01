@@ -46,6 +46,8 @@ from nginx_qa.sprint_types import (
     repair_request_fingerprint,
     resolve_sprint_type,
     review_request_fingerprint,
+    windows_absolute_path_key,
+    windows_path_is_within,
     windows_path_segment_valid,
 )
 
@@ -607,6 +609,101 @@ def pending_coordinator_runtime_fixture() -> dict:
         }
     )
     return state
+
+
+def apply_moved_coordinator_repair(state: dict) -> None:
+    """Move reserved routes while retaining the old Coordinator as a future node."""
+
+    previous_definition = state["graph_revisions"][0]["definition"]
+    retired_coordinator = copy.deepcopy(previous_definition["nodes"][1])
+    retired_coordinator.update(
+        {
+            "agent": {
+                "id": "retired-coordinator",
+                "name": "Retired Coordinator",
+                "phone": "2864",
+            },
+            "tasks": [
+                {
+                    "task_id": "COORD-OLD",
+                    "queue": "consultant-all",
+                    "message": "Recover old",
+                }
+            ],
+        }
+    )
+    new_coordinator = {
+        "id": "continuity2",
+        "agent": {
+            "id": "coordinator",
+            "name": "Coordinator",
+            "phone": "2860",
+        },
+        "tasks": [
+            {
+                "task_id": "COORD-2",
+                "queue": "consultant-all",
+                "message": "Recover new",
+            }
+        ],
+        "workspace": {"access": "read"},
+        "activation_policy": "any_parent",
+        "transitions": {
+            "RESUME": "continuity",
+            "BLOCKED_EXTERNAL": "completed",
+        },
+    }
+    coordinator_routing = {
+        "node_id": "continuity2",
+        "routes": {
+            "STOP": "continuity2",
+            "NEED_DECISION": "continuity2",
+        },
+    }
+    patch = {
+        "future_nodes": [retired_coordinator, new_coordinator],
+        "coordinator_routing": coordinator_routing,
+    }
+    repaired_definition = copy.deepcopy(previous_definition)
+    repaired_definition["nodes"][1] = retired_coordinator
+    repaired_definition["nodes"].append(new_coordinator)
+    repaired_definition["coordinator"] = coordinator_routing
+    repair_id = "repair-coordinator"
+    repair_commit = "f" * 40
+    state["repairs"] = [
+        {
+            "repair_id": repair_id,
+            "from_revision": 1,
+            "to_revision": 2,
+            "repair_source_commit": repair_commit,
+            "idempotency_key": "repair-coordinator-key",
+            "request_fingerprint": repair_request_fingerprint(
+                SPRINT_ID, 1, repair_commit, patch
+            ),
+            "patch": patch,
+            "response": {
+                "sprint_id": SPRINT_ID,
+                "from_revision": 1,
+                "graph_revision": 2,
+                "repair_source_commit": repair_commit,
+                "deduplicated": False,
+            },
+            "created_at": TIMESTAMP,
+        }
+    ]
+    state["graph_revisions"].append(
+        {
+            "revision": 2,
+            "definition_sha256": canonical_json_sha256(repaired_definition),
+            "definition": repaired_definition,
+            "artifact_source_commit": repair_commit,
+            "created_at": TIMESTAMP,
+            "source": "repair",
+            "repair_id": repair_id,
+        }
+    )
+    state["graph_revision"] = 2
+    state["workflow"]["graph_revision"] = 2
 
 
 def repaired_runtime_fixture(
@@ -1551,7 +1648,21 @@ class PureIdentityAndStateMachineContractTests(unittest.TestCase):
             "dir/trailing.",
         ):
             self.assertFalse(relative_git_path_valid(value), value)
-        for value in ("CON", "con.txt", "Lpt9.log", "bad ", "bad."):
+        for value in (
+            "CON",
+            "con.txt",
+            "Lpt9.log",
+            "COM¹.txt",
+            "lpt³.tar.gz",
+            "NUL .txt",
+            "CONIN$",
+            "CONOUT$.txt",
+            "PROGRA~1",
+            "normal .txt",
+            " leading",
+            "bad ",
+            "bad.",
+        ):
             self.assertFalse(windows_path_segment_valid(value), value)
         self.assertTrue(relative_git_path_valid("orchestration/sprint.json"))
 
@@ -1709,6 +1820,51 @@ class SprintSchemaContractTests(unittest.TestCase):
         self.assertNotIn(
             "PROCESS_ENVIRONMENT_SECRET_LITERAL",
             managed_graph_semantic_issues(secret_reference),
+        )
+        raw_secret_reference = managed_manifest_fixture()
+        raw_secret_reference["nodes"][0]["workspace"]["process"][
+            "environment"
+        ] = {
+            "DATABASE_PASSWORD": {
+                "secret_ref": "ghp_1234567890ABCDEFGHIJK"
+            }
+        }
+        self.assert_invalid(
+            "managed-workspace-sprint-v1.schema.json", raw_secret_reference
+        )
+        disguised_secret_reference = managed_manifest_fixture()
+        disguised_secret_reference["nodes"][0]["workspace"]["process"][
+            "environment"
+        ] = {
+            "DATABASE_PASSWORD": {
+                "secret_ref": "vault:ghp_1234567890ABCDEFGHIJK"
+            }
+        }
+        self.validator("managed-workspace-sprint-v1.schema.json").validate(
+            disguised_secret_reference
+        )
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_SECRET_LITERAL",
+            managed_graph_semantic_issues(disguised_secret_reference),
+        )
+        durable_disguised_reference = active_runtime_fixture()
+        durable_definition = durable_disguised_reference["graph_revisions"][0][
+            "definition"
+        ]
+        durable_definition["nodes"][0]["workspace"]["process"][
+            "environment"
+        ] = disguised_secret_reference["nodes"][0]["workspace"]["process"][
+            "environment"
+        ]
+        durable_disguised_reference["graph_revisions"][0][
+            "definition_sha256"
+        ] = canonical_json_sha256(durable_definition)
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            durable_disguised_reference
+        )
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_SECRET_LITERAL",
+            managed_activation_invariant_issues(durable_disguised_reference),
         )
         secret_in_command = managed_manifest_fixture()
         secret_in_command["nodes"][0]["workspace"]["process"]["command"] = [
@@ -2257,100 +2413,58 @@ class SprintSchemaContractTests(unittest.TestCase):
         task_to_terminal["status"] = "completed"
         self.assertEqual(managed_activation_invariant_issues(task_to_terminal), ())
 
-    def test_available_token_must_remain_eligible_in_current_graph(self) -> None:
-        state = pending_coordinator_runtime_fixture()
-        previous_definition = state["graph_revisions"][0]["definition"]
-        retired_coordinator = copy.deepcopy(previous_definition["nodes"][1])
-        retired_coordinator.update(
-            {
-                "agent": {
-                    "id": "retired-coordinator",
-                    "name": "Retired Coordinator",
-                    "phone": "2864",
-                },
-                "tasks": [
-                    {
-                        "task_id": "COORD-OLD",
-                        "queue": "consultant-all",
-                        "message": "Recover old",
-                    }
-                ],
-            }
+    def test_repair_preserves_live_assignment_and_available_token_routes(self) -> None:
+        live_assignment = active_runtime_fixture()
+        apply_moved_coordinator_repair(live_assignment)
+        for revision in live_assignment["graph_revisions"]:
+            self.assertEqual(
+                managed_graph_semantic_issues(revision["definition"]), ()
+            )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            live_assignment
         )
-        new_coordinator = {
-            "id": "continuity2",
-            "agent": {
-                "id": "coordinator",
-                "name": "Coordinator",
-                "phone": "2860",
-            },
-            "tasks": [
-                {
-                    "task_id": "COORD-2",
-                    "queue": "consultant-all",
-                    "message": "Recover new",
-                }
-            ],
-            "workspace": {"access": "read"},
-            "activation_policy": "any_parent",
-            "transitions": {
-                "RESUME": "continuity",
-                "BLOCKED_EXTERNAL": "completed",
-            },
-        }
-        coordinator_routing = {
-            "node_id": "continuity2",
-            "routes": {
-                "STOP": "continuity2",
-                "NEED_DECISION": "continuity2",
-            },
-        }
-        patch = {
-            "future_nodes": [retired_coordinator, new_coordinator],
-            "coordinator_routing": coordinator_routing,
-        }
-        repaired_definition = copy.deepcopy(previous_definition)
-        repaired_definition["nodes"][1] = retired_coordinator
-        repaired_definition["nodes"].append(new_coordinator)
-        repaired_definition["coordinator"] = coordinator_routing
-        self.assertEqual(managed_graph_semantic_issues(repaired_definition), ())
+        self.assertIn(
+            "REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE",
+            managed_activation_invariant_issues(live_assignment),
+        )
 
-        repair_id = "repair-coordinator"
-        repair_commit = "f" * 40
-        state["repairs"] = [
-            {
-                "repair_id": repair_id,
-                "from_revision": 1,
-                "to_revision": 2,
-                "repair_source_commit": repair_commit,
-                "idempotency_key": "repair-coordinator-key",
-                "request_fingerprint": repair_request_fingerprint(
-                    SPRINT_ID, 1, repair_commit, patch
-                ),
-                "patch": patch,
-                "response": {
-                    "sprint_id": SPRINT_ID,
-                    "from_revision": 1,
-                    "graph_revision": 2,
-                    "repair_source_commit": repair_commit,
-                    "deduplicated": False,
-                },
-                "created_at": TIMESTAMP,
-            }
-        ]
-        state["graph_revisions"].append(
-            {
-                "revision": 2,
-                "definition_sha256": canonical_json_sha256(repaired_definition),
-                "definition": repaired_definition,
-                "artifact_source_commit": repair_commit,
-                "created_at": TIMESTAMP,
-                "source": "repair",
-                "repair_id": repair_id,
-            }
+        prepared_assignment = active_runtime_fixture()
+        prepared_assignment["assignments"][0]["status"] = "prepared"
+        prepared_assignment["workflow"]["occurrences"][0]["state"] = "prepared"
+        prepared_assignment["active_assignment_ids"] = []
+        prepared_assignment["allowed_outcomes_by_assignment"] = {}
+        apply_moved_coordinator_repair(prepared_assignment)
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            prepared_assignment
         )
-        state["graph_revision"] = 2
-        state["workflow"]["graph_revision"] = 2
+        self.assertIn(
+            "REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE",
+            managed_activation_invariant_issues(prepared_assignment),
+        )
+
+        reviewing_done = active_runtime_fixture()
+        reviewing_done["assignments"][0].update(
+            {"status": "reviews_pending", "outcome": "DONE", "result_commit": COMMIT}
+        )
+        reviewing_done["workflow"]["occurrences"][0]["state"] = "reviews_pending"
+        apply_moved_coordinator_repair(reviewing_done)
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            reviewing_done
+        )
+        self.assertNotIn(
+            "REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE",
+            managed_activation_invariant_issues(reviewing_done),
+        )
+
+        reviewing_stop = copy.deepcopy(reviewing_done)
+        reviewing_stop["assignments"][0]["outcome"] = "STOP"
+        self.assertIn(
+            "REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE",
+            managed_activation_invariant_issues(reviewing_stop),
+        )
+
+        state = pending_coordinator_runtime_fixture()
+        apply_moved_coordinator_repair(state)
         self.validator("managed-runtime-state-v1.schema.json").validate(state)
         self.assertIn(
             "TRANSITION_TOKEN_TARGET_INELIGIBLE",
@@ -2626,6 +2740,38 @@ class SprintSchemaContractTests(unittest.TestCase):
             ).validate(invalid_never_restart)
 
     def test_repository_provenance_is_reciprocal(self) -> None:
+        referenced_credential = active_runtime_fixture()
+        referenced_credential["repository"]["credential_reference"] = (
+            "env:GITHUB_TOKEN"
+        )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            referenced_credential
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(referenced_credential), ()
+        )
+
+        raw_credential = active_runtime_fixture()
+        raw_credential["repository"]["credential_reference"] = (
+            "ghp_1234567890ABCDEFGHIJK"
+        )
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v1.schema.json").validate(
+                raw_credential
+            )
+
+        disguised_credential = active_runtime_fixture()
+        disguised_credential["repository"]["credential_reference"] = (
+            "vault:ghp_1234567890ABCDEFGHIJK"
+        )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            disguised_credential
+        )
+        self.assertIn(
+            "REPOSITORY_CREDENTIAL_REFERENCE_INVALID",
+            managed_activation_invariant_issues(disguised_credential),
+        )
+
         wrong_remote = active_runtime_fixture()
         wrong_remote["workspaces"][0]["repository_remote"] = (
             "https://evil.invalid/repo.git"
@@ -3717,6 +3863,47 @@ class SprintSchemaContractTests(unittest.TestCase):
         config = runtime_config_fixture()
         self.validator("managed-runtime-config-v1.schema.json").validate(config)
         self.assertEqual(managed_runtime_config_invariant_issues(config), ())
+        self.assertIsNotNone(windows_absolute_path_key(r"D:\nginx-qa"))
+        self.assertEqual(windows_absolute_path_key("D:/"), "d:\\")
+        self.assertTrue(windows_path_is_within(r"D:\safe", "D:/"))
+        for aliased_path in (
+            r"\\?\D:\nginx-qa",
+            r"\\.\D:\nginx-qa",
+            r"\\server\share\nginx-qa",
+            r"D:\nginx-qa\CON",
+            "D:\\safe\\COM¹.txt",
+            "D:\\safe\\NUL .txt",
+            r"C:\PROGRA~1\Common Files",
+            "D:\\ nginx-qa",
+            "D:\\nginx-qa ",
+        ):
+            self.assertIsNone(windows_absolute_path_key(aliased_path))
+
+        aliased_root = runtime_config_fixture()
+        aliased_root["managed_root"] = r"\\?\D:\nginx-qa"
+        self.assertIn(
+            "RUNTIME_CONFIG_PATH_INVALID",
+            managed_runtime_config_invariant_issues(aliased_root),
+        )
+        short_name_root = runtime_config_fixture()
+        short_name_root["service_root"] = r"C:\PROGRA~1\Common Files"
+        short_name_root["protected_roots"] = [r"C:\Program Files"]
+        self.assertIn(
+            "RUNTIME_CONFIG_PATH_INVALID",
+            managed_runtime_config_invariant_issues(short_name_root),
+        )
+        drive_root_protected = runtime_config_fixture()
+        drive_root_protected["protected_roots"] = ["D:/"]
+        self.assertIn(
+            "RUNTIME_CONFIG_PROTECTED_ROOT_CONFLICT",
+            managed_runtime_config_invariant_issues(drive_root_protected),
+        )
+        drive_root_service = runtime_config_fixture()
+        drive_root_service["service_root"] = "D:/"
+        self.assertIn(
+            "RUNTIME_CONFIG_PATH_CONFLICT",
+            managed_runtime_config_invariant_issues(drive_root_service),
+        )
         env_names = {
             definition["x-env"]
             for definition in schema["properties"].values()

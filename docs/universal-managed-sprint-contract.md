@@ -161,6 +161,18 @@ eligibility includes the implicit reserved-outcome edges to the current
 Coordinator node. Durable validation applies the same rule to every currently
 available token and the current graph, preventing a moved Coordinator route
 from stranding accepted `STOP` or `NEED_DECISION` work.
+Before repair commits, the candidate is also checked against every unsettled
+assignment. A `prepared` or `active` assignment must retain a reachable target
+for every frozen allowed outcome; a `reviews_pending` assignment need retain
+only its already immutable recorded outcome. Each outcome is resolved from the
+assignment's creation-revision node, with creation-revision Coordinator routes
+taking precedence for `STOP` and `NEED_DECISION`. The target must exist in the
+candidate; if it remains a task, the source node must still be an eligible
+explicit or implicit predecessor. A terminal target is allowed because the
+result transaction can settle it atomically. The durable checker applies this
+rule to live assignments and the current graph. It intentionally does not
+infer that an old-revision rework assignment existed during every intervening
+repair: rework retains its occurrence revision but may be created later.
 
 `repository_id` is a logical project-registry alias. Its canonical remote is
 resolved from that registry using the remote-address subset of the existing
@@ -185,9 +197,14 @@ not a raw path. Safety comparisons use resolved, normalized absolute paths (and
 case-folded comparison on Windows), reject symlink/junction escape, and compare
 whole paths rather than string prefixes.
 V1 rejects control/Windows-forbidden characters, colon/ADS or drive spellings,
-trailing dot/space aliases, and reserved device basenames (`CON`, `NUL`,
-`COM1`…`COM9`, `LPT1`…`LPT9`) in every materialized path segment. IDs, paths,
-and branch/ref components must also be unique under Windows case-folding;
+leading/trailing space aliases, spaces immediately before extension dots,
+trailing-dot and DOS 8.3 (`~`) aliases, and reserved device basenames (`CON`,
+`NUL`, `CONIN$`, `CONOUT$`, `COM1`…`COM9`, `LPT1`…`LPT9`, including the
+Windows-reserved superscript spellings such as `COM¹` and `LPT³`) in every
+materialized path segment. Configured
+absolute paths use only canonical DOS drive-root syntax; UNC, `\\?\` extended,
+and `\\.\` device namespaces are rejected before containment comparison. IDs,
+paths, and branch/ref components must also be unique under Windows case-folding;
 `Build` and `build` cannot coexist. The reference predicate is
 `windows_path_segment_valid`.
 
@@ -366,8 +383,11 @@ object `{"secret_ref": "provider:path"}`. A credential-shaped variable name
 (`*_PASSWORD`, `*_TOKEN`, `*_SECRET`, `*_API_KEY`, private-key/auth/cookie
 variants) requires a secret reference; a literal with a recognizable bearer,
 private-key, provider-token, or JWT shape is rejected even under an innocuous
-name. The same literal scan applies to command arguments. Resolution happens
-only in process memory immediately before launch. Durable manifest/process
+name. Secret references use the same qualified provider grammar as repository
+credential references, and their path is scanned too; prefixing a raw token
+with `vault:` does not convert it into a reference. The same literal scan
+applies to command arguments. Resolution happens only in process memory
+immediately before launch. Durable manifest/process
 snapshots retain the reference, never its value, and the closed process record
 does not admit a parallel `environment_raw` or equivalent escape hatch.
 
@@ -416,6 +436,10 @@ registry by `repository_id`; neither credentials nor their references are read
 from the sprint manifest. Managed production repositories must use a configured
 remote transport and may not use the current checkout or a `local:` project
 path. Unit tests may inject an isolated local Git provider explicitly.
+The durable reference is null or a provider-qualified identifier using one of
+`env:`, `keyring:`, `secret-manager:`, `vault:`, or `windows-credential:`;
+recognizable bearer, private-key, provider-token, or JWT literals are rejected
+even when prefixed to resemble a reference.
 If optional manifest `git_address` is present, it is only a provenance
 assertion: normalization must equal the registry's canonical remote or
 preflight returns `REPOSITORY_IDENTITY_MISMATCH`. It is never used as a fetch
@@ -493,12 +517,15 @@ keys plus engine-reserved `STOP` and `NEED_DECISION`. Both coordinator routes
 must target `coordinator.node_id` and take precedence over node transitions;
 preflight rejects any collision that maps a reserved outcome elsewhere.
 
-An assignment permanently records the graph revision that created it; a hot
-repair never rebinds an active/reviews-pending assignment. Its result is
-validated against that creation revision's outcomes and transition target.
-Future assignments use the then-current revision. An available token retains
-its source revision and immutable target node ID across repair; repair preflight
-rejects removal of any such target. When the token is consumed, its
+An assignment permanently records the graph revision that created its
+occurrence; a hot repair never rebinds a prepared, active, or reviews-pending
+assignment. Its result is validated against that revision's outcomes and
+transition target. A rework remains in the same occurrence and therefore keeps
+that revision; assignments for newly activated occurrences use the then-current
+revision. Before repair, every still-possible frozen outcome is validated
+prospectively against the candidate as described above. An available token
+retains its source revision and immutable target node ID across repair; repair
+preflight rejects removal of any such target. When the token is consumed, its
 `target_graph_revision` and the new occurrence are bound to the new current
 snapshot, so a repair can change future-node content without changing accepted
 history. Token lifecycle is resolved against the current target while it is
@@ -842,7 +869,12 @@ profile text; `reviewer_metadata`, `coordinator_routing`, and
 Overlapping fields with conflicting values are `REPAIR_PATCH_CONFLICT`, not a
 precedence rule. The service materializes a full candidate manifest, runs the
 entire managed schema/graph/checksum/immutability preflight, then stores that
-snapshot and its canonical digest as the next revision.
+snapshot and its canonical digest as the next revision. That preflight also
+evaluates the candidate against every outcome still possible for a live pinned
+assignment; a missing target is
+`REPAIR_LIVE_ASSIGNMENT_TARGET_INVALID`, and a retained task target that no
+longer admits the pinned source is
+`REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE`.
 `repair_source_commit` is a required full object ID in the canonical mirror;
 all replacement checksum metadata is verified from that exact commit, which is
 stored as the revision's `artifact_source_commit`. It cannot alter provenance
@@ -950,6 +982,7 @@ available tokens.
 | activation/journal commit failed | 500 | `SPRINT_ACTIVATE_FAILED` |
 | repair revision is stale | 409 | `GRAPH_REVISION_CONFLICT` |
 | repair targets immutable history | 409 | `REPAIR_IMMUTABLE_HISTORY` |
+| repair strands a live assignment outcome | 409 | `REPAIR_LIVE_ASSIGNMENT_TARGET_INVALID` / `REPAIR_LIVE_ASSIGNMENT_TARGET_INELIGIBLE` |
 | repair patch contains overlapping conflicting values | 409 | `REPAIR_PATCH_CONFLICT` |
 | result differs from accepted result request | 409 | `RESULT_CONFLICT` |
 | result commit missing or not the verified branch/workspace HEAD | 409 | `RESULT_COMMIT_NOT_FOUND` / `RESULT_HEAD_MISMATCH` |
