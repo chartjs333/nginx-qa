@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-review-decision-response-v1.schema.json",
+  "title": "Managed transition review response v1",
+  "type": "object",
+  "required": [
+    "assignment_id",
+    "source_assignment_id",
+    "result_key",
+    "decision",
+    "status",
+    "deduplicated"
+  ],
+  "properties": {
+    "assignment_id": {"type": "string", "minLength": 1},
+    "source_assignment_id": {"type": "string", "minLength": 1},
+    "result_key": {"type": "string", "pattern": "^result-[0-9a-f]{64}$"},
+    "decision": {"enum": ["APPROVE", "REJECT"]},
+    "status": {
+      "enum": ["REVIEW_ACCEPTED", "REWORK_ENQUEUED", "ALREADY_ACCEPTED"]
+    },
+    "deduplicated": {"type": "boolean"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "ALREADY_ACCEPTED"}},
+        "required": ["status"]
+      },
+      "then": {"properties": {"deduplicated": {"const": true}}},
+      "else": {"properties": {"deduplicated": {"const": false}}}
+    },
+    {
+      "if": {
+        "properties": {"deduplicated": {"const": false}},
+        "required": ["deduplicated"]
+      },
+      "then": {
+        "if": {
+          "properties": {"decision": {"const": "APPROVE"}},
+          "required": ["decision"]
+        },
+        "then": {"properties": {"status": {"const": "REVIEW_ACCEPTED"}}},
+        "else": {"properties": {"status": {"const": "REWORK_ENQUEUED"}}}
+      }
+    }
+  ],
+  "additionalProperties": false
+}

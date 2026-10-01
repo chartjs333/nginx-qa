@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/sprint-dispatch-v1.schema.json",
+  "title": "nginx-qa sprint dispatch envelope v1",
+  "description": "The only validation shared by legacy and managed imports. Legacy payload validation remains on the existing code path.",
+  "type": "object",
+  "properties": {
+    "sprint_type": {
+      "type": "string",
+      "enum": [
+        "legacy_v1",
+        "managed_workspace_v1"
+      ]
+    }
+  },
+  "additionalProperties": true
+}

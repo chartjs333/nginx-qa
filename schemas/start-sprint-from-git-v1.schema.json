@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/start-sprint-from-git-v1.schema.json",
+  "title": "Start managed sprint from Git request v1",
+  "type": "object",
+  "required": [
+    "repository_id",
+    "ref",
+    "manifest_path",
+    "idempotency_key"
+  ],
+  "properties": {
+    "repository_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,94}[A-Za-z0-9_-])?$"
+    },
+    "ref": {
+      "type": "string",
+      "pattern": "^refs/(heads|tags)/[^\\\\\\u0000-\\u001F\\u007F]+$",
+      "maxLength": 512
+    },
+    "manifest_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024,
+      "pattern": "^(?!/)(?!.*//)(?!.*\\/$)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^<>:\"\\\\|?*\\u0000-\\u001F\\u007F]+$",
+      "x-nginx-qa-path-policy": "relative POSIX path; no empty, dot, or dot-dot segment; no NUL"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    }
+  },
+  "additionalProperties": false
+}

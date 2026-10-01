@@ -1,0 +1,423 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-workspace-sprint-v1.schema.json",
+  "title": "nginx-qa managed workspace sprint v1",
+  "description": "Applied only after sprint_type dispatch selects managed_workspace_v1.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "sprint_type",
+    "git",
+    "execution",
+    "nodes",
+    "coordinator",
+    "files"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "sprint_type": {"const": "managed_workspace_v1"},
+    "git_address": {"type": "string", "minLength": 1},
+    "git": {"$ref": "#/$defs/repositoryPolicy"},
+    "execution": {"$ref": "#/$defs/execution"},
+    "nodes": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "oneOf": [
+          {"$ref": "#/$defs/taskNode"},
+          {"$ref": "#/$defs/terminalNode"}
+        ]
+      }
+    },
+    "coordinator": {"$ref": "#/$defs/coordinator"},
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/checksumFile"}
+    },
+    "workspace_policy": {"$ref": "#/$defs/workspacePolicy"},
+    "process_policy": {"$ref": "#/$defs/processPolicy"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "nodeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,94}[A-Za-z0-9_-])?$"
+    },
+    "outcome": {
+      "type": "string",
+      "pattern": "^[A-Z][A-Z0-9_-]{0,31}$"
+    },
+    "repositoryPolicy": {
+      "type": "object",
+      "required": [
+        "source_ref",
+        "expected_source_commit",
+        "assigned_branch",
+        "existing_branch_policy"
+      ],
+      "properties": {
+        "source_ref": {
+          "type": "string",
+          "pattern": "^refs/(heads|tags)/[^\\\\\\u0000-\\u001F\\u007F]+$"
+        },
+        "expected_source_commit": {
+          "type": ["string", "null"],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "assigned_branch": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "existing_branch_policy": {
+          "enum": [
+            "create",
+            "resume",
+            "reject_if_exists",
+            "require_exact_head"
+          ]
+        },
+        "expected_branch_head": {
+          "type": ["string", "null"],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"existing_branch_policy": {"const": "require_exact_head"}}
+          },
+          "then": {
+            "required": ["expected_branch_head"],
+            "properties": {"expected_branch_head": {"type": "string"}}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "mode",
+        "required_approvals",
+        "reviewers",
+        "max_rework_cycles"
+      ],
+      "properties": {
+        "mode": {"enum": ["sequential", "parallel"]},
+        "start_node": {"$ref": "#/$defs/nodeId"},
+        "start_nodes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nodeId"}
+        },
+        "required_approvals": {"const": 2},
+        "reviewers": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "items": {"$ref": "#/$defs/reviewer"}
+        },
+        "max_rework_cycles": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "sequential"}}},
+          "then": {
+            "required": ["start_node"],
+            "not": {"required": ["start_nodes"]}
+          },
+          "else": {
+            "required": ["start_nodes"],
+            "not": {"required": ["start_node"]}
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "reviewer": {
+      "type": "object",
+      "required": ["id", "name", "phone", "git_branch"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nodeId"},
+        "name": {"type": "string", "minLength": 1},
+        "phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "git_branch": {"type": "string", "minLength": 1},
+        "profile": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "agent": {
+      "type": "object",
+      "required": ["id", "name", "phone"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nodeId"},
+        "name": {"type": "string", "minLength": 1},
+        "phone": {"type": "string", "pattern": "^[0-9]{4}$"},
+        "profile": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "task": {
+      "type": "object",
+      "required": ["task_id", "queue", "message"],
+      "properties": {
+        "task_id": {"type": "string", "minLength": 1, "maxLength": 160},
+        "queue": {
+          "enum": ["worker-all", "tester-all", "consultant-all"]
+        },
+        "message": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "nodeGit": {
+      "type": "object",
+      "required": ["assigned_branch", "existing_branch_policy"],
+      "minProperties": 2,
+      "properties": {
+        "assigned_branch": {"type": "string", "minLength": 1, "maxLength": 240},
+        "existing_branch_policy": {
+          "enum": ["create", "resume", "reject_if_exists", "require_exact_head"]
+        },
+        "expected_branch_head": {
+          "type": ["string", "null"],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"existing_branch_policy": {"const": "require_exact_head"}}
+          },
+          "then": {
+            "required": ["expected_branch_head"],
+            "properties": {"expected_branch_head": {"type": "string"}}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "nodeWorkspace": {
+      "type": "object",
+      "required": ["access"],
+      "properties": {
+        "access": {"enum": ["read", "write"]},
+        "join_strategy": {
+          "enum": ["require_same_commit", "merge_no_ff"],
+          "default": "require_same_commit"
+        },
+        "git": {"$ref": "#/$defs/nodeGit"},
+        "process": {"$ref": "#/$defs/processLaunch"}
+      },
+      "additionalProperties": false
+    },
+    "taskNode": {
+      "type": "object",
+      "required": ["id", "agent", "tasks", "transitions", "workspace"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nodeId"},
+        "type": {"enum": ["task", "agent"]},
+        "agent": {"$ref": "#/$defs/agent"},
+        "tasks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/task"}
+        },
+        "transitions": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {"$ref": "#/$defs/outcome"},
+          "additionalProperties": {"$ref": "#/$defs/nodeId"}
+        },
+        "workspace": {"$ref": "#/$defs/nodeWorkspace"},
+        "activation_policy": {
+          "enum": ["any_parent", "all_parents"],
+          "default": "all_parents"
+        },
+        "join_parent_order": {
+          "type": "array",
+          "minItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/nodeId"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "terminalNode": {
+      "type": "object",
+      "required": ["id", "type", "status", "message"],
+      "properties": {
+        "id": {"$ref": "#/$defs/nodeId"},
+        "type": {"const": "terminal"},
+        "status": {"enum": ["DONE", "BLOCKED_EXTERNAL", "FAILED"]},
+        "message": {"type": "string", "minLength": 1}
+      },
+      "additionalProperties": true
+    },
+    "coordinator": {
+      "type": "object",
+      "required": ["node_id", "routes"],
+      "properties": {
+        "node_id": {"$ref": "#/$defs/nodeId"},
+        "routes": {
+          "type": "object",
+          "minProperties": 1,
+          "required": ["STOP", "NEED_DECISION"],
+          "propertyNames": {"$ref": "#/$defs/outcome"},
+          "additionalProperties": {"$ref": "#/$defs/nodeId"}
+        }
+      },
+      "additionalProperties": false
+    },
+    "checksumFile": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^(?!/)(?!.*//)(?!.*\\/$)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^<>:\"\\\\|?*\\u0000-\\u001F\\u007F]+$"
+        },
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
+    "workspacePolicy": {
+      "type": "object",
+      "properties": {
+        "reject_parent_repository": {"const": true},
+        "dirty_policy": {"const": "coordinator"},
+        "diverged_branch_policy": {"const": "coordinator"}
+      },
+      "additionalProperties": false
+    },
+    "processPolicy": {
+      "type": "object",
+      "properties": {
+        "host": {"const": "127.0.0.1"},
+        "health_path": {
+          "type": "string",
+          "pattern": "^/(?!/)[^?#\\u0000-\\u001F\\u007F]*$"
+        },
+        "restart_policy": {"enum": ["never", "on_failure"]},
+        "max_restart_attempts": {"type": "integer", "minimum": 0, "maximum": 20},
+        "restart_backoff_seconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+        "resource_limits": {"$ref": "#/$defs/resourceLimits"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"restart_policy": {"const": "on_failure"}},
+            "required": ["restart_policy", "max_restart_attempts"]
+          },
+          "then": {"properties": {"max_restart_attempts": {"minimum": 1}}}
+        },
+        {
+          "if": {
+            "properties": {"restart_policy": {"const": "never"}},
+            "required": ["restart_policy"]
+          },
+          "then": {"properties": {"max_restart_attempts": {"const": 0}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "processLaunch": {
+      "type": "object",
+      "required": [
+        "command",
+        "cwd",
+        "environment"
+      ],
+      "properties": {
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "prefixItems": [{"type": "string", "minLength": 1}],
+          "items": {"type": "string"}
+        },
+        "cwd": {
+          "description": "Canonical relative path inside the verified managed workspace; dot names its root",
+          "oneOf": [
+            {"const": "."},
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 1024,
+              "pattern": "^(?!/)(?!.*//)(?!.*\\/$)(?!\\.{1,2}(?:/|$))(?!.*\\/\\.{1,2}(?:/|$))[^<>:\"\\\\|?*\\u0000-\\u001F\\u007F]+$"
+            }
+          ]
+        },
+        "environment": {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "pattern": "^[Nn][Gg][Ii][Nn][Xx]_[Qq][Aa]_[Mm][Aa][Nn][Aa][Gg][Ee][Dd]_"
+            }
+          },
+          "additionalProperties": {"$ref": "#/$defs/environmentValue"}
+        },
+        "health_path": {
+          "type": "string",
+          "pattern": "^/(?!/)[^?#\\u0000-\\u001F\\u007F]*$"
+        },
+        "restart_policy": {"enum": ["never", "on_failure"]},
+        "max_restart_attempts": {"type": "integer", "minimum": 0, "maximum": 20},
+        "restart_backoff_seconds": {"type": "integer", "minimum": 0, "maximum": 3600},
+        "resource_limits": {"$ref": "#/$defs/resourceLimits"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"restart_policy": {"const": "on_failure"}},
+            "required": ["restart_policy", "max_restart_attempts"]
+          },
+          "then": {"properties": {"max_restart_attempts": {"minimum": 1}}}
+        },
+        {
+          "if": {
+            "properties": {"restart_policy": {"const": "never"}},
+            "required": ["restart_policy"]
+          },
+          "then": {"properties": {"max_restart_attempts": {"const": 0}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "environmentValue": {
+      "oneOf": [
+        {"type": "string"},
+        {"$ref": "#/$defs/secretReference"}
+      ]
+    },
+    "secretReference": {
+      "type": "object",
+      "required": ["secret_ref"],
+      "properties": {
+        "secret_ref": {
+          "type": "string",
+          "maxLength": 274,
+          "pattern": "^(?:env|keyring|secret-manager|vault|windows-credential):[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "resourceLimits": {
+      "type": "object",
+      "properties": {
+        "wall_time_seconds": {"type": "integer", "minimum": 1, "maximum": 604800},
+        "memory_bytes": {"type": "integer", "minimum": 1048576},
+        "cpu_percent": {"type": "integer", "minimum": 1, "maximum": 1000},
+        "process_count": {"type": "integer", "minimum": 1, "maximum": 1024}
+      },
+      "additionalProperties": false
+    }
+  }
+}

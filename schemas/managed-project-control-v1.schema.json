@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-project-control-v1.schema.json",
+  "title": "Managed project activation control v1",
+  "description": "Project-scoped lookup state that exists independently of any derived sprint_id.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project_id",
+    "active_sprint_id",
+    "activation_fencing_counter",
+    "activation_lease",
+    "start_idempotency_records"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "project_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$"
+    },
+    "active_sprint_id": {
+      "type": ["string", "null"],
+      "pattern": "^msv1-[0-9a-f]{64}$"
+    },
+    "activation_fencing_counter": {"type": "integer", "minimum": 0},
+    "activation_lease": {
+      "oneOf": [
+        {"$ref": "#/$defs/activationLease"},
+        {"type": "null"}
+      ]
+    },
+    "start_idempotency_records": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/startIdempotencyRecord"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "timestamp": {"type": "string", "format": "date-time"},
+    "activationLease": {
+      "type": "object",
+      "required": ["attempt_id", "fencing_token", "acquired_at", "expires_at"],
+      "properties": {
+        "attempt_id": {"type": "string", "minLength": 1},
+        "fencing_token": {"type": "integer", "minimum": 1},
+        "acquired_at": {"$ref": "#/$defs/timestamp"},
+        "expires_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "additionalProperties": false
+    },
+    "startIdempotencyRecord": {
+      "type": "object",
+      "required": [
+        "idempotency_key",
+        "request_fingerprint",
+        "attempt_id",
+        "recovery_of_attempt_id",
+        "recovery_generation",
+        "fencing_token",
+        "pinned_identity",
+        "workspace_source_commit",
+        "sprint_id",
+        "status",
+        "response",
+        "http_status",
+        "error",
+        "evidence",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+        "request_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "attempt_id": {"type": "string", "minLength": 1},
+        "recovery_of_attempt_id": {"type": ["string", "null"], "minLength": 1},
+        "recovery_generation": {"type": "integer", "minimum": 0, "maximum": 100},
+        "fencing_token": {"type": ["integer", "null"], "minimum": 1},
+        "pinned_identity": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "project_id",
+                "repository_id",
+                "commit",
+                "manifest_path",
+                "manifest_sha256"
+              ],
+              "properties": {
+                "project_id": {"type": "string", "minLength": 1},
+                "repository_id": {"type": "string", "minLength": 1},
+                "commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+                "manifest_path": {"type": "string", "minLength": 1},
+                "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+              },
+              "additionalProperties": false
+            },
+            {"type": "null"}
+          ]
+        },
+        "workspace_source_commit": {
+          "type": ["string", "null"],
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "sprint_id": {
+          "type": ["string", "null"],
+          "pattern": "^msv1-[0-9a-f]{64}$"
+        },
+        "status": {"enum": ["VALIDATING", "PREPARING", "ACTIVATING", "SUCCEEDED", "FAILED"]},
+        "http_status": {"type": ["integer", "null"], "minimum": 100, "maximum": 599},
+        "response": {
+          "oneOf": [
+            {"$ref": "start-sprint-from-git-response-v1.schema.json"},
+            {"type": "null"}
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {"$ref": "managed-api-error-v1.schema.json"},
+            {"type": "null"}
+          ]
+        },
+        "evidence": {"type": "object"},
+        "created_at": {"$ref": "#/$defs/timestamp"},
+        "updated_at": {"$ref": "#/$defs/timestamp"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {"enum": ["PREPARING", "ACTIVATING", "SUCCEEDED"]}
+            },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {"fencing_token": {"type": "integer", "minimum": 1}}
+          }
+        },
+        {
+          "if": {
+            "properties": {"recovery_of_attempt_id": {"type": "null"}},
+            "required": ["recovery_of_attempt_id"]
+          },
+          "then": {"properties": {"recovery_generation": {"const": 0}}},
+          "else": {"properties": {"recovery_generation": {"minimum": 1}}}
+        },
+        {
+          "if": {
+            "properties": {"status": {"const": "SUCCEEDED"}},
+            "required": ["status"]
+          },
+          "then": {
+            "properties": {
+              "sprint_id": {"type": "string"},
+              "response": {"$ref": "start-sprint-from-git-response-v1.schema.json"},
+              "http_status": {"enum": [200, 201]},
+              "error": {"type": "null"}
+            }
+          },
+          "else": {
+            "if": {
+              "properties": {"status": {"const": "FAILED"}},
+              "required": ["status"]
+            },
+            "then": {
+              "properties": {
+                "response": {"type": "null"},
+                "http_status": {"type": "integer", "minimum": 400, "maximum": 599},
+                "error": {"$ref": "managed-api-error-v1.schema.json"},
+                "evidence": {"minProperties": 1}
+              }
+            },
+            "else": {
+              "properties": {
+                "response": {"type": "null"},
+                "http_status": {"type": "null"},
+                "error": {"type": "null"}
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

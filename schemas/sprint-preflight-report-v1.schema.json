@@ -1,0 +1,141 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/sprint-preflight-report-v1.schema.json",
+  "title": "Managed sprint preflight report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "contract_version",
+    "manifest_schema_version",
+    "sprint_id",
+    "manifest_commit",
+    "workspace_source_commit",
+    "manifest_sha256",
+    "lease_snapshot",
+    "lease_snapshot_sha256",
+    "ok",
+    "phase",
+    "issues",
+    "checked_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "contract_version": {"const": 1},
+    "manifest_schema_version": {"const": 1},
+    "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+    "manifest_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "workspace_source_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "lease_snapshot": {"$ref": "#/$defs/leaseSnapshot"},
+    "lease_snapshot_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "ok": {"type": "boolean"},
+    "phase": {"const": "VALIDATE"},
+    "issues": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "path", "message"],
+        "properties": {
+          "code": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+          "path": {"type": "string"},
+          "message": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": false
+      }
+    },
+    "checked_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"ok": {"const": true}}},
+      "then": {"properties": {"issues": {"maxItems": 0}}},
+      "else": {"properties": {"issues": {"minItems": 1}}}
+    }
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "leaseSnapshot": {
+      "type": "object",
+      "required": ["branch_leases", "port_leases", "process_owners"],
+      "properties": {
+        "branch_leases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "lease_id",
+              "repository_id",
+              "repository_key",
+              "mirror_storage_key",
+              "branch",
+              "assignment_id",
+              "mode",
+              "status"
+            ],
+            "properties": {
+              "lease_id": {"type": "string", "minLength": 1},
+              "repository_id": {"type": "string", "minLength": 1},
+              "repository_key": {"type": "string", "minLength": 1},
+              "mirror_storage_key": {"type": "string", "pattern": "^mirror-[0-9a-f]{64}$"},
+              "branch": {"type": "string", "minLength": 1},
+              "assignment_id": {"type": "string", "minLength": 1},
+              "mode": {"enum": ["read", "write"]},
+              "status": {"enum": ["active", "released"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "port_leases": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "lease_id",
+              "instance_id",
+              "network_namespace_id",
+              "assignment_id",
+              "process_id",
+              "host",
+              "port",
+              "status"
+            ],
+            "properties": {
+              "lease_id": {"type": "string", "minLength": 1},
+              "instance_id": {"type": "string", "minLength": 1},
+              "network_namespace_id": {"const": "host"},
+              "assignment_id": {"type": "string", "minLength": 1},
+              "process_id": {"type": ["string", "null"]},
+              "host": {"const": "127.0.0.1"},
+              "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+              "status": {"enum": ["reserved", "bound", "released"]}
+            },
+            "additionalProperties": false
+          }
+        },
+        "process_owners": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["process_id", "assignment_id", "pid", "state"],
+            "properties": {
+              "process_id": {"type": "string", "minLength": 1},
+              "assignment_id": {"type": "string", "minLength": 1},
+              "pid": {"type": ["integer", "null"], "minimum": 1},
+              "state": {
+                "enum": ["PREPARED", "STARTING", "HEALTHY", "STOPPING", "STOPPED", "FAILED"]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
