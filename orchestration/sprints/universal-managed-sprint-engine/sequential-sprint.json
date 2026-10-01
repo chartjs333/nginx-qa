@@ -1,0 +1,274 @@
+{
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "agents": {
+    "overwrite": true,
+    "include_managed": false
+  },
+  "execution": {
+    "mode": "sequential",
+    "initialize_reviewers": true,
+    "start_node": "architecture-contract",
+    "required_approvals": 2,
+    "max_rework_cycles": 20,
+    "reviewers": [
+      {
+        "id": "umse-architecture-reviewer",
+        "name": "UMSE Architecture Reviewer",
+        "phone": "2891",
+        "git_branch": "review/umse-architecture",
+        "profile": "Проверяй backward compatibility, workspace/process isolation, sprint_type dispatch, отсутствие live mutation и точную provenance. Используй только APPROVE или actionable REJECT."
+      },
+      {
+        "id": "umse-evidence-reviewer",
+        "name": "UMSE Evidence Reviewer",
+        "phone": "2892",
+        "git_branch": "review/umse-evidence",
+        "profile": "Проверяй tests/evidence, staging isolation, changed files, commits, no secrets и отсутствие live mutation. Используй только APPROVE или actionable REJECT."
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "architecture-contract",
+      "agent": {
+        "id": "umse-architecture-engineer",
+        "name": "UMSE Architecture Engineer",
+        "phone": "2861",
+        "git_branch": "agent/umse-01-architecture-contract",
+        "profile": "Владелец versioned sprint-type contract и backward compatibility; runtime не реализует."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-001",
+          "queue": "worker-all",
+          "message": "Прочитай все файлы orchestration/sprints/universal-managed-sprint-engine/. Создай assigned branch от origin/agent/universal-managed-sprint-engine-spec. Зафиксируй contract optional sprint_type: absent/legacy_v1 сохраняет exact current behavior, managed_workspace_v1 включает новый substrate, unknown reject pre-mutation. Определи models, APIs, schemas, serialization, migration и preflight. Не изменяй live nginx-qa. Верни DONE, NEED_DECISION или STOP."
+        }
+      ],
+      "transitions": {
+        "DONE": "workspace-core",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "workspace-core",
+      "agent": {
+        "id": "umse-workspace-engineer",
+        "name": "UMSE Managed Workspace Engineer",
+        "phone": "2862",
+        "git_branch": "agent/umse-02-workspace-core",
+        "profile": "Владелец Git mirror/workspace/branch isolation. Destructive Git запрещён."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-002",
+          "queue": "worker-all",
+          "message": "Реализуй bare mirror, isolated workspace manager, verified Git root, branch leases, dirty protection и safe create/resume по requirements.md. Не используй пользовательские checkout paths. Добавь tests parent .git, drive root, dirty/diverged branch и concurrent readers. Runtime tests только в отдельной staging copy; live не трогай."
+        }
+      ],
+      "transitions": {
+        "DONE": "sprint-type-dispatch",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "sprint-type-dispatch",
+      "agent": {
+        "id": "umse-compat-engineer",
+        "name": "UMSE Compatibility Engineer",
+        "phone": "2863",
+        "git_branch": "agent/umse-03-sprint-type-dispatch",
+        "profile": "Владелец sprint_type dispatch и legacy behavior preservation."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-003",
+          "queue": "worker-all",
+          "message": "Реализуй optional sprint_type dispatch, legacy equivalence, unknown-type rejection, archive/export/UI badge и regression существующих direct, pending, Telegram, sequential и agent imports. Отсутствующее поле обязано использовать старый code path."
+        }
+      ],
+      "transitions": {
+        "DONE": "transactional-import",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "transactional-import",
+      "agent": {
+        "id": "umse-import-engineer",
+        "name": "UMSE Transactional Import Engineer",
+        "phone": "2864",
+        "git_branch": "agent/umse-04-transactional-import",
+        "profile": "Владелец start-from-git, preflight и atomic sprint activation."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-004",
+          "queue": "worker-all",
+          "message": "Реализуй start-from-git, immutable sprint identity, VALIDATE→PREPARE→ACTIVATE, graph/checksum/workspace/port preflight и atomic activation. Добавь fault/restart tests. Состояние active+workflow=null/current_node=null/no outcomes недопустимо."
+        }
+      ],
+      "transitions": {
+        "DONE": "concurrent-runtime",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "concurrent-runtime",
+      "agent": {
+        "id": "umse-concurrency-engineer",
+        "name": "UMSE Concurrency Engineer",
+        "phone": "2865",
+        "git_branch": "agent/umse-05-concurrent-runtime",
+        "profile": "Владелец process supervisor, port leases и multi-process isolation."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-005",
+          "queue": "worker-all",
+          "message": "Реализуй durable port leases, process supervisor, per-assignment runtime/log/PID/resource isolation и restart reconciliation. Одновременно запусти минимум 4 child test services в разных workspaces/ports. Live process нельзя выбирать managed child."
+        }
+      ],
+      "transitions": {
+        "DONE": "continuity-runtime",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-runtime",
+      "agent": {
+        "id": "umse-continuity-engineer",
+        "name": "UMSE Continuity Runtime Engineer",
+        "phone": "2866",
+        "git_branch": "agent/umse-06-continuity-runtime",
+        "profile": "Владелец idempotent handoff, crash recovery, Coordinator routing и hot repair."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-006",
+          "queue": "worker-all",
+          "message": "Реализуй durable idempotent result journal, crash-safe transition completion, Continuity Coordinator context/routing, hot repair future nodes и repeated-blocker detection. Accepted results/reviews/completed nodes immutable."
+        }
+      ],
+      "transitions": {
+        "DONE": "staging-qualification",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "staging-qualification",
+      "agent": {
+        "id": "umse-staging-qa",
+        "name": "UMSE Staging QA Engineer",
+        "phone": "2867",
+        "git_branch": "agent/umse-07-staging-qualification",
+        "profile": "Независимый staging QA. Live instance не изменяет и не перезапускает."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-007",
+          "queue": "tester-all",
+          "message": "Создай clean staging checkout D:\\nginx-qa-staging\\universal-managed-sprint-engine с отдельными .venv/.env/runtime/prompt/managed roots, host 127.0.0.1, port 18025, child ports 18100-18199, Telegram/tunnel disabled. Выполни end-to-end/restart/4-process/dirty/diverged/lease tests. Только read-only live health; любое live mutation = FAIL."
+        }
+      ],
+      "transitions": {
+        "PASS": "legacy-regression",
+        "FAIL": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "legacy-regression",
+      "agent": {
+        "id": "umse-legacy-tester",
+        "name": "UMSE Legacy Regression Tester",
+        "phone": "2868",
+        "git_branch": "agent/umse-08-legacy-regression",
+        "profile": "Независимый владелец regression существующей логики nginx-qa."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-008",
+          "queue": "tester-all",
+          "message": "Запусти полный existing suite, особенно project_actor_import, queue persistence, pending sprints, sequential graph/prompt, groups/cycles/history/UI, Telegram config и Windows launcher. Сравни legacy JSON без sprint_type с baseline. Любое изменение старой семантики = FAIL."
+        }
+      ],
+      "transitions": {
+        "PASS": "release-qualification",
+        "FAIL": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "release-qualification",
+      "agent": {
+        "id": "umse-release-engineer",
+        "name": "UMSE Release Qualification Engineer",
+        "phone": "2869",
+        "git_branch": "agent/umse-09-release-qualification",
+        "profile": "Финальная source-bound qualification и operator-only promotion plan. Live deployment запрещён."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-009",
+          "queue": "worker-all",
+          "message": "Собери exact accepted commits/reviews/tests/staging logs/concurrency evidence/docs/security review. Проверь clean staging restart и отсутствие live mutation. Подготовь release candidate и operator-only promotion/rollback plan. Не deploy и не restart live."
+        }
+      ],
+      "transitions": {
+        "PASS": "completed",
+        "FAIL": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "agent": {
+        "id": "umse-continuity-coordinator",
+        "name": "UMSE Continuity Coordinator",
+        "phone": "2860",
+        "git_branch": "agent/umse-continuity-coordinator",
+        "profile": "Технический Coordinator. Исправляет только sprint-owned orchestration/future plan; не reviewer и не deployment authority."
+      },
+      "tasks": [
+        {
+          "task_id": "UMSE-COORD",
+          "queue": "consultant-all",
+          "message": "Проанализируй latest result/review/workspace/process state. Исправляй только sprint-owned orchestration/future plan или формулируй точную remediation. Не переписывай accepted history, не пропускай reviews, не применяй destructive Git. Верни один RESUME_* или BLOCKED_EXTERNAL."
+        }
+      ],
+      "transitions": {
+        "RESUME_ARCHITECTURE": "architecture-contract",
+        "RESUME_WORKSPACE": "workspace-core",
+        "RESUME_TYPE": "sprint-type-dispatch",
+        "RESUME_IMPORT": "transactional-import",
+        "RESUME_CONCURRENCY": "concurrent-runtime",
+        "RESUME_CONTINUITY": "continuity-runtime",
+        "RESUME_STAGING": "staging-qualification",
+        "RESUME_LEGACY": "legacy-regression",
+        "RESUME_QUALIFICATION": "release-qualification",
+        "BLOCKED_EXTERNAL": "blocked-external"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "UMSE passed staging and legacy qualification. Live promotion remains an explicit operator action."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "External decision or dependency required. Live nginx-qa remains unchanged."
+    }
+  ]
+}
