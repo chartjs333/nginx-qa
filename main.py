@@ -31,6 +31,13 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from nginx_qa.sprint_types import (
+    SprintPipeline,
+    SprintTypeSelection,
+    SprintTypeUnsupported,
+    resolve_sprint_type,
+)
+
 
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
@@ -3713,6 +3720,7 @@ def normalize_actor_import_task(raw_task: Any, index: int) -> dict[str, Any]:
 GRAPH_NODE_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,95}$")
 GRAPH_OUTCOME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_-]{0,31}$")
 SEQUENTIAL_REVIEW_DECISIONS = {"APPROVE", "REJECT"}
+MANAGED_GIT_START_REQUIRED = "MANAGED_GIT_START_REQUIRED"
 
 
 def normalize_graph_node_id(value: Any, field_name: str) -> str:
@@ -4082,6 +4090,44 @@ def sequential_graph_import_definition(payload: dict[str, Any]) -> dict[str, Any
             "terminal_nodes": terminal_nodes,
         },
     }
+
+
+def legacy_sprint_import_dispatch(
+    payload: Any,
+    *,
+    correlation_id: str = "",
+) -> SprintTypeSelection | None:
+    """Resolve an old ingress before it can mutate project runtime state.
+
+    Non-object payloads deliberately fall through to the existing legacy
+    validation so its error ordering and response remain unchanged.  A valid
+    legacy selection is returned without copying, normalizing, or adding a key
+    to the source object.
+    """
+
+    if not isinstance(payload, dict):
+        return None
+    try:
+        selection = resolve_sprint_type(payload)
+    except SprintTypeUnsupported as exc:
+        detail = exc.as_detail()
+        detail["correlation_id"] = correlation_id or str(uuid4())
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail,
+        ) from None
+    if selection.pipeline is SprintPipeline.MANAGED_WORKSPACE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": MANAGED_GIT_START_REQUIRED,
+                "correlation_id": correlation_id or str(uuid4()),
+                "start_from_git_endpoint": (
+                    "/api/v1/projects/{project_id}/sprints/start-from-git"
+                ),
+            },
+        )
+    return selection
 
 
 def actor_import_options(payload: Any) -> dict[str, Any]:
@@ -16753,6 +16799,15 @@ def render_index_v2() -> str:
       return "ожидает запуска";
     }
 
+    function sprintTypeBadge(sprint) {
+      const sprintType = sprint && typeof sprint.sprint_type === "string"
+        ? sprint.sprint_type.trim()
+        : "";
+      return sprintType
+        ? `<span class="sprint-history-badge sprint-type">${escapeHtml(sprintType)}</span>`
+        : "";
+    }
+
     function renderPendingSprints() {
       renderPendingSprintsProjectOptions();
       const projectPhone = pendingSprintsActiveProjectPhone();
@@ -16787,7 +16842,7 @@ def render_index_v2() -> str:
         return `<article class="pending-sprint-card${selected}" data-pending-sprint-id="${escapeHtml(sprintId)}">
           <div class="pending-sprint-card-head">
             <div>
-              <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence || ""}`)}<span class="sprint-history-badge">${escapeHtml(pendingSprintStatusLabel(sprint))}</span></div>
+              <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence || ""}`)}<span class="sprint-history-badge">${escapeHtml(pendingSprintStatusLabel(sprint))}</span>${sprintTypeBadge(sprint)}</div>
               <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
             </div>
           </div>
@@ -18054,7 +18109,7 @@ def render_index_v2() -> str:
         const meta = `#${sprint.sequence} · ${dateText} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${patchText}${sourceText}${legacyText}`;
         return `<div class="sprint-history-item">
           <div>
-            <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence}`)}<span class="sprint-history-badge${statusClass}">${statusText}</span></div>
+            <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence}`)}<span class="sprint-history-badge${statusClass}">${statusText}</span>${sprintTypeBadge(sprint)}</div>
             <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
           </div>
           <div class="actions">
@@ -23377,6 +23432,8 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
             "pending_sprint_id",
         )
     }
+    if "sprint_type" in record:
+        summary["sprint_type"] = deepcopy(record["sprint_type"])
     code_history = record.get("final_code_history")
     summary["code_patch_count"] = (
         int(code_history.get("patch_count") or 0)
@@ -23422,6 +23479,8 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
             "last_activation_error",
         )
     }
+    if "sprint_type" in record:
+        summary["sprint_type"] = deepcopy(record["sprint_type"])
     record_status = str(record.get("status") or "pending").strip().lower()
     retry_at: datetime | None = None
     if record_status == "activating":
@@ -23467,6 +23526,7 @@ def stage_project_sprint_file(
     telegram_chat_id: str = "",
     telegram_message_id: str = "",
 ) -> dict[str, Any]:
+    sprint_type = legacy_sprint_import_dispatch(payload)
     with pending_sprints_file_lock():
         storage = read_pending_sprints_file()
         raw_projects = storage.get("projects")
@@ -23581,6 +23641,8 @@ def stage_project_sprint_file(
             "last_activation_error": None,
             "import_payload": deepcopy(payload),
         }
+        if sprint_type is not None:
+            record.update(sprint_type.serialized_field())
         records.append(record)
         project.update(
             {
@@ -23615,6 +23677,7 @@ async def stage_project_sprint(
     telegram_chat_id: str = "",
     telegram_message_id: str = "",
 ) -> dict[str, Any]:
+    legacy_sprint_import_dispatch(payload)
     options = actor_import_options(payload)
     config = await read_git_config()
     _, context_key, project_entry, context = project_for_group_api(
@@ -23888,6 +23951,7 @@ def record_project_sprint_import_file(
     task_count: int,
     pending_sprint_id: str = "",
 ) -> dict[str, Any]:
+    sprint_type = resolve_sprint_type(payload)
     with sprint_history_file_lock():
         history = read_sprint_history_file()
         raw_projects = history.get("projects")
@@ -24013,6 +24077,7 @@ def record_project_sprint_import_file(
             "final_state": None,
             "final_code_history": None,
         }
+        new_record.update(sprint_type.serialized_field())
         records.append(new_record)
         project.update(
             {
@@ -24094,6 +24159,7 @@ async def import_project_actors_data(
     pending_sprint_id: str = "",
     reconcile_existing_pending_sprint: bool = False,
 ) -> dict[str, Any]:
+    legacy_sprint_import_dispatch(payload)
     options = actor_import_options(payload)
     options["source"] = source
     options["expected_git_context_key"] = expected_git_context_key
@@ -27831,6 +27897,9 @@ async def start_project_pending_sprint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Pending sprint has no valid import payload",
         )
+    # A stored managed payload must never be claimed by the legacy pending
+    # activator.  Resolve it while the record is still read-only.
+    legacy_sprint_import_dispatch(payload)
     staged_repository_key = str(record.get("repository_key") or "").strip()
     staged_context_key = str(record.get("git_context_key") or "").strip()
     assignment_mode = str(
@@ -28275,6 +28344,7 @@ async def import_project_actors(
     request: Request,
 ) -> dict[str, Any]:
     payload = await read_message(request)
+    legacy_sprint_import_dispatch(payload)
     validated_project = await ensure_actor_import_matches_route_project(
         project_id,
         payload,
@@ -28629,6 +28699,7 @@ async def _telegram_actor_import_for_mode(
     update = await read_message(request)
     payload, message = await asyncio.to_thread(actor_payload_from_telegram_update, update)
     ensure_telegram_sender_allowed(message)
+    legacy_sprint_import_dispatch(payload)
     payload = actor_payload_with_assignment_mode(payload, assignment_mode)
     effective_options = actor_import_options(payload)
     effective_assignment_mode = str(
@@ -28754,18 +28825,27 @@ async def telegram_actor_import_for_mode(
             + json.dumps(diagnostic, ensure_ascii=True, sort_keys=True),
             flush=True,
         )
-        if (
+        detail_error = (
+            str(exc.detail.get("error") or "").strip()
+            if isinstance(exc.detail, dict)
+            else ""
+        )
+        sprint_dispatch_rejection = detail_error in {
+            "SPRINT_TYPE_UNSUPPORTED",
+            MANAGED_GIT_START_REQUIRED,
+        }
+        acknowledged_error = sprint_dispatch_rejection or (
             update_id is not None
-            and message
-            and exc.status_code
-            in {
+            and bool(message)
+            and exc.status_code in {
                 status.HTTP_400_BAD_REQUEST,
                 status.HTTP_404_NOT_FOUND,
                 status.HTTP_409_CONFLICT,
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
             }
-        ):
+        )
+        if acknowledged_error:
             expected_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
             supplied_secret = request.headers.get(
                 "x-telegram-bot-api-secret-token", ""
@@ -28775,13 +28855,14 @@ async def telegram_actor_import_for_mode(
                 supplied_secret,
             ):
                 raise
-            ensure_telegram_sender_allowed(message)
-            await asyncio.to_thread(
-                send_telegram_import_error_reply,
-                message,
-                exc,
-                source_filename,
-            )
+            if message:
+                ensure_telegram_sender_allowed(message)
+                await asyncio.to_thread(
+                    send_telegram_import_error_reply,
+                    message,
+                    exc,
+                    source_filename,
+                )
             return {
                 "ok": False,
                 "accepted": True,

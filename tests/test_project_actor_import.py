@@ -2509,6 +2509,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         assert isinstance(body, dict)
         self.assertTrue(body["staged"])
         self.assertEqual(body["pending_sprint"]["assignment_mode"], "sequential")
+        self.assertNotIn("sprint_type", body["pending_sprint"])
         self.assertEqual(main.agents_path.read_text(encoding="utf-8"), agents_before)
         self.assertTrue(all(not queue for queue in main.queues.values()))
         self.assertFalse(main.sprint_history_path.exists())
@@ -4637,6 +4638,511 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         activated = await self.start_staged_sprint(allowed_body)
         self.assertEqual(activated["imported_actor_count"], 1)
 
+    async def test_sprint_type_absence_and_explicit_legacy_round_trip_archives(
+        self,
+    ) -> None:
+        absent_payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"id": "dispatch-absent", "title": "Dispatch Absent"},
+            "actors": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "dispatch-absent-agent",
+                        "name": "Dispatch Absent Agent",
+                        "phone": "2211",
+                        "tasks": [],
+                    }
+                ],
+            },
+        }
+        absent_status, absent_result = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/actors/import",
+            method="POST",
+            payload=absent_payload,
+        )
+        self.assertEqual(absent_status, 201, absent_result)
+        self.assertIsInstance(absent_result, dict)
+        assert isinstance(absent_result, dict)
+        self.assertNotIn("sprint_type", absent_result["sprint"])
+
+        explicit_payload = {
+            "sprint_type": "legacy_v1",
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"id": "dispatch-explicit", "title": "Dispatch Explicit"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "dispatch-explicit-agent",
+                        "name": "Dispatch Explicit Agent",
+                        "phone": "2212",
+                        "tasks": [],
+                    }
+                ],
+            },
+        }
+        explicit_status, explicit_result = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=explicit_payload,
+        )
+        self.assertEqual(explicit_status, 201, explicit_result)
+        self.assertIsInstance(explicit_result, dict)
+        assert isinstance(explicit_result, dict)
+        self.assertEqual(explicit_result["sprint"]["sprint_type"], "legacy_v1")
+
+        list_status, sprint_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints"
+        )
+        self.assertEqual(list_status, 200, sprint_list)
+        self.assertIsInstance(sprint_list, dict)
+        assert isinstance(sprint_list, dict)
+        by_external_id = {
+            sprint["external_id"]: sprint for sprint in sprint_list["sprints"]
+        }
+        self.assertNotIn("sprint_type", by_external_id["dispatch-absent"])
+        self.assertEqual(
+            by_external_id["dispatch-explicit"]["sprint_type"],
+            "legacy_v1",
+        )
+
+        for external_id, source_payload, expected_type in (
+            ("dispatch-absent", absent_payload, None),
+            ("dispatch-explicit", explicit_payload, "legacy_v1"),
+        ):
+            record = by_external_id[external_id]
+            download_status, archive = await asgi_request(record["download_url"])
+            self.assertEqual(download_status, 200, archive)
+            self.assertIsInstance(archive, dict)
+            assert isinstance(archive, dict)
+            self.assertEqual(archive["import_payload"], source_payload)
+            if expected_type is None:
+                self.assertNotIn("sprint_type", archive["sprint"])
+                self.assertNotIn("sprint_type", archive["import_payload"])
+            else:
+                self.assertEqual(archive["sprint"]["sprint_type"], expected_type)
+                self.assertEqual(
+                    archive["import_payload"]["sprint_type"],
+                    expected_type,
+                )
+
+    async def test_managed_archive_summary_and_download_preserve_type(self) -> None:
+        record = {
+            "id": "managed-archive-record",
+            "sequence": 1,
+            "external_id": "managed-archive",
+            "title": "Managed Archive",
+            "status": "archived",
+            "project_phone": self.PROJECT_PHONE,
+            "project_name": "Actor Import Project",
+            "git_context_key": self.PROJECT_CONTEXT,
+            "source": "managed-import",
+            "source_filename": "managed.json",
+            "imported_at": "2026-10-01T00:00:00+00:00",
+            "archived_at": "2026-10-01T01:00:00+00:00",
+            "assignment_mode": "parallel",
+            "agent_count": 1,
+            "task_count": 1,
+            "legacy": False,
+            "pending_sprint_id": None,
+            "sprint_type": "managed_workspace_v1",
+            "import_payload": {
+                "sprint_type": "managed_workspace_v1",
+                "sentinel": {"preserved": True},
+            },
+            "initial_state": {},
+            "final_state": {},
+            "final_code_history": {
+                "patch_count": 0,
+                "patch_error_count": 0,
+                "timeline": [],
+                "patches": [],
+                "content_included": True,
+            },
+        }
+        main.write_sprint_history_file(
+            {
+                "schema_version": 1,
+                "projects": {
+                    self.PROJECT_CONTEXT: {
+                        "project_phone": self.PROJECT_PHONE,
+                        "project_name": "Actor Import Project",
+                        "git_context_key": self.PROJECT_CONTEXT,
+                        "current_sprint_id": None,
+                        "sprints": [record],
+                    }
+                },
+            }
+        )
+
+        list_status, sprint_list = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/sprints"
+        )
+        self.assertEqual(list_status, 200, sprint_list)
+        self.assertIsInstance(sprint_list, dict)
+        assert isinstance(sprint_list, dict)
+        self.assertEqual(
+            sprint_list["sprints"][0]["sprint_type"],
+            "managed_workspace_v1",
+        )
+
+        download_status, archive = await asgi_request(
+            sprint_list["sprints"][0]["download_url"]
+        )
+        self.assertEqual(download_status, 200, archive)
+        self.assertIsInstance(archive, dict)
+        assert isinstance(archive, dict)
+        self.assertEqual(archive["sprint"]["sprint_type"], "managed_workspace_v1")
+        self.assertEqual(archive["import_payload"], record["import_payload"])
+
+    async def test_old_ingress_dispatch_rejects_unknown_and_managed_before_mutation(
+        self,
+    ) -> None:
+        agents_before = main.agents_path.read_bytes()
+        config_before = main.git_config_path.read_bytes()
+        base_payload = {
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "must-not-import",
+                        "name": "Must Not Import",
+                        "phone": "2213",
+                        "tasks": ["Must not queue."],
+                    }
+                ],
+            },
+        }
+        cases = (
+            ("future_v9", "SPRINT_TYPE_UNSUPPORTED"),
+            ("managed_workspace_v1", "MANAGED_GIT_START_REQUIRED"),
+        )
+        for sprint_type, expected_error in cases:
+            with self.subTest(sprint_type=sprint_type):
+                with patch.object(
+                    main,
+                    "ensure_actor_import_matches_route_project",
+                    side_effect=AssertionError("dispatch ran after project validation"),
+                ) as project_validation:
+                    response_status, response = await asgi_request(
+                        f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+                        method="POST",
+                        payload={**base_payload, "sprint_type": sprint_type},
+                    )
+                self.assertEqual(response_status, 400, response)
+                self.assertIsInstance(response, dict)
+                assert isinstance(response, dict)
+                detail = response["detail"]
+                self.assertEqual(detail["error"], expected_error)
+                self.assertTrue(detail["correlation_id"])
+                project_validation.assert_not_called()
+                if expected_error == "SPRINT_TYPE_UNSUPPORTED":
+                    self.assertEqual(detail["field"], "sprint_type")
+                    self.assertEqual(
+                        detail["supported"],
+                        ["legacy_v1", "managed_workspace_v1"],
+                    )
+                    self.assertNotIn(sprint_type, json.dumps(detail))
+                else:
+                    self.assertEqual(
+                        detail["start_from_git_endpoint"],
+                        "/api/v1/projects/{project_id}/sprints/start-from-git",
+                    )
+                self.assertEqual(main.agents_path.read_bytes(), agents_before)
+                self.assertEqual(main.git_config_path.read_bytes(), config_before)
+                self.assertFalse(main.sprint_history_path.exists())
+                self.assertFalse(main.pending_sprints_path.exists())
+                self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_telegram_dispatch_acks_unknown_and_managed_without_staging(
+        self,
+    ) -> None:
+        agents_before = main.agents_path.read_bytes()
+        for update_id, sprint_type, expected_error in (
+            (50101, "future_v9", "SPRINT_TYPE_UNSUPPORTED"),
+            (50102, "managed_workspace_v1", "MANAGED_GIT_START_REQUIRED"),
+        ):
+            with self.subTest(sprint_type=sprint_type):
+                telegram_payload = {
+                    "sprint_type": sprint_type,
+                    "git_address": "https://github.com/example/actor-import.git",
+                    "agents": {
+                        "overwrite": True,
+                        "items": [
+                            {
+                                "id": "telegram-must-not-import",
+                                "name": "Telegram Must Not Import",
+                                "phone": "2214",
+                                "tasks": ["Must not queue."],
+                            }
+                        ],
+                    },
+                }
+                response_status, response = await asgi_request(
+                    "/api/v1/telegram/agents",
+                    method="POST",
+                    payload={
+                        "update_id": update_id,
+                        "message": {
+                            "message_id": update_id + 1,
+                            "chat": {"id": 501},
+                            "text": json.dumps(telegram_payload),
+                        },
+                    },
+                )
+                self.assertEqual(response_status, 200, response)
+                self.assertIsInstance(response, dict)
+                assert isinstance(response, dict)
+                self.assertFalse(response["ok"])
+                self.assertTrue(response["accepted"])
+                self.assertEqual(response["status_code"], 400)
+                self.assertEqual(response["error"]["error"], expected_error)
+                self.assertTrue(response["error"]["correlation_id"])
+                if expected_error == "SPRINT_TYPE_UNSUPPORTED":
+                    self.assertNotIn(sprint_type, json.dumps(response["error"]))
+                self.assertEqual(main.agents_path.read_bytes(), agents_before)
+                self.assertFalse(main.pending_sprints_path.exists())
+                self.assertFalse(main.sprint_history_path.exists())
+                self.assertTrue(all(not queue for queue in main.queues.values()))
+
+        raw_status, raw_response = await asgi_request(
+            "/api/v1/telegram/agents/parallel",
+            method="POST",
+            payload={
+                "sprint_type": "managed_workspace_v1",
+                "git_address": "https://github.com/example/actor-import.git",
+                "agents": {
+                    "overwrite": True,
+                    "items": [
+                        {
+                            "id": "raw-telegram-must-not-import",
+                            "name": "Raw Telegram Must Not Import",
+                            "phone": "2220",
+                            "tasks": ["Must not queue."],
+                        }
+                    ],
+                },
+            },
+        )
+        self.assertEqual(raw_status, 200, raw_response)
+        self.assertIsInstance(raw_response, dict)
+        assert isinstance(raw_response, dict)
+        self.assertFalse(raw_response["ok"])
+        self.assertEqual(raw_response["status_code"], 400)
+        self.assertEqual(
+            raw_response["error"]["error"],
+            "MANAGED_GIT_START_REQUIRED",
+        )
+        self.assertEqual(main.agents_path.read_bytes(), agents_before)
+        self.assertFalse(main.pending_sprints_path.exists())
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_explicit_legacy_telegram_pending_round_trip_and_activation(
+        self,
+    ) -> None:
+        payload = {
+            "sprint_type": "legacy_v1",
+            "git_address": "https://github.com/example/actor-import.git",
+            "sprint": {"id": "telegram-legacy", "title": "Telegram Legacy"},
+            "agents": {
+                "overwrite": True,
+                "items": [
+                    {
+                        "id": "telegram-legacy-agent",
+                        "name": "Telegram Legacy Agent",
+                        "phone": "2215",
+                        "tasks": ["Run explicit legacy work."],
+                    }
+                ],
+            },
+        }
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": 50201,
+                "message": {
+                    "message_id": 50202,
+                    "chat": {"id": 502},
+                    "text": json.dumps(payload),
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200, staged)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        self.assertEqual(staged["pending_sprint"]["sprint_type"], "legacy_v1")
+        sprint_id = staged["pending_sprint"]["id"]
+
+        detail_status, pending_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{sprint_id}"
+        )
+        self.assertEqual(detail_status, 200, pending_detail)
+        self.assertIsInstance(pending_detail, dict)
+        assert isinstance(pending_detail, dict)
+        self.assertEqual(
+            pending_detail["pending_sprint"]["sprint_type"],
+            "legacy_v1",
+        )
+        self.assertEqual(
+            pending_detail["import_payload"],
+            main.actor_payload_with_assignment_mode(payload, "parallel"),
+        )
+
+        activated = await self.start_staged_sprint(staged)
+        self.assertEqual(activated["sprint"]["sprint_type"], "legacy_v1")
+        stored = main.read_sprint_history_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ]
+        current = next(record for record in stored if record.get("status") == "current")
+        self.assertEqual(current["sprint_type"], "legacy_v1")
+        self.assertEqual(current["import_payload"]["sprint_type"], "legacy_v1")
+
+    async def test_stored_managed_or_unknown_pending_payload_is_never_claimed(
+        self,
+    ) -> None:
+        agents_before = main.agents_path.read_bytes()
+        stage_status, staged = await asgi_request(
+            "/api/v1/telegram/agents",
+            method="POST",
+            payload={
+                "update_id": 50301,
+                "message": {
+                    "message_id": 50302,
+                    "chat": {"id": 503},
+                    "text": json.dumps(
+                        {
+                            "git_address": (
+                                "https://github.com/example/actor-import.git"
+                            ),
+                            "agents": {
+                                "overwrite": True,
+                                "items": [
+                                    {
+                                        "id": "pending-must-not-import",
+                                        "name": "Pending Must Not Import",
+                                        "phone": "2216",
+                                        "tasks": ["Must not queue."],
+                                    }
+                                ],
+                            },
+                        }
+                    ),
+                },
+            },
+        )
+        self.assertEqual(stage_status, 200, staged)
+        self.assertIsInstance(staged, dict)
+        assert isinstance(staged, dict)
+        sprint_id = staged["pending_sprint"]["id"]
+
+        for sprint_type, expected_error in (
+            ("managed_workspace_v1", "MANAGED_GIT_START_REQUIRED"),
+            ("future_v9", "SPRINT_TYPE_UNSUPPORTED"),
+        ):
+            storage = main.read_pending_sprints_file()
+            record = storage["projects"][self.PROJECT_CONTEXT]["sprints"][0]
+            record["import_payload"]["sprint_type"] = sprint_type
+            record["sprint_type"] = sprint_type
+            main.write_pending_sprints_file(storage)
+            pending_bytes_before = main.pending_sprints_path.read_bytes()
+
+            with self.subTest(sprint_type=sprint_type):
+                start_status, rejected = await asgi_request(
+                    (
+                        f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                        f"{sprint_id}/start"
+                    ),
+                    method="POST",
+                )
+                self.assertEqual(start_status, 400, rejected)
+                self.assertIsInstance(rejected, dict)
+                assert isinstance(rejected, dict)
+                self.assertEqual(rejected["detail"]["error"], expected_error)
+                stored = main.read_pending_sprints_file()["projects"][
+                    self.PROJECT_CONTEXT
+                ]["sprints"][0]
+                self.assertEqual(stored["status"], "pending")
+                self.assertEqual(stored["activation_attempts"], 0)
+                self.assertIsNone(stored["activation_attempt_id"])
+                self.assertIsNone(stored["activating_at"])
+                self.assertEqual(
+                    main.pending_sprints_path.read_bytes(),
+                    pending_bytes_before,
+                )
+                self.assertEqual(main.agents_path.read_bytes(), agents_before)
+                self.assertFalse(main.sprint_history_path.exists())
+                self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_explicit_legacy_declared_graph_uses_sequential_legacy_path(
+        self,
+    ) -> None:
+        payload = {
+            "sprint_type": "legacy_v1",
+            "project_id": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/actor-import.git",
+            "agents": {"overwrite": True},
+            "execution": {
+                "mode": "sequential",
+                "start_node": "dispatch-work",
+                "max_rework_cycles": 2,
+                "required_approvals": 2,
+                "reviewers": [
+                    {
+                        "id": "dispatch-reviewer-one",
+                        "name": "Dispatch Reviewer One",
+                        "phone": "2217",
+                    },
+                    {
+                        "id": "dispatch-reviewer-two",
+                        "name": "Dispatch Reviewer Two",
+                        "phone": "2218",
+                    },
+                ],
+            },
+            "nodes": [
+                {
+                    "id": "dispatch-work",
+                    "agent": {
+                        "id": "dispatch-worker",
+                        "name": "Dispatch Worker",
+                        "phone": "2219",
+                    },
+                    "tasks": [
+                        {
+                            "task_id": "DISPATCH-1",
+                            "message": "Exercise the declared graph legacy path.",
+                        }
+                    ],
+                    "transitions": {"DONE": "dispatch-finished"},
+                },
+                {
+                    "id": "dispatch-finished",
+                    "type": "terminal",
+                    "status": "DONE",
+                    "message": "Dispatch graph complete.",
+                },
+            ],
+        }
+        response_status, response = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/agents/import",
+            method="POST",
+            payload=payload,
+        )
+        self.assertEqual(response_status, 201, response)
+        self.assertIsInstance(response, dict)
+        assert isinstance(response, dict)
+        self.assertEqual(response["assignment_mode"], "sequential")
+        self.assertEqual(response["active_agent"]["id"], "dispatch-worker")
+        self.assertEqual(response["queued_queue_item_count"], 1)
+        self.assertEqual(response["sprint"]["sprint_type"], "legacy_v1")
+        self.assertEqual(len(main.queues["worker-all"]), 1)
+
     def test_ui_exposes_actor_import_and_bulk_delete_controls(self) -> None:
         html = main.render_index_v2()
         for marker in (
@@ -4672,10 +5178,13 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             'data-action="preview-pending-sprint"',
             'data-action="start-pending-sprint"',
             "download-project-sprint",
+            "function sprintTypeBadge(sprint)",
+            'typeof sprint.sprint_type === "string"',
             "agents.overwrite: true",
             "/agents/import",
         ):
             self.assertIn(marker, html)
+        self.assertEqual(html.count("${sprintTypeBadge(sprint)}"), 2)
 
 
 if __name__ == "__main__":
