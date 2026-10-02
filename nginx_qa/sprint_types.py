@@ -5041,14 +5041,22 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         health_endpoint = process.get("health_endpoint")
-        if not legacy_process_record and (
-            not managed_health_path_valid(effective_health_path)
-            or (
+        if not legacy_process_record:
+            for process_issue in _process_environment_issue_codes(
+                process.get("environment_redacted")
+            ):
+                add(process_issue)
+            command = process.get("command_redacted")
+            if isinstance(command, list) and any(
+                isinstance(argument, str) and "\0" in argument
+                for argument in command
+            ):
+                add("PROCESS_COMMAND_INVALID")
+            if not managed_health_path_valid(effective_health_path) or (
                 isinstance(health_endpoint, Mapping)
                 and not managed_health_path_valid(health_endpoint.get("path"))
-            )
-        ):
-            add("PROCESS_HEALTH_PATH_INVALID")
+            ):
+                add("PROCESS_HEALTH_PATH_INVALID")
         if (
             not isinstance(process_launch, Mapping)
             or process.get("command_redacted") != process_launch.get("command")

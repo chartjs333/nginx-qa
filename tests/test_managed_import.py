@@ -26,11 +26,14 @@ from nginx_qa.managed_import import (
     ManagedPortReservationRegistry,
     ManagedStartResult,
     TransactionalSprintImporter,
+    _runtime_state_schema_errors,
     parse_start_request_bytes,
 )
 from nginx_qa.sprint_types import (
     StartSprintFromGitRequest,
+    canonical_json_sha256,
     managed_activation_invariant_issues,
+    managed_graph_semantic_issues,
     managed_node_path_segment,
     managed_project_path_segment,
     managed_project_control_invariant_issues,
@@ -2437,6 +2440,68 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         assert state is not None
         self.assertEqual(len(state["workspaces"]), 2)
         self.assertEqual(managed_activation_invariant_issues(state), ())
+
+    def test_migrated_runtime_keeps_unmarked_process_semantics_strict(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["execution"].pop("start_node")
+        changed["execution"]["mode"] = "parallel"
+        changed["execution"]["start_nodes"] = ["build", "continuity"]
+        for node in changed["nodes"]:
+            if node.get("type", "task") == "task":
+                node["workspace"]["process"] = {
+                    "command": [sys.executable, "service.py"],
+                    "cwd": ".",
+                    "environment": {},
+                }
+        self.push_manifest(changed, "mixed migrated process semantics")
+
+        importer = self.importer()
+        result = importer.start(self.project_id, self.request)
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        self.assertEqual(len(state["processes"]), 2)
+        state["migrated_from_runtime_schema_version"] = 1
+        state["processes"][0]["migrated_from_runtime_schema_version"] = 1
+
+        strict_process = state["processes"][1]
+        collision = {"APP_MODE": "one", "app_mode": "two"}
+        strict_process["environment_redacted"] = collision
+        assignment = next(
+            item
+            for item in state["assignments"]
+            if item["assignment_id"] == strict_process["assignment_id"]
+        )
+        revision = next(
+            item
+            for item in state["graph_revisions"]
+            if item["revision"] == assignment["graph_revision"]
+        )
+        node = next(
+            item
+            for item in revision["definition"]["nodes"]
+            if item.get("id") == assignment["node_id"]
+        )
+        node["workspace"]["process"]["environment"] = collision
+        revision["definition_sha256"] = canonical_json_sha256(
+            revision["definition"]
+        )
+
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            managed_graph_semantic_issues(revision["definition"]),
+        )
+        self.assertEqual(
+            _runtime_state_schema_errors(state, issue_code="TEST_SCHEMA_INVALID"),
+            [],
+        )
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            managed_activation_invariant_issues(state),
+        )
 
     def test_second_sprint_cannot_replace_an_active_runtime(self) -> None:
         importer = self.importer()
