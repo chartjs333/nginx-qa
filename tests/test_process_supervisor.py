@@ -30,7 +30,10 @@ from nginx_qa.process_supervisor import (
 )
 from nginx_qa.managed_import import TransactionalSprintImporter
 from nginx_qa.port_leases import ManagedPortReservationRegistry
-from nginx_qa.sprint_types import managed_activation_invariant_issues
+from nginx_qa.sprint_types import (
+    canonical_json_sha256,
+    managed_activation_invariant_issues,
+)
 from tests.test_managed_import import ManagedImportFixture
 
 
@@ -310,6 +313,25 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
             "terminal_reason",
         ):
             process.pop(key)
+        definition = state["graph_revisions"][0]["definition"]
+        launch = definition["nodes"][0]["workspace"]["process"]
+        legacy_command = [*process["command_redacted"], "legacy\0argument"]
+        legacy_environment = {
+            "": "legacy-empty-name",
+            "APP_MODE": "one",
+            "app_mode": "two",
+            "LEGACY_NUL": "bad\0value",
+        }
+        launch["command"] = legacy_command
+        launch["environment"] = legacy_environment
+        launch["health_path"] = "/ready now"
+        process["command_redacted"] = legacy_command
+        process["environment_redacted"] = legacy_environment
+        process["health_endpoint"]["path"] = "/ready now"
+        state["graph_revisions"][0]["definition_sha256"] = canonical_json_sha256(
+            definition
+        )
+        self.assertEqual(managed_activation_invariant_issues(state), ())
         encoded_state = json.dumps(
             state, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
@@ -338,14 +360,89 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
         )
         assert upgraded is not None
         self.assertEqual(upgraded["schema_version"], 2)
+        self.assertEqual(upgraded["migrated_from_runtime_schema_version"], 1)
+        self.assertEqual(
+            upgraded["processes"][0]["migrated_from_runtime_schema_version"], 1
+        )
+        self.assertEqual(
+            upgraded["processes"][0]["command_redacted"], legacy_command
+        )
+        self.assertEqual(
+            upgraded["processes"][0]["environment_redacted"], legacy_environment
+        )
+        self.assertEqual(
+            upgraded["processes"][0]["health_endpoint"]["path"], "/ready now"
+        )
         self.assertIsNone(upgraded["processes"][0]["os_process_birth_token"])
         self.assertIsNone(upgraded["processes"][0]["startup_deadline_at"])
         self.assertIsNone(upgraded["processes"][0]["terminal_reason"])
-        supervisor.stop(
+        self.assertEqual(managed_activation_invariant_issues(upgraded), ())
+        stopped = supervisor.stop(
             self.project_id,
             result.response["sprint_id"],
             process["process_id"],
         )
+        self.assertEqual(stopped.state, "FAILED")
+        self.assertEqual(stopped.action, "cancelled-before-launch")
+
+    def test_runtime_v1_upgrade_rolls_back_on_normalized_owner_mismatch(
+        self,
+    ) -> None:
+        importer, result = self.activate_manifest(
+            self.single_process_manifest("--mode", "serve")
+        )
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        state["schema_version"] = 1
+        process = state["processes"][0]
+        for key in (
+            "os_process_birth_token",
+            "startup_deadline_at",
+            "terminal_reason",
+        ):
+            process.pop(key)
+        encoded_state = json.dumps(
+            state, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        )
+        with importer.store._transaction() as connection:
+            owner_before = connection.execute(
+                """
+                SELECT process_json FROM managed_process_owners
+                WHERE process_id = ?
+                """,
+                (process["process_id"],),
+            ).fetchone()["process_json"]
+            connection.execute(
+                """
+                UPDATE managed_sprints SET state_json = ?
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (encoded_state, self.project_id, result.response["sprint_id"]),
+            )
+
+        with self.assertRaises(ManagedProcessSupervisorError) as raised:
+            self.supervisor(importer)
+        self.assertEqual(raised.exception.code, PROCESS_STATE_CONFLICT)
+
+        with importer.store._transaction() as connection:
+            stored_state = connection.execute(
+                """
+                SELECT state_json FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (self.project_id, result.response["sprint_id"]),
+            ).fetchone()["state_json"]
+            stored_owner = connection.execute(
+                """
+                SELECT process_json FROM managed_process_owners
+                WHERE process_id = ?
+                """,
+                (process["process_id"],),
+            ).fetchone()["process_json"]
+        self.assertEqual(stored_state, encoded_state)
+        self.assertEqual(stored_owner, owner_before)
 
     def test_runtime_schema_version_bool_and_float_fail_closed(self) -> None:
         importer, result = self.activate_manifest(

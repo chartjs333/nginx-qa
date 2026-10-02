@@ -1374,13 +1374,67 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         return ()
 
     issues: list[str] = []
-    legacy_runtime_v1 = type(state.get("schema_version")) is int and state.get(
-        "schema_version"
-    ) == 1
+    schema_version = state.get("schema_version")
+    legacy_runtime_v1 = type(schema_version) is int and schema_version == 1
 
     def add(code: str) -> None:
         if code not in issues:
             issues.append(code)
+
+    raw_processes = state.get("processes")
+    migration_marker_present = "migrated_from_runtime_schema_version" in state
+    migrated_runtime_v1 = (
+        migration_marker_present
+        and type(state.get("migrated_from_runtime_schema_version")) is int
+        and state.get("migrated_from_runtime_schema_version") == 1
+        and type(schema_version) is int
+        and schema_version == 2
+        and isinstance(raw_processes, list)
+        and any(
+            isinstance(process, Mapping)
+            and type(process.get("migrated_from_runtime_schema_version")) is int
+            and process.get("migrated_from_runtime_schema_version") == 1
+            for process in raw_processes
+        )
+    )
+    process_migration_marker_present = isinstance(raw_processes, list) and any(
+        isinstance(process, Mapping)
+        and "migrated_from_runtime_schema_version" in process
+        for process in raw_processes
+    )
+    process_migration_marker_invalid = isinstance(raw_processes, list) and any(
+        isinstance(process, Mapping)
+        and "migrated_from_runtime_schema_version" in process
+        and (
+            type(process.get("migrated_from_runtime_schema_version")) is not int
+            or process.get("migrated_from_runtime_schema_version") != 1
+        )
+        for process in raw_processes
+    )
+    if (
+        migration_marker_present and not migrated_runtime_v1
+    ) or process_migration_marker_invalid or (
+        process_migration_marker_present and not migrated_runtime_v1
+    ):
+        add("RUNTIME_SCHEMA_MIGRATION_INVALID")
+    migrated_process_assignment_ids = {
+        process.get("assignment_id")
+        for process in (raw_processes if isinstance(raw_processes, list) else ())
+        if isinstance(process, Mapping)
+        and type(process.get("migrated_from_runtime_schema_version")) is int
+        and process.get("migrated_from_runtime_schema_version") == 1
+        and isinstance(process.get("assignment_id"), str)
+    }
+    raw_assignments = state.get("assignments")
+    legacy_process_graph_revisions = {
+        assignment.get("graph_revision")
+        for assignment in (
+            raw_assignments if isinstance(raw_assignments, list) else ()
+        )
+        if isinstance(assignment, Mapping)
+        and assignment.get("assignment_id") in migrated_process_assignment_ids
+        and type(assignment.get("graph_revision")) is int
+    }
 
     def records_by(
         field: str,
@@ -1562,7 +1616,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         if isinstance(definition, Mapping):
             for semantic_issue in managed_graph_semantic_issues(definition):
                 if (
-                    legacy_runtime_v1
+                    (
+                        legacy_runtime_v1
+                        or (
+                            migrated_runtime_v1
+                            and number in legacy_process_graph_revisions
+                        )
+                    )
                     and semantic_issue in _RUNTIME_V2_PROCESS_SEMANTIC_ISSUES
                 ):
                     continue
@@ -4802,6 +4862,11 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             add("PROCESS_ASSIGNMENT_COVERAGE_INVALID")
 
     for process in process_by_id.values():
+        legacy_process_record = legacy_runtime_v1 or (
+            migrated_runtime_v1
+            and type(process.get("migrated_from_runtime_schema_version")) is int
+            and process.get("migrated_from_runtime_schema_version") == 1
+        )
         process_id = process.get("process_id")
         process_assignment = assignment_by_id.get(process.get("assignment_id"))
         process_workspace = workspace_by_id.get(process.get("workspace_id"))
@@ -4976,7 +5041,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         health_endpoint = process.get("health_endpoint")
-        if not legacy_runtime_v1 and (
+        if not legacy_process_record and (
             not managed_health_path_valid(effective_health_path)
             or (
                 isinstance(health_endpoint, Mapping)

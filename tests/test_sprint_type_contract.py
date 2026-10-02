@@ -2150,6 +2150,116 @@ class SprintSchemaContractTests(unittest.TestCase):
                     managed_activation_invariant_issues(strict),
                 )
 
+                migrated = copy.deepcopy(strict)
+                migrated["migrated_from_runtime_schema_version"] = 1
+                migrated["processes"][0][
+                    "migrated_from_runtime_schema_version"
+                ] = 1
+                self.validator("managed-runtime-state-v2.schema.json").validate(
+                    migrated
+                )
+                self.assertEqual(
+                    managed_activation_invariant_issues(migrated), ()
+                )
+
+    def test_runtime_v1_migration_provenance_is_complete_and_consistent(
+        self,
+    ) -> None:
+        migrated = active_runtime_fixture(include_process_definition=True)
+        migrated["schema_version"] = 2
+        migrated["migrated_from_runtime_schema_version"] = 1
+        migrated_process = process_fixture()
+        migrated_process.update(
+            {
+                "migrated_from_runtime_schema_version": 1,
+                "restart_policy": "never",
+                "max_restart_attempts": 0,
+            }
+        )
+        migrated["processes"] = [migrated_process]
+        migrated["port_leases"] = [
+            {
+                "lease_id": "port-lease-1",
+                "instance_id": "umse-staging",
+                "network_namespace_id": "host",
+                "assignment_id": "assignment-1",
+                "process_id": None,
+                "host": "127.0.0.1",
+                "port": 18100,
+                "status": "reserved",
+                "bind_verified": False,
+                "acquired_at": TIMESTAMP,
+                "released_at": None,
+            }
+        ]
+        self.validator("managed-runtime-state-v2.schema.json").validate(migrated)
+        self.assertEqual(managed_activation_invariant_issues(migrated), ())
+
+        missing_process_marker = copy.deepcopy(migrated)
+        missing_process_marker["processes"][0].pop(
+            "migrated_from_runtime_schema_version"
+        )
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                missing_process_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(missing_process_marker),
+        )
+
+        missing_root_marker = copy.deepcopy(migrated)
+        missing_root_marker.pop("migrated_from_runtime_schema_version")
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                missing_root_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(missing_root_marker),
+        )
+
+        mixed = copy.deepcopy(migrated)
+        strict_process = process_fixture()
+        strict_process.update(
+            {
+                "process_id": "process-2",
+                "port_lease_id": "port-lease-2",
+                "restart_policy": "never",
+                "max_restart_attempts": 0,
+            }
+        )
+        mixed["processes"].append(strict_process)
+        self.validator("managed-runtime-state-v2.schema.json").validate(mixed)
+        mixed["processes"][1]["command_redacted"] = ["bad\0command"]
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(mixed)
+
+        wrong_version = copy.deepcopy(migrated)
+        wrong_version["schema_version"] = 1
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(wrong_version),
+        )
+
+        invalid_marker = copy.deepcopy(migrated)
+        invalid_marker["migrated_from_runtime_schema_version"] = True
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                invalid_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(invalid_marker),
+        )
+
+        escaped_process = process_fixture()
+        escaped_process["migrated_from_runtime_schema_version"] = 1
+        with self.assertRaises(ValidationError):
+            self.def_validator(
+                "managed-runtime-state-v2.schema.json", "process"
+            ).validate(escaped_process)
+
     def test_every_public_api_schema_has_a_positive_instance(self) -> None:
         result_key = managed_result_key("assignment-1", "DONE", COMMIT)
         runtime_v2 = active_runtime_fixture()

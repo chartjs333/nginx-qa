@@ -458,6 +458,11 @@ class _SupervisorRepository:
                 self._assert_runtime_shape(state)
                 if version != 1:
                     continue
+                if "migrated_from_runtime_schema_version" in state:
+                    raise ManagedProcessSupervisorError(
+                        PROCESS_STATE_CONFLICT,
+                        "v1 runtime already declares migration provenance",
+                    )
                 processes = state.get("processes")
                 if not isinstance(processes, list):
                     raise ManagedProcessSupervisorError(
@@ -468,6 +473,7 @@ class _SupervisorRepository:
                     continue
                 upgraded = deepcopy(state)
                 upgraded["schema_version"] = 2
+                upgraded["migrated_from_runtime_schema_version"] = 1
                 for process in upgraded["processes"]:
                     if (
                         not isinstance(process, dict)
@@ -492,6 +498,7 @@ class _SupervisorRepository:
                         )
                     process.update(
                         {
+                            "migrated_from_runtime_schema_version": 1,
                             "os_process_birth_token": None,
                             "startup_deadline_at": None,
                             "terminal_reason": None,
@@ -1156,6 +1163,7 @@ class _SupervisorRepository:
                 )
             immutable_process_keys = (
                 "process_id",
+                "migrated_from_runtime_schema_version",
                 "assignment_id",
                 "workspace_id",
                 "runtime_root",

@@ -289,6 +289,17 @@ transaction. A version-1 state containing a started or terminal process, or a
 partial/foreign safety-field shape, fails closed instead of being
 reinterpreted.
 
+That narrow migration writes `migrated_from_runtime_schema_version: 1` on the
+runtime and on every process copied from v1. The normal importer never emits
+this provenance marker. Marker-absent v2 processes retain the strict v2
+command, environment-name/value, and HTTP-origin-path rules, including when a
+new process is later added to a migrated runtime. A marked process preserves
+the exact frozen v1 command, environment, and health path so that a valid old
+snapshot remains readable and transitionable; launch-time command,
+environment, and health guards still reject unsafe values for that process
+without making the entire service unavailable. Process provenance is immutable
+across transitions and is inherited by restart attempts.
+
 Minimal managed envelope:
 
 ```json
