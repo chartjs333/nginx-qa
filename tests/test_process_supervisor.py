@@ -163,7 +163,10 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
         raise AssertionError("no contiguous localhost test port range is available")
 
     def install_service(self) -> str:
-        payload = FIXTURE.read_bytes()
+        # Git stores text blobs with LF even when a Windows checkout uses
+        # core.autocrlf=true.  Build the manifest checksum from those same
+        # canonical bytes so a fresh checkout exercises the supervisor too.
+        payload = FIXTURE.read_bytes().replace(b"\r\n", b"\n")
         (self.source / "service.py").write_bytes(payload)
         return hashlib.sha256(payload).hexdigest()
 
