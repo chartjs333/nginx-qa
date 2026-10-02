@@ -691,6 +691,7 @@ def git_ref_format_valid(value: str, *, branch: bool = False) -> bool:
         and not component.startswith(".")
         and not component.endswith(".lock")
         and windows_path_segment_valid(component)
+        and len(component.encode("utf-16-le")) // 2 <= 255
         for component in components
     )
 
@@ -705,6 +706,7 @@ def relative_git_path_valid(value: str) -> bool:
     return all(
         component not in {"", ".", ".."}
         and windows_path_segment_valid(component)
+        and len(component.encode("utf-16-le")) // 2 <= 255
         for component in value.split("/")
     )
 
@@ -734,6 +736,39 @@ def windows_path_segment_valid(value: str) -> bool:
         return False
     basename = value.split(".", 1)[0].rstrip(" ").casefold()
     return basename not in _WINDOWS_RESERVED_BASENAMES
+
+
+def managed_node_path_segment(node_id: str) -> str:
+    """Map a logical node ID to a deterministic Windows-budgeted segment."""
+
+    if not windows_path_segment_valid(node_id):
+        raise ValueError("node_id is not a safe Windows path segment")
+    if len(node_id.encode("utf-16-le")) // 2 <= 48:
+        return node_id
+    digest = hashlib.sha256(node_id.encode("utf-8")).hexdigest()
+    return f"node-{digest[:24]}"
+
+
+def managed_project_path_segment(project_id: str) -> str:
+    """Map a logical project ID to a deterministic physical path segment."""
+
+    if not windows_path_segment_valid(project_id):
+        raise ValueError("project_id is not a safe Windows path segment")
+    if len(project_id.encode("utf-16-le")) // 2 <= 48:
+        return project_id
+    digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()
+    return f"project-{digest[:24]}"
+
+
+def managed_sprint_path_segment(sprint_id: str) -> str:
+    """Keep content-addressed sprint IDs within the Win32 Git path budget."""
+
+    if not windows_path_segment_valid(sprint_id):
+        raise ValueError("sprint_id is not a safe Windows path segment")
+    if len(sprint_id.encode("utf-16-le")) // 2 <= 48:
+        return sprint_id
+    digest = hashlib.sha256(sprint_id.encode("utf-8")).hexdigest()
+    return f"sprint-{digest[:24]}"
 
 
 def windows_absolute_path_key(value: str) -> str | None:
@@ -2391,15 +2426,21 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             for value in (managed_root_key, project_id, sprint_id, node_id, assignment_id)
         ):
             return False
+        try:
+            node_path_segment = managed_node_path_segment(node_id)
+            project_path_segment = managed_project_path_segment(project_id)
+            sprint_path_segment = managed_sprint_path_segment(sprint_id)
+        except ValueError:
+            return False
         expected_key = windows_absolute_path_key(
             ntpath.join(
                 managed_root_key,
                 "projects",
-                project_id,
+                project_path_segment,
                 "sprints",
-                sprint_id,
+                sprint_path_segment,
                 "nodes",
-                node_id,
+                node_path_segment,
                 assignment_id,
             )
         )
@@ -5398,6 +5439,16 @@ def managed_project_control_invariant_issues(
                 issues.append("START_FENCING_TOKEN_INVALID")
             else:
                 fencing_tokens.add(token)
+        created_token = record.get("created_fencing_token")
+        if created_token is not None and (
+            not isinstance(created_token, int)
+            or isinstance(created_token, bool)
+            or created_token < 1
+            or not isinstance(token, int)
+            or isinstance(token, bool)
+            or created_token > token
+        ):
+            issues.append("START_CREATED_FENCING_TOKEN_INVALID")
 
         pinned = record.get("pinned_identity")
         sprint_id = record.get("sprint_id")
@@ -5487,6 +5538,26 @@ def managed_project_control_invariant_issues(
             issues.append("ACTIVATION_LEASE_OWNER_MISMATCH")
 
     active_sprint_id = control.get("active_sprint_id")
+    greatest_successful_fence = (
+        max(token for token, _ in successful_sprints_by_token)
+        if successful_sprints_by_token
+        else None
+    )
+    if greatest_successful_fence is not None:
+        for record in records:
+            if not isinstance(record, Mapping) or record.get("status") not in {
+                "VALIDATING",
+                "PREPARING",
+                "ACTIVATING",
+            }:
+                continue
+            token = record.get("created_fencing_token")
+            if (
+                not isinstance(token, int)
+                or isinstance(token, bool)
+                or token <= greatest_successful_fence
+            ):
+                issues.append("START_ATTEMPT_SUPERSEDED")
     latest_successful_sprint_id = (
         max(successful_sprints_by_token, key=lambda item: item[0])[1]
         if successful_sprints_by_token
@@ -5569,6 +5640,9 @@ __all__ = [
     "managed_graph_semantic_issues",
     "managed_integration_id",
     "managed_integration_workspace_id",
+    "managed_node_path_segment",
+    "managed_project_path_segment",
+    "managed_sprint_path_segment",
     "managed_occurrence_id",
     "managed_project_control_invariant_issues",
     "managed_runtime_config_invariant_issues",

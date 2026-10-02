@@ -74,6 +74,7 @@
         "attempt_id": {"type": "string", "minLength": 1},
         "recovery_of_attempt_id": {"type": ["string", "null"], "minLength": 1},
         "recovery_generation": {"type": "integer", "minimum": 0, "maximum": 100},
+        "created_fencing_token": {"type": "integer", "minimum": 1},
         "fencing_token": {"type": ["integer", "null"], "minimum": 1},
         "pinned_identity": {
           "oneOf": [

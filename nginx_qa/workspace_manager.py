@@ -28,8 +28,15 @@ from .git_provider import (
     ManagedGitProvider,
     ManagedRepository,
     RepositorySpec,
+    TRANSIENT_GIT_ERROR_CODES,
 )
-from .sprint_types import windows_absolute_path_key, windows_path_segment_valid
+from .sprint_types import (
+    managed_node_path_segment,
+    managed_project_path_segment,
+    managed_sprint_path_segment,
+    windows_absolute_path_key,
+    windows_path_segment_valid,
+)
 
 
 _COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
@@ -181,7 +188,42 @@ class ManagedWorkspaceManager:
                     "WORKSPACE_ROOT_FORBIDDEN",
                     "managed root overlaps an install, service, or protected root",
                 )
-        self._assert_no_parent_repository(root)
+        self._assert_no_parent_repository(root, include_candidate=True)
+
+    @classmethod
+    def validate_isolated_root(
+        cls,
+        value: str | os.PathLike[str],
+        *,
+        protected_roots: tuple[str | os.PathLike[str], ...] = (),
+        install_roots: tuple[str | os.PathLike[str], ...] = (),
+    ) -> Path:
+        """Validate a configured mutation root without creating it.
+
+        Runtime, lease, prompt, and workspace roots share the same containment
+        hazards: filesystem aliases, parent Git repositories, user/install
+        roots, and protected/live trees.  Import preflight uses this helper
+        before opening SQLite or creating a mirror.
+        """
+
+        root = cls._canonical_configured_root(value)
+        home = Path(os.path.realpath(Path.home().resolve(strict=False)))
+        if _same_non_strict_path(root, home):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_FORBIDDEN", "the user home cannot be a mutation root"
+            )
+        forbidden = tuple(
+            cls._resolve_configured_path(item)
+            for item in (*protected_roots, *install_roots)
+        )
+        for candidate in forbidden:
+            if _paths_overlap(root, candidate):
+                raise WorkspaceError(
+                    "WORKSPACE_ROOT_FORBIDDEN",
+                    "mutation root overlaps an install, service, or protected root",
+                )
+        cls._assert_no_parent_repository(root, include_candidate=True)
+        return root
 
     @staticmethod
     def _validate_request(request: WorkspaceRequest) -> None:
@@ -251,11 +293,11 @@ class ManagedWorkspaceManager:
         self._validate_request(request)
         root = (
             self.workspaces_root
-            / request.project_id
+            / managed_project_path_segment(request.project_id)
             / "sprints"
-            / request.sprint_id
+            / managed_sprint_path_segment(request.sprint_id)
             / "nodes"
-            / request.node_id
+            / managed_node_path_segment(request.node_id)
             / request.assignment_id
         )
         resolved_candidate = _resolve_from_nearest_existing(root)
@@ -277,8 +319,12 @@ class ManagedWorkspaceManager:
         return root
 
     @staticmethod
-    def _assert_no_parent_repository(candidate: Path) -> None:
-        current = candidate.parent if candidate.suffix or candidate.name else candidate
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -> None:
+        current = candidate if include_candidate else candidate.parent
         while True:
             dot_git = current / ".git"
             bare_marker = (
@@ -299,11 +345,24 @@ class ManagedWorkspaceManager:
         self,
         request: WorkspaceRequest,
         *,
+        repository: ManagedRepository | None = None,
         expected_record: ManagedWorkspace | None = None,
+        publish_write_lease: bool = True,
+        selected_initial_head: str | None = None,
     ) -> ManagedWorkspace:
         """Safely create a workspace or verify an exact frozen replay."""
 
         self._validate_request(request)
+        if request.access == "read" and selected_initial_head is not None:
+            raise WorkspaceError(
+                "WORKSPACE_ACCESS_INVALID",
+                "read workspaces cannot override their pinned source head",
+            )
+        if publish_write_lease and selected_initial_head is not None:
+            raise WorkspaceError(
+                "BRANCH_POLICY_INVALID",
+                "selected_initial_head is reserved for unpublished preparation",
+            )
         expected_root = self.expected_root(request)
         if expected_record is not None and not (
             expected_root.exists() or expected_root.is_symlink()
@@ -312,7 +371,19 @@ class ManagedWorkspaceManager:
                 "WORKSPACE_ROOT_MISMATCH",
                 "a frozen workspace record points to a missing checkout",
             )
-        repository = self.git_provider.ensure_mirror(request.repository_id)
+        if repository is None:
+            repository = self.git_provider.ensure_mirror(request.repository_id)
+        elif (
+            repository.repository_id != request.repository_id
+            or repository.mirror_path.resolve(strict=False)
+            != self.git_provider.mirror_path_for(
+                repository.canonical_remote
+            ).resolve(strict=False)
+        ):
+            raise WorkspaceError(
+                "REPOSITORY_IDENTITY_MISMATCH",
+                "bound repository does not match the workspace request",
+            )
         spec = repository.spec
         self.git_provider.assert_commit(repository, request.source_commit)
 
@@ -328,56 +399,86 @@ class ManagedWorkspaceManager:
                 request.assigned_branch,
                 request.assignment_id,
             )
-            frozen_lease = self.branch_leases.get(lease_id)
-            if expected_record is not None:
-                self._assert_record_matches_request(
-                    expected_record, request, repository, expected_root
-                )
-                if frozen_lease is None:
-                    raise BranchLeaseError(
-                        "BRANCH_LEASE_NOT_FOUND",
-                        "frozen write workspace has no durable branch lease",
+            if not publish_write_lease:
+                if expected_record is not None:
+                    self._assert_record_matches_request(
+                        expected_record,
+                        request,
+                        repository,
+                        expected_root,
+                        allow_unpublished_write=True,
                     )
-                initial_head = expected_record.initial_head_commit
-            elif frozen_lease is not None:
-                if frozen_lease.status != "active":
-                    raise BranchLeaseError(
-                        "BRANCH_LEASE_RELEASED",
-                        "released assignment lease cannot prepare another workspace",
+                    initial_head = expected_record.initial_head_commit
+                    if (
+                        selected_initial_head is not None
+                        and selected_initial_head != initial_head
+                    ):
+                        raise WorkspaceError(
+                            "BRANCH_DIVERGED",
+                            "unpublished workspace head differs from frozen preflight",
+                        )
+                elif selected_initial_head is None:
+                    raise WorkspaceError(
+                        "BRANCH_POLICY_INVALID",
+                        "unpublished write preparation needs a frozen initial head",
                     )
-                initial_head = frozen_lease.initial_head_commit
+                else:
+                    initial_head = selected_initial_head
+                self.git_provider.assert_commit(repository, initial_head)
+                lease_id = None
             else:
-                raw_heads = self.git_provider.branch_heads(
-                    repository, request.assigned_branch
+                frozen_lease = self.branch_leases.get(lease_id)
+                if expected_record is not None:
+                    self._assert_record_matches_request(
+                        expected_record, request, repository, expected_root
+                    )
+                    if frozen_lease is None:
+                        raise BranchLeaseError(
+                            "BRANCH_LEASE_NOT_FOUND",
+                            "frozen write workspace has no durable branch lease",
+                        )
+                    initial_head = expected_record.initial_head_commit
+                elif frozen_lease is not None:
+                    if frozen_lease.status != "active":
+                        raise BranchLeaseError(
+                            "BRANCH_LEASE_RELEASED",
+                            "released assignment lease cannot prepare another workspace",
+                        )
+                    initial_head = frozen_lease.initial_head_commit
+                else:
+                    raw_heads = self.git_provider.branch_heads(
+                        repository, request.assigned_branch
+                    )
+                    heads = BranchHeads(
+                        local_head=raw_heads.get(
+                            f"refs/heads/{request.assigned_branch}"
+                        ),
+                        remote_head=raw_heads.get(
+                            f"refs/remotes/origin/{request.assigned_branch}"
+                        ),
+                    )
+                    initial_head = select_initial_head(
+                        policy=request.existing_branch_policy,
+                        source_commit=request.source_commit,
+                        expected_branch_head=request.expected_branch_head,
+                        heads=heads,
+                        is_ancestor=lambda ancestor, descendant: self.git_provider.is_ancestor(
+                            repository, ancestor, descendant
+                        ),
+                    )
+                self.git_provider.assert_commit(repository, initial_head)
+                lease = self.branch_leases.acquire_write(
+                    BranchLeaseRequest(
+                        lease_id=lease_id,
+                        repository_id=request.repository_id,
+                        repository_key=repository.canonical_remote,
+                        mirror_storage_key=repository.mirror_storage_key,
+                        branch=request.assigned_branch,
+                        assignment_id=request.assignment_id,
+                        source_commit=request.source_commit,
+                        initial_head_commit=initial_head,
+                    )
                 )
-                heads = BranchHeads(
-                    local_head=raw_heads.get(f"refs/heads/{request.assigned_branch}"),
-                    remote_head=raw_heads.get(
-                        f"refs/remotes/origin/{request.assigned_branch}"
-                    ),
-                )
-                initial_head = select_initial_head(
-                    policy=request.existing_branch_policy,
-                    source_commit=request.source_commit,
-                    expected_branch_head=request.expected_branch_head,
-                    heads=heads,
-                    is_ancestor=lambda ancestor, descendant: self.git_provider.is_ancestor(
-                        repository, ancestor, descendant
-                    ),
-                )
-            self.git_provider.assert_commit(repository, initial_head)
-            lease = self.branch_leases.acquire_write(
-                BranchLeaseRequest(
-                    lease_id=lease_id,
-                    repository_id=request.repository_id,
-                    repository_key=repository.canonical_remote,
-                    mirror_storage_key=repository.mirror_storage_key,
-                    branch=request.assigned_branch,
-                    assignment_id=request.assignment_id,
-                    source_commit=request.source_commit,
-                    initial_head_commit=initial_head,
-                )
-            )
         elif expected_record is not None:
             self._assert_record_matches_request(
                 expected_record, request, repository, expected_root
@@ -425,7 +526,7 @@ class ManagedWorkspaceManager:
                         initial_head,
                         owner_id=f"{request.assignment_id}:initial",
                     )
-                    if request.access == "write":
+                    if request.access == "write" and publish_write_lease:
                         assert request.assigned_branch is not None
                         self.git_provider.reserve_local_branch(
                             repository,
@@ -446,7 +547,7 @@ class ManagedWorkspaceManager:
                     initial_head,
                     owner_id=f"{request.assignment_id}:initial",
                 )
-                if request.access == "write":
+                if request.access == "write" and publish_write_lease:
                     assert request.assigned_branch is not None
                     self.git_provider.reserve_local_branch(
                         repository,
@@ -470,6 +571,154 @@ class ManagedWorkspaceManager:
             raise WorkspaceError(
                 "WORKSPACE_LOCK_TIMEOUT", "timed out waiting for the workspace lock"
             ) from None
+
+    def publish_write_workspace(
+        self,
+        request: WorkspaceRequest,
+        workspace: ManagedWorkspace,
+        *,
+        repository: ManagedRepository | None = None,
+        transactional_lease: BranchLease | None = None,
+        publish_mirror_ref: bool = True,
+    ) -> ManagedWorkspace:
+        """Fence and publish one already prepared write workspace.
+
+        PREPARE uses ``publish_write_lease=False`` so the checkout remains an
+        unreachable artifact.  ACTIVATE calls this method immediately before
+        its durable state commit.  Replays are exact and never reset either the
+        mirror branch or the workspace.
+        """
+
+        self._validate_request(request)
+        if request.access != "write" or not request.assigned_branch:
+            raise WorkspaceError(
+                "WORKSPACE_ACCESS_INVALID", "only write workspaces can be published"
+            )
+        if repository is None:
+            repository = self.git_provider.ensure_mirror(
+                request.repository_id, fetch=False
+            )
+        elif (
+            repository.repository_id != request.repository_id
+            or repository.mirror_path.resolve(strict=False)
+            != self.git_provider.mirror_path_for(
+                repository.canonical_remote
+            ).resolve(strict=False)
+        ):
+            raise WorkspaceError(
+                "REPOSITORY_IDENTITY_MISMATCH",
+                "bound repository does not match the workspace request",
+            )
+        expected_root = self.expected_root(request)
+        self._assert_record_matches_request(
+            workspace,
+            request,
+            repository,
+            expected_root,
+            allow_unpublished_write=workspace.branch_lease_id is None,
+        )
+        lease_id = deterministic_branch_lease_id(
+            repository.mirror_storage_key,
+            request.assigned_branch,
+            request.assignment_id,
+        )
+        if transactional_lease is not None:
+            expected_request = BranchLeaseRequest(
+                lease_id=lease_id,
+                repository_id=request.repository_id,
+                repository_key=repository.canonical_remote,
+                mirror_storage_key=repository.mirror_storage_key,
+                branch=request.assigned_branch,
+                assignment_id=request.assignment_id,
+                source_commit=request.source_commit,
+                initial_head_commit=workspace.initial_head_commit,
+            )
+            if (
+                transactional_lease.status != "active"
+                or transactional_lease.mode != "write"
+                or transactional_lease.lease_id != expected_request.lease_id
+                or transactional_lease.repository_id != expected_request.repository_id
+                or transactional_lease.repository_key != expected_request.repository_key
+                or transactional_lease.mirror_storage_key
+                != expected_request.mirror_storage_key
+                or transactional_lease.branch != expected_request.branch
+                or transactional_lease.assignment_id != expected_request.assignment_id
+                or transactional_lease.source_commit != expected_request.source_commit
+                or transactional_lease.initial_head_commit
+                != expected_request.initial_head_commit
+            ):
+                raise WorkspaceError(
+                    "BRANCH_LEASE_CONFLICT",
+                    "transactional branch lease does not match the workspace",
+                )
+            prior_lease = transactional_lease
+        else:
+            prior_lease = self.branch_leases.get(lease_id)
+        if prior_lease is None:
+            raw_heads = self.git_provider.branch_heads(
+                repository, request.assigned_branch
+            )
+            selected = select_initial_head(
+                policy=request.existing_branch_policy or "",
+                source_commit=request.source_commit,
+                expected_branch_head=request.expected_branch_head,
+                heads=BranchHeads(
+                    local_head=raw_heads.get(f"refs/heads/{request.assigned_branch}"),
+                    remote_head=raw_heads.get(
+                        f"refs/remotes/origin/{request.assigned_branch}"
+                    ),
+                ),
+                is_ancestor=lambda ancestor, descendant: self.git_provider.is_ancestor(
+                    repository, ancestor, descendant
+                ),
+            )
+            if selected != workspace.initial_head_commit:
+                raise WorkspaceError(
+                    "BRANCH_DIVERGED",
+                    "branch changed after the frozen preflight observation",
+                )
+        lease = (
+            transactional_lease
+            if transactional_lease is not None
+            else self.branch_leases.acquire_write(
+                BranchLeaseRequest(
+                    lease_id=lease_id,
+                    repository_id=request.repository_id,
+                    repository_key=repository.canonical_remote,
+                    mirror_storage_key=repository.mirror_storage_key,
+                    branch=request.assigned_branch,
+                    assignment_id=request.assignment_id,
+                    source_commit=request.source_commit,
+                    initial_head_commit=workspace.initial_head_commit,
+                )
+            )
+        )
+        try:
+            if publish_mirror_ref:
+                self.git_provider.reserve_local_branch(
+                    repository,
+                    request.assigned_branch,
+                    policy=request.existing_branch_policy or "",
+                    source_commit=request.source_commit,
+                    expected_branch_head=request.expected_branch_head,
+                    selected_head=workspace.initial_head_commit,
+                )
+            return self.verify(
+                request,
+                repository,
+                expected_root=expected_root,
+                expected_initial_head=workspace.initial_head_commit,
+                branch_lease_id=lease.lease_id,
+            )
+        except Exception:
+            if prior_lease is None and transactional_lease is None:
+                self.branch_leases.release(
+                    lease.lease_id,
+                    request.assignment_id,
+                    assignment_settled=True,
+                    all_processes_stopped=True,
+                )
+            raise
 
     def _materialize(
         self,
@@ -503,7 +752,10 @@ class ManagedWorkspaceManager:
                     "workspace parent changed into a protected root",
                 )
         self._assert_no_parent_repository(expected_root)
-        preparation_root = expected_root.parent / f".prepare-{uuid.uuid4().hex}"
+        # Keep the unpublished name opaque but compact: the final managed path
+        # already contains a full sprint digest and Git appends ~50 characters
+        # for loose objects on Windows.
+        preparation_root = expected_root.parent / f".p-{uuid.uuid4().hex[:24]}"
         if preparation_root.exists() or preparation_root.is_symlink():
             raise WorkspaceError(
                 "WORKSPACE_ROOT_MISMATCH", "workspace preparation root already exists"
@@ -511,6 +763,8 @@ class ManagedWorkspaceManager:
 
         self.git_provider.runner.run(
             (
+                "-c",
+                "core.longpaths=true",
                 "init",
                 "--quiet",
                 f"--object-format={repository.object_format}",
@@ -518,6 +772,14 @@ class ManagedWorkspaceManager:
                 "--",
                 str(preparation_root),
             ),
+            error_code="WORKSPACE_CREATE_FAILED",
+        )
+        # The frozen managed path topology is intentionally descriptive and
+        # can exceed the legacy Win32 260-character limit once Git appends
+        # object paths.  Enable Git's native long-path handling before the
+        # first fetch writes any objects into the prepared checkout.
+        self.git_provider.runner.run(
+            ("-C", str(preparation_root), "config", "core.longpaths", "true"),
             error_code="WORKSPACE_CREATE_FAILED",
         )
         self._verify_git_root_only(
@@ -621,6 +883,8 @@ class ManagedWorkspaceManager:
                 error_code="WORKSPACE_ROOT_MISMATCH",
             )
         except ManagedGitError as exc:
+            if exc.code in TRANSIENT_GIT_ERROR_CODES:
+                raise
             raise WorkspaceError(
                 "WORKSPACE_ROOT_MISMATCH", "workspace is not an owned Git root"
             ) from exc
@@ -855,6 +1119,8 @@ class ManagedWorkspaceManager:
                 error_code="WORKSPACE_ROOT_MISMATCH",
             ).stdout.strip()
         except ManagedGitError as exc:
+            if exc.code in TRANSIENT_GIT_ERROR_CODES:
+                raise
             raise WorkspaceError(
                 "WORKSPACE_ROOT_MISMATCH", "prepared repository root is invalid"
             ) from exc
@@ -905,6 +1171,8 @@ class ManagedWorkspaceManager:
                 error_code="REPOSITORY_IDENTITY_MISMATCH",
             ).stdout.splitlines()
         except ManagedGitError as exc:
+            if exc.code in TRANSIENT_GIT_ERROR_CODES:
+                raise
             raise WorkspaceError(
                 "REPOSITORY_IDENTITY_MISMATCH", "workspace origin is missing"
             ) from exc
@@ -922,6 +1190,8 @@ class ManagedWorkspaceManager:
         request: WorkspaceRequest,
         repository: ManagedRepository,
         expected_root: Path,
+        *,
+        allow_unpublished_write: bool = False,
     ) -> None:
         if (
             record.workspace_id != _workspace_id(request)
@@ -953,11 +1223,20 @@ class ManagedWorkspaceManager:
             )
             or (
                 request.access == "write"
-                and record.branch_lease_id
-                != deterministic_branch_lease_id(
-                    repository.mirror_storage_key,
-                    request.assigned_branch or "",
-                    request.assignment_id,
+                and (
+                    (
+                        allow_unpublished_write
+                        and record.branch_lease_id is not None
+                    )
+                    or (
+                        not allow_unpublished_write
+                        and record.branch_lease_id
+                        != deterministic_branch_lease_id(
+                            repository.mirror_storage_key,
+                            request.assigned_branch or "",
+                            request.assignment_id,
+                        )
+                    )
                 )
             )
         ):
