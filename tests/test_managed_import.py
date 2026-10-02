@@ -13,6 +13,7 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
+from typing import Callable
 from unittest.mock import AsyncMock, Mock, patch
 
 import main
@@ -3504,6 +3505,20 @@ class ManagedImportStoreTests(ManagedImportFixture):
     def test_store_path_must_be_absolute(self) -> None:
         with self.assertRaises(ValueError):
             ManagedImportStore("relative.sqlite3")
+
+    def test_process_local_rollback_runs_while_sqlite_writer_is_exclusive(self) -> None:
+        store = self.importer().store
+        rollback_actions: list[Callable[[], None]] = []
+        transaction_states: list[bool] = []
+
+        with self.assertRaisesRegex(RuntimeError, "force rollback"):
+            with store._transaction(rollback_actions=rollback_actions) as connection:
+                rollback_actions.append(
+                    lambda: transaction_states.append(connection.in_transaction)
+                )
+                raise RuntimeError("force rollback")
+
+        self.assertEqual(transaction_states, [True])
 
     def test_shared_database_is_safe_when_branch_schema_is_first(self) -> None:
         importer = self.importer()

@@ -40,14 +40,17 @@ class ManagedPortReservationError(RuntimeError):
 class ManagedPortReservationToken:
     """Identify sockets newly acquired by one activation transaction.
 
-    The shape intentionally matches the original managed-import token.  An
-    idempotent acquisition therefore returns a token with no ``acquired_keys``;
-    rolling it back leaves reservations acquired by an earlier transaction in
-    place.
+    ``acquired_keys`` intentionally preserves the original managed-import API.
+    Its aligned registry revisions and generations fence rollback against a
+    later durable, reacquired, or handed-off reservation.  An idempotent
+    acquisition returns no acquired entries, so rolling it back leaves an
+    earlier transaction's holder intact.
     """
 
     database_key: str
     acquired_keys: tuple[tuple[str, str], ...]
+    acquired_revisions: tuple[int, ...] = ()
+    acquired_generations: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,7 +328,7 @@ class ManagedPortReservationRegistry:
         *,
         durable: bool = False,
     ) -> ManagedPortReservationToken:
-        acquired: list[tuple[str, str]] = []
+        acquired: list[tuple[tuple[str, str], int]] = []
         try:
             for lease in requested:
                 key = (database_key, lease.lease_id)
@@ -344,7 +347,7 @@ class ManagedPortReservationRegistry:
                         "managed child port is already owned"
                     )
                 holder = self._bind(lease.host, lease.port)
-                self._reservations[key] = _ManagedPortReservation(
+                reservation = _ManagedPortReservation(
                     database_path=path,
                     database_key=database_key,
                     lease_id=lease.lease_id,
@@ -356,14 +359,23 @@ class ManagedPortReservationRegistry:
                     durable_seen=durable,
                     durable_revision=self._next_durable_revision_locked(),
                 )
+                self._reservations[key] = reservation
                 self._endpoint_owners[lease.endpoint_key] = key
-                acquired.append(key)
+                acquired.append((key, reservation.durable_revision))
         except (OSError, ManagedPortReservationError) as exc:
-            self._release_keys_locked(acquired)
+            self._release_keys_locked(tuple(key for key, _revision in acquired))
             raise ManagedPortReservationError(
                 "managed child port is already owned"
             ) from exc
-        return ManagedPortReservationToken(database_key, tuple(acquired))
+        return ManagedPortReservationToken(
+            database_key,
+            tuple(key for key, _revision in acquired),
+            tuple(revision for _key, revision in acquired),
+            tuple(
+                self._reservations[key].generation
+                for key, _revision in acquired
+            ),
+        )
 
     def _handoff_reservation_locked(
         self,
@@ -822,11 +834,28 @@ class ManagedPortReservationRegistry:
         """Release sockets first acquired by an uncommitted transaction."""
 
         with self._lock:
-            keys = tuple(
-                key
-                for key in token.acquired_keys
-                if len(key) == 2 and key[0] == token.database_key
-            )
+            if not (
+                len(token.acquired_keys)
+                == len(token.acquired_revisions)
+                == len(token.acquired_generations)
+            ):
+                return
+            keys: list[tuple[str, str]] = []
+            for key, revision, generation in zip(
+                token.acquired_keys,
+                token.acquired_revisions,
+                token.acquired_generations,
+                strict=True,
+            ):
+                if len(key) != 2 or key[0] != token.database_key:
+                    continue
+                reservation = self._reservations.get(key)
+                if (
+                    reservation is not None
+                    and reservation.durable_revision == revision
+                    and reservation.generation == generation
+                ):
+                    keys.append(key)
             self._release_keys_locked(keys)
 
     def release(

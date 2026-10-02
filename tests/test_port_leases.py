@@ -78,6 +78,45 @@ class ManagedPortReservationRegistryTests(unittest.TestCase):
         with self.bind_competitor(port):
             pass
 
+    def test_stale_rollback_token_cannot_release_reacquired_lease(self) -> None:
+        database = self.database("runtime.sqlite3")
+        port = self.available_port()
+        lease = self.lease("lease-1", port)
+
+        stale = self.registry.acquire_many(database, [lease])
+        self.registry.release(database, "lease-1")
+        current = self.registry.acquire_many(database, [lease])
+
+        self.registry.rollback(stale)
+        self.assertTrue(self.registry.holds_endpoint(database, "127.0.0.1", port))
+        with self.assertRaises(OSError):
+            self.bind_competitor(port)
+
+        self.registry.rollback(current)
+        with self.bind_competitor(port):
+            pass
+
+    def test_rollback_token_cannot_release_durable_or_handed_off_lease(self) -> None:
+        database = self.database("runtime.sqlite3")
+        port = self.available_port()
+        lease = self.lease("lease-1", port)
+
+        provisional = self.registry.acquire_many(database, [lease])
+        self.registry.mark_durable_many(database, [lease])
+        self.registry.rollback(provisional)
+        self.assertTrue(self.registry.holds_endpoint(database, "127.0.0.1", port))
+
+        self.registry.release(database, "lease-1")
+        durable = self.registry.acquire_durable_many(database, [lease])
+        handoff = self.registry.begin_handoff(database, "lease-1")
+        self.registry.rollback(durable)
+        owner = self.registry.endpoint_owner("127.0.0.1", port)
+        self.assertIsNotNone(owner)
+        assert owner is not None
+        self.assertEqual(owner.state, "handing_off")
+        self.registry.reacquire_handoff(handoff)
+        self.registry.release(database, "lease-1")
+
     def test_endpoint_claim_is_global_across_databases_and_namespaces(self) -> None:
         first_database = self.database("first.sqlite3")
         second_database = self.database("second.sqlite3")

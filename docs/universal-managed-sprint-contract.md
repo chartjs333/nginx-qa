@@ -438,6 +438,11 @@ normalized executable/cwd, and Windows Job Object (or equivalent held process
 handle) identity. Reconciliation or termination requires all available
 components to match and rejects the live service PID/ancestry. A reused PID or
 identity mismatch becomes `ORPHAN_PROCESS`; it is never signalled by PID alone.
+On Windows, recovered resume rechecks the birth token, executable, and Job
+membership through the same pinned process handle used by `NtResumeProcess`;
+termination retains one authenticated Job handle from identity/scope validation
+through `TerminateJobObject`, so a recycled PID or Job name cannot retarget the
+OS side effect.
 The durable process record also equals the creation revision's effective
 command, explicit environment, resolved in-workspace cwd, health path, restart
 policy/backoff/cap, and finite resource limits. Stopped and failed records keep
@@ -1382,7 +1387,11 @@ VALIDATE -> PREPARE -> ACTIVATE
   corresponding queue items recoverably enqueueable through the outbox. Every
   `reserved` initial port is first acquired as a process-local exclusive OS
   socket; SQLite rollback releases only the sockets acquired by that failed
-  transaction. Before serving traffic, startup attempts every committed
+  transaction. That process-local rollback runs before the SQLite writer lock
+  is released and uses a registry-wide revision plus a reservation generation
+  fence, so a stale token cannot remove a durable, reacquired, or handed-off
+  successor holder.
+  Before serving traffic, startup attempts every committed
   assignment independently. It reacquires that assignment's durable
   `reserved` ports when possible; a conflicting endpoint leaves only that
   assignment fail-closed, and the background monitor then records durable

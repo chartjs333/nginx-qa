@@ -1052,6 +1052,62 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
             second._windows_action_mutex_name(process_id),
         )
 
+    def test_receipt_recovery_rejects_config_drift_before_claim(self) -> None:
+        importer, result = self.activate_manifest(
+            self.single_process_manifest("--mode", "serve")
+        )
+        owner = self.supervisor(importer)
+        context = owner._repository.contexts(
+            project_id=self.project_id,
+            sprint_id=result.response["sprint_id"],
+        )[0]
+        process_id = str(context.process["process_id"])
+        receipt_path = owner._pid_receipt_path(process_id)
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        receipt_path.write_text("{}", encoding="utf-8")
+
+        drifted_config = dict(self.runtime_config)
+        drifted_config["instance_id"] = "drifted-service-instance"
+        drifted = ManagedProcessSupervisor(
+            drifted_config,
+            importer.store,
+            self.port_reservations,
+        )
+        self.supervisors.append(drifted)
+        with (
+            patch.object(
+                drifted._repository,
+                "claim_prepared",
+                wraps=drifted._repository.claim_prepared,
+            ) as claim_prepared,
+            self.assertRaises(ManagedProcessSupervisorError) as raised,
+        ):
+            drifted.launch_prepared(
+                self.project_id,
+                result.response["sprint_id"],
+                process_id,
+            )
+        self.assertEqual(
+            raised.exception.code,
+            process_supervisor_module.RUNTIME_CONFIG_DRIFT,
+        )
+        claim_prepared.assert_not_called()
+
+        claim = owner._repository.claim_prepared(
+            self.project_id,
+            result.response["sprint_id"],
+            process_id,
+            owner="claim-verifier",
+            ttl_seconds=30,
+        )
+        self.assertIsNotNone(claim)
+        assert claim is not None
+        owner._repository.release_claim(
+            process_id,
+            owner="claim-verifier",
+            supervisor_fence=claim.supervisor_fence,
+        )
+
     def test_windows_launch_path_pins_block_retarget_before_resume(self) -> None:
         frozen_parent = self.base / "pinned-bin"
         frozen_parent.mkdir()
@@ -3379,6 +3435,137 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
             supervisor._assert_scope_safe(context, job=FakeJob())  # type: ignore[arg-type]
         self.assertEqual(raised.exception.code, ORPHAN_PROCESS)
         self.assertIsNotNone(process_identity(os.getpid()))
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job termination handle")
+    def test_recovered_termination_anchors_one_job_through_signal(self) -> None:
+        importer, result = self.activate_manifest(
+            self.single_process_manifest("--mode", "serve")
+        )
+        supervisor = self.supervisor(importer)
+        context = supervisor._repository.contexts(
+            project_id=self.project_id,
+            sprint_id=result.response["sprint_id"],
+        )[0]
+        expected_job = supervisor._windows_job_name(context)
+        context.process.update(
+            {
+                "pid": 424242,
+                "os_process_created_at": datetime_now(),
+                "os_process_birth_token": "windows-filetime:424242",
+                "process_group_id": expected_job,
+                "job_object_id": expected_job,
+            }
+        )
+
+        class FakeJob:
+            name = expected_job
+            terminated = False
+            closed = False
+
+            def active_process_ids(inner_self: object) -> frozenset[int]:
+                return frozenset()
+
+            def terminate(inner_self: object) -> None:
+                inner_self.terminated = True  # type: ignore[attr-defined]
+
+            def close(inner_self: object) -> None:
+                inner_self.closed = True  # type: ignore[attr-defined]
+
+        job = FakeJob()
+        death_checks = 0
+
+        def confirmed_dead(
+            _context: object,
+            *,
+            owned: object = None,
+            job: object = None,
+        ) -> bool:
+            nonlocal death_checks
+            self.assertIsNone(owned)
+            self.assertIs(job, anchored_job)
+            death_checks += 1
+            return death_checks > 1
+
+        def record_identity(
+            _context: object,
+            *,
+            allow_posix_launch_helper: bool = False,
+            job: object = None,
+        ) -> tuple[object, dict[str, object]]:
+            self.assertFalse(allow_posix_launch_helper)
+            self.assertIs(job, anchored_job)
+            return object(), {}
+
+        anchored_job = job
+        with (
+            patch.object(
+                process_supervisor_module._WindowsJob,
+                "open",
+                return_value=anchored_job,
+            ) as open_job,
+            patch.object(supervisor, "_confirmed_dead", side_effect=confirmed_dead),
+            patch.object(supervisor, "_record_identity", side_effect=record_identity),
+        ):
+            supervisor._terminate_context(context)
+
+        open_job.assert_called_once_with(expected_job)
+        self.assertTrue(job.terminated)
+        self.assertTrue(job.closed)
+        self.assertEqual(death_checks, 2)
+
+    def test_resume_exact_rejects_reused_pid_on_the_open_handle(self) -> None:
+        class FakeKernel32:
+            opened: list[tuple[int, bool, int]] = []
+            closed: list[int] = []
+
+            def OpenProcess(
+                inner_self: object,
+                access: int,
+                inherit: bool,
+                pid: int,
+            ) -> int:
+                inner_self.opened.append((access, inherit, pid))  # type: ignore[attr-defined]
+                return 12345
+
+            def CloseHandle(inner_self: object, handle: int) -> bool:
+                inner_self.closed.append(handle)  # type: ignore[attr-defined]
+                return True
+
+            def IsProcessInJob(inner_self: object, *_arguments: object) -> bool:
+                raise AssertionError("changed process must be rejected before membership")
+
+        kernel32 = FakeKernel32()
+        job = process_supervisor_module._WindowsJob(
+            67890,
+            "Global\\nginx-qa-resume-exact-test",
+            kernel32,
+        )
+        expected = process_supervisor_module.ProcessIdentity(
+            pid=1234,
+            created_at="2026-01-01T00:00:00+00:00",
+            birth_token="windows-filetime:1",
+            executable_path=sys.executable,
+            cwd=None,
+            process_group_id=None,
+        )
+        replacement = process_supervisor_module.ProcessIdentity(
+            pid=1234,
+            created_at="2026-01-01T00:00:01+00:00",
+            birth_token="windows-filetime:2",
+            executable_path=sys.executable,
+            cwd=None,
+            process_group_id=None,
+        )
+        with patch.object(
+            process_supervisor_module,
+            "_windows_process_identity_from_handle",
+            return_value=replacement,
+        ):
+            with self.assertRaises(ManagedProcessSupervisorError) as raised:
+                job.resume_exact(expected, process_id="managed-process")
+        self.assertEqual(raised.exception.code, ORPHAN_PROCESS)
+        self.assertEqual(kernel32.opened[0][1:], (False, expected.pid))
+        self.assertEqual(kernel32.closed, [12345])
 
     @unittest.skipUnless(os.name == "nt", "Windows Job resource limits")
     def test_fresh_launch_rejects_a_preexisting_named_job(self) -> None:

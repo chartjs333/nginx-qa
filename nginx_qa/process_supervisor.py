@@ -1487,14 +1487,17 @@ def _linux_process_identity(pid: int) -> ProcessIdentity | None:
         return None
 
 
-def _windows_process_identity(pid: int) -> ProcessIdentity | None:
+def _windows_process_identity_from_handle(
+    pid: int,
+    handle: Any,
+    kernel32: Any,
+) -> ProcessIdentity | None:
+    """Read identity from an already-open handle that pins one process object."""
+
     try:
         import ctypes
         from ctypes import wintypes
 
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
-        kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.GetProcessTimes.argtypes = [
             wintypes.HANDLE,
             ctypes.POINTER(wintypes.FILETIME),
@@ -1510,44 +1513,61 @@ def _windows_process_identity(pid: int) -> ProcessIdentity | None:
             ctypes.POINTER(wintypes.DWORD),
         ]
         kernel32.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+        kernel32.GetProcessId.restype = wintypes.DWORD
+        if not handle or int(kernel32.GetProcessId(handle)) != pid:
+            return None
+        creation = wintypes.FILETIME()
+        exit_time = wintypes.FILETIME()
+        kernel_time = wintypes.FILETIME()
+        user_time = wintypes.FILETIME()
+        if not kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(creation),
+            ctypes.byref(exit_time),
+            ctypes.byref(kernel_time),
+            ctypes.byref(user_time),
+        ):
+            return None
+        ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
+        unix_seconds = ticks / 10_000_000 - 11_644_473_600
+        created = datetime.fromtimestamp(unix_seconds, timezone.utc).isoformat()
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(
+            handle, 0, buffer, ctypes.byref(size)
+        ):
+            return None
+        return ProcessIdentity(
+            pid,
+            created,
+            f"windows-filetime:{ticks}",
+            os.path.realpath(buffer.value),
+            None,
+            None,
+        )
+    except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+        return None
+
+
+def _windows_process_identity(pid: int) -> ProcessIdentity | None:
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
         kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
         kernel32.CloseHandle.restype = wintypes.BOOL
         handle = kernel32.OpenProcess(0x1000 | 0x00100000, False, pid)
         if not handle:
             return None
         try:
-            creation = wintypes.FILETIME()
-            exit_time = wintypes.FILETIME()
-            kernel_time = wintypes.FILETIME()
-            user_time = wintypes.FILETIME()
-            if not kernel32.GetProcessTimes(
-                handle,
-                ctypes.byref(creation),
-                ctypes.byref(exit_time),
-                ctypes.byref(kernel_time),
-                ctypes.byref(user_time),
-            ):
-                return None
-            ticks = (creation.dwHighDateTime << 32) | creation.dwLowDateTime
-            unix_seconds = ticks / 10_000_000 - 11_644_473_600
-            created = datetime.fromtimestamp(unix_seconds, timezone.utc).isoformat()
-            size = wintypes.DWORD(32768)
-            buffer = ctypes.create_unicode_buffer(size.value)
-            if not kernel32.QueryFullProcessImageNameW(
-                handle, 0, buffer, ctypes.byref(size)
-            ):
-                return None
-            return ProcessIdentity(
-                pid,
-                created,
-                f"windows-filetime:{ticks}",
-                os.path.realpath(buffer.value),
-                None,
-                None,
-            )
+            return _windows_process_identity_from_handle(pid, handle, kernel32)
         finally:
             kernel32.CloseHandle(handle)
-    except (OSError, OverflowError, ValueError):
+    except (AttributeError, OSError, OverflowError, TypeError, ValueError):
         return None
 
 
@@ -2076,6 +2096,59 @@ class _WindowsJob:
         except OSError:
             return False
 
+    def contains_handle(self, process_handle: Any) -> bool:
+        """Check membership using a handle that already pins one process object."""
+
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            result = wintypes.BOOL()
+            return bool(
+                process_handle
+                and self.kernel32.IsProcessInJob(
+                    process_handle,
+                    self.handle,
+                    ctypes.byref(result),
+                )
+                and result.value
+            )
+        except (OSError, TypeError, ValueError):
+            return False
+
+    def _handle_matches_identity(
+        self,
+        process_handle: Any,
+        identity: ProcessIdentity,
+    ) -> bool:
+        current = _windows_process_identity_from_handle(
+            identity.pid,
+            process_handle,
+            self.kernel32,
+        )
+        return bool(
+            current is not None
+            and current.birth_token == identity.birth_token
+            and _path_key(current.executable_path)
+            == _path_key(identity.executable_path)
+            and self.contains_handle(process_handle)
+        )
+
+    def contains_exact(self, identity: ProcessIdentity) -> bool:
+        """Authenticate identity and Job membership through one pinned handle."""
+
+        process_handle = self.kernel32.OpenProcess(
+            0x1000 | 0x00100000,
+            False,
+            identity.pid,
+        )
+        if not process_handle:
+            return False
+        try:
+            return self._handle_matches_identity(process_handle, identity)
+        finally:
+            self.kernel32.CloseHandle(process_handle)
+
     def active_process_ids(self) -> frozenset[int]:
         """Return every live member of this Job, or fail closed.
 
@@ -2161,27 +2234,27 @@ class _WindowsJob:
                 "suspended managed child could not be resumed",
             ) from exc
 
-    @staticmethod
-    def resume_pid(pid: int) -> None:
-        """Resume a recovered suspended process by its exact verified PID."""
+    def resume_exact(self, identity: ProcessIdentity, *, process_id: str) -> None:
+        """Resume only the process object matching identity and this exact Job."""
 
         try:
             import ctypes
             from ctypes import wintypes
 
-            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-            kernel32.OpenProcess.argtypes = [
-                wintypes.DWORD,
-                wintypes.BOOL,
-                wintypes.DWORD,
-            ]
-            kernel32.OpenProcess.restype = wintypes.HANDLE
-            kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-            kernel32.CloseHandle.restype = wintypes.BOOL
-            handle = kernel32.OpenProcess(0x0800 | 0x1000, False, pid)
+            handle = self.kernel32.OpenProcess(
+                0x0800 | 0x1000 | 0x00100000,
+                False,
+                identity.pid,
+            )
             if not handle:
                 raise OSError(ctypes.get_last_error(), "OpenProcess failed")
             try:
+                if not self._handle_matches_identity(handle, identity):
+                    raise ManagedProcessSupervisorError(
+                        ORPHAN_PROCESS,
+                        "recovered suspended child identity or Job membership changed",
+                        process_id=process_id,
+                    )
                 ntdll = ctypes.WinDLL("ntdll", use_last_error=True)
                 ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
                 ntdll.NtResumeProcess.restype = ctypes.c_long
@@ -2189,12 +2262,14 @@ class _WindowsJob:
                 if status != 0:
                     raise OSError(status, "NtResumeProcess failed")
             finally:
-                kernel32.CloseHandle(handle)
+                self.kernel32.CloseHandle(handle)
+        except ManagedProcessSupervisorError:
+            raise
         except (OSError, TypeError, ValueError) as exc:
             raise ManagedProcessSupervisorError(
                 ORPHAN_PROCESS,
                 "recovered suspended child could not be resumed",
-                process_id=str(pid),
+                process_id=process_id,
             ) from exc
 
     def close(self) -> None:
@@ -3801,8 +3876,9 @@ class ManagedProcessSupervisor:
     def _resume_windows_with_pins(
         self,
         context: _ProcessContext,
-        pid: int,
+        identity: ProcessIdentity,
         *,
+        job: _WindowsJob,
         startup_deadline_at: str,
     ) -> tuple[_PinnedPath, ...]:
         pins = self._pin_windows_launch_paths(context)
@@ -3818,7 +3894,16 @@ class ManagedProcessSupervisor:
                     "managed gated launch expired before resume",
                     process_id=str(context.process["process_id"]),
             )
-            _WindowsJob.resume_pid(pid)
+            if identity.pid in self.protected_pids:
+                raise ManagedProcessSupervisorError(
+                    ORPHAN_PROCESS,
+                    "protected service PID cannot be resumed as a managed child",
+                    process_id=str(context.process["process_id"]),
+                )
+            job.resume_exact(
+                identity,
+                process_id=str(context.process["process_id"]),
+            )
             # Launch identity pins are needed only through the resume gate;
             # release them before ordinary child execution begins.
             return ()
@@ -4195,7 +4280,7 @@ class ManagedProcessSupervisor:
             if actual_job is None:
                 return False
             try:
-                return actual_job.contains(identity.pid)
+                return actual_job.contains_exact(identity)
             finally:
                 if job is None:
                     actual_job.close()
@@ -4342,6 +4427,7 @@ class ManagedProcessSupervisor:
         *,
         allowed_phases: Iterable[str] = ("launched",),
         allow_posix_launch_helper: bool = False,
+        job: _WindowsJob | None = None,
     ) -> tuple[_ProcessContext, ProcessIdentity | None, dict[str, Any]]:
         """Bind a durable PREPARED record to its exact launch receipt.
 
@@ -4427,6 +4513,7 @@ class ManagedProcessSupervisor:
             candidate,
             identity,
             receipt_value,
+            job=job,
             allow_posix_launch_helper=allow_posix_launch_helper,
         ):
             raise ManagedProcessSupervisorError(
@@ -4435,7 +4522,7 @@ class ManagedProcessSupervisor:
                 process_id=process_id,
             )
         if identity is not None:
-            self._assert_scope_safe(candidate)
+            self._assert_scope_safe(candidate, job=job)
         return candidate, identity, receipt_value
 
     def _linux_intent_candidates(
@@ -4793,7 +4880,8 @@ class ManagedProcessSupervisor:
                     try:
                         recovery_pins = self._resume_windows_with_pins(
                             candidate,
-                            identity.pid,
+                            identity,
+                            job=job,
                             startup_deadline_at=str(startup_deadline_at),
                         )
                     except ManagedProcessSupervisorError as exc:
@@ -4901,26 +4989,35 @@ class ManagedProcessSupervisor:
         if expired is not None:
             return expired
         if os.name == "nt":
-            self._assert_scope_safe(candidate)
-            try:
-                recovery_pins = self._resume_windows_with_pins(
-                    candidate,
-                    identity.pid,
-                    startup_deadline_at=str(startup_deadline_at),
+            job = _WindowsJob.open(self._windows_job_name(candidate))
+            if job is None:
+                raise ManagedProcessSupervisorError(
+                    ORPHAN_PROCESS,
+                    "gated managed Windows Job cannot be reopened",
+                    process_id=process_id,
                 )
-            except ManagedProcessSupervisorError as exc:
-                if exc.code != PROCESS_HEALTH_FAILED:
-                    raise
-                expired = self._terminalize_expired_gated_launch(
-                    candidate,
-                    startup_deadline_at=str(startup_deadline_at),
-                    create_restart=create_restart,
-                    action="expired-gated-launch-reconciled",
-                )
-                if expired is None:
-                    raise
-                return expired
+            recovery_pins: tuple[_PinnedPath, ...] = ()
             try:
+                self._assert_scope_safe(candidate, job=job)
+                try:
+                    recovery_pins = self._resume_windows_with_pins(
+                        candidate,
+                        identity,
+                        job=job,
+                        startup_deadline_at=str(startup_deadline_at),
+                    )
+                except ManagedProcessSupervisorError as exc:
+                    if exc.code != PROCESS_HEALTH_FAILED:
+                        raise
+                    expired = self._terminalize_expired_gated_launch(
+                        candidate,
+                        startup_deadline_at=str(startup_deadline_at),
+                        create_restart=create_restart,
+                        action="expired-gated-launch-reconciled",
+                    )
+                    if expired is None:
+                        raise
+                    return expired
                 self._write_receipt(
                     context,
                     identity,
@@ -4934,6 +5031,7 @@ class ManagedProcessSupervisor:
                 )
             finally:
                 self._close_launch_pins(recovery_pins)
+                job.close()
         else:
             deadline = _parse_timestamp(startup_deadline_at)
             target = _path_key(str(context.process["executable_path"]))
@@ -5354,9 +5452,9 @@ class ManagedProcessSupervisor:
         self, project_id: str, sprint_id: str, process_id: str
     ) -> SupervisionResult:
         receipt_path = self._pid_receipt_path(process_id)
+        preclaim = self._repository.load(project_id, sprint_id, process_id)
+        self._validate_config(preclaim)
         if not receipt_path.exists():
-            preclaim = self._repository.load(project_id, sprint_id, process_id)
-            self._validate_config(preclaim)
             if preclaim.process.get("state") == "PREPARED":
                 reservation = self.port_reservations.reservation(
                     self.store.database_path,
@@ -5400,7 +5498,15 @@ class ManagedProcessSupervisor:
                 str(current.process["state"]),
                 "not-claimed",
             )
-        self._validate_config(claim)
+        try:
+            self._validate_config(claim)
+        except BaseException:
+            self._repository.release_claim(
+                process_id,
+                owner=self.claim_owner,
+                supervisor_fence=claim.supervisor_fence,
+            )
+            raise
         if receipt_path.exists():
             receipt = self._receipt(process_id)
             if receipt.get("phase") == "intent":
@@ -5841,6 +5947,7 @@ class ManagedProcessSupervisor:
         context: _ProcessContext,
         *,
         allow_posix_launch_helper: bool = False,
+        job: _WindowsJob | None = None,
     ) -> tuple[ProcessIdentity, dict[str, Any]]:
         process_id = str(context.process["process_id"])
         pid = context.process.get("pid")
@@ -5866,7 +5973,7 @@ class ManagedProcessSupervisor:
             context,
             identity,
             receipt,
-            job=owned.job if owned is not None else None,
+            job=(owned.job if owned is not None else job),
             allow_posix_launch_helper=allow_posix_launch_helper,
         ):
             raise ManagedProcessSupervisorError(
@@ -5874,11 +5981,15 @@ class ManagedProcessSupervisor:
                 "PID reuse or managed process identity mismatch detected",
                 process_id=process_id,
             )
-        self._assert_scope_safe(context, owned=owned)
+        self._assert_scope_safe(context, owned=owned, job=job)
         return identity, receipt
 
     def _confirmed_dead(
-        self, context: _ProcessContext, *, owned: _OwnedProcess | None = None
+        self,
+        context: _ProcessContext,
+        *,
+        owned: _OwnedProcess | None = None,
+        job: _WindowsJob | None = None,
     ) -> bool:
         process_id = str(context.process["process_id"])
         if owned is None:
@@ -5904,6 +6015,7 @@ class ManagedProcessSupervisor:
         group = context.process.get("process_group_id")
         if os.name == "nt":
             expected_job = self._windows_job_name(context)
+            close_job = False
             if owned is not None and owned.job is not None:
                 # Before the launch receipt is durable, PREPARED legitimately
                 # has no PID/Job fields.  The in-memory Job is nevertheless
@@ -5916,28 +6028,33 @@ class ManagedProcessSupervisor:
                     expected_job,
                 } or group not in {None, expected_job}:
                     return False
-                job = owned.job
+                actual_job = owned.job
             else:
                 if (
                     context.process.get("job_object_id") != expected_job
                     or group != expected_job
                 ):
                     return False
-                job = _WindowsJob.open(expected_job)
-            if job is None:
+                actual_job = job
+                if actual_job is None:
+                    actual_job = _WindowsJob.open(expected_job)
+                    close_job = actual_job is not None
+                elif actual_job.name != expected_job:
+                    return False
+            if actual_job is None:
                 # A Job persists after its last handle closes while any
                 # associated process remains.  With a globally visible,
                 # deterministic name and an already-dead exact leader,
                 # absence therefore proves that the whole scope is gone.
                 return True
             try:
-                members = job.active_process_ids()
+                members = actual_job.active_process_ids()
                 return not members
             except ManagedProcessSupervisorError:
                 return False
             finally:
-                if owned is None or owned.job is None:
-                    job.close()
+                if close_job:
+                    actual_job.close()
         if not isinstance(group, int):
             return False
         try:
@@ -6267,80 +6384,100 @@ class ManagedProcessSupervisor:
         self._health_failures.pop(process_id, None)
         with self._owned_lock:
             owned = self._owned.get(process_id)
-        if self._confirmed_dead(context, owned=owned):
-            return
-        signal_context = context
+        anchored_job = owned.job if owned is not None else None
+        close_job = False
+        if os.name == "nt" and anchored_job is None:
+            expected_job = self._windows_job_name(context)
+            if (
+                context.process.get("job_object_id") == expected_job
+                and context.process.get("process_group_id") == expected_job
+            ):
+                anchored_job = _WindowsJob.open(expected_job)
+                close_job = anchored_job is not None
         try:
-            self._record_identity(
-                context,
-                allow_posix_launch_helper=allow_posix_launch_helper,
-            )
-        except ProcessLookupError:
-            # A dead leader is not sufficient death proof.  Re-bind the exact
-            # receipt so its surviving Job/group can be inspected and stopped.
-            signal_context, _identity, _receipt = self._context_from_receipt(
-                context,
-                allowed_phases=(
-                    ("launch_gated", "launched")
-                    if allow_posix_launch_helper
-                    else ("launched",)
-                ),
-                allow_posix_launch_helper=allow_posix_launch_helper,
-            )
-        if owned is not None:
-            self._terminate_owned(process_id, owned, context=signal_context)
-        elif os.name == "nt":
-            job_id = signal_context.process.get("job_object_id")
-            job = _WindowsJob.open(str(job_id)) if isinstance(job_id, str) else None
-            if job is None:
-                raise ManagedProcessSupervisorError(
-                    ORPHAN_PROCESS,
-                    "managed Windows Job Object cannot be reopened",
-                    process_id=process_id,
-                )
-            try:
-                self._assert_scope_safe(signal_context, job=job)
-                job.terminate()
-            finally:
-                job.close()
-        else:
-            group = signal_context.process.get("process_group_id")
-            if not isinstance(group, int):
-                raise ManagedProcessSupervisorError(
-                    ORPHAN_PROCESS,
-                    "managed process group identity is unsafe",
-                    process_id=process_id,
-                )
-            self._assert_scope_safe(signal_context)
-            try:
-                os.killpg(group, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + self.stop_timeout_seconds
-        while time.monotonic() < deadline:
-            if self._confirmed_dead(signal_context, owned=owned):
+            if self._confirmed_dead(context, owned=owned, job=anchored_job):
                 return
-            time.sleep(0.05)
-        if os.name != "nt" and isinstance(
-            signal_context.process.get("process_group_id"), int
-        ):
-            self._assert_scope_safe(signal_context)
+            signal_context = context
             try:
-                os.killpg(
-                    int(signal_context.process["process_group_id"]), signal.SIGKILL
+                self._record_identity(
+                    context,
+                    allow_posix_launch_helper=allow_posix_launch_helper,
+                    job=anchored_job,
                 )
             except ProcessLookupError:
-                pass
-        deadline = time.monotonic() + self.stop_timeout_seconds
-        while time.monotonic() < deadline:
-            if self._confirmed_dead(signal_context, owned=owned):
-                return
-            time.sleep(0.05)
-        raise ManagedProcessSupervisorError(
-            ORPHAN_PROCESS,
-            "managed process group did not exit; lease remains bound",
-            process_id=process_id,
-        )
+                # A dead leader is not sufficient death proof.  Re-bind the exact
+                # receipt so its surviving Job/group can be inspected and stopped.
+                signal_context, _identity, _receipt = self._context_from_receipt(
+                    context,
+                    allowed_phases=(
+                        ("launch_gated", "launched")
+                        if allow_posix_launch_helper
+                        else ("launched",)
+                    ),
+                    allow_posix_launch_helper=allow_posix_launch_helper,
+                    job=anchored_job,
+                )
+            if owned is not None:
+                self._terminate_owned(process_id, owned, context=signal_context)
+            elif os.name == "nt":
+                if anchored_job is None:
+                    raise ManagedProcessSupervisorError(
+                        ORPHAN_PROCESS,
+                        "managed Windows Job Object cannot be anchored",
+                        process_id=process_id,
+                    )
+                self._assert_scope_safe(signal_context, job=anchored_job)
+                anchored_job.terminate()
+            else:
+                group = signal_context.process.get("process_group_id")
+                if not isinstance(group, int):
+                    raise ManagedProcessSupervisorError(
+                        ORPHAN_PROCESS,
+                        "managed process group identity is unsafe",
+                        process_id=process_id,
+                    )
+                self._assert_scope_safe(signal_context)
+                try:
+                    os.killpg(group, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + self.stop_timeout_seconds
+            while time.monotonic() < deadline:
+                if self._confirmed_dead(
+                    signal_context,
+                    owned=owned,
+                    job=anchored_job,
+                ):
+                    return
+                time.sleep(0.05)
+            if os.name != "nt" and isinstance(
+                signal_context.process.get("process_group_id"), int
+            ):
+                self._assert_scope_safe(signal_context)
+                try:
+                    os.killpg(
+                        int(signal_context.process["process_group_id"]),
+                        signal.SIGKILL,
+                    )
+                except ProcessLookupError:
+                    pass
+            deadline = time.monotonic() + self.stop_timeout_seconds
+            while time.monotonic() < deadline:
+                if self._confirmed_dead(
+                    signal_context,
+                    owned=owned,
+                    job=anchored_job,
+                ):
+                    return
+                time.sleep(0.05)
+            raise ManagedProcessSupervisorError(
+                ORPHAN_PROCESS,
+                "managed process group did not exit; lease remains bound",
+                process_id=process_id,
+            )
+        finally:
+            if close_job and anchored_job is not None:
+                anchored_job.close()
 
     def stop(
         self, project_id: str, sprint_id: str, process_id: str

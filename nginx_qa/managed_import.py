@@ -570,7 +570,10 @@ class ManagedImportStore:
             yield connection
             connection.commit()
         except BaseException:
-            connection.rollback()
+            # Undo process-local capabilities while BEGIN IMMEDIATE still
+            # excludes a successor transaction.  Releasing SQLite first would
+            # let that successor adopt the provisional socket before this
+            # transaction's delayed rollback token runs.
             for action in reversed(rollback_actions or []):
                 try:
                     action()
@@ -578,6 +581,7 @@ class ManagedImportStore:
                     # Preserve the transaction failure; a reservation holder
                     # is process-local and will also close on process exit.
                     pass
+            connection.rollback()
             raise
         finally:
             connection.close()
