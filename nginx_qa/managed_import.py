@@ -788,6 +788,31 @@ class ManagedImportStore:
                     WHERE state IN ('PREPARED', 'STARTING', 'HEALTHY', 'STOPPING');
                 """
                 )
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    duplicate_active = connection.execute(
+                        """
+                        SELECT project_id FROM managed_sprints
+                        WHERE status = 'active'
+                        GROUP BY project_id HAVING COUNT(*) > 1
+                        LIMIT 1
+                        """
+                    ).fetchone()
+                    if duplicate_active is not None:
+                        raise RuntimeError(
+                            "managed sprint runtime invariant failed: "
+                            "MULTIPLE_ACTIVE_SPRINTS"
+                        )
+                    connection.execute(
+                        """
+                        CREATE UNIQUE INDEX IF NOT EXISTS managed_single_active_sprint
+                        ON managed_sprints(project_id) WHERE status = 'active'
+                        """
+                    )
+                    connection.commit()
+                except BaseException:
+                    connection.rollback()
+                    raise
 
     @staticmethod
     def _resource_snapshot_in_transaction(
@@ -887,6 +912,11 @@ class ManagedImportStore:
             raise RuntimeError("managed project control is corrupt") from exc
         if not isinstance(control, dict):
             raise RuntimeError("managed project control is corrupt")
+        if control.get("project_id") != project_id:
+            raise RuntimeError(
+                "managed project control invariant failed: "
+                "PROJECT_CONTROL_INDEX_MISMATCH"
+            )
         return control, int(row["revision"])
 
     @staticmethod
@@ -936,8 +966,11 @@ class ManagedImportStore:
         if not self.database_path.exists():
             return empty_project_control(project_id)
         self._ensure_initialized()
-        with closing(self._connect()) as connection:
-            control, _ = self._load_control(connection, project_id)
+        migration_time = datetime.now(timezone.utc).isoformat()
+
+        def validate(
+            connection: sqlite3.Connection, control: dict[str, Any]
+        ) -> dict[str, Any]:
             schema_issues = _schema_errors(
                 control,
                 "managed-project-control-v1.schema.json",
@@ -954,6 +987,184 @@ class ManagedImportStore:
                 )
             return deepcopy(control)
 
+        with closing(self._connect()) as connection:
+            control, _ = self._load_control(connection, project_id)
+            candidate = deepcopy(control)
+            needs_migration = self._reconcile_superseded_attempts(
+                candidate, updated_at=migration_time
+            )
+            if not needs_migration:
+                return validate(connection, control)
+
+        # A legacy repair is the uncommon write path. Reload under the writer
+        # reservation so a concurrent activation cannot be overwritten.
+        with self._transaction() as connection:
+            control, revision = self._load_control(connection, project_id)
+            if self._reconcile_superseded_attempts(
+                control, updated_at=migration_time
+            ):
+                self._write_control(connection, control, revision)
+            return validate(connection, control)
+
+    def _validate_control_snapshot(
+        self,
+        connection: sqlite3.Connection,
+        project_id: str,
+        control: Mapping[str, Any],
+    ) -> None:
+        issues: list[str] = []
+        if control.get("project_id") != project_id:
+            issues.append("PROJECT_CONTROL_INDEX_MISMATCH")
+        if _schema_errors(
+            control,
+            "managed-project-control-v1.schema.json",
+            issue_code="PROJECT_CONTROL_SCHEMA_INVALID",
+        ):
+            issues.append("PROJECT_CONTROL_SCHEMA_INVALID")
+        else:
+            issues.extend(
+                managed_project_control_invariant_issues(
+                    control, self._known_sprints(connection, project_id)
+                )
+            )
+        if issues:
+            raise RuntimeError(
+                "managed project control invariant failed: "
+                + ",".join(dict.fromkeys(issues))
+            )
+
+    @staticmethod
+    def _runtime_row_issues(
+        control: Mapping[str, Any],
+        row: sqlite3.Row,
+        state: Any,
+        *,
+        require_indexed: bool,
+    ) -> tuple[str, ...]:
+        issues: list[str] = []
+        if not isinstance(state, Mapping):
+            return ("RUNTIME_STATE_NOT_OBJECT",)
+        row_project_id = row["project_id"]
+        row_sprint_id = row["sprint_id"]
+        row_status = row["status"]
+        row_fence = row["fencing_token"]
+        identity = state.get("identity")
+        if (
+            not isinstance(identity, Mapping)
+            or identity.get("project_id") != row_project_id
+        ):
+            issues.append("RUNTIME_PROJECT_INDEX_MISMATCH")
+        if state.get("sprint_id") != row_sprint_id:
+            issues.append("RUNTIME_SPRINT_INDEX_MISMATCH")
+        if state.get("status") != row_status:
+            issues.append("RUNTIME_STATUS_INDEX_MISMATCH")
+        if _schema_errors(
+            state,
+            "managed-runtime-state-v1.schema.json",
+            issue_code="RUNTIME_STATE_SCHEMA_INVALID",
+        ):
+            issues.append("RUNTIME_STATE_SCHEMA_INVALID")
+        if managed_activation_invariant_issues(state):
+            issues.append("RUNTIME_STATE_INVARIANT_INVALID")
+
+        records = control.get("start_idempotency_records")
+        successful = (
+            [
+                record
+                for record in records
+                if isinstance(record, Mapping)
+                and record.get("status") == "SUCCEEDED"
+            ]
+            if isinstance(records, list)
+            else []
+        )
+        matching = [
+            record for record in successful if record.get("sprint_id") == row_sprint_id
+        ]
+        matching_fence = (
+            matching[0].get("fencing_token") if len(matching) == 1 else None
+        )
+        if (
+            len(matching) != 1
+            or not isinstance(row_fence, int)
+            or isinstance(row_fence, bool)
+            or not isinstance(matching_fence, int)
+            or isinstance(matching_fence, bool)
+            or matching_fence != row_fence
+        ):
+            issues.append("RUNTIME_ACTIVATION_FENCE_MISMATCH")
+        active_sprint_id = control.get("active_sprint_id")
+        if row_status == "active" and active_sprint_id != row_sprint_id:
+            issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
+        if require_indexed or row_status == "active":
+            if active_sprint_id != row_sprint_id:
+                issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
+            if row_status not in {"active", "completed", "failed", "blocked"}:
+                issues.append("ACTIVE_SPRINT_STATUS_INVALID")
+            successful_fences = [
+                record.get("fencing_token")
+                for record in successful
+                if isinstance(record.get("fencing_token"), int)
+                and not isinstance(record.get("fencing_token"), bool)
+            ]
+            if (
+                len(matching) == 1
+                and successful_fences
+                and matching[0].get("fencing_token") != max(successful_fences)
+            ):
+                issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
+        return tuple(dict.fromkeys(issues))
+
+    def _indexed_runtime_or_error(
+        self,
+        connection: sqlite3.Connection,
+        control: Mapping[str, Any],
+        project_id: str,
+        *,
+        correlation_id: str,
+        phase: str,
+    ) -> tuple[sqlite3.Row, dict[str, Any]] | None:
+        active_sprint_id = control.get("active_sprint_id")
+        if active_sprint_id is None:
+            return None
+        if not isinstance(active_sprint_id, str):
+            issues = ("ACTIVE_SPRINT_INDEX_MISMATCH",)
+        else:
+            row = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, active_sprint_id),
+            ).fetchone()
+            if row is not None:
+                try:
+                    state = json.loads(row["state_json"])
+                except (TypeError, json.JSONDecodeError):
+                    state = None
+                issues = self._runtime_row_issues(
+                    control, row, state, require_indexed=True
+                )
+                if not issues and isinstance(state, dict):
+                    return row, state
+            else:
+                issues = ("ACTIVE_SPRINT_STATE_MISSING",)
+        raise ManagedImportError(
+            SPRINT_RECOVERY_REQUIRED,
+            409,
+            correlation_id,
+            phase=phase,
+            issues=[
+                {
+                    "code": "ACTIVE_SPRINT_STATE_CONFLICT",
+                    "path": "active_sprint_id",
+                    "message": "Indexed managed sprint state is inconsistent",
+                }
+            ],
+            evidence={"runtime_invariant_issues": list(issues)},
+        )
+
     def runtime_state(self, project_id: str, sprint_id: str) -> dict[str, Any] | None:
         if not self.database_path.exists():
             return None
@@ -961,29 +1172,28 @@ class ManagedImportStore:
         with closing(self._connect()) as connection:
             row = connection.execute(
                 """
-                SELECT state_json FROM managed_sprints
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
                 WHERE project_id = ? AND sprint_id = ?
                 """,
                 (project_id, sprint_id),
             ).fetchone()
-        if row is None:
-            return None
-        value = json.loads(row["state_json"])
-        if not isinstance(value, dict):
-            raise RuntimeError("managed sprint runtime is corrupt")
-        if _schema_errors(
-            value,
-            "managed-runtime-state-v1.schema.json",
-            issue_code="RUNTIME_STATE_SCHEMA_INVALID",
-        ):
-            raise RuntimeError("managed sprint runtime schema validation failed")
-        invariant_issues = managed_activation_invariant_issues(value)
-        if invariant_issues:
-            raise RuntimeError(
-                "managed sprint runtime invariant failed: "
-                + ",".join(invariant_issues)
+            if row is None:
+                return None
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            try:
+                value = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("managed sprint runtime is corrupt") from exc
+            issues = self._runtime_row_issues(
+                control, row, value, require_indexed=False
             )
-        return value
+            if issues:
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: " + ",".join(issues)
+                )
+            return deepcopy(value)
 
     def active_runtime_states(self) -> tuple[dict[str, Any], ...]:
         """Return every active managed runtime for startup reconciliation."""
@@ -991,20 +1201,64 @@ class ManagedImportStore:
         if not self.database_path.exists():
             return ()
         self._ensure_initialized()
+        migration_time = datetime.now(timezone.utc).isoformat()
+        with self._transaction() as connection:
+            project_ids = [
+                str(row["project_id"])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT project_id FROM managed_sprints
+                    WHERE status = 'active' ORDER BY project_id
+                    """
+                )
+            ]
+            for project_id in project_ids:
+                control, revision = self._load_control(connection, project_id)
+                if self._reconcile_superseded_attempts(
+                    control, updated_at=migration_time
+                ):
+                    self._write_control(connection, control, revision)
         with closing(self._connect()) as connection:
+            connection.execute("BEGIN")
             rows = connection.execute(
                 """
-                SELECT project_id, sprint_id FROM managed_sprints
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
                 WHERE status = 'active'
                 ORDER BY project_id, sprint_id
                 """
             ).fetchall()
-        states: list[dict[str, Any]] = []
-        for row in rows:
-            state = self.runtime_state(row["project_id"], row["sprint_id"])
-            if state is None:
-                raise RuntimeError("active managed sprint runtime disappeared")
-            states.append(state)
+            duplicate = connection.execute(
+                """
+                SELECT project_id FROM managed_sprints
+                WHERE status = 'active'
+                GROUP BY project_id HAVING COUNT(*) > 1
+                LIMIT 1
+                """
+            ).fetchone()
+            if duplicate is not None:
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: MULTIPLE_ACTIVE_SPRINTS"
+                )
+            states: list[dict[str, Any]] = []
+            for row in rows:
+                project_id = str(row["project_id"])
+                control, _ = self._load_control(connection, project_id)
+                self._validate_control_snapshot(connection, project_id, control)
+                try:
+                    state = json.loads(row["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("managed sprint runtime is corrupt") from exc
+                issues = self._runtime_row_issues(
+                    control, row, state, require_indexed=True
+                )
+                if issues or not isinstance(state, dict):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                    )
+                states.append(deepcopy(state))
+            connection.commit()
         return tuple(states)
 
     def lookup(self, project_id: str, key: str) -> dict[str, Any] | None:
@@ -1018,6 +1272,119 @@ class ManagedImportStore:
             return False
         expires_at = _parse_timestamp(lease.get("expires_at"))
         return expires_at is not None and expires_at > now
+
+    def _reconcile_superseded_attempts(
+        self,
+        control: dict[str, Any],
+        *,
+        updated_at: str,
+    ) -> bool:
+        """Migrate/fail stale pre-fix attempts before strict invariant reads."""
+
+        records = control.get("start_idempotency_records")
+        if not isinstance(records, list):
+            raise RuntimeError("managed project control is corrupt")
+        successful = [
+            record
+            for record in records
+            if isinstance(record, Mapping)
+            and record.get("status") == "SUCCEEDED"
+            and isinstance(record.get("fencing_token"), int)
+            and not isinstance(record.get("fencing_token"), bool)
+        ]
+        winner = (
+            max(successful, key=lambda record: int(record["fencing_token"]))
+            if successful
+            else None
+        )
+        winner_token = int(winner["fencing_token"]) if winner is not None else None
+        changed = False
+        for record in records:
+            if not isinstance(record, dict) or record.get("status") not in {
+                "VALIDATING",
+                "PREPARING",
+                "ACTIVATING",
+            }:
+                continue
+            created_token = record.get("created_fencing_token")
+            current_token = record.get("fencing_token")
+            if winner is None:
+                if (
+                    created_token is None
+                    and isinstance(current_token, int)
+                    and not isinstance(current_token, bool)
+                ):
+                    record["created_fencing_token"] = current_token
+                    changed = True
+                continue
+            if (
+                not isinstance(created_token, int)
+                or isinstance(created_token, bool)
+                or created_token <= int(winner_token)
+            ):
+                self._supersede_attempt(
+                    record,
+                    superseding_attempt_id=str(winner["attempt_id"]),
+                    superseding_sprint_id=str(winner["sprint_id"]),
+                    superseding_fencing_token=int(winner_token),
+                    updated_at=updated_at,
+                )
+                lease = control.get("activation_lease")
+                if (
+                    isinstance(lease, Mapping)
+                    and lease.get("attempt_id") == record.get("attempt_id")
+                ):
+                    control["activation_lease"] = None
+                changed = True
+        return changed
+
+    @staticmethod
+    def _supersede_attempt(
+        record: dict[str, Any],
+        *,
+        superseding_attempt_id: str,
+        superseding_sprint_id: str,
+        superseding_fencing_token: int,
+        updated_at: str,
+    ) -> None:
+        attempt_id = str(record.get("attempt_id") or "superseded-attempt")
+        error = ManagedImportError(
+            SPRINT_RECOVERY_REQUIRED,
+            409,
+            attempt_id,
+            phase="ACTIVATE",
+            issues=[
+                {
+                    "code": "ATTEMPT_SUPERSEDED",
+                    "path": "activation.fencing_token",
+                    "message": "A newer managed sprint activation superseded this attempt",
+                }
+            ],
+        )
+        evidence = (
+            deepcopy(record.get("evidence"))
+            if isinstance(record.get("evidence"), Mapping)
+            else {}
+        )
+        evidence.update(
+            {
+                "phase": "ACTIVATE",
+                "failure_code": "ATTEMPT_SUPERSEDED",
+                "superseding_attempt_id": superseding_attempt_id,
+                "superseding_sprint_id": superseding_sprint_id,
+                "superseding_fencing_token": superseding_fencing_token,
+            }
+        )
+        record.update(
+            {
+                "status": "FAILED",
+                "response": None,
+                "http_status": 409,
+                "error": deepcopy(error.envelope),
+                "evidence": evidence,
+                "updated_at": updated_at,
+            }
+        )
 
     def register_or_resume(
         self,
@@ -1037,6 +1404,9 @@ class ManagedImportStore:
         now_text = now.isoformat()
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
+            reconciled = self._reconcile_superseded_attempts(
+                control, updated_at=now_text
+            )
             existing = self._record(control, request.idempotency_key)
             if existing is not None:
                 if existing.get("request_fingerprint") != fingerprint:
@@ -1047,6 +1417,8 @@ class ManagedImportStore:
                         phase="VALIDATE",
                     )
                 if existing.get("status") in {"SUCCEEDED", "FAILED"}:
+                    if reconciled:
+                        self._write_control(connection, control, revision)
                     return deepcopy(existing), True
                 pinned = existing.get("pinned_identity")
                 if (
@@ -1056,6 +1428,8 @@ class ManagedImportStore:
                 ):
                     # The first caller to pin a mutable ref wins.  The caller
                     # resumes that attempt instead of rebinding the same key.
+                    if reconciled:
+                        self._write_control(connection, control, revision)
                     return deepcopy(existing), True
                 lease = control.get("activation_lease")
                 if (
@@ -1074,6 +1448,8 @@ class ManagedImportStore:
                     and isinstance(lease, Mapping)
                     and lease.get("attempt_id") == existing.get("attempt_id")
                 ):
+                    if reconciled:
+                        self._write_control(connection, control, revision)
                     return deepcopy(existing), True
                 counter = int(control.get("activation_fencing_counter") or 0) + 1
                 control["activation_fencing_counter"] = counter
@@ -1118,6 +1494,7 @@ class ManagedImportStore:
                 "attempt_id": attempt_id,
                 "recovery_of_attempt_id": None,
                 "recovery_generation": 0,
+                "created_fencing_token": counter,
                 "fencing_token": counter,
                 "pinned_identity": (
                     asdict(provenance) if provenance is not None else None
@@ -1168,30 +1545,21 @@ class ManagedImportStore:
                 self._write_control(connection, control, revision)
                 return deepcopy(record), False
 
-            active_sprint_id = control.get("active_sprint_id")
-            if provenance is not None and isinstance(active_sprint_id, str):
-                active_row = connection.execute(
-                    """
-                    SELECT state_json FROM managed_sprints
-                    WHERE project_id = ? AND sprint_id = ?
-                    """,
-                    (project_id, active_sprint_id),
-                ).fetchone()
-                if active_row is not None:
-                    try:
-                        active_state = json.loads(active_row["state_json"])
-                    except (TypeError, json.JSONDecodeError) as exc:
-                        raise RuntimeError("active managed sprint is corrupt") from exc
-                    if (
-                        isinstance(active_state, Mapping)
-                        and active_state.get("status") == "active"
-                    ):
-                        raise ManagedImportError(
-                            PROJECT_ACTIVATION_IN_PROGRESS,
-                            409,
-                            active_sprint_id,
-                            phase="VALIDATE",
-                        )
+            if provenance is not None:
+                indexed = self._indexed_runtime_or_error(
+                    connection,
+                    control,
+                    project_id,
+                    correlation_id=attempt_id,
+                    phase="VALIDATE",
+                )
+                if indexed is not None and indexed[0]["status"] == "active":
+                    raise ManagedImportError(
+                        PROJECT_ACTIVATION_IN_PROGRESS,
+                        409,
+                        str(indexed[0]["sprint_id"]),
+                        phase="VALIDATE",
+                    )
 
             control["activation_fencing_counter"] = counter
             control["activation_lease"] = {
@@ -1293,6 +1661,9 @@ class ManagedImportStore:
         now = _utc_now(clock)
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
+            reconciled = self._reconcile_superseded_attempts(
+                control, updated_at=now.isoformat()
+            )
             record = self._record(control, request.idempotency_key)
             if record is None:
                 raise RuntimeError("managed start record disappeared")
@@ -1304,6 +1675,8 @@ class ManagedImportStore:
                     phase="VALIDATE",
                 )
             if record.get("status") in {"SUCCEEDED", "FAILED"}:
+                if reconciled:
+                    self._write_control(connection, control, revision)
                 return deepcopy(record)
             lease = control.get("activation_lease")
             if (
@@ -1322,6 +1695,8 @@ class ManagedImportStore:
                 and isinstance(lease, Mapping)
                 and lease.get("attempt_id") == record.get("attempt_id")
             ):
+                if reconciled:
+                    self._write_control(connection, control, revision)
                 return deepcopy(record)
             counter = int(control.get("activation_fencing_counter") or 0) + 1
             now_text = now.isoformat()
@@ -1447,30 +1822,20 @@ class ManagedImportStore:
                     phase="VALIDATE",
                     evidence={"sprint_id": sprint_id},
                 )
-            active_sprint_id = control.get("active_sprint_id")
-            if isinstance(active_sprint_id, str):
-                active_row = connection.execute(
-                    """
-                    SELECT state_json FROM managed_sprints
-                    WHERE project_id = ? AND sprint_id = ?
-                    """,
-                    (project_id, active_sprint_id),
-                ).fetchone()
-                if active_row is not None:
-                    try:
-                        active_state = json.loads(active_row["state_json"])
-                    except (TypeError, json.JSONDecodeError) as exc:
-                        raise RuntimeError("active managed sprint is corrupt") from exc
-                    if (
-                        isinstance(active_state, Mapping)
-                        and active_state.get("status") == "active"
-                    ):
-                        raise ManagedImportError(
-                            PROJECT_ACTIVATION_IN_PROGRESS,
-                            409,
-                            active_sprint_id,
-                            phase="VALIDATE",
-                        )
+            indexed = self._indexed_runtime_or_error(
+                connection,
+                control,
+                project_id,
+                correlation_id=attempt_id,
+                phase="VALIDATE",
+            )
+            if indexed is not None and indexed[0]["status"] == "active":
+                raise ManagedImportError(
+                    PROJECT_ACTIVATION_IN_PROGRESS,
+                    409,
+                    str(indexed[0]["sprint_id"]),
+                    phase="VALIDATE",
+                )
             record["pinned_identity"] = pinned_identity
             record["sprint_id"] = sprint_id
             record["updated_at"] = _timestamp(clock)
@@ -1638,6 +2003,139 @@ class ManagedImportStore:
             self._assert_fence(control, record, fencing_token)
             if record.get("status") != "ACTIVATING":
                 raise RuntimeError("managed start attempt is not ready to activate")
+
+            sprint_id = str(record.get("sprint_id") or "")
+            created_fencing_token = record.get("created_fencing_token")
+            successful_fences = [
+                int(candidate["fencing_token"])
+                for candidate in control["start_idempotency_records"]
+                if isinstance(candidate, Mapping)
+                and candidate.get("status") == "SUCCEEDED"
+                and isinstance(candidate.get("fencing_token"), int)
+                and not isinstance(candidate.get("fencing_token"), bool)
+            ]
+            if (
+                not isinstance(created_fencing_token, int)
+                or isinstance(created_fencing_token, bool)
+                or created_fencing_token > fencing_token
+                or (
+                    successful_fences
+                    and created_fencing_token <= max(successful_fences)
+                )
+            ):
+                raise ManagedImportError(
+                    SPRINT_RECOVERY_REQUIRED,
+                    409,
+                    attempt_id,
+                    phase="ACTIVATE",
+                    issues=[
+                        {
+                            "code": "ATTEMPT_SUPERSEDED",
+                            "path": "activation.created_fencing_token",
+                            "message": "Managed attempt predates a successful activation",
+                        }
+                    ],
+                )
+            active_rows = connection.execute(
+                """
+                SELECT sprint_id
+                FROM managed_sprints
+                WHERE project_id = ? AND status = 'active'
+                ORDER BY sprint_id
+                """,
+                (project_id,),
+            ).fetchall()
+            if len(active_rows) > 1:
+                raise ManagedImportError(
+                    SPRINT_RECOVERY_REQUIRED,
+                    409,
+                    attempt_id,
+                    phase="ACTIVATE",
+                    issues=[
+                        {
+                            "code": "ACTIVE_SPRINT_STATE_CONFLICT",
+                            "path": "active_sprint_id",
+                            "message": "Multiple active managed sprint states exist",
+                        }
+                    ],
+                )
+            indexed = self._indexed_runtime_or_error(
+                connection,
+                control,
+                project_id,
+                correlation_id=attempt_id,
+                phase="ACTIVATE",
+            )
+            if indexed is None:
+                indexed_conflict = bool(active_rows)
+            else:
+                indexed_row, _ = indexed
+                indexed_conflict = (
+                    bool(active_rows)
+                    and active_rows[0]["sprint_id"] != indexed_row["sprint_id"]
+                )
+                if indexed_row["status"] == "active" and not indexed_conflict:
+                    raise ManagedImportError(
+                        PROJECT_ACTIVATION_IN_PROGRESS,
+                        409,
+                        str(indexed_row["sprint_id"]),
+                        phase="ACTIVATE",
+                    )
+                if (
+                    indexed_row["status"] != "active"
+                    and indexed_row["fencing_token"] >= created_fencing_token
+                ):
+                    indexed_conflict = True
+            if indexed_conflict:
+                raise ManagedImportError(
+                    SPRINT_RECOVERY_REQUIRED,
+                    409,
+                    attempt_id,
+                    phase="ACTIVATE",
+                    issues=[
+                        {
+                            "code": "ACTIVE_SPRINT_STATE_CONFLICT",
+                            "path": "active_sprint_id",
+                            "message": "Indexed managed sprint state cannot be replaced safely",
+                        }
+                    ],
+                )
+
+            updated_at = _timestamp(clock)
+            for candidate in control["start_idempotency_records"]:
+                if (
+                    not isinstance(candidate, dict)
+                    or candidate is record
+                    or candidate.get("status")
+                    not in {"VALIDATING", "PREPARING", "ACTIVATING"}
+                ):
+                    continue
+                candidate_token = candidate.get("fencing_token")
+                if (
+                    not isinstance(candidate_token, int)
+                    or isinstance(candidate_token, bool)
+                    or candidate_token >= fencing_token
+                ):
+                    raise ManagedImportError(
+                        SPRINT_RECOVERY_REQUIRED,
+                        409,
+                        attempt_id,
+                        phase="ACTIVATE",
+                        issues=[
+                            {
+                                "code": "ACTIVE_SPRINT_STATE_CONFLICT",
+                                "path": "activation.fencing_token",
+                                "message": "Concurrent managed attempt ordering is corrupt",
+                            }
+                        ],
+                    )
+                self._supersede_attempt(
+                    candidate,
+                    superseding_attempt_id=attempt_id,
+                    superseding_sprint_id=sprint_id,
+                    superseding_fencing_token=fencing_token,
+                    updated_at=updated_at,
+                )
             current_branch_snapshot = sorted(
                 [
                     _branch_snapshot(lease)
@@ -1914,7 +2412,6 @@ class ManagedImportStore:
                         ),
                     },
                 )
-            sprint_id = str(record.get("sprint_id") or "")
             existing = connection.execute(
                 """
                 SELECT state_json FROM managed_sprints
@@ -4377,6 +4874,9 @@ class TransactionalSprintImporter:
                 self._ensure_succeeded_publication(latest)
                 return self._replay(latest)
             record = self.store.resume_existing(project_id, request, clock=self.clock)
+            if record.get("status") in {"SUCCEEDED", "FAILED"}:
+                self._ensure_succeeded_publication(record)
+                return self._replay(record)
             fencing_token = int(record["fencing_token"])
             stored_workspace_source = record.get("workspace_source_commit")
             if stored_workspace_source is None:

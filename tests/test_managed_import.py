@@ -1,9 +1,12 @@
 import hashlib
 import json
+from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -15,7 +18,7 @@ from unittest.mock import AsyncMock, patch
 import main
 
 from nginx_qa.branch_leases import BranchLeaseRequest, deterministic_branch_lease_id
-from nginx_qa.git_provider import ManagedGitError, RepositorySpec
+from nginx_qa.git_provider import ManagedGitError, ManagedGitProvider, RepositorySpec
 from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedImportStore,
@@ -1392,6 +1395,458 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         self.assertEqual(result.response["identity"]["commit"], self.commit)
         self.assertFalse(other_mirror.exists())
 
+    def test_crash_after_mirror_creation_keeps_first_repository_binding(self) -> None:
+        other_canonical = "example.invalid/acme/pre-dispatch-retarget"
+        other_remote, other_commit = self.create_managed_remote(
+            "pre-dispatch-retarget", other_canonical
+        )
+        importer = self.importer()
+        original_ensure_mirror = ManagedGitProvider.ensure_mirror
+        crashed = False
+
+        def crash_after_mirror(provider, repository_id, *, fetch=True):
+            nonlocal crashed
+            repository = original_ensure_mirror(
+                provider, repository_id, fetch=fetch
+            )
+            if (
+                fetch
+                and repository.canonical_remote == self.canonical_remote
+                and not crashed
+            ):
+                crashed = True
+                raise SimulatedCrash()
+            return repository
+
+        with patch.object(
+            ManagedGitProvider,
+            "ensure_mirror",
+            crash_after_mirror,
+        ):
+            with self.assertRaises(SimulatedCrash):
+                importer.start(self.project_id, self.request)
+
+        self.assertTrue(crashed)
+        self.assertIsNone(
+            importer.store.lookup(self.project_id, self.request.idempotency_key)
+        )
+        first_mirror = importer.git_provider.mirror_path_for(self.canonical_remote)
+        self.assertTrue(first_mirror.is_dir())
+
+        retargeted = TransactionalSprintImporter(
+            self.runtime_config,
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote=other_canonical,
+                    transport_url=str(other_remote),
+                )
+            },
+            port_reservations=self.port_reservations,
+            allow_local_transport=True,
+        )
+        other_mirror = retargeted.git_provider.mirror_path_for(other_canonical)
+
+        result = retargeted.start(self.project_id, self.request)
+
+        self.assertEqual(result.http_status, 201)
+        self.assertEqual(result.response["identity"]["commit"], self.commit)
+        self.assertNotEqual(result.response["identity"]["commit"], other_commit)
+        self.assertFalse(other_mirror.exists())
+
+    def test_crash_before_mirror_creation_recovers_from_root_binding(self) -> None:
+        other_canonical = "example.invalid/acme/root-only-retarget"
+        other_remote, other_commit = self.create_managed_remote(
+            "root-only-retarget", other_canonical
+        )
+        importer = self.importer()
+        original_ensure_mirror = ManagedGitProvider.ensure_mirror
+        crashed = False
+
+        def crash_at_mirror_entry(provider, repository_id, *, fetch=True):
+            nonlocal crashed
+            if fetch and not crashed:
+                crashed = True
+                raise SimulatedCrash()
+            return original_ensure_mirror(provider, repository_id, fetch=fetch)
+
+        with patch.object(
+            ManagedGitProvider,
+            "ensure_mirror",
+            crash_at_mirror_entry,
+        ):
+            with self.assertRaises(SimulatedCrash):
+                importer.start(self.project_id, self.request)
+
+        binding_key = importer._request_binding_key(
+            self.project_id, self.request.idempotency_key
+        )
+        binding_path = (
+            Path(self.runtime_config["managed_root"])
+            / "repository-bindings"
+            / f"{binding_key}.json"
+        )
+        self.assertTrue(binding_path.is_file())
+        self.assertFalse(
+            importer.git_provider.mirror_path_for(self.canonical_remote).exists()
+        )
+
+        retargeted = TransactionalSprintImporter(
+            self.runtime_config,
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote=other_canonical,
+                    transport_url=str(other_remote),
+                )
+            },
+            port_reservations=self.port_reservations,
+            allow_local_transport=True,
+        )
+        result = retargeted.start(self.project_id, self.request)
+
+        self.assertEqual(result.response["identity"]["commit"], self.commit)
+        self.assertNotEqual(result.response["identity"]["commit"], other_commit)
+        self.assertFalse(
+            retargeted.git_provider.mirror_path_for(other_canonical).exists()
+        )
+
+    def test_legacy_git_binding_is_migrated_before_alias_resolution(self) -> None:
+        importer = self.importer()
+        binding_key = "a" * 64
+        fingerprint = "b" * 64
+        bound, created = importer.git_provider.bind_request_repository(
+            binding_key, fingerprint, self.repository_id
+        )
+        self.assertTrue(created)
+        binding_path = (
+            Path(self.runtime_config["managed_root"])
+            / "repository-bindings"
+            / f"{binding_key}.json"
+        )
+        binding_path.unlink()
+
+        other_canonical = "example.invalid/acme/legacy-binding-retarget"
+        other_remote, _ = self.create_managed_remote(
+            "legacy-binding-retarget", other_canonical
+        )
+        retargeted = ManagedGitProvider(
+            Path(self.runtime_config["managed_root"]),
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote=other_canonical,
+                    transport_url=str(other_remote),
+                )
+            },
+            allow_local_transport=True,
+        )
+        migrated, recreated = retargeted.bind_request_repository(
+            binding_key, fingerprint, self.repository_id
+        )
+
+        self.assertFalse(recreated)
+        self.assertEqual(migrated, bound)
+        self.assertTrue(binding_path.is_file())
+        self.assertFalse(retargeted.mirror_path_for(other_canonical).exists())
+
+    def test_legacy_binding_with_invalid_utf8_is_not_migrated(self) -> None:
+        canonical_remote = "example.invalid/acme/\ufffd-binding"
+        provider = ManagedGitProvider(
+            Path(self.runtime_config["managed_root"]),
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote=canonical_remote,
+                    transport_url=str(self.remote),
+                )
+            },
+            allow_local_transport=True,
+        )
+        binding_key = "e" * 64
+        fingerprint = "f" * 64
+        bound, _ = provider.bind_request_repository(
+            binding_key, fingerprint, self.repository_id
+        )
+        binding_path = (
+            Path(self.runtime_config["managed_root"])
+            / "repository-bindings"
+            / f"{binding_key}.json"
+        )
+        serialized = binding_path.read_bytes()
+        self.assertIn(b"\xef\xbf\xbd", serialized)
+        binding_path.unlink()
+        mirror_path = provider.mirror_path_for(bound.canonical_remote)
+        invalid = serialized.replace(b"\xef\xbf\xbd", b"\xff", 1)
+        hashed = subprocess.run(
+            (
+                "git",
+                "--git-dir",
+                str(mirror_path),
+                "hash-object",
+                "-w",
+                "--stdin",
+            ),
+            input=invalid,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+        object_id = hashed.stdout.decode("ascii").strip()
+        self.git(
+            "--git-dir",
+            str(mirror_path),
+            "update-ref",
+            f"refs/nginx-qa/request-bindings/{binding_key}",
+            object_id,
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            provider.bind_request_repository(
+                binding_key, fingerprint, self.repository_id
+            )
+
+        self.assertEqual(raised.exception.code, "REPOSITORY_BINDING_INVALID")
+        self.assertFalse(binding_path.exists())
+
+    def test_secret_looking_repository_alias_replays_without_redaction(self) -> None:
+        repository_id = "ghp_abcdefgh"
+        provider = ManagedGitProvider(
+            Path(self.runtime_config["managed_root"]),
+            {
+                repository_id: RepositorySpec(
+                    repository_id=repository_id,
+                    canonical_remote=self.canonical_remote,
+                    transport_url=str(self.remote),
+                )
+            },
+            allow_local_transport=True,
+        )
+        binding_key = "1" * 64
+        fingerprint = "2" * 64
+
+        first, created = provider.bind_request_repository(
+            binding_key, fingerprint, repository_id
+        )
+        replay, recreated = provider.bind_request_repository(
+            binding_key, fingerprint, repository_id
+        )
+
+        self.assertTrue(created)
+        self.assertFalse(recreated)
+        self.assertEqual(replay, first)
+
+    def test_corrupt_root_binding_does_not_fall_back_to_valid_git_ref(self) -> None:
+        importer = self.importer()
+        binding_key = "c" * 64
+        fingerprint = "d" * 64
+        importer.git_provider.bind_request_repository(
+            binding_key, fingerprint, self.repository_id
+        )
+        binding_path = (
+            Path(self.runtime_config["managed_root"])
+            / "repository-bindings"
+            / f"{binding_key}.json"
+        )
+        malformed_receipts = (
+            b"not-json",
+            b'\xff',
+            b'{"value":"\\ud800"}',
+            b'{"value":' + (b"1" * 5000) + b"}",
+            b'{"value":NaN}',
+            (b"[" * 2000) + b"0" + (b"]" * 2000),
+            b'{"repository":{},"request_fingerprint":"'
+            + fingerprint.encode("ascii")
+            + b'","schema_version":true}',
+        )
+        for raw in malformed_receipts:
+            with self.subTest(raw=raw[:32]):
+                binding_path.write_bytes(raw)
+                with self.assertRaises(ManagedGitError) as raised:
+                    importer.git_provider.bind_request_repository(
+                        binding_key, fingerprint, self.repository_id
+                    )
+                self.assertEqual(
+                    raised.exception.code, "REPOSITORY_BINDING_INVALID"
+                )
+
+    def test_binding_directory_file_fails_before_mirror_or_control_mutation(self) -> None:
+        binding_root = (
+            Path(self.runtime_config["managed_root"]) / "repository-bindings"
+        )
+        binding_root.parent.mkdir(parents=True, exist_ok=True)
+        binding_root.write_bytes(b"not-a-directory")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(
+            importer.git_provider.mirror_path_for(self.canonical_remote).exists()
+        )
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_request_lock_directory_file_is_a_stable_validate_failure(self) -> None:
+        lock_root = (
+            Path(self.runtime_config["managed_root"])
+            / "locks"
+            / "import-requests"
+        )
+        lock_root.parent.mkdir(parents=True, exist_ok=True)
+        lock_root.write_bytes(b"not-a-directory")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(
+            importer.git_provider.mirror_path_for(self.canonical_remote).exists()
+        )
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_request_lock_path_directory_is_a_stable_validate_failure(self) -> None:
+        importer = self.importer()
+        binding_key = importer._request_binding_key(
+            self.project_id, self.request.idempotency_key
+        )
+        lock_path = (
+            Path(self.runtime_config["managed_root"])
+            / "locks"
+            / "import-requests"
+            / f"{binding_key}.lock"
+        )
+        lock_path.mkdir(parents=True)
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_binding_lock_path_directory_is_a_stable_validate_failure(self) -> None:
+        importer = self.importer()
+        binding_key = importer._request_binding_key(
+            self.project_id, self.request.idempotency_key
+        )
+        lock_path = (
+            Path(self.runtime_config["managed_root"])
+            / "locks"
+            / "repository-bindings"
+            / f"{binding_key}.lock"
+        )
+        lock_path.mkdir(parents=True)
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_mirror_directory_file_is_a_stable_validate_failure(self) -> None:
+        importer = self.importer()
+        repositories_root = Path(self.runtime_config["managed_root"]) / "repositories"
+        repositories_root.parent.mkdir(parents=True, exist_ok=True)
+        repositories_root.write_bytes(b"not-a-directory")
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_mirror_lock_directory_file_is_a_stable_validate_failure(self) -> None:
+        importer = self.importer()
+        locks_root = (
+            Path(self.runtime_config["managed_root"])
+            / "locks"
+            / "repositories"
+        )
+        locks_root.parent.mkdir(parents=True, exist_ok=True)
+        locks_root.write_bytes(b"not-a-directory")
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.envelope["detail"]["phase"], "VALIDATE")
+        self.assertFalse(importer.store.database_path.exists())
+
+    def test_registry_surrogate_is_rejected_before_binding_publication(self) -> None:
+        invalid = TransactionalSprintImporter(
+            self.runtime_config,
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote="example.invalid/acme/\ud800",
+                    transport_url="https://example.invalid/acme/\ud800.git",
+                )
+            },
+            port_reservations=self.port_reservations,
+            allow_local_transport=True,
+        )
+
+        with self.assertRaises(ManagedImportError) as raised:
+            invalid.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "REPOSITORY_REGISTRY_INVALID",
+        )
+        binding_root = (
+            Path(self.runtime_config["managed_root"]) / "repository-bindings"
+        )
+        self.assertFalse(binding_root.exists())
+        self.assertFalse(invalid.store.database_path.exists())
+
+    def test_lost_binding_link_ack_retries_from_published_receipt(self) -> None:
+        other_canonical = "example.invalid/acme/lost-binding-ack-retarget"
+        other_remote, other_commit = self.create_managed_remote(
+            "lost-binding-ack-retarget", other_canonical
+        )
+        importer = self.importer()
+        original_link = os.link
+        injected = False
+
+        def link_then_lose_ack(source, destination, *args, **kwargs):
+            nonlocal injected
+            original_link(source, destination, *args, **kwargs)
+            if not injected:
+                injected = True
+                raise OSError("simulated lost hardlink acknowledgement")
+
+        with patch("nginx_qa.git_provider.os.link", link_then_lose_ack):
+            with self.assertRaises(ManagedImportError) as raised:
+                importer.start(self.project_id, self.request)
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+
+        retargeted = TransactionalSprintImporter(
+            self.runtime_config,
+            {
+                self.repository_id: RepositorySpec(
+                    repository_id=self.repository_id,
+                    canonical_remote=other_canonical,
+                    transport_url=str(other_remote),
+                )
+            },
+            port_reservations=self.port_reservations,
+            allow_local_transport=True,
+        )
+        result = retargeted.start(self.project_id, self.request)
+
+        self.assertEqual(result.response["identity"]["commit"], self.commit)
+        self.assertNotEqual(result.response["identity"]["commit"], other_commit)
+        self.assertFalse(
+            retargeted.git_provider.mirror_path_for(other_canonical).exists()
+        )
+
     def test_retry_durably_fails_schema_invalid_null_intent(self) -> None:
         changed = json.loads(
             (self.source / self.manifest_path).read_text(encoding="utf-8")
@@ -1767,6 +2222,665 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
             first.response["sprint_id"],
         )
         self.assertEqual(importer.branch_leases.active_writers(), active_leases)
+
+    def test_expired_preparing_attempt_cannot_replace_new_active_sprint(self) -> None:
+        current_time = [datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)]
+        crashed = False
+
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "resource-free expired attempt")
+
+        def fault(point: str, _: dict) -> None:
+            nonlocal crashed
+            if point == "after_validate" and not crashed:
+                crashed = True
+                raise SimulatedCrash()
+
+        first = self.importer(
+            clock=lambda: current_time[0],
+            fault_injector=fault,
+        )
+        with self.assertRaises(SimulatedCrash):
+            first.start(self.project_id, self.request)
+        first_record = first.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert first_record is not None
+        self.assertEqual(first_record["status"], "PREPARING")
+
+        current_time[0] += timedelta(minutes=10)
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["tasks"][0]["message"] = "new active sprint"
+        self.push_manifest(changed, "activate newer sprint after expired attempt")
+        second_request = StartSprintFromGitRequest(
+            repository_id=self.request.repository_id,
+            ref=self.request.ref,
+            manifest_path=self.request.manifest_path,
+            idempotency_key="new-active-after-expired-attempt",
+        )
+        second = self.importer(clock=lambda: current_time[0])
+        second_result = second.start(self.project_id, second_request)
+
+        with self.assertRaises(ManagedImportError) as raised:
+            first.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_RECOVERY_REQUIRED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "ATTEMPT_SUPERSEDED",
+        )
+        control = second.store.project_control(self.project_id)
+        self.assertEqual(
+            control["active_sprint_id"], second_result.response["sprint_id"]
+        )
+        active = second.store.active_runtime_states()
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0]["sprint_id"], second_result.response["sprint_id"])
+        preserved = second.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert preserved is not None
+        self.assertEqual(preserved["status"], "FAILED")
+        self.assertEqual(preserved["evidence"]["failure_code"], "ATTEMPT_SUPERSEDED")
+
+    def test_legacy_refenced_attempt_is_failed_by_immutable_creation_fence(self) -> None:
+        current_time = [datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)]
+        crashed = False
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "legacy refence setup")
+
+        def fault(point: str, _: dict) -> None:
+            nonlocal crashed
+            if point == "after_validate" and not crashed:
+                crashed = True
+                raise SimulatedCrash()
+
+        first = self.importer(clock=lambda: current_time[0], fault_injector=fault)
+        with self.assertRaises(SimulatedCrash):
+            first.start(self.project_id, self.request)
+        current_time[0] += timedelta(minutes=10)
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["tasks"][0]["message"] = "legacy winner"
+        self.push_manifest(changed, "legacy winner activation")
+        winner_request = StartSprintFromGitRequest(
+            repository_id=self.request.repository_id,
+            ref=self.request.ref,
+            manifest_path=self.request.manifest_path,
+            idempotency_key="legacy-refence-winner",
+        )
+        winner = self.importer(clock=lambda: current_time[0])
+        winner_result = winner.start(self.project_id, winner_request)
+
+        database = winner.store.database_path
+        with closing(sqlite3.connect(database)) as connection:
+            raw_control = connection.execute(
+                "SELECT control_json FROM managed_projects WHERE project_id = ?",
+                (self.project_id,),
+            ).fetchone()[0]
+            control = json.loads(raw_control)
+            old_record = next(
+                record
+                for record in control["start_idempotency_records"]
+                if record["idempotency_key"] == self.request.idempotency_key
+            )
+            winner_record = next(
+                record
+                for record in control["start_idempotency_records"]
+                if record["idempotency_key"] == winner_request.idempotency_key
+            )
+            old_record.pop("created_fencing_token", None)
+            old_record.update(
+                {
+                    "status": "PREPARING",
+                    "fencing_token": int(winner_record["fencing_token"]) + 1,
+                    "response": None,
+                    "http_status": None,
+                    "error": None,
+                }
+            )
+            control["activation_fencing_counter"] = old_record["fencing_token"]
+            control["activation_lease"] = None
+            connection.execute(
+                "UPDATE managed_projects SET control_json = ? WHERE project_id = ?",
+                (
+                    json.dumps(
+                        control,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    self.project_id,
+                ),
+            )
+            connection.commit()
+
+        restarted = ManagedImportStore(database)
+        restored = restarted.active_runtime_states()
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0]["sprint_id"], winner_result.response["sprint_id"])
+        startup_control = restarted.project_control(self.project_id)
+        startup_old = next(
+            record
+            for record in startup_control["start_idempotency_records"]
+            if record["idempotency_key"] == self.request.idempotency_key
+        )
+        self.assertEqual(startup_old["status"], "FAILED")
+        self.assertEqual(
+            startup_old["evidence"]["failure_code"], "ATTEMPT_SUPERSEDED"
+        )
+
+        with self.assertRaises(ManagedImportError) as raised:
+            first.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_RECOVERY_REQUIRED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "ATTEMPT_SUPERSEDED",
+        )
+        repaired = winner.store.project_control(self.project_id)
+        repaired_old = next(
+            record
+            for record in repaired["start_idempotency_records"]
+            if record["idempotency_key"] == self.request.idempotency_key
+        )
+        self.assertEqual(repaired_old["status"], "FAILED")
+        self.assertEqual(
+            repaired["active_sprint_id"], winner_result.response["sprint_id"]
+        )
+
+    def test_current_fence_winner_supersedes_later_abandoned_attempt(self) -> None:
+        current_time = [datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)]
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "current fence winner setup")
+
+        first_crashed = False
+
+        def first_fault(point: str, _: dict) -> None:
+            nonlocal first_crashed
+            if point == "after_validate" and not first_crashed:
+                first_crashed = True
+                raise SimulatedCrash()
+
+        first = self.importer(
+            clock=lambda: current_time[0], fault_injector=first_fault
+        )
+        with self.assertRaises(SimulatedCrash):
+            first.start(self.project_id, self.request)
+
+        current_time[0] += timedelta(minutes=10)
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["tasks"][0]["message"] = "later abandoned attempt"
+        self.push_manifest(changed, "later abandoned attempt")
+        second_request = StartSprintFromGitRequest(
+            repository_id=self.request.repository_id,
+            ref=self.request.ref,
+            manifest_path=self.request.manifest_path,
+            idempotency_key="later-abandoned-attempt",
+        )
+        second_crashed = False
+
+        def second_fault(point: str, _: dict) -> None:
+            nonlocal second_crashed
+            if point == "after_validate" and not second_crashed:
+                second_crashed = True
+                raise SimulatedCrash()
+
+        second = self.importer(
+            clock=lambda: current_time[0], fault_injector=second_fault
+        )
+        with self.assertRaises(SimulatedCrash):
+            second.start(self.project_id, second_request)
+
+        current_time[0] += timedelta(minutes=10)
+        result = first.start(self.project_id, self.request)
+
+        self.assertEqual(result.http_status, 201)
+        abandoned = first.store.lookup(
+            self.project_id, second_request.idempotency_key
+        )
+        assert abandoned is not None
+        self.assertEqual(abandoned["status"], "FAILED")
+        self.assertEqual(
+            abandoned["evidence"]["failure_code"], "ATTEMPT_SUPERSEDED"
+        )
+
+    def test_inconsistent_terminal_runtime_fails_closed_at_final_boundary(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "inconsistent terminal setup")
+        importer = self.importer()
+        first = importer.start(self.project_id, self.request)
+
+        database = importer.store.database_path
+        with closing(sqlite3.connect(database)) as connection:
+            raw_state = connection.execute(
+                """
+                SELECT state_json FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (self.project_id, first.response["sprint_id"]),
+            ).fetchone()[0]
+            state = json.loads(raw_state)
+            state["status"] = "completed"
+            connection.execute(
+                """
+                UPDATE managed_sprints SET status = 'completed', state_json = ?
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (
+                    json.dumps(
+                        state,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    self.project_id,
+                    first.response["sprint_id"],
+                ),
+            )
+            connection.commit()
+
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["tasks"][0]["message"] = "must not replace corrupt terminal"
+        self.push_manifest(changed, "inconsistent terminal contender")
+        contender = StartSprintFromGitRequest(
+            repository_id=self.request.repository_id,
+            ref=self.request.ref,
+            manifest_path=self.request.manifest_path,
+            idempotency_key="inconsistent-terminal-contender",
+        )
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, contender)
+
+        self.assertEqual(raised.exception.code, "SPRINT_RECOVERY_REQUIRED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "ACTIVE_SPRINT_STATE_CONFLICT",
+        )
+
+    def test_corrupt_active_runtime_is_recovery_not_transient_conflict(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "corrupt active setup")
+        importer = self.importer()
+        first = importer.start(self.project_id, self.request)
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            raw_state = connection.execute(
+                """
+                SELECT state_json FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (self.project_id, first.response["sprint_id"]),
+            ).fetchone()[0]
+            state = json.loads(raw_state)
+            state.pop("schema_version")
+            connection.execute(
+                """
+                UPDATE managed_sprints SET state_json = ?
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (
+                    json.dumps(state, sort_keys=True, separators=(",", ":")),
+                    self.project_id,
+                    first.response["sprint_id"],
+                ),
+            )
+            connection.commit()
+
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["tasks"][0]["message"] = "corrupt active contender"
+        self.push_manifest(changed, "corrupt active contender")
+        contender = StartSprintFromGitRequest(
+            repository_id=self.request.repository_id,
+            ref=self.request.ref,
+            manifest_path=self.request.manifest_path,
+            idempotency_key="corrupt-active-contender",
+        )
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, contender)
+
+        self.assertEqual(raised.exception.code, "SPRINT_RECOVERY_REQUIRED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "ACTIVE_SPRINT_STATE_CONFLICT",
+        )
+
+    def test_valid_terminal_predecessor_with_exact_fence_can_be_replaced(self) -> None:
+        from tests.test_sprint_type_contract import (
+            completed_runtime_fixture,
+            project_control_fixture,
+        )
+
+        importer = self.importer()
+        importer.store._ensure_initialized()
+        control = project_control_fixture()
+        terminal = completed_runtime_fixture()
+        prior_project_id = str(control["project_id"])
+        prior_sprint_id = str(control["active_sprint_id"])
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            connection.execute(
+                """
+                INSERT INTO managed_projects(project_id, control_json, revision)
+                VALUES (?, ?, 1)
+                """,
+                (
+                    prior_project_id,
+                    json.dumps(control, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO managed_sprints(
+                    project_id, sprint_id, status, fencing_token, state_json
+                ) VALUES (?, ?, 'completed', 1, ?)
+                """,
+                (
+                    prior_project_id,
+                    prior_sprint_id,
+                    json.dumps(terminal, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            connection.commit()
+
+        result = importer.start(prior_project_id, self.request)
+
+        self.assertEqual(result.http_status, 201)
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            rows = connection.execute(
+                """
+                SELECT sprint_id, status FROM managed_sprints
+                WHERE project_id = ? ORDER BY sprint_id
+                """,
+                (prior_project_id,),
+            ).fetchall()
+        self.assertEqual(sum(status == "active" for _, status in rows), 1)
+        self.assertIn((prior_sprint_id, "completed"), rows)
+        self.assertEqual(
+            importer.store.project_control(prior_project_id)["active_sprint_id"],
+            result.response["sprint_id"],
+        )
+
+    def test_terminal_predecessor_fence_mismatch_fails_closed(self) -> None:
+        from tests.test_sprint_type_contract import (
+            completed_runtime_fixture,
+            project_control_fixture,
+        )
+
+        importer = self.importer()
+        importer.store._ensure_initialized()
+        control = project_control_fixture()
+        terminal = completed_runtime_fixture()
+        prior_project_id = str(control["project_id"])
+        prior_sprint_id = str(control["active_sprint_id"])
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            connection.execute(
+                """
+                INSERT INTO managed_projects(project_id, control_json, revision)
+                VALUES (?, ?, 1)
+                """,
+                (
+                    prior_project_id,
+                    json.dumps(control, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            connection.execute(
+                """
+                INSERT INTO managed_sprints(
+                    project_id, sprint_id, status, fencing_token, state_json
+                ) VALUES (?, ?, 'completed', 0, ?)
+                """,
+                (
+                    prior_project_id,
+                    prior_sprint_id,
+                    json.dumps(terminal, sort_keys=True, separators=(",", ":")),
+                ),
+            )
+            connection.commit()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(prior_project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_RECOVERY_REQUIRED")
+        self.assertEqual(
+            raised.exception.envelope["detail"]["issues"][0]["code"],
+            "ACTIVE_SPRINT_STATE_CONFLICT",
+        )
+
+    def test_legacy_duplicate_active_rows_fail_startup_reconciliation(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "duplicate active setup")
+        importer = self.importer()
+        first = importer.start(self.project_id, self.request)
+        duplicate_sprint_id = "msv1-" + "0" * 64
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            connection.execute("DROP INDEX managed_single_active_sprint")
+            raw_state, fencing_token = connection.execute(
+                """
+                SELECT state_json, fencing_token FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (self.project_id, first.response["sprint_id"]),
+            ).fetchone()
+            connection.execute(
+                """
+                INSERT INTO managed_sprints(
+                    project_id, sprint_id, status, fencing_token, state_json
+                ) VALUES (?, ?, 'active', ?, ?)
+                """,
+                (
+                    self.project_id,
+                    duplicate_sprint_id,
+                    fencing_token,
+                    raw_state,
+                ),
+            )
+            connection.commit()
+
+        restarted = ManagedImportStore(importer.store.database_path)
+        with self.assertRaisesRegex(RuntimeError, "MULTIPLE_ACTIVE_SPRINTS"):
+            restarted.active_runtime_states()
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            connection.execute(
+                "DELETE FROM managed_sprints WHERE project_id = ? AND sprint_id = ?",
+                (self.project_id, duplicate_sprint_id),
+            )
+            connection.commit()
+        restarted._ensure_initialized()
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            index = connection.execute(
+                """
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'index' AND name = 'managed_single_active_sprint'
+                """
+            ).fetchone()
+            self.assertIsNotNone(index)
+            with self.assertRaises(sqlite3.IntegrityError):
+                connection.execute(
+                    """
+                    INSERT INTO managed_sprints(
+                        project_id, sprint_id, status, fencing_token, state_json
+                    ) VALUES (?, ?, 'active', ?, ?)
+                    """,
+                    (
+                        self.project_id,
+                        "msv1-" + "1" * 64,
+                        fencing_token,
+                        raw_state,
+                    ),
+                )
+            connection.rollback()
+        self.assertEqual(len(restarted.active_runtime_states()), 1)
+
+    def test_corrupt_project_control_fails_startup_reconciliation(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "corrupt project control setup")
+        importer = self.importer()
+        importer.start(self.project_id, self.request)
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            raw_control = connection.execute(
+                "SELECT control_json FROM managed_projects WHERE project_id = ?",
+                (self.project_id,),
+            ).fetchone()[0]
+            cases = (
+                ("indexed project", "PROJECT_CONTROL_INDEX_MISMATCH"),
+                ("lease schema", "PROJECT_CONTROL_SCHEMA_INVALID"),
+                ("success response", "START_SUCCESS_RESPONSE_MISMATCH"),
+            )
+            for corruption, expected_issue in cases:
+                with self.subTest(corruption=corruption):
+                    control = json.loads(raw_control)
+                    if corruption == "indexed project":
+                        control["project_id"] = "wrong-project"
+                    elif corruption == "lease schema":
+                        control["activation_lease"] = {}
+                    else:
+                        control["start_idempotency_records"][0]["response"][
+                            "workspace_source_commit"
+                        ] = "a" * 40
+                    connection.execute(
+                        """
+                        UPDATE managed_projects SET control_json = ?
+                        WHERE project_id = ?
+                        """,
+                        (
+                            json.dumps(
+                                control, sort_keys=True, separators=(",", ":")
+                            ),
+                            self.project_id,
+                        ),
+                    )
+                    connection.commit()
+                    with self.assertRaisesRegex(RuntimeError, expected_issue):
+                        ManagedImportStore(
+                            importer.store.database_path
+                        ).active_runtime_states()
+
+    def test_stale_active_pointer_fails_startup_reconciliation(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "stale active pointer setup")
+        importer = self.importer()
+        first = importer.start(self.project_id, self.request)
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            raw_control = connection.execute(
+                "SELECT control_json FROM managed_projects WHERE project_id = ?",
+                (self.project_id,),
+            ).fetchone()[0]
+            control = json.loads(raw_control)
+            later = json.loads(
+                json.dumps(control["start_idempotency_records"][0])
+            )
+            later_sprint_id = "msv1-" + "b" * 64
+            later.update(
+                {
+                    "idempotency_key": "later-success",
+                    "request_fingerprint": "3" * 64,
+                    "attempt_id": "later-attempt",
+                    "created_fencing_token": 2,
+                    "fencing_token": 2,
+                    "sprint_id": later_sprint_id,
+                }
+            )
+            later["response"]["sprint_id"] = later_sprint_id
+            control["activation_fencing_counter"] = 2
+            control["start_idempotency_records"].append(later)
+            self.assertEqual(
+                control["active_sprint_id"], first.response["sprint_id"]
+            )
+            connection.execute(
+                "UPDATE managed_projects SET control_json = ? WHERE project_id = ?",
+                (
+                    json.dumps(control, sort_keys=True, separators=(",", ":")),
+                    self.project_id,
+                ),
+            )
+            connection.commit()
+
+        restarted = ManagedImportStore(importer.store.database_path)
+        with self.assertRaisesRegex(RuntimeError, "ACTIVE_SPRINT_INDEX_MISMATCH"):
+            restarted.active_runtime_states()
+
+    def test_non_integer_control_fence_fails_startup_reconciliation(self) -> None:
+        resource_free = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        resource_free["nodes"][0]["workspace"] = {"access": "read"}
+        self.push_manifest(resource_free, "non-integer control fence setup")
+        importer = self.importer()
+        importer.start(self.project_id, self.request)
+
+        with closing(sqlite3.connect(importer.store.database_path)) as connection:
+            raw_control = connection.execute(
+                "SELECT control_json FROM managed_projects WHERE project_id = ?",
+                (self.project_id,),
+            ).fetchone()[0]
+            cases = (
+                (True, "PROJECT_CONTROL_SCHEMA_INVALID"),
+                (1.0, "START_FENCING_TOKEN_INVALID"),
+            )
+            for bad_fence, expected_issue in cases:
+                with self.subTest(bad_fence=bad_fence):
+                    control = json.loads(raw_control)
+                    control["start_idempotency_records"][0][
+                        "fencing_token"
+                    ] = bad_fence
+                    connection.execute(
+                        """
+                        UPDATE managed_projects SET control_json = ?
+                        WHERE project_id = ?
+                        """,
+                        (
+                            json.dumps(
+                                control, sort_keys=True, separators=(",", ":")
+                            ),
+                            self.project_id,
+                        ),
+                    )
+                    connection.commit()
+                    with self.assertRaisesRegex(
+                        RuntimeError, expected_issue
+                    ):
+                        ManagedImportStore(
+                            importer.store.database_path
+                        ).active_runtime_states()
 
     def test_branch_race_returns_stale_snapshot_without_partial_activation(self) -> None:
         injected = False

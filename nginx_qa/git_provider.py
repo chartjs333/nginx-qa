@@ -653,6 +653,78 @@ class GitCommandRunner:
             )
         return result
 
+    def run_raw_stdout(
+        self,
+        arguments: Sequence[str],
+        *,
+        cwd: Path | None = None,
+        environment: Mapping[str, str] | None = None,
+        max_stdout_bytes: int,
+        allowed_returncodes: frozenset[int] = frozenset({0}),
+        error_code: str = "GIT_COMMAND_FAILED",
+    ) -> bytes:
+        """Return bounded raw stdout without decoding or secret redaction.
+
+        Callers must use this only for non-loggable protocol data whose size was
+        independently bounded. Error evidence never includes raw stdout.
+        """
+
+        if max_stdout_bytes < 0:
+            raise ValueError("max_stdout_bytes cannot be negative")
+        argv = (self.executable, *(str(item) for item in arguments))
+        secrets = tuple((environment or {}).values())
+        try:
+            process = subprocess.Popen(
+                argv,
+                cwd=str(cwd) if cwd is not None else None,
+                env=_minimal_environment(environment),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=False,
+                shell=False,
+                **_process_group_options(),
+            )
+        except OSError as exc:
+            raise ManagedGitError(
+                "GIT_EXECUTABLE_UNAVAILABLE",
+                f"Git could not be started: {exc.__class__.__name__}",
+            ) from None
+        process_tree = _ManagedProcessTree(process)
+        try:
+            try:
+                stdout, stderr = process.communicate(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                process_tree.terminate()
+                try:
+                    process.communicate(timeout=0.5)
+                except (subprocess.TimeoutExpired, OSError):
+                    pass
+                raise ManagedGitError(
+                    "GIT_COMMAND_TIMEOUT",
+                    f"Git command exceeded the {self.timeout:g}s timeout",
+                ) from None
+            process_tree.close_after_parent()
+            stderr_text = _redact(
+                stderr.decode("utf-8", errors="replace")[:_OUTPUT_LIMIT],
+                secrets,
+            )
+            if process.returncode not in allowed_returncodes:
+                raise ManagedGitError(
+                    error_code,
+                    f"Git command failed with exit code {process.returncode}",
+                    stderr=stderr_text,
+                    returncode=process.returncode,
+                )
+            if len(stdout) > max_stdout_bytes:
+                raise ManagedGitError(
+                    error_code, "Git raw output exceeded the managed limit"
+                )
+            return bytes(stdout)
+        finally:
+            if process.poll() is None:
+                process_tree.terminate()
+
     def run_streaming_lines(
         self,
         arguments: Sequence[str],
@@ -807,6 +879,7 @@ class ManagedGitProvider:
         if self.managed_root.parent == self.managed_root:
             raise ValueError("managed_root cannot be a filesystem root")
         self.repositories_root = self.managed_root / "repositories"
+        self.request_bindings_root = self.managed_root / "repository-bindings"
         self.locks_root = self.managed_root / "locks" / "repositories"
         self.request_binding_locks_root = (
             self.managed_root / "locks" / "repository-bindings"
@@ -858,22 +931,44 @@ class ManagedGitProvider:
                 "REPOSITORY_IDENTITY_MISMATCH",
                 "registry entry does not match the requested repository_id",
             )
-        if not spec.canonical_remote or _SECRET_LITERAL.search(spec.canonical_remote):
+        if not isinstance(spec.canonical_remote, str) or not spec.canonical_remote:
+            raise ManagedGitError(
+                "REPOSITORY_REGISTRY_INVALID", "canonical repository identity is invalid"
+            )
+        try:
+            spec.canonical_remote.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise ManagedGitError(
+                "REPOSITORY_REGISTRY_INVALID",
+                "canonical repository identity is not valid UTF-8",
+            ) from None
+        if _SECRET_LITERAL.search(spec.canonical_remote):
             raise ManagedGitError(
                 "REPOSITORY_REGISTRY_INVALID", "canonical repository identity is invalid"
             )
         reference = spec.credential_reference
-        if reference is not None and (
-            _CREDENTIAL_REFERENCE.fullmatch(reference) is None
-            or _SECRET_LITERAL.search(reference) is not None
-        ):
-            raise ManagedGitError(
-                "CREDENTIAL_REFERENCE_INVALID", "credential reference is invalid"
-            )
+        if reference is not None:
+            if not isinstance(reference, str):
+                raise ManagedGitError(
+                    "CREDENTIAL_REFERENCE_INVALID", "credential reference is invalid"
+                )
+            try:
+                reference.encode("utf-8", errors="strict")
+            except UnicodeEncodeError:
+                raise ManagedGitError(
+                    "CREDENTIAL_REFERENCE_INVALID", "credential reference is invalid"
+                ) from None
+            if (
+                _CREDENTIAL_REFERENCE.fullmatch(reference) is None
+                or _SECRET_LITERAL.search(reference) is not None
+            ):
+                raise ManagedGitError(
+                    "CREDENTIAL_REFERENCE_INVALID", "credential reference is invalid"
+                )
 
-        transport_identity = canonical_remote_from_address(spec.transport_url)
         if (
-            not spec.transport_url
+            not isinstance(spec.transport_url, str)
+            or not spec.transport_url
             or len(spec.transport_url) > 2048
             or any(
                 ord(character) < 32 or ord(character) == 127
@@ -884,6 +979,13 @@ class ManagedGitProvider:
             raise ManagedGitError(
                 "REPOSITORY_TRANSPORT_INVALID", "repository transport is invalid"
             )
+        try:
+            spec.transport_url.encode("utf-8", errors="strict")
+        except UnicodeEncodeError:
+            raise ManagedGitError(
+                "REPOSITORY_TRANSPORT_INVALID", "repository transport is invalid"
+            ) from None
+        transport_identity = canonical_remote_from_address(spec.transport_url)
         if transport_identity is None:
             if not self.allow_local_transport or not self._is_local_transport(
                 spec.transport_url
@@ -949,6 +1051,56 @@ class ManagedGitProvider:
     def mirror_path_for(self, canonical_remote: str) -> Path:
         return self.repositories_root / f"{mirror_storage_key(canonical_remote)}.git"
 
+    def _ensure_internal_directory(self, path: Path, *, error_code: str) -> None:
+        self._assert_internal_path(path)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise ManagedGitError(
+                error_code, "managed repository directory is unavailable"
+            ) from exc
+        self._assert_internal_path(path)
+        if (
+            not path.is_dir()
+            or path.is_symlink()
+            or _path_is_junction(path)
+            or not _path_resolves_to_itself(path)
+        ):
+            raise ManagedGitError(
+                error_code, "managed repository directory is redirected"
+            )
+
+    def _prepare_internal_lock_file(self, path: Path, *, error_code: str) -> None:
+        """Create and validate a provider lock path before ManagedFileLock opens it."""
+
+        self._assert_internal_path(path)
+        if os.path.lexists(path) and (
+            not path.is_file()
+            or path.is_symlink()
+            or _path_is_junction(path)
+            or not _path_resolves_to_itself(path)
+        ):
+            raise ManagedGitError(error_code, "managed lock path is redirected")
+        try:
+            with path.open("a+b") as handle:
+                handle.seek(0, os.SEEK_END)
+                if handle.tell() == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                    os.fsync(handle.fileno())
+        except OSError as exc:
+            raise ManagedGitError(
+                error_code, "managed lock path is unavailable"
+            ) from exc
+        self._assert_internal_path(path)
+        if (
+            not path.is_file()
+            or path.is_symlink()
+            or _path_is_junction(path)
+            or not _path_resolves_to_itself(path)
+        ):
+            raise ManagedGitError(error_code, "managed lock path is redirected")
+
     def request_operation_lock(
         self, binding_key: str, *, timeout: float
     ) -> ManagedFileLock:
@@ -960,11 +1112,12 @@ class ManagedGitProvider:
             )
         lock_root = self.managed_root / "locks" / "import-requests"
         lock_path = lock_root / f"{binding_key}.lock"
-        self._assert_internal_path(lock_root)
-        self._assert_internal_path(lock_path)
-        lock_root.mkdir(parents=True, exist_ok=True)
-        self._assert_internal_path(lock_root)
-        self._assert_internal_path(lock_path)
+        self._ensure_internal_directory(
+            lock_root, error_code="REPOSITORY_BINDING_INVALID"
+        )
+        self._prepare_internal_lock_file(
+            lock_path, error_code="REPOSITORY_BINDING_INVALID"
+        )
         return ManagedFileLock(lock_path, timeout=timeout)
 
     def bind_request_repository(
@@ -989,7 +1142,10 @@ class ManagedGitProvider:
             raise ManagedGitError("REPOSITORY_ID_INVALID", "repository_id is invalid")
 
         binding_ref = f"refs/nginx-qa/request-bindings/{binding_key}"
+        binding_path = self.request_bindings_root / f"{binding_key}.json"
         lock_path = self.request_binding_locks_root / f"{binding_key}.lock"
+        self._assert_internal_path(self.request_bindings_root)
+        self._assert_internal_path(binding_path)
         self._assert_internal_path(self.request_binding_locks_root)
         self._assert_internal_path(lock_path)
 
@@ -1006,25 +1162,37 @@ class ManagedGitProvider:
             provider.runner = self.runner
             return provider
 
-        def decode_binding(raw: bytes, mirror_path: Path) -> RepositorySpec:
+        def decode_binding(raw: bytes) -> RepositorySpec:
             if not raw or len(raw) > 16 * 1024:
                 raise ManagedGitError(
                     "REPOSITORY_BINDING_INVALID",
                     "request repository binding size is invalid",
                 )
+            def reject_nonfinite_constant(value: str) -> None:
+                raise ValueError(f"non-finite JSON constant: {value}")
+
             try:
-                payload = json.loads(raw.decode("utf-8", errors="strict"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                payload = json.loads(
+                    raw.decode("utf-8", errors="strict"),
+                    parse_constant=reject_nonfinite_constant,
+                )
+                canonical = json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except (
+                UnicodeDecodeError,
+                UnicodeEncodeError,
+                json.JSONDecodeError,
+                RecursionError,
+                ValueError,
+            ) as exc:
                 raise ManagedGitError(
                     "REPOSITORY_BINDING_INVALID",
                     "request repository binding is malformed",
                 ) from exc
-            canonical = json.dumps(
-                payload,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
             if raw != canonical or not isinstance(payload, dict):
                 raise ManagedGitError(
                     "REPOSITORY_BINDING_INVALID",
@@ -1034,12 +1202,20 @@ class ManagedGitProvider:
                 "schema_version",
                 "request_fingerprint",
                 "repository",
-            } or payload.get("schema_version") != 1:
+            } or type(payload.get("schema_version")) is not int or payload.get(
+                "schema_version"
+            ) != 1:
                 raise ManagedGitError(
                     "REPOSITORY_BINDING_INVALID",
                     "request repository binding schema is invalid",
                 )
-            if payload.get("request_fingerprint") != request_fingerprint:
+            stored_fingerprint = payload.get("request_fingerprint")
+            if not isinstance(stored_fingerprint, str):
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository fingerprint is invalid",
+                )
+            if stored_fingerprint != request_fingerprint:
                 raise ManagedGitError(
                     "IDEMPOTENCY_KEY_CONFLICT",
                     "idempotency key is bound to another request",
@@ -1055,15 +1231,24 @@ class ManagedGitProvider:
                     "REPOSITORY_BINDING_INVALID",
                     "request repository identity is invalid",
                 )
+            if (
+                not isinstance(repository.get("repository_id"), str)
+                or not isinstance(repository.get("canonical_remote"), str)
+                or not isinstance(repository.get("transport_url"), str)
+                or (
+                    repository.get("credential_reference") is not None
+                    and not isinstance(repository.get("credential_reference"), str)
+                )
+            ):
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository identity has invalid field types",
+                )
             spec = RepositorySpec(
-                repository_id=str(repository.get("repository_id") or ""),
-                canonical_remote=str(repository.get("canonical_remote") or ""),
-                transport_url=str(repository.get("transport_url") or ""),
-                credential_reference=(
-                    str(repository["credential_reference"])
-                    if repository.get("credential_reference") is not None
-                    else None
-                ),
+                repository_id=repository["repository_id"],
+                canonical_remote=repository["canonical_remote"],
+                transport_url=repository["transport_url"],
+                credential_reference=repository["credential_reference"],
             )
             if spec.repository_id != repository_id:
                 raise ManagedGitError(
@@ -1071,18 +1256,139 @@ class ManagedGitProvider:
                     "request repository alias disagrees with its fingerprint",
                 )
             provider = provider_for(spec)
-            spec = provider.resolve_repository(repository_id)
-            if provider.mirror_path_for(spec.canonical_remote).resolve(
-                strict=False
-            ) != mirror_path.resolve(strict=False):
+            return provider.resolve_repository(repository_id)
+
+        def read_root_binding() -> tuple[RepositorySpec, bytes] | None:
+            if not os.path.lexists(binding_path):
+                return None
+            self._assert_internal_path(binding_path)
+            if (
+                not binding_path.is_file()
+                or binding_path.is_symlink()
+                or _path_is_junction(binding_path)
+                or not _path_resolves_to_itself(binding_path)
+            ):
                 raise ManagedGitError(
                     "REPOSITORY_BINDING_INVALID",
-                    "request repository binding is stored in another mirror",
+                    "request repository binding is not a regular managed file",
                 )
-            provider.ensure_mirror(repository_id, fetch=False)
-            return spec
+            try:
+                with binding_path.open("rb") as handle:
+                    raw = handle.read(16 * 1024 + 1)
+            except OSError as exc:
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding could not be read",
+                ) from exc
+            return decode_binding(raw), raw
 
-        def find_binding() -> RepositorySpec | None:
+        def ensure_binding_directory(path: Path) -> None:
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding directory is unavailable",
+                ) from exc
+            self._assert_internal_path(path)
+            if (
+                not path.is_dir()
+                or path.is_symlink()
+                or _path_is_junction(path)
+                or not _path_resolves_to_itself(path)
+            ):
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding directory is redirected",
+                )
+
+        def persist_root_binding(raw: bytes) -> bool:
+            ensure_binding_directory(self.request_bindings_root)
+            self._assert_internal_path(binding_path)
+            existing = read_root_binding()
+            if existing is not None:
+                if existing[1] != raw:
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding disagrees with durable identity",
+                    )
+                return False
+
+            temporary_path = self.request_bindings_root / (
+                f".{binding_key}.{uuid.uuid4().hex}.tmp"
+            )
+            self._assert_internal_path(temporary_path)
+            descriptor: int | None = None
+            try:
+                descriptor = os.open(
+                    temporary_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                with os.fdopen(descriptor, "wb") as handle:
+                    descriptor = None
+                    handle.write(raw)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._assert_internal_path(temporary_path)
+                if (
+                    not temporary_path.is_file()
+                    or temporary_path.is_symlink()
+                    or _path_is_junction(temporary_path)
+                    or not _path_resolves_to_itself(temporary_path)
+                ):
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding preparation was redirected",
+                    )
+                try:
+                    os.link(temporary_path, binding_path)
+                except FileExistsError:
+                    existing = read_root_binding()
+                    if existing is None or existing[1] != raw:
+                        raise ManagedGitError(
+                            "REPOSITORY_BINDING_INVALID",
+                            "request repository binding publication conflicted",
+                        )
+                    return False
+                self._assert_internal_path(binding_path)
+                published = read_root_binding()
+                if published is None or published[1] != raw:
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding publication was not durable",
+                    )
+                if os.name != "nt":
+                    directory_descriptor: int | None = None
+                    try:
+                        directory_descriptor = os.open(
+                            self.request_bindings_root,
+                            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+                        )
+                        os.fsync(directory_descriptor)
+                    except OSError:
+                        # The file itself is already fsynced and atomically linked.
+                        pass
+                    finally:
+                        if directory_descriptor is not None:
+                            os.close(directory_descriptor)
+                return True
+            except ManagedGitError:
+                raise
+            except OSError as exc:
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding could not be published",
+                ) from exc
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+                try:
+                    temporary_path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+        def find_git_binding() -> tuple[RepositorySpec, bytes] | None:
             if not self.repositories_root.exists():
                 return None
             self._assert_internal_path(self.repositories_root)
@@ -1114,11 +1420,33 @@ class ManagedGitProvider:
                         "REPOSITORY_BINDING_INVALID",
                         "request repository binding object is invalid",
                     )
-                blob = self.runner.run(
-                    ("--git-dir", str(mirror_path), "cat-file", "blob", object_id),
+                size_result = self.runner.run(
+                    ("--git-dir", str(mirror_path), "cat-file", "-s", object_id),
                     error_code="REPOSITORY_BINDING_INVALID",
                 )
-                matches.append((mirror_path, blob.stdout.encode("utf-8")))
+                try:
+                    blob_size = int(size_result.stdout.strip())
+                except ValueError as exc:
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding size is malformed",
+                    ) from exc
+                if blob_size < 1 or blob_size > 16 * 1024:
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding size is invalid",
+                    )
+                blob = self.runner.run_raw_stdout(
+                    ("--git-dir", str(mirror_path), "cat-file", "blob", object_id),
+                    max_stdout_bytes=blob_size,
+                    error_code="REPOSITORY_BINDING_INVALID",
+                )
+                if len(blob) != blob_size:
+                    raise ManagedGitError(
+                        "REPOSITORY_BINDING_INVALID",
+                        "request repository binding size changed while reading",
+                    )
+                matches.append((mirror_path, blob))
             if not matches:
                 return None
             if len(matches) != 1:
@@ -1126,68 +1454,102 @@ class ManagedGitProvider:
                     "REPOSITORY_BINDING_INVALID",
                     "request repository binding exists in multiple mirrors",
                 )
-            return decode_binding(*matches[0][::-1])
+            mirror_path, raw = matches[0]
+            spec = decode_binding(raw)
+            expected_mirror = provider_for(spec).mirror_path_for(spec.canonical_remote)
+            if expected_mirror.resolve(strict=False) != mirror_path.resolve(
+                strict=False
+            ):
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding is stored in another mirror",
+                )
+            return spec, raw
+
+        def serialize_binding(spec: RepositorySpec) -> bytes:
+            payload = {
+                "schema_version": 1,
+                "request_fingerprint": request_fingerprint,
+                "repository": {
+                    "repository_id": spec.repository_id,
+                    "canonical_remote": spec.canonical_remote,
+                    "transport_url": spec.transport_url,
+                    "credential_reference": spec.credential_reference,
+                },
+            }
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+        def publish_git_binding(repository: ManagedRepository, raw: bytes) -> None:
+            object_id = self.runner.run(
+                (
+                    "--git-dir",
+                    str(repository.mirror_path),
+                    "hash-object",
+                    "-w",
+                    "--stdin",
+                ),
+                stdin_text=raw.decode("utf-8", errors="strict"),
+                error_code="REPOSITORY_BINDING_INVALID",
+            ).stdout.strip()
+            if _COMMIT_ID.fullmatch(object_id) is None:
+                raise ManagedGitError(
+                    "REPOSITORY_BINDING_INVALID",
+                    "request repository binding object was not created",
+                )
+            zero = "0" * (40 if repository.object_format == "sha1" else 64)
+            self.runner.run(
+                (
+                    "--git-dir",
+                    str(repository.mirror_path),
+                    "update-ref",
+                    binding_ref,
+                    object_id,
+                    zero,
+                ),
+                error_code="REPOSITORY_BINDING_INVALID",
+            )
 
         try:
-            self.request_binding_locks_root.mkdir(parents=True, exist_ok=True)
-            self._assert_internal_path(self.request_binding_locks_root)
+            ensure_binding_directory(self.request_binding_locks_root)
+            self._prepare_internal_lock_file(
+                lock_path, error_code="REPOSITORY_BINDING_INVALID"
+            )
             with ManagedFileLock(lock_path, timeout=self.lock_timeout):
-                bound = find_binding()
-                if bound is not None:
-                    return bound, False
-                if not create:
-                    raise ManagedGitError(
-                        "REPOSITORY_BINDING_NOT_FOUND",
-                        "durable request repository binding is missing",
-                    )
-                spec = self.resolve_repository(repository_id)
+                root_binding = read_root_binding()
+                git_binding = find_git_binding()
+                created = False
+                if root_binding is not None:
+                    spec, serialized = root_binding
+                    if git_binding is not None and git_binding[1] != serialized:
+                        raise ManagedGitError(
+                            "REPOSITORY_BINDING_INVALID",
+                            "Git binding disagrees with durable request identity",
+                        )
+                elif git_binding is not None:
+                    spec, serialized = git_binding
+                    persist_root_binding(serialized)
+                else:
+                    if not create:
+                        raise ManagedGitError(
+                            "REPOSITORY_BINDING_NOT_FOUND",
+                            "durable request repository binding is missing",
+                        )
+                    spec = self.resolve_repository(repository_id)
+                    serialized = serialize_binding(spec)
+                    # This immutable receipt must exist before mirror creation,
+                    # fetching, or any other crashable repository operation.
+                    created = persist_root_binding(serialized)
+
                 provider = provider_for(spec)
-                repository = provider.ensure_mirror(repository_id, fetch=True)
-                payload = {
-                    "schema_version": 1,
-                    "request_fingerprint": request_fingerprint,
-                    "repository": {
-                        "repository_id": spec.repository_id,
-                        "canonical_remote": spec.canonical_remote,
-                        "transport_url": spec.transport_url,
-                        "credential_reference": spec.credential_reference,
-                    },
-                }
-                serialized = json.dumps(
-                    payload,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
-                object_id = self.runner.run(
-                    (
-                        "--git-dir",
-                        str(repository.mirror_path),
-                        "hash-object",
-                        "-w",
-                        "--stdin",
-                    ),
-                    stdin_text=serialized,
-                    error_code="REPOSITORY_BINDING_INVALID",
-                ).stdout.strip()
-                if _COMMIT_ID.fullmatch(object_id) is None:
-                    raise ManagedGitError(
-                        "REPOSITORY_BINDING_INVALID",
-                        "request repository binding object was not created",
-                    )
-                zero = "0" * (40 if repository.object_format == "sha1" else 64)
-                self.runner.run(
-                    (
-                        "--git-dir",
-                        str(repository.mirror_path),
-                        "update-ref",
-                        binding_ref,
-                        object_id,
-                        zero,
-                    ),
-                    error_code="REPOSITORY_BINDING_INVALID",
-                )
-                return spec, True
+                repository = provider.ensure_mirror(repository_id, fetch=created)
+                if git_binding is None:
+                    publish_git_binding(repository, serialized)
+                return spec, created
         except FileLockTimeout:
             raise ManagedGitError(
                 "REPOSITORY_FETCH_LOCK_TIMEOUT",
@@ -1222,14 +1584,25 @@ class ManagedGitProvider:
         spec = self.resolve_repository(repository_id)
         mirror_path = self.mirror_path_for(spec.canonical_remote)
         lock_path = self.locks_root / f"{spec.storage_key}.lock"
-        self._assert_internal_path(self.repositories_root)
-        self._assert_internal_path(self.locks_root)
-        self._assert_internal_path(lock_path)
+        self._ensure_internal_directory(
+            self.repositories_root, error_code="REPOSITORY_MIRROR_INVALID"
+        )
+        self._ensure_internal_directory(
+            self.locks_root, error_code="REPOSITORY_MIRROR_INVALID"
+        )
+        self._prepare_internal_lock_file(
+            lock_path, error_code="REPOSITORY_MIRROR_INVALID"
+        )
         try:
             with ManagedFileLock(lock_path, timeout=self.lock_timeout):
-                self.repositories_root.mkdir(parents=True, exist_ok=True)
-                self._assert_internal_path(self.repositories_root)
-                self._assert_internal_path(self.locks_root)
+                self._ensure_internal_directory(
+                    self.repositories_root,
+                    error_code="REPOSITORY_MIRROR_INVALID",
+                )
+                self._ensure_internal_directory(
+                    self.locks_root,
+                    error_code="REPOSITORY_MIRROR_INVALID",
+                )
                 existed = mirror_path.exists()
                 if existed:
                     object_format = self._verify_bare_mirror(spec, mirror_path)

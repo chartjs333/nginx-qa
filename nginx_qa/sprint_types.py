@@ -5439,6 +5439,16 @@ def managed_project_control_invariant_issues(
                 issues.append("START_FENCING_TOKEN_INVALID")
             else:
                 fencing_tokens.add(token)
+        created_token = record.get("created_fencing_token")
+        if created_token is not None and (
+            not isinstance(created_token, int)
+            or isinstance(created_token, bool)
+            or created_token < 1
+            or not isinstance(token, int)
+            or isinstance(token, bool)
+            or created_token > token
+        ):
+            issues.append("START_CREATED_FENCING_TOKEN_INVALID")
 
         pinned = record.get("pinned_identity")
         sprint_id = record.get("sprint_id")
@@ -5528,6 +5538,26 @@ def managed_project_control_invariant_issues(
             issues.append("ACTIVATION_LEASE_OWNER_MISMATCH")
 
     active_sprint_id = control.get("active_sprint_id")
+    greatest_successful_fence = (
+        max(token for token, _ in successful_sprints_by_token)
+        if successful_sprints_by_token
+        else None
+    )
+    if greatest_successful_fence is not None:
+        for record in records:
+            if not isinstance(record, Mapping) or record.get("status") not in {
+                "VALIDATING",
+                "PREPARING",
+                "ACTIVATING",
+            }:
+                continue
+            token = record.get("created_fencing_token")
+            if (
+                not isinstance(token, int)
+                or isinstance(token, bool)
+                or token <= greatest_successful_fence
+            ):
+                issues.append("START_ATTEMPT_SUPERSEDED")
     latest_successful_sprint_id = (
         max(successful_sprints_by_token, key=lambda item: item[0])[1]
         if successful_sprints_by_token

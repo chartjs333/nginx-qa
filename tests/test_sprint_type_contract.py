@@ -941,6 +941,7 @@ def project_control_fixture() -> dict:
                 "attempt_id": "attempt-1",
                 "recovery_of_attempt_id": None,
                 "recovery_generation": 0,
+                "created_fencing_token": 1,
                 "fencing_token": 1,
                 "pinned_identity": identity_fixture(),
                 "workspace_source_commit": COMMIT,
@@ -3838,6 +3839,7 @@ class SprintSchemaContractTests(unittest.TestCase):
             {
                 "idempotency_key": "start-key-2",
                 "attempt_id": "attempt-2",
+                "created_fencing_token": 2,
                 "fencing_token": 2,
                 "pinned_identity": newer_identity,
                 "sprint_id": newer_sprint_id,

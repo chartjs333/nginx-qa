@@ -68,12 +68,17 @@ existing sprint or assignment.
 
 Before project-control storage is allowed, start-from-Git CAS-binds
 `(canonical_project_id, idempotency_key)` to the first resolved repository and
-request fingerprint. The binding is canonical JSON stored as a Git blob behind
+request fingerprint. Its authoritative receipt is canonical JSON at
+`<managed_root>/repository-bindings/<binding_sha256>.json`. A same-directory
+fsynced temporary file is published with an atomic no-clobber link before any
+mirror creation or fetch; once published, later failures never delete it. A
+cross-process request lock serializes discovery/creation. The Git blob behind
 `refs/nginx-qa/request-bindings/<binding_sha256>` in exactly one managed bare
-mirror. A cross-process request lock serializes discovery/creation, discovery
-scans all managed mirrors, and duplicate, malformed, mismatched, or redirected
-bindings fail closed. This cache-only receipt prevents a callable or retargeted
-registry alias from changing repositories during the pre-dispatch crash window.
+mirror is secondary evidence and the migration source for legacy caches. A
+present root receipt is always authoritative: malformed, mismatched, duplicate,
+or redirected evidence fails closed and never falls back to the mutable
+registry alias or to a conflicting Git ref. This root-scoped receipt preserves
+the first repository even if the process stops before a mirror exists.
 
 ## 2. Versioned models
 
@@ -802,24 +807,38 @@ intent containing the request fingerprint, attempt ID, phase/status, and the
 frozen repository binding, with null sprint provenance and workspace source.
 It then fills the five pinned identity fields atomically, followed by the
 separately resolved immutable workspace source commit, before PREPARE. A crash
-at any boundary resumes only from the cache binding or durable intent and never
-resolves through the current mutable registry alias. If the configured managed
-root no longer contains the bound mirror, recovery fails closed instead of
-fetching another repository. An in-progress exact replay resumes or observes
-the same attempt; a successful exact replay reconstructs a one-entry provider
-from the durable repository binding, reconciles any missing publication, and
-returns its stored response; a changed request conflicts before activation.
+before intent creation resumes from the authoritative root receipt and may
+materialize its frozen repository mirror without consulting the current
+registry alias. After intent creation it resumes only from the repository
+binding embedded in that durable intent. If that later bound mirror is missing,
+recovery fails closed instead of fetching another repository. An in-progress
+exact replay resumes or observes the same attempt; a successful exact replay
+reconstructs a one-entry provider from the durable repository binding,
+reconciles any missing publication, and returns its stored response; a changed
+request conflicts before activation.
 The activation lease carries a
 monotonic fencing token from a durable high-water counter so an expired owner
 cannot commit after a successor or reuse a token after restart.
-Every start record in `PREPARING`, `ACTIVATING`, or `SUCCEEDED` retains the
-positive fencing token that authorized it. A `SUCCEEDED` record's sprint ID
-and stored response resolve exactly to `active_sprint_id`; that pointer remains
-present through the sprint's terminal state until a later fenced activation
-atomically replaces it. Among historical successful start records, it therefore
-names the success with the greatest fencing token, not merely any previously
-successful sprint. A lease, record, counter, and active pointer that do
-not name the same fenced owner are durable corruption.
+Every live start record retains both its immutable `created_fencing_token` and
+the current positive `fencing_token` that authorizes mutation after any resume.
+A record whose creation fence predates an already successful activation is
+durably failed as `ATTEMPT_SUPERSEDED` before it can renew its lease. At the
+final ACTIVATE boundary the current fence owner atomically fails every other
+nonterminal attempt with a lower current fence, validates that no other active
+runtime exists, and only then publishes the new success. A `SUCCEEDED` record's
+sprint ID and stored response resolve exactly to `active_sprint_id`; that
+pointer remains present through the sprint's valid terminal state until a later
+fenced activation atomically replaces it. Among historical successful start
+records, it therefore names the success with the greatest fencing token, not
+merely any previously successful sprint. A lease, record, counter, runtime
+status, and active pointer that do not name a consistent fenced owner are
+durable corruption.
+SQLite enforces at most one `active` runtime per project with a partial unique
+index. Initialization fails closed when legacy duplicates prevent installing
+that index; it never marks such a store initialized without the constraint.
+Startup restoration reads active rows and their complete project-control
+documents in one database snapshot, revalidates both schemas and all relational
+invariants, and refuses to restore any inconsistent state.
 A failed record retains its normalized error and evidence; an exact caller
 replay returns that stored failure with its stored HTTP status without
 resolving a newer ref. It is immutable. `RETRY_IMPORT` is an explicit
@@ -1327,8 +1346,9 @@ VALIDATE -> PREPARE -> ACTIVATE
 ```
 
 - **VALIDATE** resolves type, pins provenance, parses schemas, and computes the
-  preflight report. Before managed dispatch it may update only the isolated bare
-  mirror and its request-binding receipt needed to read a Git manifest. After
+  preflight report. Before managed dispatch it first publishes the isolated
+  root request-binding receipt, then may create/update only its frozen bare
+  mirror and secondary Git-ref receipt needed to read a Git manifest. After
   managed dispatch it may additionally create/update the fenced project-control
   start intent and normalized terminal validation evidence, but it may not
   publish runtime state, assignments, workspaces, leases, processes, queues, or
