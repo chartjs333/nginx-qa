@@ -270,15 +270,24 @@ The JSON Schemas have intentionally different scopes:
   evidence;
 - `schemas/managed-runtime-config-v1.schema.json` maps the environment-backed
   runtime configuration into typed values;
-- `schemas/managed-runtime-state-v1.schema.json` defines the durable sprint
-  identity, import attempts, assignments, workspaces, branch/port leases,
-  processes, occurrence/token workflow, integration attempts, transition
-  journal/outbox receipts, recoveries, and repairs.
+- `schemas/managed-runtime-state-v1.schema.json` preserves the original
+  durable-state contract, while `schemas/managed-runtime-state-v2.schema.json`
+  keeps the same sprint, workspace, lease, workflow, integration, recovery,
+  and repair model and additionally requires each process record to carry its
+  OS birth token, durable startup deadline, and terminal reason.
 
 The top-level envelope and explicitly open record objects accept additive
 metadata. Safety-critical nested policy objects are closed. A new required
 meaning, a changed meaning, or a new safety-critical nested field requires a
 new managed schema version, not an in-place reinterpretation of v1.
+
+New activations persist runtime-state version 2. On supervisor startup, a
+version-1 state may be migrated to version 2 only when every process is still
+`PREPARED` and none of the three version-2 process fields is already present;
+the state document and normalized process rows are updated in one SQLite
+transaction. A version-1 state containing a started or terminal process, or a
+partial/foreign safety-field shape, fails closed instead of being
+reinterpreted.
 
 Minimal managed envelope:
 
@@ -395,9 +404,21 @@ are never inherited. The supervisor injects reserved
 `NGINX_QA_MANAGED_HOST`, `NGINX_QA_MANAGED_PORT`,
 `NGINX_QA_MANAGED_PROCESS_ID`, `NGINX_QA_MANAGED_RUNTIME_ROOT`, and
 `NGINX_QA_MANAGED_LAUNCH_NONCE` after allocating ownership; manifest attempts
-to set that prefix are rejected. Unsupported resource enforcement is
+to set that prefix are rejected. Semantic preflight also rejects NUL in argv or
+environment values, empty environment names, names containing `=` or NUL, and
+names that collide under case-insensitive Windows comparison. Unsupported
+resource enforcement is
 `RESOURCE_LIMIT_UNSUPPORTED`, not a silent unbounded launch. V1 trusts the
 configured repository code as executable and is not an OS security sandbox.
+Health paths must be ASCII HTTP origin-form paths; non-ASCII, spaces,
+backslashes, and malformed percent escapes fail semantic preflight, while a
+space may be supplied as its canonical `%20` encoding.
+
+The wall-clock resource budget begins at the authenticated OS process creation
+time, including any time spent suspended behind the launch gate. The durable
+startup deadline is capped by both that creation-time budget and the earlier
+launch-intent budget; recovery may shorten a legacy deadline but never refresh
+or extend either budget.
 
 Each explicit environment value is either a non-secret string or the closed
 object `{"secret_ref": "provider:path"}`. A credential-shaped variable name
@@ -1361,8 +1382,19 @@ VALIDATE -> PREPARE -> ACTIVATE
   corresponding queue items recoverably enqueueable through the outbox. Every
   `reserved` initial port is first acquired as a process-local exclusive OS
   socket; SQLite rollback releases only the sockets acquired by that failed
-  transaction. Startup reacquires all durable `reserved` ports before serving
-  traffic and fails closed into recovery if any endpoint has been taken.
+  transaction. Before serving traffic, startup attempts every committed
+  assignment independently. It reacquires that assignment's durable
+  `reserved` ports when possible; a conflicting endpoint leaves only that
+  assignment fail-closed, and the background monitor then records durable
+  recovery evidence without delaying HTTP readiness or suppressing recovery
+  of unrelated assignments.
+  Restart allocation serializes candidate selection with the same SQLite write
+  transaction: under `BEGIN IMMEDIATE` it inserts the unique lease row before
+  binding the provisional process-local reservation socket, then commits the
+  lease and restart record together and marks the socket durable; either both
+  resources survive or both are rolled back. A child handoff gap therefore
+  never makes a still-live durable endpoint available to another service
+  instance.
 
 Service-owned branch refs are published only after the SQLite commit. The
 branch and an immutable `refs/nginx-qa/publications/*` receipt are created in

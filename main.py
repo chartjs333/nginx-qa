@@ -14,6 +14,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import threading
 import time as time_module
 import urllib.error
 import urllib.parse
@@ -39,6 +40,9 @@ from nginx_qa.managed_import import (
     normalize_managed_runtime_config,
     parse_start_request_bytes,
 )
+from nginx_qa.process_supervisor import (
+    ManagedProcessSupervisor,
+)
 from nginx_qa.sprint_types import (
     SprintPipeline,
     SprintTypeSelection,
@@ -48,10 +52,13 @@ from nginx_qa.sprint_types import (
 
 
 managed_port_reservation_registry = ManagedPortReservationRegistry()
+managed_process_supervisor: ManagedProcessSupervisor | None = None
+managed_process_supervisor_lock = threading.RLock()
 
 
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
+    global managed_process_supervisor
     await restore_runtime_state()
     try:
         if os.environ.get("NGINX_QA_MANAGED_ROOT"):
@@ -62,14 +69,42 @@ async def app_lifespan(_: FastAPI):
                 port_reservations=managed_port_reservation_registry,
             )
             await asyncio.to_thread(
-                managed_bootstrap.restore_committed_activations
+                managed_bootstrap.restore_committed_activations,
+                isolate_process_failures=True,
             )
+            managed_process_supervisor = managed_process_supervisor_for(
+                managed_runtime_config,
+                managed_bootstrap.store,
+            )
+            # Child launch/health timeouts must not delay HTTP readiness.
+            # start_background() wakes the monitor immediately, while each
+            # assignment remains independently fail-closed in durable state.
+            managed_process_supervisor.start_background()
         yield
     finally:
+        supervisor_quiescent = True
+        close_error: Exception | None = None
+        with managed_process_supervisor_lock:
+            supervisor = managed_process_supervisor
+        if supervisor is not None:
+            try:
+                supervisor.close()
+            except Exception as exc:
+                # Never close shared port holders underneath a supervisor
+                # operation that failed to quiesce.
+                supervisor_quiescent = False
+                close_error = exc
+        if supervisor_quiescent:
+            with managed_process_supervisor_lock:
+                if managed_process_supervisor is supervisor:
+                    managed_process_supervisor = None
         try:
             await shutdown_runtime_state()
         finally:
-            managed_port_reservation_registry.close_all()
+            if supervisor_quiescent:
+                managed_port_reservation_registry.close_all()
+        if close_error is not None:
+            raise close_error
 
 
 app = FastAPI(lifespan=app_lifespan)
@@ -28158,6 +28193,66 @@ def managed_sprint_importer_factory(
     )
 
 
+def managed_process_secret_resolver(reference: str) -> str:
+    """Resolve an ephemeral ``env:NAME`` child secret without persisting it."""
+
+    provider, separator, locator = reference.partition(":")
+    if separator != ":" or provider != "env" or not locator:
+        raise LookupError("managed process secret provider is not configured")
+    value = os.environ.get(locator)
+    if value is None:
+        raise LookupError("managed process secret reference is unavailable")
+    return value
+
+
+def managed_process_supervisor_for(
+    runtime_config: dict[str, Any],
+    store: Any,
+) -> ManagedProcessSupervisor:
+    """Return the one monitor bound to the frozen managed runtime database."""
+
+    global managed_process_supervisor
+    with managed_process_supervisor_lock:
+        current = managed_process_supervisor
+        if (
+            current is not None
+            and current.store.database_path.resolve(strict=False)
+            == store.database_path.resolve(strict=False)
+            and current.runtime_config == runtime_config
+        ):
+            return current
+        if current is not None:
+            current.close()
+        managed_process_supervisor = ManagedProcessSupervisor(
+            runtime_config,
+            store,
+            managed_port_reservation_registry,
+            secret_resolver=managed_process_secret_resolver,
+        )
+        return managed_process_supervisor
+
+
+def activate_managed_processes(
+    runtime_config: dict[str, Any],
+    importer: TransactionalSprintImporter,
+    result: Any,
+) -> None:
+    """Launch/reconcile post-commit children without rolling activation back."""
+
+    try:
+        supervisor = managed_process_supervisor_for(runtime_config, importer.store)
+        # The import transaction is already committed.  Reconciliation may
+        # wait for health/death proof for many children, so only wake the
+        # singleton monitor here and return the JSON response immediately.
+        supervisor.start_background()
+    except Exception:
+        # ACTIVATE is already durable.  The supervisor has either recorded the
+        # failed attempt or retained its lease fail-closed for reconciliation;
+        # a process-side failure must not rewrite a published sprint as an
+        # import failure.
+        pass
+
+
 def managed_git_credential_resolver(reference: str) -> dict[str, str]:
     """Resolve the production-safe ``env:`` credential-provider adapter.
 
@@ -28301,7 +28396,10 @@ async def start_managed_project_sprint_from_git(
         importer = managed_sprint_importer_factory(
             runtime_config, repository_registry
         )
-        return importer.start(project_phone, start_request)
+        result = importer.start(project_phone, start_request)
+        if isinstance(importer, TransactionalSprintImporter):
+            activate_managed_processes(runtime_config, importer, result)
+        return result
 
     try:
         result = await asyncio.to_thread(run_import)
