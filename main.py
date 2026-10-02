@@ -31,6 +31,14 @@ import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from nginx_qa.git_provider import RepositorySpec, canonical_remote_from_address
+from nginx_qa.managed_import import (
+    ManagedImportError,
+    ManagedPortReservationRegistry,
+    TransactionalSprintImporter,
+    normalize_managed_runtime_config,
+    parse_start_request_bytes,
+)
 from nginx_qa.sprint_types import (
     SprintPipeline,
     SprintTypeSelection,
@@ -39,13 +47,29 @@ from nginx_qa.sprint_types import (
 )
 
 
+managed_port_reservation_registry = ManagedPortReservationRegistry()
+
+
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
     await restore_runtime_state()
     try:
+        if os.environ.get("NGINX_QA_MANAGED_ROOT"):
+            managed_runtime_config = load_managed_runtime_config()
+            managed_bootstrap = TransactionalSprintImporter(
+                managed_runtime_config,
+                {},
+                port_reservations=managed_port_reservation_registry,
+            )
+            await asyncio.to_thread(
+                managed_bootstrap.restore_committed_activations
+            )
         yield
     finally:
-        await shutdown_runtime_state()
+        try:
+            await shutdown_runtime_state()
+        finally:
+            managed_port_reservation_registry.close_all()
 
 
 app = FastAPI(lifespan=app_lifespan)
@@ -28054,6 +28078,245 @@ async def start_project_pending_sprint(
         "sprint": deepcopy(result.get("sprint")),
         "import_result": result,
     }
+
+
+def load_managed_runtime_config() -> dict[str, Any]:
+    """Load managed-only settings lazily so legacy startup keeps its defaults."""
+
+    return normalize_managed_runtime_config()
+
+
+def managed_repository_registry_for_project(
+    project_entry: dict[str, Any],
+    context: dict[str, Any],
+) -> dict[str, RepositorySpec]:
+    """Project-scoped trusted repository aliases for managed Git access."""
+
+    registry: dict[str, RepositorySpec] = {}
+    raw_repositories = project_entry.get("repositories")
+    if isinstance(raw_repositories, dict):
+        for raw_alias, raw_spec in raw_repositories.items():
+            alias = str(raw_alias or "").strip()
+            if not alias or not isinstance(raw_spec, dict):
+                continue
+            transport = str(
+                raw_spec.get("transport_url")
+                or raw_spec.get("git_address")
+                or raw_spec.get("fetch_url")
+                or ""
+            ).strip()
+            canonical = canonical_remote_from_address(transport)
+            declared_canonical = str(
+                raw_spec.get("canonical_remote")
+                or raw_spec.get("repository_key")
+                or canonical
+                or ""
+            ).strip()
+            if canonical is None or declared_canonical != canonical:
+                continue
+            credential_reference = raw_spec.get("credential_reference")
+            registry[alias] = RepositorySpec(
+                repository_id=alias,
+                canonical_remote=canonical,
+                transport_url=transport,
+                credential_reference=(
+                    str(credential_reference)
+                    if credential_reference is not None
+                    else None
+                ),
+            )
+
+    if "main" not in registry:
+        transport = str(
+            project_entry.get("git_address") or context.get("git_address") or ""
+        ).strip()
+        canonical = canonical_remote_from_address(transport)
+        if canonical is not None:
+            credential_reference = project_entry.get("credential_reference")
+            registry["main"] = RepositorySpec(
+                repository_id="main",
+                canonical_remote=canonical,
+                transport_url=transport,
+                credential_reference=(
+                    str(credential_reference)
+                    if credential_reference is not None
+                    else None
+                ),
+            )
+    return registry
+
+
+def managed_sprint_importer_factory(
+    runtime_config: dict[str, Any],
+    repository_registry: dict[str, RepositorySpec],
+) -> TransactionalSprintImporter:
+    return TransactionalSprintImporter(
+        runtime_config,
+        repository_registry,
+        credential_resolver=managed_git_credential_resolver,
+        port_reservations=managed_port_reservation_registry,
+    )
+
+
+def managed_git_credential_resolver(reference: str) -> dict[str, str]:
+    """Resolve the production-safe ``env:`` credential-provider adapter.
+
+    The referenced environment variable contains a JSON object of ephemeral
+    Git environment overrides.  The provider validates reserved keys and keeps
+    both this resolved object and its values out of durable sprint state.
+    Other qualified providers require an installed operator integration and
+    therefore fail closed here.
+    """
+
+    provider, separator, locator = reference.partition(":")
+    if separator != ":" or provider != "env" or not locator:
+        raise LookupError("managed credential provider is not configured")
+    encoded = os.environ.get(locator)
+    if not encoded:
+        raise LookupError("managed credential reference is unavailable")
+    try:
+        decoded = json.loads(encoded)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise LookupError("managed credential reference is invalid") from exc
+    if not isinstance(decoded, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in decoded.items()
+    ):
+        raise LookupError("managed credential reference is invalid")
+    return dict(decoded)
+
+
+def managed_start_error_response(error: ManagedImportError) -> JSONResponse:
+    return JSONResponse(status_code=error.http_status, content=error.envelope)
+
+
+@app.post("/api/v1/projects/{project_id}/sprints/start-from-git")
+async def start_managed_project_sprint_from_git(
+    project_id: str,
+    request: Request,
+) -> JSONResponse:
+    correlation_id = f"request-{uuid4().hex}"
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        return managed_start_error_response(
+            ManagedImportError(
+                "INVALID_MANAGED_SPRINT_REQUEST",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                phase="VALIDATE",
+                field="content-type",
+            )
+        )
+    try:
+        declared_length = request.headers.get("content-length")
+        if declared_length is not None:
+            try:
+                parsed_length = int(declared_length)
+                if parsed_length < 0 or parsed_length > 4 * 1024 * 1024:
+                    raise ValueError
+            except ValueError:
+                raise ManagedImportError(
+                    "INVALID_MANAGED_SPRINT_REQUEST",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    phase="VALIDATE",
+                ) from None
+        bounded_body = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) > 4 * 1024 * 1024 - len(bounded_body):
+                raise ManagedImportError(
+                    "INVALID_MANAGED_SPRINT_REQUEST",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    phase="VALIDATE",
+                )
+            bounded_body.extend(chunk)
+        body = bytes(bounded_body)
+        start_request = parse_start_request_bytes(body, correlation_id)
+    except ManagedImportError as exc:
+        return managed_start_error_response(exc)
+
+    try:
+        config = await read_git_config()
+    except Exception:
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_PREFLIGHT_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="VALIDATE",
+            )
+        )
+    try:
+        _, _, project_entry, context = project_for_group_api(config, project_id)
+    except HTTPException as exc:
+        code = (
+            "PROJECT_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "INVALID_MANAGED_SPRINT_REQUEST"
+        )
+        return managed_start_error_response(
+            ManagedImportError(
+                code,
+                exc.status_code,
+                correlation_id,
+                phase="VALIDATE",
+                field="project_id",
+            )
+        )
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if not project_phone:
+        return managed_start_error_response(
+            ManagedImportError(
+                "INVALID_MANAGED_SPRINT_REQUEST",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                phase="VALIDATE",
+                field="project_id",
+            )
+        )
+    repository_registry = managed_repository_registry_for_project(
+        project_entry, context
+    )
+    try:
+        runtime_config = load_managed_runtime_config()
+    except (TypeError, ValueError):
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_PREFLIGHT_FAILED",
+                status.HTTP_409_CONFLICT,
+                correlation_id,
+                phase="VALIDATE",
+                issues=[
+                    {
+                        "code": "RUNTIME_ROOT_NOT_ISOLATED",
+                        "path": "runtime_config",
+                        "message": "Managed runtime configuration is unavailable",
+                    }
+                ],
+            )
+        )
+
+    def run_import() -> Any:
+        importer = managed_sprint_importer_factory(
+            runtime_config, repository_registry
+        )
+        return importer.start(project_phone, start_request)
+
+    try:
+        result = await asyncio.to_thread(run_import)
+    except ManagedImportError as exc:
+        return managed_start_error_response(exc)
+    except Exception:
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_ACTIVATE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="ACTIVATE",
+            )
+        )
+    return JSONResponse(status_code=result.http_status, content=result.response)
 
 
 @app.get("/api/v1/projects/{project_id}/sprints")

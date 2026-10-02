@@ -66,6 +66,15 @@ tree; concurrent readers address immutable object IDs, and a later fetch may
 move remote-tracking refs but may never change the pinned `source_commit` of an
 existing sprint or assignment.
 
+Before project-control storage is allowed, start-from-Git CAS-binds
+`(canonical_project_id, idempotency_key)` to the first resolved repository and
+request fingerprint. The binding is canonical JSON stored as a Git blob behind
+`refs/nginx-qa/request-bindings/<binding_sha256>` in exactly one managed bare
+mirror. A cross-process request lock serializes discovery/creation, discovery
+scans all managed mirrors, and duplicate, malformed, mismatched, or redirected
+bindings fail closed. This cache-only receipt prevents a callable or retargeted
+registry alias from changing repositories during the pre-dispatch crash window.
+
 ## 2. Versioned models
 
 The dependency-free, import-side-effect-free value objects live in
@@ -184,8 +193,15 @@ paths are deterministic:
 
 ```text
 <managed_root>/repositories/<mirror_storage_key>.git
-<managed_root>/projects/<project_id>/sprints/<sprint_id>/nodes/<node_id>/<assignment_id>/
+<managed_root>/projects/<project_path_segment>/sprints/<sprint_path_segment>/nodes/<node_path_segment>/<assignment_id>/
 ```
+
+Logical project, sprint, and node IDs remain unchanged in durable state. To
+preserve their schema limits without exceeding Git for Windows path limits, an
+ID longer than 48 UTF-16 code units uses `<kind>-` plus the first 24 lowercase
+hex characters of SHA-256 over its exact UTF-8 bytes as its physical segment.
+Shorter IDs remain literal. Runtime invariants derive and verify the same
+segment mapping.
 
 Durable state requires `repository_key == canonical_remote`, recomputes the
 mirror key from that value, and requires every workspace remote and branch
@@ -780,14 +796,20 @@ manifest_path]`; the idempotency key itself is the lookup key and is not an
 array component.
 
 The lookup scope is `(canonical_project_id, idempotency_key)`, persisted in
-the project-scoped control record before any sprint ID exists. The record binds
-the request fingerprint, attempt ID, eventual sprint ID, phase/status, and
-successful response. As soon as manifest resolution succeeds, the five pinned
-identity fields and workspace source commit are written atomically to that
-record before PREPARE; replay never resolves the mutable ref again. An
-in-progress exact replay resumes or observes the same
-attempt; a successful exact replay returns its stored response; a changed
-request conflicts before fetch or activation. The activation lease carries a
+the project-scoped control record before any sprint ID exists. Once the pinned
+manifest dispatches to `managed_workspace_v1`, VALIDATE first writes a fenced
+intent containing the request fingerprint, attempt ID, phase/status, and the
+frozen repository binding, with null sprint provenance and workspace source.
+It then fills the five pinned identity fields atomically, followed by the
+separately resolved immutable workspace source commit, before PREPARE. A crash
+at any boundary resumes only from the cache binding or durable intent and never
+resolves through the current mutable registry alias. If the configured managed
+root no longer contains the bound mirror, recovery fails closed instead of
+fetching another repository. An in-progress exact replay resumes or observes
+the same attempt; a successful exact replay reconstructs a one-entry provider
+from the durable repository binding, reconciles any missing publication, and
+returns its stored response; a changed request conflicts before activation.
+The activation lease carries a
 monotonic fencing token from a durable high-water counter so an expired owner
 cannot commit after a successor or reuse a token after restart.
 Every start record in `PREPARING`, `ACTIVATING`, or `SUCCEEDED` retains the
@@ -1305,14 +1327,30 @@ VALIDATE -> PREPARE -> ACTIVATE
 ```
 
 - **VALIDATE** resolves type, pins provenance, parses schemas, and computes the
-  preflight report. It may update only the isolated bare mirror needed to read a
-  Git manifest.
+  preflight report. Before managed dispatch it may update only the isolated bare
+  mirror and its request-binding receipt needed to read a Git manifest. After
+  managed dispatch it may additionally create/update the fenced project-control
+  start intent and normalized terminal validation evidence, but it may not
+  publish runtime state, assignments, workspaces, leases, processes, queues, or
+  agents.
 - **PREPARE** may create unreferenced managed artifacts under the configured
   managed root. They remain unreachable from current project state and are
   deleted or retained as failed evidence according to policy.
 - **ACTIVATE** is one durable commit that swaps the active sprint, agents,
   execution state, leases, and complete initial assignment set, then makes the
-corresponding queue items recoverably enqueueable through the outbox.
+  corresponding queue items recoverably enqueueable through the outbox. Every
+  `reserved` initial port is first acquired as a process-local exclusive OS
+  socket; SQLite rollback releases only the sockets acquired by that failed
+  transaction. Startup reacquires all durable `reserved` ports before serving
+  traffic and fails closed into recovery if any endpoint has been taken.
+
+Service-owned branch refs are published only after the SQLite commit. The
+branch and an immutable `refs/nginx-qa/publications/*` receipt are created in
+one Git ref transaction. Without that receipt, recovery accepts only the exact
+frozen initial head and rechecks the frozen existing-branch policy; with the
+receipt, later compare-and-swap worker advances are legitimate. Startup
+reconciles missing receipts/refs, so completion never depends on the client
+retrying the original idempotency key.
 
 A durable sprint record whose status is `preparing` has `workflow=null` and no
 assignments, reviews, integrations, integration workspaces, leases, processes,

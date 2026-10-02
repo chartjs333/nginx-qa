@@ -37,6 +37,7 @@ from nginx_qa.sprint_types import (
     managed_occurrence_id,
     managed_project_control_invariant_issues,
     managed_runtime_config_invariant_issues,
+    managed_sprint_path_segment,
     managed_result_key,
     managed_transition_token_id,
     mirror_storage_key,
@@ -57,12 +58,13 @@ SCHEMA_ROOT = ROOT / "schemas"
 COMMIT = "a" * 40
 MANIFEST_SHA = "b" * 64
 SPRINT_ID = "msv1-5f55f42e54a6ffccd983edbe38830972dc3b8e57ad82323cdb41f3008faa37f6"
+SPRINT_PATH_SEGMENT = managed_sprint_path_segment(SPRINT_ID)
 TIMESTAMP = "2026-10-01T12:00:00+00:00"
 REPOSITORY_KEY = "github.com/owner/repository"
 MIRROR_KEY = mirror_storage_key(REPOSITORY_KEY)
 WORKSPACE_1_ROOT = (
     "D:/nginx-qa-staging/managed/projects/project-id/sprints/"
-    f"{SPRINT_ID}/nodes/build/assignment-1"
+    f"{SPRINT_PATH_SEGMENT}/nodes/build/assignment-1"
 )
 EXPECTED_SCHEMA_FILES = {
     "managed-api-error-v1.schema.json",
@@ -846,7 +848,8 @@ def successor_runtime_fixture() -> dict:
         }
     )
     workspace_root = (
-        f"D:/nginx-qa-staging/managed/projects/project-id/sprints/{SPRINT_ID}/"
+        "D:/nginx-qa-staging/managed/projects/project-id/sprints/"
+        f"{SPRINT_PATH_SEGMENT}/"
         "nodes/continuity/assignment-2"
     )
     state["workspaces"].append(
@@ -1117,7 +1120,7 @@ def prepared_integration_runtime_fixture() -> tuple[dict, list[str]]:
     )
     lint_workspace_root = (
         "D:/nginx-qa-staging/managed/projects/project-id/sprints/"
-        f"{SPRINT_ID}/nodes/lint/lint-assignment"
+        f"{SPRINT_PATH_SEGMENT}/nodes/lint/lint-assignment"
     )
     state["workspaces"].append(
         {
@@ -1665,6 +1668,10 @@ class PureIdentityAndStateMachineContractTests(unittest.TestCase):
         ):
             self.assertFalse(windows_path_segment_valid(value), value)
         self.assertTrue(relative_git_path_valid("orchestration/sprint.json"))
+        self.assertTrue(relative_git_path_valid("x" * 255))
+        self.assertFalse(relative_git_path_valid("x" * 256))
+        self.assertTrue(git_ref_format_valid("x" * 255, branch=True))
+        self.assertFalse(git_ref_format_valid("x" * 256, branch=True))
 
     def test_all_lifecycle_edges_are_frozen(self) -> None:
         lifecycle_maps = (
@@ -3311,7 +3318,7 @@ class SprintSchemaContractTests(unittest.TestCase):
             )
         join_workspace_root = (
             "D:/nginx-qa-staging/managed/projects/project-id/sprints/"
-            f"{SPRINT_ID}/nodes/join/join-assignment"
+            f"{SPRINT_PATH_SEGMENT}/nodes/join/join-assignment"
         )
         committed_recheck["assignments"].append(
             {

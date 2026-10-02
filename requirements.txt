@@ -1,2 +1,3 @@
 fastapi
 uvicorn[standard]
+jsonschema>=4.23,<5

@@ -10,8 +10,10 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 from typing import Callable
 
+from .git_provider import ManagedFileLock
 from .sprint_types import git_ref_format_valid, mirror_storage_key
 
 
@@ -143,8 +145,18 @@ class BranchLeaseStore:
         self.lease_root = root.resolve(strict=False)
         self.database_path = self.lease_root / database_name
         self.timeout = timeout
-        self.lease_root.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self._initialization_lock = threading.Lock()
+        self._initialized = False
+
+    def ensure_initialized(self) -> None:
+        """Create the shared lease schema once per store instance."""
+
+        if self._initialized:
+            return
+        with self._initialization_lock:
+            if not self._initialized:
+                self._initialize()
+                self._initialized = True
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(
@@ -166,11 +178,20 @@ class BranchLeaseStore:
             connection.close()
 
     def _initialize(self) -> None:
-        with self._connection() as connection:
-            connection.execute("PRAGMA journal_mode = WAL")
-            connection.execute("PRAGMA synchronous = FULL")
-            connection.executescript(
-                """
+        self.lease_root.mkdir(parents=True, exist_ok=True)
+        initialization_lock = self.lease_root / f".{self.database_path.name}.init.lock"
+        with ManagedFileLock(initialization_lock, timeout=self.timeout):
+            with self._connection() as connection:
+                connection.execute("PRAGMA journal_mode = WAL")
+                connection.execute("PRAGMA synchronous = FULL")
+                self.initialize_connection(connection)
+
+    @staticmethod
+    def initialize_connection(connection: sqlite3.Connection) -> None:
+        """Install the lease tables on an existing SQLite connection."""
+
+        connection.executescript(
+            """
                 CREATE TABLE IF NOT EXISTS branch_leases (
                     lease_id TEXT PRIMARY KEY,
                     repository_id TEXT NOT NULL,
@@ -191,8 +212,8 @@ class BranchLeaseStore:
                     WHERE status = 'active' AND mode = 'write';
                 CREATE INDEX IF NOT EXISTS branch_leases_assignment
                     ON branch_leases (assignment_id, status);
-                """
-            )
+            """
+        )
 
     @staticmethod
     def _validate_request(request: BranchLeaseRequest) -> None:
@@ -220,73 +241,14 @@ class BranchLeaseStore:
 
     def acquire_write(self, request: BranchLeaseRequest) -> BranchLease:
         self._validate_request(request)
+        self.ensure_initialized()
         now = datetime.now(timezone.utc).isoformat()
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                same_id = connection.execute(
-                    "SELECT * FROM branch_leases WHERE lease_id = ?",
-                    (request.lease_id,),
-                ).fetchone()
-                if same_id is not None:
-                    lease = _row_to_lease(same_id)
-                    if lease.status == "released":
-                        raise BranchLeaseError(
-                            "BRANCH_LEASE_RELEASED",
-                            "a released branch lease cannot be reactivated",
-                        )
-                    if not _request_matches_lease(request, lease):
-                        raise BranchLeaseError(
-                            "BRANCH_LEASE_CONFLICT",
-                            "lease ID is already bound to different immutable facts",
-                        )
-                    connection.commit()
-                    return lease
-
-                active = connection.execute(
-                    """
-                    SELECT * FROM branch_leases
-                    WHERE mirror_storage_key = ? AND branch_key = ?
-                      AND status = 'active' AND mode = 'write'
-                    """,
-                    (request.mirror_storage_key, request.branch.casefold()),
-                ).fetchone()
-                if active is not None:
-                    lease = _row_to_lease(active)
-                    if _request_matches_lease(request, lease):
-                        connection.commit()
-                        return lease
-                    raise BranchLeaseError(
-                        "BRANCH_ALREADY_LEASED",
-                        "assigned branch already has an active writer",
-                    )
-
-                connection.execute(
-                    """
-                    INSERT INTO branch_leases (
-                        lease_id, repository_id, repository_key,
-                        mirror_storage_key, branch, branch_key, assignment_id,
-                        source_commit, initial_head_commit, mode, status,
-                        acquired_at, released_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'write', 'active', ?, NULL)
-                    """,
-                    (
-                        request.lease_id,
-                        request.repository_id,
-                        request.repository_key,
-                        request.mirror_storage_key,
-                        request.branch,
-                        request.branch.casefold(),
-                        request.assignment_id,
-                        request.source_commit,
-                        request.initial_head_commit,
-                        now,
-                    ),
+                lease = self.acquire_write_in_transaction(
+                    connection, request, acquired_at=now
                 )
-                row = connection.execute(
-                    "SELECT * FROM branch_leases WHERE lease_id = ?",
-                    (request.lease_id,),
-                ).fetchone()
                 connection.commit()
         except sqlite3.IntegrityError:
             raise BranchLeaseError(
@@ -297,8 +259,99 @@ class BranchLeaseStore:
                 "BRANCH_LEASE_STORE_UNAVAILABLE",
                 f"branch lease transaction failed: {exc.__class__.__name__}",
             ) from None
+        return lease
+
+    def acquire_write_in_transaction(
+        self,
+        connection: sqlite3.Connection,
+        request: BranchLeaseRequest,
+        *,
+        acquired_at: str,
+    ) -> BranchLease:
+        """Acquire a writer using the caller's already-open transaction.
+
+        The caller must use this store's database and hold a write transaction.
+        This seam lets sprint ACTIVATE publish branch ownership in the same
+        durable commit as runtime/control state.
+        """
+
+        self._validate_request(request)
+        same_id = connection.execute(
+            "SELECT * FROM branch_leases WHERE lease_id = ?",
+            (request.lease_id,),
+        ).fetchone()
+        if same_id is not None:
+            lease = _row_to_lease(same_id)
+            if lease.status == "released":
+                raise BranchLeaseError(
+                    "BRANCH_LEASE_RELEASED",
+                    "a released branch lease cannot be reactivated",
+                )
+            if not _request_matches_lease(request, lease):
+                raise BranchLeaseError(
+                    "BRANCH_LEASE_CONFLICT",
+                    "lease ID is already bound to different immutable facts",
+                )
+            return lease
+
+        active = connection.execute(
+            """
+            SELECT * FROM branch_leases
+            WHERE mirror_storage_key = ? AND branch_key = ?
+              AND status = 'active' AND mode = 'write'
+            """,
+            (request.mirror_storage_key, request.branch.casefold()),
+        ).fetchone()
+        if active is not None:
+            lease = _row_to_lease(active)
+            if _request_matches_lease(request, lease):
+                return lease
+            raise BranchLeaseError(
+                "BRANCH_ALREADY_LEASED",
+                "assigned branch already has an active writer",
+            )
+
+        connection.execute(
+            """
+            INSERT INTO branch_leases (
+                lease_id, repository_id, repository_key,
+                mirror_storage_key, branch, branch_key, assignment_id,
+                source_commit, initial_head_commit, mode, status,
+                acquired_at, released_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'write', 'active', ?, NULL)
+            """,
+            (
+                request.lease_id,
+                request.repository_id,
+                request.repository_key,
+                request.mirror_storage_key,
+                request.branch,
+                request.branch.casefold(),
+                request.assignment_id,
+                request.source_commit,
+                request.initial_head_commit,
+                acquired_at,
+            ),
+        )
+        row = connection.execute(
+            "SELECT * FROM branch_leases WHERE lease_id = ?",
+            (request.lease_id,),
+        ).fetchone()
         assert row is not None
         return _row_to_lease(row)
+
+    @staticmethod
+    def active_writers_in_transaction(
+        connection: sqlite3.Connection,
+    ) -> tuple[BranchLease, ...]:
+        rows = connection.execute(
+            """
+            SELECT * FROM branch_leases
+            WHERE status = 'active' AND mode = 'write'
+            ORDER BY mirror_storage_key, branch_key, lease_id
+            """
+        ).fetchall()
+        return tuple(_row_to_lease(row) for row in rows)
 
     def release(
         self,
@@ -308,6 +361,11 @@ class BranchLeaseStore:
         assignment_settled: bool = False,
         all_processes_stopped: bool = False,
     ) -> BranchLease:
+        if not self.database_path.exists():
+            raise BranchLeaseError(
+                "BRANCH_LEASE_NOT_FOUND", "branch lease does not exist"
+            )
+        self.ensure_initialized()
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
@@ -354,6 +412,9 @@ class BranchLeaseStore:
         return _row_to_lease(updated)
 
     def get(self, lease_id: str) -> BranchLease | None:
+        if not self.database_path.exists():
+            return None
+        self.ensure_initialized()
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM branch_leases WHERE lease_id = ?", (lease_id,)
@@ -361,15 +422,11 @@ class BranchLeaseStore:
         return _row_to_lease(row) if row is not None else None
 
     def active_writers(self) -> tuple[BranchLease, ...]:
+        if not self.database_path.exists():
+            return ()
+        self.ensure_initialized()
         with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM branch_leases
-                WHERE status = 'active' AND mode = 'write'
-                ORDER BY mirror_storage_key, branch_key, lease_id
-                """
-            ).fetchall()
-        return tuple(_row_to_lease(row) for row in rows)
+            return self.active_writers_in_transaction(connection)
 
 
 def _request_matches_lease(request: BranchLeaseRequest, lease: BranchLease) -> bool:
