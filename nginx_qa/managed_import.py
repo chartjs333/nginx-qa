@@ -46,6 +46,12 @@ from .git_provider import (
     TRANSIENT_GIT_ERROR_CODES,
     canonical_remote_from_address,
 )
+from .port_leases import (
+    ManagedPortReconciliationFence,
+    ManagedPortReservationError,
+    ManagedPortReservationRegistry,
+    ManagedPortReservationToken,
+)
 from .sprint_types import (
     SprintPipeline,
     SprintProvenance,
@@ -90,6 +96,15 @@ _MANIFEST_SCHEMA = "managed-workspace-sprint-v1.schema.json"
 _LEASE_SECONDS = 300
 _MANIFEST_MAX_BYTES = 4 * 1024 * 1024
 _ARTIFACT_MAX_BYTES = 64 * 1024 * 1024
+
+
+def _aggregate_process_limits_supported() -> bool:
+    """Return whether this host has the v1 assignment-wide hard-limit backend."""
+
+    # Windows Job Objects enforce memory, CPU rate, and process count over the
+    # complete descendant set.  POSIX rlimits are per-process or per-UID and
+    # therefore cannot truthfully implement the frozen per-assignment policy.
+    return os.name == "nt"
 
 
 def _utc_now(clock: Callable[[], datetime]) -> datetime:
@@ -231,10 +246,40 @@ def _schema_errors(
             {
                 "code": issue_code,
                 "path": path,
-                "message": "Value does not satisfy the managed v1 schema",
+                "message": "Value does not satisfy the declared managed schema",
             }
         )
     return result
+
+
+_RUNTIME_STATE_SCHEMA_BY_VERSION = {
+    1: "managed-runtime-state-v1.schema.json",
+    2: "managed-runtime-state-v2.schema.json",
+}
+
+
+def _runtime_state_schema_errors(
+    instance: Any,
+    *,
+    issue_code: str,
+) -> list[dict[str, str]]:
+    """Validate a durable runtime snapshot with its declared exact version."""
+
+    version = instance.get("schema_version") if isinstance(instance, Mapping) else None
+    filename = (
+        _RUNTIME_STATE_SCHEMA_BY_VERSION.get(version)
+        if isinstance(version, int) and not isinstance(version, bool)
+        else None
+    )
+    if filename is None:
+        return [
+            {
+                "code": issue_code,
+                "path": "schema_version",
+                "message": "Unsupported managed runtime-state schema version",
+            }
+        ]
+    return _schema_errors(instance, filename, issue_code=issue_code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -307,204 +352,6 @@ class ManagedImportError(RuntimeError):
         )
         error.envelope = deepcopy(dict(envelope))
         return error
-
-
-class ManagedPortReservationError(RuntimeError):
-    """Raised when the OS cannot grant a planned managed port reservation."""
-
-
-@dataclass(frozen=True, slots=True)
-class ManagedPortReservationToken:
-    """Identify sockets newly acquired by one activation transaction."""
-
-    database_key: str
-    acquired_keys: tuple[tuple[str, str], ...]
-
-
-@dataclass(slots=True)
-class _ManagedPortReservation:
-    database_path: Path
-    database_key: str
-    lease_id: str
-    network_namespace_id: str
-    host: str
-    port: int
-    signature: str
-    holder: socket.socket
-
-
-class ManagedPortReservationRegistry:
-    """Hold PREPARED child ports across request-scoped importer objects."""
-
-    def __init__(self) -> None:
-        self._lock = threading.RLock()
-        self._reservations: dict[
-            tuple[str, str], _ManagedPortReservation
-        ] = {}
-
-    @staticmethod
-    def _database_identity(
-        database_path: str | os.PathLike[str],
-    ) -> tuple[Path, str]:
-        path = Path(database_path).resolve(strict=False)
-        return path, os.path.normcase(str(path))
-
-    @staticmethod
-    def _bind(host: str, port: int) -> socket.socket:
-        family = socket.AF_INET6 if ":" in host else socket.AF_INET
-        candidate = socket.socket(family, socket.SOCK_STREAM)
-        try:
-            candidate.set_inheritable(False)
-            if family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
-                candidate.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
-            if os.name == "nt" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-                candidate.setsockopt(
-                    socket.SOL_SOCKET,
-                    socket.SO_EXCLUSIVEADDRUSE,
-                    1,
-                )
-            candidate.bind((host, port))
-        except BaseException:
-            candidate.close()
-            raise
-        return candidate
-
-    def _release_keys_locked(self, keys: Sequence[tuple[str, str]]) -> None:
-        for key in keys:
-            reservation = self._reservations.pop(key, None)
-            if reservation is not None:
-                reservation.holder.close()
-
-    def _prune_locked(self) -> None:
-        stale = [
-            key
-            for key, reservation in self._reservations.items()
-            if not reservation.database_path.exists()
-        ]
-        self._release_keys_locked(stale)
-
-    def prune(self) -> None:
-        """Release holders whose durable runtime database was removed."""
-
-        with self._lock:
-            self._prune_locked()
-
-    def acquire_many(
-        self,
-        database_path: str | os.PathLike[str],
-        leases: Sequence[Mapping[str, Any]],
-    ) -> ManagedPortReservationToken:
-        """Bind an entire port plan, releasing this call's partial batch on error."""
-
-        path, database_key = self._database_identity(database_path)
-        requested: list[tuple[str, str, str, int, str]] = []
-        seen_leases: set[str] = set()
-        seen_endpoints: set[tuple[str, str, int]] = set()
-        for raw in leases:
-            lease_id = raw.get("lease_id")
-            namespace = raw.get("network_namespace_id")
-            host = raw.get("host")
-            port = raw.get("port")
-            endpoint = (
-                str(namespace).casefold(),
-                str(host).casefold(),
-                int(port) if isinstance(port, int) and not isinstance(port, bool) else -1,
-            )
-            if (
-                not isinstance(lease_id, str)
-                or not lease_id
-                or not isinstance(namespace, str)
-                or not namespace
-                or not isinstance(host, str)
-                or not host
-                or not isinstance(port, int)
-                or isinstance(port, bool)
-                or not (1 <= port <= 65535)
-                or lease_id in seen_leases
-                or endpoint in seen_endpoints
-            ):
-                raise ManagedPortReservationError("invalid managed port plan")
-            seen_leases.add(lease_id)
-            seen_endpoints.add(endpoint)
-            requested.append(
-                (lease_id, namespace, host, port, canonical_json_sha256(dict(raw)))
-            )
-
-        acquired: list[tuple[str, str]] = []
-        with self._lock:
-            self._prune_locked()
-            try:
-                for lease_id, namespace, host, port, signature in sorted(requested):
-                    key = (database_key, lease_id)
-                    existing = self._reservations.get(key)
-                    if existing is not None:
-                        if (
-                            existing.network_namespace_id != namespace
-                            or existing.host != host
-                            or existing.port != port
-                            or existing.signature != signature
-                        ):
-                            raise ManagedPortReservationError(
-                                "managed port lease identity changed"
-                            )
-                        continue
-                    holder = self._bind(host, port)
-                    self._reservations[key] = _ManagedPortReservation(
-                        database_path=path,
-                        database_key=database_key,
-                        lease_id=lease_id,
-                        network_namespace_id=namespace,
-                        host=host,
-                        port=port,
-                        signature=signature,
-                        holder=holder,
-                    )
-                    acquired.append(key)
-            except (OSError, ManagedPortReservationError) as exc:
-                self._release_keys_locked(acquired)
-                raise ManagedPortReservationError(
-                    "managed child port is already owned"
-                ) from exc
-        return ManagedPortReservationToken(database_key, tuple(acquired))
-
-    def owns_endpoint(
-        self,
-        database_path: str | os.PathLike[str],
-        host: str,
-        port: int,
-    ) -> bool:
-        _, database_key = self._database_identity(database_path)
-        with self._lock:
-            self._prune_locked()
-            return any(
-                reservation.database_key == database_key
-                and reservation.host == host
-                and reservation.port == port
-                for reservation in self._reservations.values()
-            )
-
-    def rollback(self, token: ManagedPortReservationToken) -> None:
-        """Release sockets first acquired by an uncommitted transaction."""
-
-        with self._lock:
-            self._release_keys_locked(token.acquired_keys)
-
-    def release(
-        self,
-        database_path: str | os.PathLike[str],
-        lease_id: str,
-    ) -> None:
-        """Release one holder for supervisor handoff or terminal cleanup."""
-
-        _, database_key = self._database_identity(database_path)
-        with self._lock:
-            self._release_keys_locked(((database_key, lease_id),))
-
-    def close_all(self) -> None:
-        """Close all process-local holders during application/test shutdown."""
-
-        with self._lock:
-            self._release_keys_locked(tuple(self._reservations))
 
 
 _DEFAULT_MANAGED_PORT_RESERVATIONS = ManagedPortReservationRegistry()
@@ -723,7 +570,10 @@ class ManagedImportStore:
             yield connection
             connection.commit()
         except BaseException:
-            connection.rollback()
+            # Undo process-local capabilities while BEGIN IMMEDIATE still
+            # excludes a successor transaction.  Releasing SQLite first would
+            # let that successor adopt the provisional socket before this
+            # transaction's delayed rollback token runs.
             for action in reversed(rollback_actions or []):
                 try:
                     action()
@@ -731,6 +581,7 @@ class ManagedImportStore:
                     # Preserve the transaction failure; a reservation holder
                     # is process-local and will also close on process exit.
                     pass
+            connection.rollback()
             raise
         finally:
             connection.close()
@@ -1058,9 +909,8 @@ class ManagedImportStore:
             issues.append("RUNTIME_SPRINT_INDEX_MISMATCH")
         if state.get("status") != row_status:
             issues.append("RUNTIME_STATUS_INDEX_MISMATCH")
-        if _schema_errors(
+        if _runtime_state_schema_errors(
             state,
-            "managed-runtime-state-v1.schema.json",
             issue_code="RUNTIME_STATE_SCHEMA_INVALID",
         ):
             issues.append("RUNTIME_STATE_SCHEMA_INVALID")
@@ -1930,9 +1780,8 @@ class ManagedImportStore:
         clock: Callable[[], datetime],
     ) -> bool:
         state = deepcopy(dict(runtime_state))
-        runtime_schema_issues = _schema_errors(
+        runtime_schema_issues = _runtime_state_schema_errors(
             state,
-            "managed-runtime-state-v1.schema.json",
             issue_code="ACTIVATION_SCHEMA_INVALID",
         )
         response_schema_issues = _schema_errors(
@@ -2450,7 +2299,14 @@ class ManagedImportStore:
             control["active_sprint_id"] = sprint_id
             control["activation_lease"] = None
             self._write_control(connection, control, revision)
-            return True
+        # The sockets were provisional while SQLite could still roll back.
+        # Publish their durable generation only after the commit succeeds, so
+        # a reconciliation based on an older DB snapshot cannot discard them.
+        port_reservations.mark_durable_many(
+            self.database_path,
+            normalized_port_records,
+        )
+        return True
 
 
 def _repository_assertion_key(value: Any) -> str | None:
@@ -2899,6 +2755,55 @@ class TransactionalSprintImporter:
             limits.update(launch_limits)
         elif isinstance(policy_limits, Mapping):
             limits.update(policy_limits)
+        if not _aggregate_process_limits_supported():
+            issues.append(
+                {
+                    "code": "RESOURCE_LIMIT_UNSUPPORTED",
+                    "path": (
+                        f"nodes[{node.get('id')}].workspace.process.resource_limits"
+                    ),
+                    "message": (
+                        "This platform has no assignment-wide hard-limit backend"
+                    ),
+                }
+            )
+        if (
+            os.name == "nt"
+            and isinstance(limits.get("cpu_percent"), int)
+            and not isinstance(limits.get("cpu_percent"), bool)
+            and int(limits["cpu_percent"]) > 100
+        ):
+            issues.append(
+                {
+                    "code": "RESOURCE_LIMIT_UNSUPPORTED",
+                    "path": (
+                        f"nodes[{node.get('id')}].workspace.process."
+                        "resource_limits.cpu_percent"
+                    ),
+                    "message": (
+                        "Windows Job CPU hard-cap supports cpu_percent "
+                        "values from 1 to 100"
+                    ),
+                }
+            )
+        if (
+            isinstance(limits.get("memory_bytes"), int)
+            and not isinstance(limits.get("memory_bytes"), bool)
+            and int(limits["memory_bytes"]) > sys.maxsize
+        ):
+            issues.append(
+                {
+                    "code": "RESOURCE_LIMIT_UNSUPPORTED",
+                    "path": (
+                        f"nodes[{node.get('id')}].workspace.process."
+                        "resource_limits.memory_bytes"
+                    ),
+                    "message": (
+                        "Process memory limit exceeds this platform's "
+                        "representable resource-limit range"
+                    ),
+                }
+            )
         process_id = _safe_identifier("process", sprint_id, assignment_id, "0")
         port_lease_id = _safe_identifier("port-lease", process_id)
         launch_nonce = (
@@ -3506,6 +3411,7 @@ class TransactionalSprintImporter:
                     "state": "PREPARED",
                     "launch_nonce": str(process_plan["launch_nonce"]),
                     "os_process_created_at": None,
+                    "os_process_birth_token": None,
                     "executable_path": str(process_plan["executable_path"]),
                     "job_object_id": None,
                     "pid": None,
@@ -3538,8 +3444,10 @@ class TransactionalSprintImporter:
                     ],
                     "port_lease_id": port_lease_id,
                     "started_at": None,
+                    "startup_deadline_at": None,
                     "stopped_at": None,
                     "failed_at": None,
+                    "terminal_reason": None,
                 }
             )
         return port_leases, processes, issues
@@ -3636,7 +3544,7 @@ class TransactionalSprintImporter:
             )
         identity = asdict(provenance)
         return {
-            "schema_version": 1,
+            "schema_version": 2,
             "contract_version": 1,
             "manifest_schema_version": 1,
             "sprint_type": "managed_workspace_v1",
@@ -3745,7 +3653,10 @@ class TransactionalSprintImporter:
             if isinstance(item, Mapping) and item.get("status") == "reserved"
         ]
         try:
-            self.port_reservations.acquire_many(self.store.database_path, reserved)
+            self.port_reservations.acquire_durable_many(
+                self.store.database_path,
+                reserved,
+            )
         except ManagedPortReservationError as exc:
             raise ManagedImportError(
                 SPRINT_RECOVERY_REQUIRED,
@@ -3761,20 +3672,266 @@ class TransactionalSprintImporter:
                 ],
             ) from exc
 
-    def restore_committed_activations(self) -> None:
-        """Reconcile durable ports and Git publications before serving traffic."""
+    @staticmethod
+    def _matching_launch_receipt(
+        state: Mapping[str, Any],
+        process: Mapping[str, Any],
+        pid_root: Path,
+    ) -> bool:
+        """Accept only structurally complete evidence for this exact attempt."""
+
+        process_id = process.get("process_id")
+        if not isinstance(process_id, str):
+            return False
+        path = pid_root / f"{process_id}.json"
+        try:
+            with path.open("rb") as stream:
+                raw = stream.read((64 * 1024) + 1)
+            if len(raw) > 64 * 1024:
+                return False
+            receipt = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(receipt, Mapping):
+            return False
+        required_keys = {
+            "schema_version",
+            "phase",
+            "project_id",
+            "sprint_id",
+            "process_id",
+            "assignment_id",
+            "launch_nonce",
+            "pid",
+            "os_process_created_at",
+            "os_process_birth_token",
+            "executable_path",
+            "cwd",
+            "process_group_id",
+            "job_object_id",
+            "port_lease_id",
+            "created_at",
+        }
+        if not required_keys.issubset(receipt):
+            return False
+        schema_version = receipt.get("schema_version")
+        if (
+            not isinstance(schema_version, int)
+            or isinstance(schema_version, bool)
+            or schema_version != 1
+        ):
+            return False
+        identity = state.get("identity")
+        expected = {
+            "project_id": (
+                identity.get("project_id")
+                if isinstance(identity, Mapping)
+                else None
+            ),
+            "sprint_id": state.get("sprint_id"),
+            "process_id": process_id,
+            "assignment_id": process.get("assignment_id"),
+            "launch_nonce": process.get("launch_nonce"),
+            "executable_path": process.get("executable_path"),
+            "cwd": process.get("cwd"),
+            "port_lease_id": process.get("port_lease_id"),
+        }
+        if any(receipt.get(key) != value for key, value in expected.items()):
+            return False
+        phase = receipt.get("phase")
+        if phase not in {"intent", "launch_gated", "launched"} or _parse_timestamp(
+            receipt.get("created_at")
+        ) is None:
+            return False
+        if phase in {"intent", "launch_gated"}:
+            if (
+                "startup_deadline_at" not in receipt
+                or _parse_timestamp(receipt.get("startup_deadline_at")) is None
+            ):
+                return False
+        elif "startup_deadline_at" in receipt and _parse_timestamp(
+            receipt.get("startup_deadline_at")
+        ) is None:
+            # Legacy launched v1 receipts may omit the deadline.  A present
+            # but malformed value is never legacy evidence.
+            return False
+        expected_job = (
+            "Global\\nginx-qa-managed-"
+            + hashlib.sha256(
+                (
+                    process_id
+                    + "\0"
+                    + str(process.get("launch_nonce") or "")
+                ).encode("utf-8")
+            ).hexdigest()[:40]
+            if os.name == "nt"
+            else None
+        )
+        if phase == "intent":
+            return (
+                receipt.get("pid") is None
+                and receipt.get("os_process_created_at") is None
+                and receipt.get("os_process_birth_token") is None
+                and receipt.get("process_group_id") == expected_job
+                and receipt.get("job_object_id") == expected_job
+            )
+        pid = receipt.get("pid")
+        group_id = receipt.get("process_group_id")
+        job_id = receipt.get("job_object_id")
+        return (
+            isinstance(pid, int)
+            and not isinstance(pid, bool)
+            and pid > 0
+            and _parse_timestamp(receipt.get("os_process_created_at")) is not None
+            and isinstance(receipt.get("os_process_birth_token"), str)
+            and bool(receipt.get("os_process_birth_token"))
+            and (
+                (group_id == expected_job and job_id == expected_job)
+                if os.name == "nt"
+                else (
+                    isinstance(group_id, int)
+                    and not isinstance(group_id, bool)
+                    and group_id == pid
+                    and job_id == f"posix-session:{pid}"
+                )
+            )
+        )
+
+    @staticmethod
+    def _restorable_reserved_ports(
+        state: Mapping[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return PREPARED leases without exact structural launch evidence.
+
+        A service crash can happen after spawn/receipt publication but before
+        PREPARED -> STARTING is committed.  Rebinding that exact port would
+        collide with the legitimate child and prevent the supervisor from
+        validating or adopting it.  Mere file presence is never evidence: a
+        truncated, foreign, or corrupt receipt leaves the lease restorable.
+        The supervisor still performs OS identity and socket-owner validation.
+        """
+
+        processes = state.get("processes")
+        runtime_config = state.get("runtime_config")
+        pid_root = (
+            Path(str(runtime_config.get("pid_root")))
+            if isinstance(runtime_config, Mapping)
+            and isinstance(runtime_config.get("pid_root"), str)
+            else None
+        )
+        prepared_process_by_lease = {
+            str(process.get("port_lease_id")): process
+            for process in processes or []
+            if isinstance(process, Mapping)
+            and process.get("state") == "PREPARED"
+            and isinstance(process.get("port_lease_id"), str)
+            and isinstance(process.get("process_id"), str)
+        }
+        restorable: list[dict[str, Any]] = []
+        for raw_lease in state.get("port_leases", []):
+            if (
+                not isinstance(raw_lease, Mapping)
+                or raw_lease.get("status") != "reserved"
+            ):
+                continue
+            lease = deepcopy(dict(raw_lease))
+            process = prepared_process_by_lease.get(str(lease.get("lease_id")))
+            receipt_matches = (
+                pid_root is not None
+                and isinstance(process, Mapping)
+                and TransactionalSprintImporter._matching_launch_receipt(
+                    state,
+                    process,
+                    pid_root,
+                )
+            )
+            if not receipt_matches:
+                restorable.append(lease)
+        return restorable
+
+    def _reconcile_local_port_claims(
+        self,
+        states: Sequence[Mapping[str, Any]],
+        *,
+        correlation_id: str,
+        fence: ManagedPortReconciliationFence,
+    ) -> None:
+        """Drop process-local holders made stale by another service instance."""
+
+        live_leases = [
+            deepcopy(dict(lease))
+            for state in states
+            if isinstance(state, Mapping)
+            for lease in state.get("port_leases", [])
+            if isinstance(lease, Mapping)
+            and lease.get("status") in {"reserved", "bound"}
+        ]
+        try:
+            self.port_reservations.reconcile_durable(
+                self.store.database_path,
+                live_leases,
+                fence=fence,
+            )
+        except ManagedPortReservationError as exc:
+            raise ManagedImportError(
+                SPRINT_RECOVERY_REQUIRED,
+                409,
+                correlation_id,
+                phase="ACTIVATE",
+                issues=[
+                    {
+                        "code": "LIVE_PORT_CONFLICT",
+                        "path": "runtime_state.port_leases",
+                        "message": "Local child-port ownership differs from durable state",
+                    }
+                ],
+            ) from exc
+
+    def restore_committed_activations(
+        self,
+        *,
+        isolate_process_failures: bool = False,
+    ) -> None:
+        """Reconcile durable ports and Git publications before serving traffic.
+
+        The application startup path isolates each PREPARED port recovery so
+        one conflicted assignment cannot prevent unrelated children (or the
+        HTTP service itself) from being restored.  Explicit recovery callers
+        retain the original all-or-nothing error behavior by default.
+        """
 
         self._assert_mutation_roots_safe()
-        states = self.store.active_runtime_states()
-        self._restore_reserved_ports(
-            [
-                deepcopy(dict(lease))
-                for state in states
-                for lease in state.get("port_leases", [])
-                if isinstance(lease, Mapping)
-            ],
-            correlation_id="managed-port-startup-recovery",
+        port_fence = self.port_reservations.reconciliation_fence(
+            self.store.database_path
         )
+        states = self.store.active_runtime_states()
+        self._reconcile_local_port_claims(
+            states,
+            correlation_id="startup-port-reconciliation",
+            fence=port_fence,
+        )
+        leases_without_launch_receipts = [
+            lease
+            for state in states
+            for lease in self._restorable_reserved_ports(state)
+        ]
+        if isolate_process_failures:
+            for lease in leases_without_launch_receipts:
+                try:
+                    self._restore_reserved_ports(
+                        [lease],
+                        correlation_id="managed-port-startup-recovery",
+                    )
+                except ManagedImportError:
+                    # The process supervisor reconciles this exact assignment
+                    # independently.  Other durable port holders and Git
+                    # publications must still be restored first.
+                    continue
+        else:
+            self._restore_reserved_ports(
+                leases_without_launch_receipts,
+                correlation_id="managed-port-startup-recovery",
+            )
         for state in states:
             repository_record = state.get("repository")
             identity = state.get("identity")
@@ -3788,7 +3945,8 @@ class TransactionalSprintImporter:
                     "sprint_id": state.get("sprint_id"),
                     "pinned_identity": deepcopy(dict(identity)),
                     "attempt_id": "managed-startup-recovery",
-                }
+                },
+                restore_ports=False,
             )
 
     def _provider_for_durable_repository(
@@ -4058,6 +4216,7 @@ class TransactionalSprintImporter:
         record: Mapping[str, Any],
         *,
         git_provider: ManagedGitProvider | None = None,
+        restore_ports: bool = True,
     ) -> None:
         """Restore process-local resources and Git refs for a committed activation."""
 
@@ -4070,10 +4229,13 @@ class TransactionalSprintImporter:
         state = self.store.runtime_state(str(pinned["project_id"]), sprint_id)
         if not isinstance(state, Mapping):
             raise RuntimeError("managed success runtime is missing")
-        self._restore_reserved_ports(
-            state.get("port_leases", []),
-            correlation_id=str(record.get("attempt_id") or "managed-port-recovery"),
-        )
+        if restore_ports:
+            self._restore_reserved_ports(
+                self._restorable_reserved_ports(state),
+                correlation_id=str(
+                    record.get("attempt_id") or "managed-port-recovery"
+                ),
+            )
         repository_record = state.get("repository")
         if not isinstance(repository_record, Mapping):
             raise RuntimeError("managed success repository is missing")
@@ -4272,6 +4434,29 @@ class TransactionalSprintImporter:
             ) from None
         fingerprint = request.request_fingerprint(project_id)
         existing = self.store.lookup(project_id, request.idempotency_key)
+        port_fence = self.port_reservations.reconciliation_fence(
+            self.store.database_path
+        )
+        try:
+            active_states = self.store.active_runtime_states()
+        except RuntimeError:
+            # The normal fenced prepare path below converts a corrupt active
+            # predecessor into SPRINT_RECOVERY_REQUIRED.  Do not let this
+            # best-effort local socket reconciliation bypass that stable API,
+            # and especially do not close reservations whose durable owner
+            # cannot be decoded safely.
+            active_states = None
+        if active_states is not None:
+            self._reconcile_local_port_claims(
+                active_states,
+                correlation_id=(
+                    str(existing.get("attempt_id"))
+                    if isinstance(existing, Mapping)
+                    and isinstance(existing.get("attempt_id"), str)
+                    else f"request-{uuid4().hex}"
+                ),
+                fence=port_fence,
+            )
         if existing is not None:
             if existing.get("request_fingerprint") != fingerprint:
                 raise ManagedImportError(
@@ -5158,6 +5343,14 @@ class TransactionalSprintImporter:
                     raise RuntimeError("committed managed attempt disappeared")
                 self._ensure_succeeded_publication(completed)
                 return self._replay(completed)
+            port_fence = self.port_reservations.reconciliation_fence(
+                self.store.database_path
+            )
+            self._reconcile_local_port_claims(
+                self.store.active_runtime_states(),
+                correlation_id=attempt_id,
+                fence=port_fence,
+            )
             self._fault("after_activation_commit", attempt_id=attempt_id)
             settled = self.store.lookup(project_id, request.idempotency_key)
             if settled is None or settled.get("status") != "SUCCEEDED":

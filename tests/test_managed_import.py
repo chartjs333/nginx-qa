@@ -13,7 +13,8 @@ import tempfile
 import threading
 import unittest
 import urllib.parse
-from unittest.mock import AsyncMock, patch
+from typing import Callable
+from unittest.mock import AsyncMock, Mock, patch
 
 import main
 
@@ -25,11 +26,14 @@ from nginx_qa.managed_import import (
     ManagedPortReservationRegistry,
     ManagedStartResult,
     TransactionalSprintImporter,
+    _runtime_state_schema_errors,
     parse_start_request_bytes,
 )
 from nginx_qa.sprint_types import (
     StartSprintFromGitRequest,
+    canonical_json_sha256,
     managed_activation_invariant_issues,
+    managed_graph_semantic_issues,
     managed_node_path_segment,
     managed_project_path_segment,
     managed_project_control_invariant_issues,
@@ -873,6 +877,246 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
                             state["port_leases"][0]["port"],
                         )
                     )
+        finally:
+            restarted_reservations.close_all()
+
+    def test_startup_restore_skips_receipted_prepared_port_in_both_paths(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "health_path": "/health",
+            "restart_policy": "never",
+            "max_restart_attempts": 0,
+            "resource_limits": {},
+        }
+        self.push_manifest(changed, "receipted process activation")
+
+        importer = self.importer(port_probe=lambda _host, _port: True)
+        result = importer.start(self.project_id, self.request)
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        process = state["processes"][0]
+        lease = state["port_leases"][0]
+        pid_root = Path(self.runtime_config["pid_root"])
+        pid_root.mkdir(parents=True, exist_ok=True)
+        created_at = datetime.now(timezone.utc)
+        job_id = (
+            "Global\\nginx-qa-managed-"
+            + hashlib.sha256(
+                (
+                    process["process_id"]
+                    + "\0"
+                    + process["launch_nonce"]
+                ).encode("utf-8")
+            ).hexdigest()[:40]
+            if os.name == "nt"
+            else None
+        )
+        (pid_root / f"{process['process_id']}.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "phase": "intent",
+                    "project_id": self.project_id,
+                    "sprint_id": result.response["sprint_id"],
+                    "process_id": process["process_id"],
+                    "assignment_id": process["assignment_id"],
+                    "launch_nonce": process["launch_nonce"],
+                    "pid": None,
+                    "os_process_created_at": None,
+                    "os_process_birth_token": None,
+                    "executable_path": process["executable_path"],
+                    "cwd": process["cwd"],
+                    "process_group_id": job_id,
+                    "job_object_id": job_id,
+                    "port_lease_id": process["port_lease_id"],
+                    "created_at": created_at.isoformat(),
+                    "startup_deadline_at": (
+                        created_at + timedelta(minutes=1)
+                    ).isoformat(),
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        self.port_reservations.close_all()
+        restarted_reservations = ManagedPortReservationRegistry()
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as child_listener:
+                child_listener.bind((lease["host"], lease["port"]))
+                child_listener.listen(1)
+                restarted = TransactionalSprintImporter(
+                    self.runtime_config,
+                    self.registry,
+                    port_reservations=restarted_reservations,
+                    allow_local_transport=True,
+                )
+                restarted.restore_committed_activations()
+                self.assertFalse(
+                    restarted_reservations.owns_endpoint(
+                        restarted.store.database_path,
+                        lease["host"],
+                        lease["port"],
+                    )
+                )
+        finally:
+            restarted_reservations.close_all()
+
+    def test_launch_receipt_matcher_requires_exact_json_types_and_fields(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "health_path": "/health",
+            "restart_policy": "never",
+            "max_restart_attempts": 0,
+            "resource_limits": {},
+        }
+        self.push_manifest(changed, "strict receipt matcher")
+        importer = self.importer(port_probe=lambda _host, _port: True)
+        result = importer.start(self.project_id, self.request)
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        process = state["processes"][0]
+        pid_root = Path(self.runtime_config["pid_root"])
+        pid_root.mkdir(parents=True, exist_ok=True)
+        receipt_path = pid_root / f"{process['process_id']}.json"
+        created_at = datetime.now(timezone.utc)
+        job_id = (
+            "Global\\nginx-qa-managed-"
+            + hashlib.sha256(
+                (
+                    process["process_id"]
+                    + "\0"
+                    + process["launch_nonce"]
+                ).encode("utf-8")
+            ).hexdigest()[:40]
+            if os.name == "nt"
+            else None
+        )
+        intent = {
+            "schema_version": 1,
+            "phase": "intent",
+            "project_id": self.project_id,
+            "sprint_id": result.response["sprint_id"],
+            "process_id": process["process_id"],
+            "assignment_id": process["assignment_id"],
+            "launch_nonce": process["launch_nonce"],
+            "pid": None,
+            "os_process_created_at": None,
+            "os_process_birth_token": None,
+            "executable_path": process["executable_path"],
+            "cwd": process["cwd"],
+            "process_group_id": job_id,
+            "job_object_id": job_id,
+            "port_lease_id": process["port_lease_id"],
+            "created_at": created_at.isoformat(),
+            "startup_deadline_at": (
+                created_at + timedelta(minutes=1)
+            ).isoformat(),
+        }
+
+        receipt_path.write_text(json.dumps(intent), encoding="utf-8")
+        self.assertTrue(importer._matching_launch_receipt(state, process, pid_root))
+        for corrupt in (
+            {key: value for key, value in intent.items() if key != "pid"},
+            {**intent, "schema_version": True},
+        ):
+            receipt_path.write_text(json.dumps(corrupt), encoding="utf-8")
+            self.assertFalse(
+                importer._matching_launch_receipt(state, process, pid_root)
+            )
+
+        launched_pid = 43210
+        launched = {
+            **intent,
+            "phase": "launched",
+            "pid": launched_pid,
+            "os_process_created_at": created_at.isoformat(),
+            "os_process_birth_token": "birth-token",
+            "process_group_id": job_id if os.name == "nt" else launched_pid,
+            "job_object_id": (
+                job_id if os.name == "nt" else f"posix-session:{launched_pid}"
+            ),
+        }
+        launched.pop("startup_deadline_at")
+        receipt_path.write_text(json.dumps(launched), encoding="utf-8")
+        self.assertTrue(importer._matching_launch_receipt(state, process, pid_root))
+        receipt_path.write_text(
+            json.dumps({**launched, "startup_deadline_at": None}),
+            encoding="utf-8",
+        )
+        self.assertFalse(importer._matching_launch_receipt(state, process, pid_root))
+        if os.name != "nt":
+            receipt_path.write_text(
+                json.dumps({**launched, "process_group_id": float(launched_pid)}),
+                encoding="utf-8",
+            )
+            self.assertFalse(
+                importer._matching_launch_receipt(state, process, pid_root)
+            )
+
+    def test_startup_restore_rebinds_port_when_launch_receipt_is_corrupt(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "health_path": "/health",
+            "restart_policy": "never",
+            "max_restart_attempts": 0,
+            "resource_limits": {},
+        }
+        self.push_manifest(changed, "corrupt receipt port recovery")
+
+        importer = self.importer(port_probe=lambda _host, _port: True)
+        result = importer.start(self.project_id, self.request)
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        process = state["processes"][0]
+        lease = state["port_leases"][0]
+        pid_root = Path(self.runtime_config["pid_root"])
+        pid_root.mkdir(parents=True, exist_ok=True)
+        (pid_root / f"{process['process_id']}.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+
+        self.port_reservations.close_all()
+        restarted_reservations = ManagedPortReservationRegistry()
+        try:
+            restarted = TransactionalSprintImporter(
+                self.runtime_config,
+                self.registry,
+                port_reservations=restarted_reservations,
+                allow_local_transport=True,
+            )
+            restarted.restore_committed_activations()
+            self.assertTrue(
+                restarted_reservations.owns_endpoint(
+                    restarted.store.database_path,
+                    lease["host"],
+                    lease["port"],
+                )
+            )
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as competitor:
+                with self.assertRaises(OSError):
+                    competitor.bind((lease["host"], lease["port"]))
         finally:
             restarted_reservations.close_all()
 
@@ -2197,6 +2441,68 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         self.assertEqual(len(state["workspaces"]), 2)
         self.assertEqual(managed_activation_invariant_issues(state), ())
 
+    def test_migrated_runtime_keeps_unmarked_process_semantics_strict(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["execution"].pop("start_node")
+        changed["execution"]["mode"] = "parallel"
+        changed["execution"]["start_nodes"] = ["build", "continuity"]
+        for node in changed["nodes"]:
+            if node.get("type", "task") == "task":
+                node["workspace"]["process"] = {
+                    "command": [sys.executable, "service.py"],
+                    "cwd": ".",
+                    "environment": {},
+                }
+        self.push_manifest(changed, "mixed migrated process semantics")
+
+        importer = self.importer()
+        result = importer.start(self.project_id, self.request)
+        state = importer.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert state is not None
+        self.assertEqual(len(state["processes"]), 2)
+        state["migrated_from_runtime_schema_version"] = 1
+        state["processes"][0]["migrated_from_runtime_schema_version"] = 1
+
+        strict_process = state["processes"][1]
+        collision = {"APP_MODE": "one", "app_mode": "two"}
+        strict_process["environment_redacted"] = collision
+        assignment = next(
+            item
+            for item in state["assignments"]
+            if item["assignment_id"] == strict_process["assignment_id"]
+        )
+        revision = next(
+            item
+            for item in state["graph_revisions"]
+            if item["revision"] == assignment["graph_revision"]
+        )
+        node = next(
+            item
+            for item in revision["definition"]["nodes"]
+            if item.get("id") == assignment["node_id"]
+        )
+        node["workspace"]["process"]["environment"] = collision
+        revision["definition_sha256"] = canonical_json_sha256(
+            revision["definition"]
+        )
+
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            managed_graph_semantic_issues(revision["definition"]),
+        )
+        self.assertEqual(
+            _runtime_state_schema_errors(state, issue_code="TEST_SCHEMA_INVALID"),
+            [],
+        )
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            managed_activation_invariant_issues(state),
+        )
+
     def test_second_sprint_cannot_replace_an_active_runtime(self) -> None:
         importer = self.importer()
         first = importer.start(self.project_id, self.request)
@@ -3060,6 +3366,149 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         )
         self.assertEqual(importer.branch_leases.active_writers(), ())
 
+    def test_process_environment_case_collision_fails_before_activation(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {"APP_MODE": "one", "app_mode": "two"},
+        }
+        self.push_manifest(changed, "colliding process environment names")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            {
+                issue["code"]
+                for issue in raised.exception.envelope["detail"]["issues"]
+            },
+        )
+        self.assertEqual(importer.branch_leases.active_writers(), ())
+
+    def test_process_health_path_fails_before_activation_when_not_origin_form(
+        self,
+    ) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "health_path": "/ready now",
+        }
+        self.push_manifest(changed, "invalid process health path")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertIn(
+            "PROCESS_HEALTH_PATH_INVALID",
+            {
+                issue["code"]
+                for issue in raised.exception.envelope["detail"]["issues"]
+            },
+        )
+        self.assertEqual(importer.branch_leases.active_writers(), ())
+
+    def test_platform_without_assignment_wide_limits_fails_before_activation(
+        self,
+    ) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+        }
+        self.push_manifest(changed, "unsupported aggregate process limits")
+        importer = self.importer()
+
+        with patch(
+            "nginx_qa.managed_import._aggregate_process_limits_supported",
+            return_value=False,
+        ):
+            with self.assertRaises(ManagedImportError) as raised:
+                importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertIn(
+            "RESOURCE_LIMIT_UNSUPPORTED",
+            {issue["code"] for issue in raised.exception.envelope["detail"]["issues"]},
+        )
+        self.assertIsNone(
+            importer.store.runtime_state(
+                self.project_id,
+                str(
+                    importer.store.lookup(
+                        self.project_id, self.request.idempotency_key
+                    )["sprint_id"]
+                ),
+            )
+        )
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job CPU hard-cap preflight")
+    def test_windows_cpu_limit_above_hard_cap_fails_before_activation(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "resource_limits": {"cpu_percent": 101},
+        }
+        self.push_manifest(changed, "unsupported Windows CPU hard cap")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertIn(
+            "RESOURCE_LIMIT_UNSUPPORTED",
+            {issue["code"] for issue in raised.exception.envelope["detail"]["issues"]},
+        )
+        self.assertIsNone(
+            importer.store.runtime_state(
+                self.project_id,
+                str(
+                    importer.store.lookup(
+                        self.project_id, self.request.idempotency_key
+                    )["sprint_id"]
+                ),
+            )
+        )
+
+    def test_unrepresentable_memory_limit_fails_before_activation(self) -> None:
+        changed = json.loads(
+            (self.source / self.manifest_path).read_text(encoding="utf-8")
+        )
+        changed["nodes"][0]["workspace"]["process"] = {
+            "command": [sys.executable, "service.py"],
+            "cwd": ".",
+            "environment": {},
+            "resource_limits": {"memory_bytes": sys.maxsize + 1},
+        }
+        self.push_manifest(changed, "unrepresentable process memory limit")
+        importer = self.importer()
+
+        with self.assertRaises(ManagedImportError) as raised:
+            importer.start(self.project_id, self.request)
+
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        issues = raised.exception.envelope["detail"]["issues"]
+        self.assertIn("RESOURCE_LIMIT_UNSUPPORTED", {issue["code"] for issue in issues})
+
     def test_four_exact_callers_publish_one_runtime(self) -> None:
         def invoke(_: int):
             return self.importer().start(self.project_id, self.request)
@@ -3122,6 +3571,20 @@ class ManagedImportStoreTests(ManagedImportFixture):
         with self.assertRaises(ValueError):
             ManagedImportStore("relative.sqlite3")
 
+    def test_process_local_rollback_runs_while_sqlite_writer_is_exclusive(self) -> None:
+        store = self.importer().store
+        rollback_actions: list[Callable[[], None]] = []
+        transaction_states: list[bool] = []
+
+        with self.assertRaisesRegex(RuntimeError, "force rollback"):
+            with store._transaction(rollback_actions=rollback_actions) as connection:
+                rollback_actions.append(
+                    lambda: transaction_states.append(connection.in_transaction)
+                )
+                raise RuntimeError("force rollback")
+
+        self.assertEqual(transaction_states, [True])
+
     def test_shared_database_is_safe_when_branch_schema_is_first(self) -> None:
         importer = self.importer()
         importer.branch_leases.ensure_initialized()
@@ -3148,6 +3611,84 @@ class ManagedImportStoreTests(ManagedImportFixture):
             {"port_leases": [], "process_owners": []},
         )
 
+    def test_isolated_startup_port_conflict_preserves_other_assignment(self) -> None:
+        importer = self.importer()
+        importer.store._ensure_initialized()
+        ports = (
+            int(self.runtime_config["child_port_start"]),
+            int(self.runtime_config["child_port_start"]) + 1,
+        )
+
+        def state(index: int) -> dict[str, object]:
+            process_id = f"process-startup-{index}"
+            lease_id = f"lease-startup-{index}"
+            return {
+                "sprint_id": f"sprint-startup-{index}",
+                "identity": {"project_id": f"project-startup-{index}"},
+                "repository": {},
+                "runtime_config": dict(self.runtime_config),
+                "processes": [
+                    {
+                        "process_id": process_id,
+                        "port_lease_id": lease_id,
+                        "state": "PREPARED",
+                    }
+                ],
+                "port_leases": [
+                    {
+                        "lease_id": lease_id,
+                        "instance_id": self.runtime_config["instance_id"],
+                        "network_namespace_id": "host",
+                        "assignment_id": f"assignment-startup-{index}",
+                        "process_id": None,
+                        "host": "127.0.0.1",
+                        "port": ports[index],
+                        "status": "reserved",
+                        "bind_verified": False,
+                        "acquired_at": "2026-10-02T00:00:00+00:00",
+                        "released_at": None,
+                    }
+                ],
+            }
+
+        states = [state(0), state(1)]
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as conflict:
+            conflict.bind(("127.0.0.1", ports[0]))
+            conflict.listen(1)
+            with (
+                patch.object(
+                    importer.store,
+                    "active_runtime_states",
+                    return_value=states,
+                ),
+                patch.object(importer, "_ensure_succeeded_publication") as publish,
+            ):
+                importer.restore_committed_activations(
+                    isolate_process_failures=True
+                )
+
+        self.assertFalse(
+            self.port_reservations.owns_endpoint(
+                importer.store.database_path,
+                "127.0.0.1",
+                ports[0],
+            )
+        )
+        self.assertTrue(
+            self.port_reservations.holds_endpoint(
+                importer.store.database_path,
+                "127.0.0.1",
+                ports[1],
+            )
+        )
+        self.assertEqual(publish.call_count, 2)
+        self.assertTrue(
+            all(
+                call.kwargs == {"restore_ports": False}
+                for call in publish.call_args_list
+            )
+        )
+
 
 class ManagedCredentialResolverTests(unittest.TestCase):
     def test_env_reference_resolves_only_ephemeral_git_environment(self) -> None:
@@ -3169,6 +3710,23 @@ class ManagedCredentialResolverTests(unittest.TestCase):
         with self.assertRaises(LookupError):
             main.managed_git_credential_resolver("vault:production/repository")
 
+    def test_managed_process_secret_resolver_accepts_only_env_references(self) -> None:
+        with patch.dict(
+            main.os.environ,
+            {"NGINX_QA_TEST_CHILD_SECRET": "ephemeral-child-secret"},
+            clear=False,
+        ):
+            self.assertEqual(
+                main.managed_process_secret_resolver(
+                    "env:NGINX_QA_TEST_CHILD_SECRET"
+                ),
+                "ephemeral-child-secret",
+            )
+        with self.assertRaises(LookupError):
+            main.managed_process_secret_resolver("vault:child/service")
+        with self.assertRaises(LookupError):
+            main.managed_process_secret_resolver("env:NGINX_QA_MISSING_SECRET")
+
 
 class ManagedRequestParserTests(unittest.TestCase):
     def test_deep_json_and_float_overflow_are_normalized(self) -> None:
@@ -3185,6 +3743,172 @@ class ManagedRequestParserTests(unittest.TestCase):
         with self.assertRaises(ManagedImportError) as overflow_error:
             parse_start_request_bytes(overflow, "overflow-correlation")
         self.assertEqual(overflow_error.exception.http_status, 400)
+
+
+class ManagedAppLifespanTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_restore_monitor_and_cleanup_are_strictly_ordered(
+        self,
+    ) -> None:
+        events: list[str] = []
+        bootstrap = Mock(spec=TransactionalSprintImporter)
+        bootstrap.store = object()
+        bootstrap.restore_committed_activations.side_effect = (
+            lambda **_kwargs: events.append("restore-activations")
+        )
+        supervisor = Mock()
+        supervisor.start_background.side_effect = lambda: events.append(
+            "start-monitor"
+        )
+        supervisor.close.side_effect = lambda: events.append("close-supervisor")
+
+        async def restore_state() -> None:
+            events.append("restore-runtime")
+
+        async def shutdown_state() -> None:
+            events.append("shutdown-runtime")
+
+        previous = main.managed_process_supervisor
+        main.managed_process_supervisor = None
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"NGINX_QA_MANAGED_ROOT": "C:/managed-test-root"},
+                ),
+                patch.object(
+                    main,
+                    "restore_runtime_state",
+                    AsyncMock(side_effect=restore_state),
+                ),
+                patch.object(
+                    main,
+                    "shutdown_runtime_state",
+                    AsyncMock(side_effect=shutdown_state),
+                ),
+                patch.object(main, "load_managed_runtime_config", return_value={}),
+                patch.object(
+                    main,
+                    "TransactionalSprintImporter",
+                    return_value=bootstrap,
+                ),
+                patch.object(
+                    main,
+                    "managed_process_supervisor_for",
+                    return_value=supervisor,
+                ),
+                patch.object(
+                    main.managed_port_reservation_registry,
+                    "close_all",
+                    side_effect=lambda: events.append("close-ports"),
+                ),
+            ):
+                async with main.app_lifespan(main.app):
+                    events.append("serving")
+            self.assertEqual(
+                events,
+                [
+                    "restore-runtime",
+                    "restore-activations",
+                    "start-monitor",
+                    "serving",
+                    "close-supervisor",
+                    "shutdown-runtime",
+                    "close-ports",
+                ],
+            )
+            bootstrap.restore_committed_activations.assert_called_once_with(
+                isolate_process_failures=True
+            )
+            self.assertIsNone(main.managed_process_supervisor)
+        finally:
+            main.managed_process_supervisor = previous
+
+    async def test_failed_supervisor_quiescence_preserves_port_holders(self) -> None:
+        events: list[str] = []
+        bootstrap = Mock(spec=TransactionalSprintImporter)
+        bootstrap.store = object()
+        supervisor = Mock()
+
+        def fail_close() -> None:
+            events.append("close-supervisor")
+            raise RuntimeError("injected close failure")
+
+        supervisor.close.side_effect = fail_close
+
+        async def shutdown_state() -> None:
+            events.append("shutdown-runtime")
+
+        previous = main.managed_process_supervisor
+        main.managed_process_supervisor = None
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"NGINX_QA_MANAGED_ROOT": "C:/managed-test-root"},
+                ),
+                patch.object(main, "restore_runtime_state", AsyncMock()),
+                patch.object(
+                    main,
+                    "shutdown_runtime_state",
+                    AsyncMock(side_effect=shutdown_state),
+                ),
+                patch.object(main, "load_managed_runtime_config", return_value={}),
+                patch.object(
+                    main,
+                    "TransactionalSprintImporter",
+                    return_value=bootstrap,
+                ),
+                patch.object(
+                    main,
+                    "managed_process_supervisor_for",
+                    return_value=supervisor,
+                ),
+                patch.object(
+                    main.managed_port_reservation_registry,
+                    "close_all",
+                ) as close_ports,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "injected close failure"):
+                    async with main.app_lifespan(main.app):
+                        events.append("serving")
+                close_ports.assert_not_called()
+            self.assertEqual(
+                events,
+                ["serving", "close-supervisor", "shutdown-runtime"],
+            )
+            self.assertIs(main.managed_process_supervisor, supervisor)
+        finally:
+            main.managed_process_supervisor = previous
+
+
+class ManagedPostCommitActivationTests(unittest.TestCase):
+    def test_supervisor_is_woken_without_inline_reconcile_or_result_rewrite(self) -> None:
+        supervisor = Mock()
+        supervisor.reconcile.side_effect = AssertionError(
+            "post-commit request path must not reconcile inline"
+        )
+        supervisor.start_background.side_effect = RuntimeError(
+            "injected background wake failure"
+        )
+        importer = Mock(spec=TransactionalSprintImporter)
+        importer.store = object()
+        result = ManagedStartResult(
+            {
+                "sprint_id": "msv1-" + "a" * 64,
+                "identity": {"project_id": "9002"},
+            },
+            201,
+        )
+
+        with patch.object(
+            main,
+            "managed_process_supervisor_for",
+            return_value=supervisor,
+        ):
+            main.activate_managed_processes({}, importer, result)
+
+        supervisor.reconcile.assert_not_called()
+        supervisor.start_background.assert_called_once_with()
 
 
 class ManagedStartRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -3213,7 +3937,10 @@ class ManagedStartRouteTests(unittest.IsolatedAsyncioTestCase):
             "initial_assignment_ids": ["assignment-a"],
         }
 
-        class Importer:
+        class Importer(TransactionalSprintImporter):
+            def __init__(self):
+                self.store = object()
+
             def start(self, project_id, request):
                 self.project_id = project_id
                 self.request = request
@@ -3225,6 +3952,7 @@ class ManagedStartRouteTests(unittest.IsolatedAsyncioTestCase):
             "project_phone": "9002",
             "git_address": "https://github.com/example/repository.git",
         }
+        activate = Mock()
         with (
             patch.object(main, "read_git_config", AsyncMock(return_value={})),
             patch.object(
@@ -3235,6 +3963,7 @@ class ManagedStartRouteTests(unittest.IsolatedAsyncioTestCase):
             patch.object(main, "managed_repository_registry_for_project", return_value={}),
             patch.object(main, "load_managed_runtime_config", return_value={}),
             patch.object(main, "managed_sprint_importer_factory", return_value=importer),
+            patch.object(main, "activate_managed_processes", activate),
         ):
             http_status, decoded = await asgi_raw_request(
                 "/api/v1/projects/9002/sprints/start-from-git", body
@@ -3243,6 +3972,11 @@ class ManagedStartRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decoded, response)
         self.assertEqual(importer.project_id, "9002")
         self.assertEqual(importer.request.idempotency_key, "route-key")
+        activate.assert_called_once()
+        runtime_config, activated_importer, activated_result = activate.call_args.args
+        self.assertEqual(runtime_config, {})
+        self.assertIs(activated_importer, importer)
+        self.assertEqual(activated_result.response, response)
 
     async def test_malformed_request_stops_before_project_lookup(self) -> None:
         read_config = AsyncMock(return_value={})

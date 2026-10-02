@@ -100,6 +100,18 @@ _CREDENTIAL_REFERENCE = re.compile(
     r"(?:env|keyring|secret-manager|vault|windows-credential):"
     r"[A-Za-z0-9][A-Za-z0-9._/@+-]{0,254}\Z"
 )
+_HTTP_ORIGIN_PATH = re.compile(
+    r"/(?!/)(?:[A-Za-z0-9._~!$&'()*+,;=:@/-]|%[0-9A-Fa-f]{2})*\Z"
+)
+_RUNTIME_V2_PROCESS_SEMANTIC_ISSUES = frozenset(
+    {
+        "PROCESS_ENVIRONMENT_NAME_INVALID",
+        "PROCESS_ENVIRONMENT_NAME_COLLISION",
+        "PROCESS_ENVIRONMENT_VALUE_INVALID",
+        "PROCESS_COMMAND_INVALID",
+        "PROCESS_HEALTH_PATH_INVALID",
+    }
+)
 
 
 def _reference_value_valid(value: Any) -> bool:
@@ -132,6 +144,41 @@ def _environment_contains_secret_literal(environment: Any) -> bool:
         if not isinstance(value, str) and not is_reference:
             return True
     return False
+
+
+def _process_environment_issue_codes(environment: Any) -> tuple[str, ...]:
+    """Return platform-portable process environment structural failures."""
+
+    if not isinstance(environment, Mapping):
+        return ()
+    issues: list[str] = []
+    names_casefolded: set[str] = set()
+    for name, value in environment.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or "=" in name
+            or "\0" in name
+        ):
+            if "PROCESS_ENVIRONMENT_NAME_INVALID" not in issues:
+                issues.append("PROCESS_ENVIRONMENT_NAME_INVALID")
+        else:
+            folded = name.casefold()
+            if folded in names_casefolded:
+                if "PROCESS_ENVIRONMENT_NAME_COLLISION" not in issues:
+                    issues.append("PROCESS_ENVIRONMENT_NAME_COLLISION")
+            else:
+                names_casefolded.add(folded)
+        if isinstance(value, str) and "\0" in value:
+            if "PROCESS_ENVIRONMENT_VALUE_INVALID" not in issues:
+                issues.append("PROCESS_ENVIRONMENT_VALUE_INVALID")
+    return tuple(issues)
+
+
+def managed_health_path_valid(value: Any) -> bool:
+    """Accept an ASCII RFC 3986 path safe to place in an HTTP request line."""
+
+    return isinstance(value, str) and _HTTP_ORIGIN_PATH.fullmatch(value) is not None
 
 
 def _credential_reference_valid(value: Any) -> bool:
@@ -1211,14 +1258,29 @@ def managed_graph_semantic_issues(
         launch_cwd = process_launch.get("cwd")
         if launch_cwd != "." and not relative_git_path_valid(launch_cwd):
             add("PATH_SEGMENT_UNSAFE")
-        if _environment_contains_secret_literal(process_launch.get("environment")):
+        environment = process_launch.get("environment")
+        for environment_issue in _process_environment_issue_codes(environment):
+            add(environment_issue)
+        if _environment_contains_secret_literal(environment):
             add("PROCESS_ENVIRONMENT_SECRET_LITERAL")
         command = process_launch.get("command")
+        if isinstance(command, list) and any(
+            isinstance(argument, str) and "\0" in argument
+            for argument in command
+        ):
+            add("PROCESS_COMMAND_INVALID")
         if isinstance(command, list) and any(
             isinstance(argument, str) and _SECRET_LITERAL.search(argument)
             for argument in command
         ):
             add("PROCESS_COMMAND_SECRET_LITERAL")
+        effective_health_path = (
+            process_launch.get("health_path")
+            if "health_path" in process_launch
+            else process_policy.get("health_path", "/health")
+        )
+        if not managed_health_path_valid(effective_health_path):
+            add("PROCESS_HEALTH_PATH_INVALID")
         effective_restart = process_launch.get("restart_policy", policy_restart)
         effective_max_restarts = (
             process_launch.get("max_restart_attempts")
@@ -1301,9 +1363,9 @@ def managed_graph_semantic_issues(
 def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, ...]:
     """Return relational failures for one managed durable-state snapshot.
 
-    Shape validation by ``managed-runtime-state-v1`` is a required predecessor.
-    This pure checker covers equality, ownership, ordering, and lifecycle
-    relations that JSON Schema cannot express.
+    Shape validation by the runtime state's declared versioned schema is a
+    required predecessor. This pure checker covers equality, ownership,
+    ordering, and lifecycle relations that JSON Schema cannot express.
     """
 
     if not isinstance(state, Mapping):
@@ -1312,10 +1374,67 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         return ()
 
     issues: list[str] = []
+    schema_version = state.get("schema_version")
+    legacy_runtime_v1 = type(schema_version) is int and schema_version == 1
 
     def add(code: str) -> None:
         if code not in issues:
             issues.append(code)
+
+    raw_processes = state.get("processes")
+    migration_marker_present = "migrated_from_runtime_schema_version" in state
+    migrated_runtime_v1 = (
+        migration_marker_present
+        and type(state.get("migrated_from_runtime_schema_version")) is int
+        and state.get("migrated_from_runtime_schema_version") == 1
+        and type(schema_version) is int
+        and schema_version == 2
+        and isinstance(raw_processes, list)
+        and any(
+            isinstance(process, Mapping)
+            and type(process.get("migrated_from_runtime_schema_version")) is int
+            and process.get("migrated_from_runtime_schema_version") == 1
+            for process in raw_processes
+        )
+    )
+    process_migration_marker_present = isinstance(raw_processes, list) and any(
+        isinstance(process, Mapping)
+        and "migrated_from_runtime_schema_version" in process
+        for process in raw_processes
+    )
+    process_migration_marker_invalid = isinstance(raw_processes, list) and any(
+        isinstance(process, Mapping)
+        and "migrated_from_runtime_schema_version" in process
+        and (
+            type(process.get("migrated_from_runtime_schema_version")) is not int
+            or process.get("migrated_from_runtime_schema_version") != 1
+        )
+        for process in raw_processes
+    )
+    if (
+        migration_marker_present and not migrated_runtime_v1
+    ) or process_migration_marker_invalid or (
+        process_migration_marker_present and not migrated_runtime_v1
+    ):
+        add("RUNTIME_SCHEMA_MIGRATION_INVALID")
+    migrated_process_assignment_ids = {
+        process.get("assignment_id")
+        for process in (raw_processes if isinstance(raw_processes, list) else ())
+        if isinstance(process, Mapping)
+        and type(process.get("migrated_from_runtime_schema_version")) is int
+        and process.get("migrated_from_runtime_schema_version") == 1
+        and isinstance(process.get("assignment_id"), str)
+    }
+    raw_assignments = state.get("assignments")
+    legacy_process_graph_revisions = {
+        assignment.get("graph_revision")
+        for assignment in (
+            raw_assignments if isinstance(raw_assignments, list) else ()
+        )
+        if isinstance(assignment, Mapping)
+        and assignment.get("assignment_id") in migrated_process_assignment_ids
+        and type(assignment.get("graph_revision")) is int
+    }
 
     def records_by(
         field: str,
@@ -1496,6 +1615,17 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             add("GRAPH_REVISION_DIGEST_MISMATCH")
         if isinstance(definition, Mapping):
             for semantic_issue in managed_graph_semantic_issues(definition):
+                if (
+                    (
+                        legacy_runtime_v1
+                        or (
+                            migrated_runtime_v1
+                            and number in legacy_process_graph_revisions
+                        )
+                    )
+                    and semantic_issue in _RUNTIME_V2_PROCESS_SEMANTIC_ISSUES
+                ):
+                    continue
                 add(semantic_issue)
             if (
                 "git_address" in definition
@@ -4713,7 +4843,30 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     ):
         add("PROCESS_PORT_LEASE_REUSE_INVALID")
 
+    for assignment_id, assignment in assignment_by_id.items():
+        assignment_node = nodes_by_revision.get(
+            assignment.get("graph_revision"), {}
+        ).get(assignment.get("node_id"))
+        assignment_workspace = (
+            assignment_node.get("workspace")
+            if isinstance(assignment_node, Mapping)
+            else None
+        )
+        process_configured = isinstance(assignment_workspace, Mapping) and isinstance(
+            assignment_workspace.get("process"), Mapping
+        )
+        owned_processes = processes_by_assignment.get(assignment_id, [])
+        if (process_configured and not owned_processes) or (
+            not process_configured and owned_processes
+        ):
+            add("PROCESS_ASSIGNMENT_COVERAGE_INVALID")
+
     for process in process_by_id.values():
+        legacy_process_record = legacy_runtime_v1 or (
+            migrated_runtime_v1
+            and type(process.get("migrated_from_runtime_schema_version")) is int
+            and process.get("migrated_from_runtime_schema_version") == 1
+        )
         process_id = process.get("process_id")
         process_assignment = assignment_by_id.get(process.get("assignment_id"))
         process_workspace = workspace_by_id.get(process.get("workspace_id"))
@@ -4888,6 +5041,22 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         health_endpoint = process.get("health_endpoint")
+        if not legacy_process_record:
+            for process_issue in _process_environment_issue_codes(
+                process.get("environment_redacted")
+            ):
+                add(process_issue)
+            command = process.get("command_redacted")
+            if isinstance(command, list) and any(
+                isinstance(argument, str) and "\0" in argument
+                for argument in command
+            ):
+                add("PROCESS_COMMAND_INVALID")
+            if not managed_health_path_valid(effective_health_path) or (
+                isinstance(health_endpoint, Mapping)
+                and not managed_health_path_valid(health_endpoint.get("path"))
+            ):
+                add("PROCESS_HEALTH_PATH_INVALID")
         if (
             not isinstance(process_launch, Mapping)
             or process.get("command_redacted") != process_launch.get("command")

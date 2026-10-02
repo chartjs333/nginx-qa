@@ -75,6 +75,7 @@ EXPECTED_SCHEMA_FILES = {
     "managed-review-decision-v1.schema.json",
     "managed-runtime-config-v1.schema.json",
     "managed-runtime-state-v1.schema.json",
+    "managed-runtime-state-v2.schema.json",
     "managed-workspace-sprint-v1.schema.json",
     "repair-sprint-response-v1.schema.json",
     "repair-sprint-v1.schema.json",
@@ -225,8 +226,10 @@ def preflight_fixture() -> dict:
     }
 
 
-def active_runtime_fixture() -> dict:
+def active_runtime_fixture(*, include_process_definition: bool = False) -> dict:
     manifest = managed_manifest_fixture()
+    if not include_process_definition:
+        manifest["nodes"][0]["workspace"].pop("process", None)
     occurrence_id = managed_occurrence_id(SPRINT_ID, 1, "build", 1, [])
     return {
         "schema_version": 1,
@@ -989,6 +992,7 @@ def process_fixture() -> dict:
         "state": "PREPARED",
         "launch_nonce": "nonce-0123456789ab",
         "os_process_created_at": None,
+        "os_process_birth_token": None,
         "executable_path": "C:/Python/python.exe",
         "job_object_id": None,
         "pid": None,
@@ -1012,8 +1016,10 @@ def process_fixture() -> dict:
         "restart_backoff_seconds": 5,
         "port_lease_id": "port-lease-1",
         "started_at": None,
+        "startup_deadline_at": None,
         "stopped_at": None,
         "failed_at": None,
+        "terminal_reason": None,
     }
 
 
@@ -1795,6 +1801,115 @@ class SprintSchemaContractTests(unittest.TestCase):
         parallel["execution"]["start_nodes"] = ["build", "continuity"]
         validator.validate(parallel)
 
+    def test_process_environment_and_argv_semantics_reject_unsafe_values(self) -> None:
+        invalid_environments = (
+            ({"": "value"}, "PROCESS_ENVIRONMENT_NAME_INVALID"),
+            ({"BAD=NAME": "value"}, "PROCESS_ENVIRONMENT_NAME_INVALID"),
+            ({"BAD\0NAME": "value"}, "PROCESS_ENVIRONMENT_NAME_INVALID"),
+            ({"GOOD_NAME": "bad\0value"}, "PROCESS_ENVIRONMENT_VALUE_INVALID"),
+        )
+        for environment, issue_code in invalid_environments:
+            with self.subTest(environment=environment):
+                manifest = managed_manifest_fixture()
+                manifest["nodes"][0]["workspace"]["process"][
+                    "environment"
+                ] = environment
+                self.validator(
+                    "managed-workspace-sprint-v1.schema.json"
+                ).validate(
+                    manifest
+                )
+                self.assertIn(
+                    issue_code,
+                    managed_graph_semantic_issues(manifest),
+                )
+
+        colliding = managed_manifest_fixture()
+        colliding["nodes"][0]["workspace"]["process"]["environment"] = {
+            "APP_MODE": "one",
+            "app_mode": "two",
+        }
+        self.validator("managed-workspace-sprint-v1.schema.json").validate(
+            colliding
+        )
+        self.assertIn(
+            "PROCESS_ENVIRONMENT_NAME_COLLISION",
+            managed_graph_semantic_issues(colliding),
+        )
+
+        nul_argument = managed_manifest_fixture()
+        nul_argument["nodes"][0]["workspace"]["process"]["command"] = [
+            "python",
+            "service.py\0redirected",
+        ]
+        self.validator(
+            "managed-workspace-sprint-v1.schema.json"
+        ).validate(
+            nul_argument
+        )
+        self.assertIn(
+            "PROCESS_COMMAND_INVALID",
+            managed_graph_semantic_issues(nul_argument),
+        )
+
+    def test_runtime_v2_process_rejects_invalid_environment_and_argv(self) -> None:
+        validator = self.def_validator(
+            "managed-runtime-state-v2.schema.json", "process"
+        )
+        invalid_processes = []
+        for environment in (
+            {"": "value"},
+            {"BAD=NAME": "value"},
+            {"BAD\0NAME": "value"},
+            {"GOOD_NAME": "bad\0value"},
+        ):
+            process = process_fixture()
+            process["environment_redacted"] = environment
+            invalid_processes.append(process)
+        command = process_fixture()
+        command["command_redacted"] = ["python", "service.py\0redirected"]
+        invalid_processes.append(command)
+        for process in invalid_processes:
+            with self.subTest(
+                environment=process["environment_redacted"],
+                command=process["command_redacted"],
+            ):
+                with self.assertRaises(ValidationError):
+                    validator.validate(process)
+
+    def test_process_health_path_requires_ascii_http_origin_form(self) -> None:
+        for path in ("/ready now", "/готов", "/bad%ZZ", "/back\\slash"):
+            with self.subTest(path=path):
+                manifest = managed_manifest_fixture()
+                manifest["nodes"][0]["workspace"]["process"][
+                    "health_path"
+                ] = path
+                # Manifest v1 remains frozen; semantic preflight owns the
+                # portable request-target restriction.
+                self.validator("managed-workspace-sprint-v1.schema.json").validate(
+                    manifest
+                )
+                self.assertIn(
+                    "PROCESS_HEALTH_PATH_INVALID",
+                    managed_graph_semantic_issues(manifest),
+                )
+
+                process = process_fixture()
+                process["health_endpoint"]["path"] = path
+                with self.assertRaises(ValidationError):
+                    self.def_validator(
+                        "managed-runtime-state-v2.schema.json", "process"
+                    ).validate(process)
+
+        valid = managed_manifest_fixture()
+        valid["nodes"][0]["workspace"]["process"][
+            "health_path"
+        ] = "/v1/ready%20now;mode=full"
+        self.assertNotIn(
+            "PROCESS_HEALTH_PATH_INVALID",
+            managed_graph_semantic_issues(valid),
+        )
+
     def test_manifest_rejects_partial_override_and_unsafe_values(self) -> None:
         partial = managed_manifest_fixture()
         partial["nodes"][0]["workspace"]["git"] = {}
@@ -1855,7 +1970,9 @@ class SprintSchemaContractTests(unittest.TestCase):
             "PROCESS_ENVIRONMENT_SECRET_LITERAL",
             managed_graph_semantic_issues(disguised_secret_reference),
         )
-        durable_disguised_reference = active_runtime_fixture()
+        durable_disguised_reference = active_runtime_fixture(
+            include_process_definition=True
+        )
         durable_definition = durable_disguised_reference["graph_revisions"][0][
             "definition"
         ]
@@ -1905,18 +2022,248 @@ class SprintSchemaContractTests(unittest.TestCase):
         raw_process_environment["environment_raw"] = {"PASSWORD": "secret"}
         with self.assertRaises(ValidationError):
             self.def_validator(
-                "managed-runtime-state-v1.schema.json", "process"
+                "managed-runtime-state-v2.schema.json", "process"
             ).validate(raw_process_environment)
         referenced_process_environment = process_fixture()
         referenced_process_environment["environment_redacted"] = {
             "DATABASE_PASSWORD": {"secret_ref": "vault:database/password"}
         }
         self.def_validator(
-            "managed-runtime-state-v1.schema.json", "process"
+            "managed-runtime-state-v2.schema.json", "process"
         ).validate(referenced_process_environment)
+
+    def test_schema_v1_accepts_process_records_from_before_supervisor_hardening(
+        self,
+    ) -> None:
+        legacy_process = process_fixture()
+        legacy_process.pop("os_process_birth_token")
+        legacy_process.pop("startup_deadline_at")
+        legacy_process.pop("terminal_reason")
+        self.def_validator(
+            "managed-runtime-state-v1.schema.json", "process"
+        ).validate(legacy_process)
+        with self.assertRaises(ValidationError):
+            self.def_validator(
+                "managed-runtime-state-v1.schema.json", "process"
+            ).validate(process_fixture())
+
+    def test_runtime_v1_keeps_legacy_process_semantics_but_new_inputs_are_strict(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "invalid environment name",
+                "PROCESS_ENVIRONMENT_NAME_INVALID",
+                "environment",
+                {"": "value"},
+            ),
+            (
+                "case-folded environment collision",
+                "PROCESS_ENVIRONMENT_NAME_COLLISION",
+                "environment",
+                {"APP_MODE": "one", "app_mode": "two"},
+            ),
+            (
+                "invalid environment value",
+                "PROCESS_ENVIRONMENT_VALUE_INVALID",
+                "environment",
+                {"APP_MODE": "bad\0value"},
+            ),
+            (
+                "invalid command argument",
+                "PROCESS_COMMAND_INVALID",
+                "command",
+                ["python", "service.py\0redirected"],
+            ),
+            (
+                "non-origin health path",
+                "PROCESS_HEALTH_PATH_INVALID",
+                "health_path",
+                "/ready now",
+            ),
+        )
+        for label, issue_code, field, value in cases:
+            with self.subTest(case=label):
+                legacy = active_runtime_fixture(include_process_definition=True)
+                process = process_fixture()
+                process.update(
+                    {
+                        "restart_policy": "never",
+                        "max_restart_attempts": 0,
+                    }
+                )
+                for version_two_field in (
+                    "os_process_birth_token",
+                    "startup_deadline_at",
+                    "terminal_reason",
+                ):
+                    process.pop(version_two_field)
+                definition = legacy["graph_revisions"][0]["definition"]
+                launch = definition["nodes"][0]["workspace"]["process"]
+                launch[field] = copy.deepcopy(value)
+                if field == "environment":
+                    process["environment_redacted"] = copy.deepcopy(value)
+                elif field == "command":
+                    process["command_redacted"] = copy.deepcopy(value)
+                else:
+                    process["health_endpoint"]["path"] = value
+                legacy["graph_revisions"][0]["definition_sha256"] = (
+                    canonical_json_sha256(definition)
+                )
+                legacy["processes"] = [process]
+                legacy["port_leases"] = [
+                    {
+                        "lease_id": "port-lease-1",
+                        "instance_id": "umse-staging",
+                        "network_namespace_id": "host",
+                        "assignment_id": "assignment-1",
+                        "process_id": None,
+                        "host": "127.0.0.1",
+                        "port": 18100,
+                        "status": "reserved",
+                        "bind_verified": False,
+                        "acquired_at": TIMESTAMP,
+                        "released_at": None,
+                    }
+                ]
+
+                self.validator("managed-runtime-state-v1.schema.json").validate(
+                    legacy
+                )
+                self.assertEqual(managed_activation_invariant_issues(legacy), ())
+                self.assertIn(
+                    issue_code,
+                    managed_graph_semantic_issues(definition),
+                )
+
+                strict = copy.deepcopy(legacy)
+                strict["schema_version"] = 2
+                strict["processes"][0].update(
+                    {
+                        "os_process_birth_token": None,
+                        "startup_deadline_at": None,
+                        "terminal_reason": None,
+                    }
+                )
+                self.assertIn(
+                    issue_code,
+                    managed_activation_invariant_issues(strict),
+                )
+
+                migrated = copy.deepcopy(strict)
+                migrated["migrated_from_runtime_schema_version"] = 1
+                migrated["processes"][0][
+                    "migrated_from_runtime_schema_version"
+                ] = 1
+                self.validator("managed-runtime-state-v2.schema.json").validate(
+                    migrated
+                )
+                self.assertEqual(
+                    managed_activation_invariant_issues(migrated), ()
+                )
+
+    def test_runtime_v1_migration_provenance_is_complete_and_consistent(
+        self,
+    ) -> None:
+        migrated = active_runtime_fixture(include_process_definition=True)
+        migrated["schema_version"] = 2
+        migrated["migrated_from_runtime_schema_version"] = 1
+        migrated_process = process_fixture()
+        migrated_process.update(
+            {
+                "migrated_from_runtime_schema_version": 1,
+                "restart_policy": "never",
+                "max_restart_attempts": 0,
+            }
+        )
+        migrated["processes"] = [migrated_process]
+        migrated["port_leases"] = [
+            {
+                "lease_id": "port-lease-1",
+                "instance_id": "umse-staging",
+                "network_namespace_id": "host",
+                "assignment_id": "assignment-1",
+                "process_id": None,
+                "host": "127.0.0.1",
+                "port": 18100,
+                "status": "reserved",
+                "bind_verified": False,
+                "acquired_at": TIMESTAMP,
+                "released_at": None,
+            }
+        ]
+        self.validator("managed-runtime-state-v2.schema.json").validate(migrated)
+        self.assertEqual(managed_activation_invariant_issues(migrated), ())
+
+        missing_process_marker = copy.deepcopy(migrated)
+        missing_process_marker["processes"][0].pop(
+            "migrated_from_runtime_schema_version"
+        )
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                missing_process_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(missing_process_marker),
+        )
+
+        missing_root_marker = copy.deepcopy(migrated)
+        missing_root_marker.pop("migrated_from_runtime_schema_version")
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                missing_root_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(missing_root_marker),
+        )
+
+        mixed = copy.deepcopy(migrated)
+        strict_process = process_fixture()
+        strict_process.update(
+            {
+                "process_id": "process-2",
+                "port_lease_id": "port-lease-2",
+                "restart_policy": "never",
+                "max_restart_attempts": 0,
+            }
+        )
+        mixed["processes"].append(strict_process)
+        self.validator("managed-runtime-state-v2.schema.json").validate(mixed)
+        mixed["processes"][1]["command_redacted"] = ["bad\0command"]
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(mixed)
+
+        wrong_version = copy.deepcopy(migrated)
+        wrong_version["schema_version"] = 1
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(wrong_version),
+        )
+
+        invalid_marker = copy.deepcopy(migrated)
+        invalid_marker["migrated_from_runtime_schema_version"] = True
+        with self.assertRaises(ValidationError):
+            self.validator("managed-runtime-state-v2.schema.json").validate(
+                invalid_marker
+            )
+        self.assertIn(
+            "RUNTIME_SCHEMA_MIGRATION_INVALID",
+            managed_activation_invariant_issues(invalid_marker),
+        )
+
+        escaped_process = process_fixture()
+        escaped_process["migrated_from_runtime_schema_version"] = 1
+        with self.assertRaises(ValidationError):
+            self.def_validator(
+                "managed-runtime-state-v2.schema.json", "process"
+            ).validate(escaped_process)
 
     def test_every_public_api_schema_has_a_positive_instance(self) -> None:
         result_key = managed_result_key("assignment-1", "DONE", COMMIT)
+        runtime_v2 = active_runtime_fixture()
+        runtime_v2["schema_version"] = 2
         cases = {
             "managed-api-error-v1.schema.json": {
                 "detail": {"error": "SPRINT_PREFLIGHT_FAILED", "correlation_id": "corr-1"}
@@ -1952,6 +2299,7 @@ class SprintSchemaContractTests(unittest.TestCase):
             },
             "managed-runtime-config-v1.schema.json": runtime_config_fixture(),
             "managed-runtime-state-v1.schema.json": active_runtime_fixture(),
+            "managed-runtime-state-v2.schema.json": runtime_v2,
             "managed-workspace-sprint-v1.schema.json": managed_manifest_fixture(),
             "repair-sprint-v1.schema.json": {
                 "expected_revision": 1,
@@ -2584,13 +2932,34 @@ class SprintSchemaContractTests(unittest.TestCase):
         )
 
     def test_runtime_nested_lifecycle_schemas(self) -> None:
-        process_validator = self.def_validator("managed-runtime-state-v1.schema.json", "process")
+        process_validator = self.def_validator("managed-runtime-state-v2.schema.json", "process")
         process = process_fixture()
         process_validator.validate(process)
         invalid_process = copy.deepcopy(process)
         invalid_process["max_restart_attempts"] = 0
         with self.assertRaises(ValidationError):
             process_validator.validate(invalid_process)
+
+        contradictory_live = copy.deepcopy(process)
+        contradictory_live["terminal_reason"] = "failure"
+        with self.assertRaises(ValidationError):
+            process_validator.validate(contradictory_live)
+
+        failed = copy.deepcopy(process)
+        failed.update(
+            {
+                "state": "FAILED",
+                "failed_at": TIMESTAMP,
+                "terminal_reason": "failure",
+            }
+        )
+        process_validator.validate(failed)
+        cancelled = {**failed, "terminal_reason": "operator_cancelled"}
+        process_validator.validate(cancelled)
+        with self.assertRaises(ValidationError):
+            process_validator.validate(
+                {**failed, "terminal_reason": "operator_stopped"}
+            )
 
         review_validator = self.def_validator(
             "managed-runtime-state-v1.schema.json", "reviewAssignment"
@@ -2619,12 +2988,13 @@ class SprintSchemaContractTests(unittest.TestCase):
             review_validator.validate(invalid_review)
 
     def test_restart_budget_cross_field_invariant(self) -> None:
-        state = active_runtime_fixture()
+        state = active_runtime_fixture(include_process_definition=True)
         process = process_fixture()
         process["restart_attempt"] = 2
         process["restart_of_process_id"] = "process-old"
         process["max_restart_attempts"] = 1
         state["processes"].append(process)
+        state["schema_version"] = 2
         state["port_leases"].append(
             {
                 "lease_id": "port-lease-1",
@@ -2640,14 +3010,47 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "released_at": None,
             }
         )
-        self.validator("managed-runtime-state-v1.schema.json").validate(state)
+        self.validator("managed-runtime-state-v2.schema.json").validate(state)
         self.assertIn(
             "PROCESS_RESTART_BUDGET_INVALID",
             managed_activation_invariant_issues(state),
         )
 
+    def test_process_configured_assignment_requires_one_attempt_chain(self) -> None:
+        missing = active_runtime_fixture(include_process_definition=True)
+        self.validator("managed-runtime-state-v1.schema.json").validate(missing)
+        self.assertIn(
+            "PROCESS_ASSIGNMENT_COVERAGE_INVALID",
+            managed_activation_invariant_issues(missing),
+        )
+
+        unexpected = active_runtime_fixture()
+        unexpected["schema_version"] = 2
+        unexpected["processes"] = [process_fixture()]
+        unexpected["port_leases"] = [
+            {
+                "lease_id": "port-lease-1",
+                "instance_id": "umse-staging",
+                "network_namespace_id": "host",
+                "assignment_id": "assignment-1",
+                "process_id": None,
+                "host": "127.0.0.1",
+                "port": 18100,
+                "status": "reserved",
+                "bind_verified": False,
+                "acquired_at": TIMESTAMP,
+                "released_at": None,
+            }
+        ]
+        self.validator("managed-runtime-state-v2.schema.json").validate(unexpected)
+        self.assertIn(
+            "PROCESS_ASSIGNMENT_COVERAGE_INVALID",
+            managed_activation_invariant_issues(unexpected),
+        )
+
     def test_process_records_bind_policy_ownership_and_one_restart_chain(self) -> None:
-        state = active_runtime_fixture()
+        state = active_runtime_fixture(include_process_definition=True)
+        state["schema_version"] = 2
         process = process_fixture()
         process.update(
             {
@@ -2670,7 +3073,7 @@ class SprintSchemaContractTests(unittest.TestCase):
         }
         state["processes"] = [process]
         state["port_leases"] = [port]
-        self.validator("managed-runtime-state-v1.schema.json").validate(state)
+        self.validator("managed-runtime-state-v2.schema.json").validate(state)
         self.assertEqual(managed_activation_invariant_issues(state), ())
 
         wrong_command = copy.deepcopy(state)
@@ -2700,7 +3103,7 @@ class SprintSchemaContractTests(unittest.TestCase):
             }
         )
         reused_port_lease["processes"].append(port_reuser)
-        self.validator("managed-runtime-state-v1.schema.json").validate(
+        self.validator("managed-runtime-state-v2.schema.json").validate(
             reused_port_lease
         )
         self.assertIn(
@@ -2725,7 +3128,7 @@ class SprintSchemaContractTests(unittest.TestCase):
         second_port.update({"lease_id": "port-lease-2", "port": 18101})
         duplicate_live["processes"].append(second_process)
         duplicate_live["port_leases"].append(second_port)
-        self.validator("managed-runtime-state-v1.schema.json").validate(
+        self.validator("managed-runtime-state-v2.schema.json").validate(
             duplicate_live
         )
         self.assertIn(
@@ -2744,7 +3147,7 @@ class SprintSchemaContractTests(unittest.TestCase):
         )
         with self.assertRaises(ValidationError):
             self.def_validator(
-                "managed-runtime-state-v1.schema.json", "process"
+                "managed-runtime-state-v2.schema.json", "process"
             ).validate(invalid_never_restart)
 
     def test_repository_provenance_is_reciprocal(self) -> None:
