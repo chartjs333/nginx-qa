@@ -33,6 +33,11 @@ environment are disjoint siblings. In particular, mutable roots must not be
 created below the service checkout: that layout violates the frozen runtime
 configuration invariant and is rejected before startup.
 
+Если на одном из родителей mutable roots уже существует чужой `.git`, эти roots
+переносятся на отдельный безопасный volume, а service checkout остаётся по точному
+пути выше. Launcher не удаляет и не переименовывает внешний repository marker и
+перед запуском применяет тот же parent-repository guard, что и importer.
+
 Staging создаётся из Git в новом каталоге. Если каталог существует, имеет неизвестное
 содержимое или dirty state, запуск fail closed; автоматическая очистка запрещена.
 

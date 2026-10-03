@@ -95,7 +95,8 @@ class StagingIsolationTests(unittest.TestCase):
             "Get-NetTCPConnection -LocalPort 18025 -State Listen",
             "-m uvicorn main:app --host $env:NGINX_QA_HTTP_HOST --port $env:NGINX_QA_HTTP_PORT",
             "Remove-Item Env:TELEGRAM_BOT_TOKEN",
-            'directory_template = "D:\\nginx-qa-staging\\prompt\\{repository}"',
+            "ManagedWorkspaceManager.validate_isolated_root",
+            "Resolve-NormalizedPath $env:NGINX_QA_PROMPT_ROOT",
         )
         for fragment in required_fragments:
             self.assertIn(fragment, launcher)

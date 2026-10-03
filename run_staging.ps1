@@ -109,9 +109,6 @@ $expectedValues = [ordered]@{
     NGINX_QA_HTTP_PORT = "18025"
     NGINX_QA_SERVICE_ROOT = "D:/nginx-qa-staging/universal-managed-sprint-engine"
     NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa","D:/nginx-qa-umse","D:/Prompt"]'
-    NGINX_QA_RUNTIME_ROOT = "D:/nginx-qa-staging/runtime_state"
-    NGINX_QA_PROMPT_ROOT = "D:/nginx-qa-staging/prompt"
-    NGINX_QA_MANAGED_ROOT = "D:/nginx-qa-staging/managed"
     NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
     NGINX_QA_CHILD_PORT_RANGE = "18100-18199"
     NGINX_QA_INSTANCE_ID = "universal-managed-sprint-engine-staging"
@@ -178,11 +175,23 @@ if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
 $validationScript = @'
 from nginx_qa.managed_import import normalize_managed_runtime_config
 from nginx_qa.sprint_types import managed_runtime_config_invariant_issues
+from nginx_qa.workspace_manager import ManagedWorkspaceManager
+from pathlib import Path
+import sys
 
 config = normalize_managed_runtime_config()
 issues = managed_runtime_config_invariant_issues(config)
 if issues:
     raise SystemExit("invalid staging runtime config: " + ",".join(issues))
+forbidden = tuple(config["protected_roots"]) + (
+    config["service_root"],
+    str(Path(sys.prefix).resolve(strict=False)),
+    str(Path(sys.base_prefix).resolve(strict=False)),
+)
+for field in ("runtime_root", "prompt_root", "managed_root"):
+    ManagedWorkspaceManager.validate_isolated_root(
+        config[field], protected_roots=forbidden
+    )
 '@
 Push-Location $serviceRoot
 try {
@@ -206,9 +215,10 @@ try {
 
     $legacyRuntimeRoot = Join-Path $serviceRoot "runtime_state"
     $promptSettingsPath = Join-Path $legacyRuntimeRoot "sequential-prompt-settings.json"
+    $isolatedPromptRoot = Resolve-NormalizedPath $env:NGINX_QA_PROMPT_ROOT
     $expectedPromptSettings = [ordered]@{
-        directory_template = "D:\nginx-qa-staging\prompt\{repository}"
-        agent_latest_file_template = "D:\nginx-qa-staging\prompt\{repository}_{agent_phone}-latest.prompt"
+        directory_template = Join-Path $isolatedPromptRoot "{repository}"
+        agent_latest_file_template = Join-Path $isolatedPromptRoot "{repository}_{agent_phone}-latest.prompt"
     }
     New-Item -ItemType Directory -Path $legacyRuntimeRoot -Force | Out-Null
     if (Test-Path -LiteralPath $promptSettingsPath -PathType Leaf) {
