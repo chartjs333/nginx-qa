@@ -2563,6 +2563,13 @@ class ManagedGitProvider:
         try:
             with ManagedFileLock(lock_path, timeout=self.lock_timeout):
                 current = self.branch_heads(repository, branch).get(ref)
+                if current == new_head:
+                    if not self.is_ancestor(repository, expected_head, new_head):
+                        raise ManagedGitError(
+                            "BRANCH_DIVERGED",
+                            "service-owned branch result is not a fast-forward",
+                        )
+                    return new_head
                 if current != expected_head or not self.is_ancestor(
                     repository, expected_head, new_head
                 ):

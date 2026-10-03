@@ -623,6 +623,41 @@ def _apply_managed_repair_patch(
     return candidate
 
 
+def apply_managed_repair_patch(
+    definition: Mapping[str, Any], patch: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Materialize a frozen future-graph patch without mutating its inputs."""
+
+    return _apply_managed_repair_patch(definition, patch)
+
+
+def managed_blocker_fingerprint(
+    assignment_id: str,
+    reason_code: str,
+    normalized_error: Mapping[str, Any],
+) -> str:
+    """Return the v1 stable identity for one assignment-scoped blocker.
+
+    Timestamps and free-form operator text are intentionally excluded.  A
+    repeated observation increments the one durable record with this identity;
+    it never authorizes terminal state by itself.
+    """
+
+    if not isinstance(assignment_id, str) or not assignment_id:
+        raise ValueError("assignment_id must be a non-empty string")
+    if re.fullmatch(r"[A-Z][A-Z0-9_]*", reason_code or "") is None:
+        raise ValueError("reason_code must be a stable uppercase code")
+    if not isinstance(normalized_error, Mapping) or not normalized_error:
+        raise ValueError("normalized_error must be a non-empty object")
+    return canonical_json_sha256(
+        {
+            "assignment_id": assignment_id,
+            "normalized_error": dict(normalized_error),
+            "reason_code": reason_code,
+        }
+    )
+
+
 def mirror_storage_key(canonical_remote: str) -> str:
     """Return a filesystem-safe key without redefining repository identity."""
 
@@ -1564,9 +1599,53 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     blocker_by_fingerprint = records_by(
         "blocker_observations", "fingerprint", "BLOCKER_OBSERVATION_DUPLICATE"
     )
+    for fingerprint, observation in blocker_by_fingerprint.items():
+        reason_code = observation.get("reason_code")
+        normalized_error = observation.get("normalized_error")
+        if legacy_runtime_v1 or migrated_runtime_v1 or (
+            reason_code is None and normalized_error is None
+        ):
+            # The frozen v1 contract allowed blocker extensions without
+            # canonical-fingerprint semantics.  Newer runtimes must keep every
+            # schema-valid v1 snapshot readable; v2 records that predate the
+            # retained inputs receive the same narrow compatibility treatment.
+            continue
+        try:
+            expected_fingerprint = managed_blocker_fingerprint(
+                observation.get("assignment_id"),
+                reason_code,
+                normalized_error,
+            )
+        except (TypeError, ValueError):
+            expected_fingerprint = None
+        if fingerprint != expected_fingerprint:
+            add("BLOCKER_OBSERVATION_FINGERPRINT_INVALID")
     recovery_by_id = records_by(
         "recovery_records", "recovery_id", "RECOVERY_ID_DUPLICATE"
     )
+    completed_continue_by_assignment: dict[str, Mapping[str, Any]] = {}
+    for recovery in recovery_by_id.values():
+        if (
+            recovery.get("action") != "CONTINUE_NODE"
+            or recovery.get("status") != "completed"
+        ):
+            continue
+        produced_ids = recovery.get("produced_record_ids")
+        produced_ids = produced_ids if isinstance(produced_ids, list) else []
+        continuation_ids = [
+            record_id
+            for record_id in produced_ids
+            if isinstance(record_id, str)
+            and record_id in assignment_by_id
+            and record_id != recovery.get("assignment_id")
+        ]
+        if len(continuation_ids) != 1:
+            continue
+        continuation_id = continuation_ids[0]
+        if continuation_id in completed_continue_by_assignment:
+            add("RECOVERY_EFFECT_BINDING_INVALID")
+        else:
+            completed_continue_by_assignment[continuation_id] = recovery
 
     raw_revisions = state.get("graph_revisions")
     revision_by_number: dict[int, Mapping[str, Any]] = {}
@@ -2038,19 +2117,45 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 or assignment_ids[0] in rework_by_assignment
             ):
                 add("OCCURRENCE_ASSIGNMENT_LINEAGE_INVALID")
-            for cycle, replacement_assignment_id in enumerate(
-                assignment_ids[1:], start=1
-            ):
+            expected_rework_cycle = 0
+            previous_assignment_id = assignment_ids[0]
+            for replacement_assignment_id in assignment_ids[1:]:
                 replacement = assignment_by_id.get(replacement_assignment_id)
                 rework = rework_by_assignment.get(replacement_assignment_id)
+                continuation = completed_continue_by_assignment.get(
+                    replacement_assignment_id
+                )
+                previous = assignment_by_id.get(previous_assignment_id)
+                continuation_valid = (
+                    isinstance(replacement, Mapping)
+                    and isinstance(previous, Mapping)
+                    and isinstance(continuation, Mapping)
+                    and continuation.get("assignment_id") == previous_assignment_id
+                    and replacement.get("node_id") == previous.get("node_id")
+                    and replacement.get("graph_revision")
+                    == previous.get("graph_revision")
+                    and replacement.get("source_kind") == previous.get("source_kind")
+                    and replacement.get("source_result_keys")
+                    == previous.get("source_result_keys")
+                    and replacement.get("integration_id")
+                    == previous.get("integration_id")
+                    and replacement.get("rework_cycle")
+                    == previous.get("rework_cycle")
+                    and rework is None
+                )
+                if continuation_valid:
+                    previous_assignment_id = replacement_assignment_id
+                    continue
+                expected_rework_cycle += 1
                 if (
                     not isinstance(replacement, Mapping)
                     or replacement.get("source_kind") != "rework_result"
-                    or replacement.get("rework_cycle") != cycle
+                    or replacement.get("rework_cycle") != expected_rework_cycle
                     or not isinstance(rework, Mapping)
-                    or rework.get("rework_cycle") != cycle
+                    or rework.get("rework_cycle") != expected_rework_cycle
                 ):
                     add("OCCURRENCE_ASSIGNMENT_LINEAGE_INVALID")
+                previous_assignment_id = replacement_assignment_id
         occurrence_state = occurrence.get("state")
         live_in_occurrence = [
             assignment_id
@@ -2261,6 +2366,17 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             and isinstance(source_assignment.get("branch_lease_id"), str)
             else None
         )
+        continued_source = bool(
+            isinstance(source_assignment, Mapping)
+            and isinstance(source_occurrence, Mapping)
+            and any(
+                recovery.get("assignment_id")
+                == source_assignment.get("assignment_id")
+                and assignment_by_id.get(continuation_id, {}).get("occurrence_id")
+                == source_occurrence.get("occurrence_id")
+                for continuation_id, recovery in completed_continue_by_assignment.items()
+            )
+        )
         if journal.get("disposition") == "accepted" and journal.get("state") in {
             "REVIEWS_ACCEPTED",
             "TRANSITION_COMMITTED",
@@ -2270,7 +2386,10 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 not isinstance(source_assignment, Mapping)
                 or source_assignment.get("status") != "completed"
                 or not isinstance(source_occurrence, Mapping)
-                or source_occurrence.get("state") != "completed"
+                or (
+                    source_occurrence.get("state") != "completed"
+                    and not continued_source
+                )
                 or (
                     isinstance(source_lease, Mapping)
                     and source_lease.get("status") != "released"
@@ -2618,6 +2737,42 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         assignment: Mapping[str, Any],
         occurrence: Mapping[str, Any] | None,
     ) -> bool:
+        continuation = completed_continue_by_assignment.get(assignment_id)
+        if isinstance(continuation, Mapping):
+            source_assignment_id = continuation.get("assignment_id")
+            source_assignment = (
+                assignment_by_id.get(source_assignment_id)
+                if isinstance(source_assignment_id, str)
+                else None
+            )
+            parameters = continuation.get("parameters")
+            parameters = parameters if isinstance(parameters, Mapping) else {}
+            return (
+                isinstance(source_assignment, Mapping)
+                and source_assignment.get("status")
+                in {"completed", "failed", "blocked"}
+                and assignment.get("occurrence_id")
+                == source_assignment.get("occurrence_id")
+                and assignment.get("node_id") == source_assignment.get("node_id")
+                and assignment.get("graph_revision")
+                == source_assignment.get("graph_revision")
+                and assignment.get("source_kind")
+                == source_assignment.get("source_kind")
+                and assignment.get("source_result_keys")
+                == source_assignment.get("source_result_keys")
+                and assignment.get("integration_id")
+                == source_assignment.get("integration_id")
+                and assignment.get("rework_cycle")
+                == source_assignment.get("rework_cycle")
+                and parameters.get("node_id") == assignment.get("node_id")
+                and parameters.get("source_commit")
+                == assignment.get("source_commit")
+                and assignment.get("source_commit")
+                in {
+                    source_assignment.get("source_commit"),
+                    source_assignment.get("result_commit"),
+                }
+            )
         source_kind = assignment.get("source_kind")
         source_keys = assignment.get("source_result_keys")
         source_keys = source_keys if isinstance(source_keys, list) else []
@@ -2942,6 +3097,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             owned_workspace_roots.add(root_key)
 
     completed_join_recovery_by_context: dict[str, Mapping[str, Any]] = {}
+    pending_join_repair_targets: set[tuple[int, str, tuple[str, ...]]] = set()
     resolved_join_integration_ids: set[str] = set()
     for recovery in recovery_by_id.values():
         join_target = recovery.get("join_target")
@@ -2962,6 +3118,49 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         response = recovery.get("response")
+        parameters = recovery.get("parameters")
+        repair_request = (
+            parameters.get("request")
+            if isinstance(parameters, Mapping)
+            else None
+        )
+        matching_pending_repairs = [
+            candidate
+            for candidate in repair_by_id.values()
+            if isinstance(repair_request, Mapping)
+            and candidate.get("from_revision")
+            == repair_request.get("expected_revision")
+            and candidate.get("repair_source_commit")
+            == repair_request.get("repair_source_commit")
+            and candidate.get("idempotency_key")
+            == repair_request.get("idempotency_key")
+            and candidate.get("patch") == repair_request.get("patch")
+        ]
+        if (
+            recovery.get("action") == "APPLY_REPAIR"
+            and recovery.get("status") == "pending"
+            and isinstance(join_target, Mapping)
+            and isinstance(context, Mapping)
+            and context.get("join_target") == join_target
+            and len(matching_pending_repairs) == 1
+        ):
+            pending_repair = matching_pending_repairs[0]
+            to_revision = pending_repair.get("to_revision")
+            target_node_id = join_target.get("target_node_id")
+            trigger_token_ids = join_target.get("trigger_token_ids")
+            if (
+                isinstance(to_revision, int)
+                and not isinstance(to_revision, bool)
+                and pending_repair.get("from_revision")
+                == recovery.get("graph_revision")
+                and to_revision == pending_repair.get("from_revision") + 1
+                and isinstance(target_node_id, str)
+                and isinstance(trigger_token_ids, list)
+                and all(isinstance(value, str) for value in trigger_token_ids)
+            ):
+                pending_join_repair_targets.add(
+                    (to_revision, target_node_id, tuple(trigger_token_ids))
+                )
         if (
             recovery.get("action") == "APPLY_REPAIR"
             and recovery.get("status") == "completed"
@@ -3681,7 +3880,156 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         ):
             add("REWORK_BINDING_INVALID")
 
+    def valid_rework_limit_context(
+        context: Mapping[str, Any], failed_assignment: Mapping[str, Any] | None
+    ) -> bool:
+        """Recompute the exact review evidence that permits terminal blocking."""
+
+        if not isinstance(failed_assignment, Mapping):
+            return False
+        assignment_id = failed_assignment.get("assignment_id")
+        assignment_revision = failed_assignment.get("graph_revision")
+        rework_cycle = failed_assignment.get("rework_cycle")
+        occurrence = occurrence_by_id.get(failed_assignment.get("occurrence_id"))
+        assignment_lineage = (
+            occurrence.get("assignment_ids")
+            if isinstance(occurrence, Mapping)
+            and isinstance(occurrence.get("assignment_ids"), list)
+            else []
+        )
+        matching_journals = [
+            (result_key, journal)
+            for result_key, journal in journal_by_result.items()
+            if journal.get("assignment_id") == assignment_id
+        ]
+        if len(matching_journals) != 1:
+            return False
+        result_key, journal = matching_journals[0]
+        receipt = receipt_by_key.get(result_key)
+        source_definition = (
+            revision_by_number.get(assignment_revision, {}).get("definition")
+            if isinstance(assignment_revision, int)
+            and not isinstance(assignment_revision, bool)
+            else None
+        )
+        execution = (
+            source_definition.get("execution")
+            if isinstance(source_definition, Mapping)
+            else None
+        )
+        maximum = (
+            execution.get("max_rework_cycles")
+            if isinstance(execution, Mapping)
+            else None
+        )
+        if (
+            not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or not isinstance(rework_cycle, int)
+            or isinstance(rework_cycle, bool)
+        ):
+            return False
+        next_cycle = rework_cycle + 1
+
+        raw_reviews = state.get("reviews")
+        matching_reviews = (
+            [
+                review
+                for review in raw_reviews
+                if isinstance(review, Mapping)
+                and review.get("result_key") == result_key
+            ]
+            if isinstance(raw_reviews, list)
+            else []
+        )
+        rejecting_reviews = [
+            review
+            for review in matching_reviews
+            if review.get("decision") == "REJECT"
+        ]
+        approving_reviews = [
+            review
+            for review in matching_reviews
+            if review.get("decision") == "APPROVE"
+        ]
+        if (
+            len(rejecting_reviews) != 1
+            or len(approving_reviews) > 1
+            or len(matching_reviews)
+            != len(rejecting_reviews) + len(approving_reviews)
+            or any(
+                not isinstance(review.get("reviewer_id"), str)
+                or not isinstance(review.get("reviewer_index"), int)
+                or isinstance(review.get("reviewer_index"), bool)
+                or not isinstance(review.get("decision"), str)
+                or (
+                    review.get("feedback") is not None
+                    and not isinstance(review.get("feedback"), str)
+                )
+                for review in matching_reviews
+            )
+        ):
+            return False
+        rejecting_review = rejecting_reviews[0]
+        rejecting_assignment = review_assignment_by_id.get(
+            rejecting_review.get("assignment_id")
+        )
+        expected_reviewer_feedback = [
+            {
+                "reviewer_id": review["reviewer_id"],
+                "reviewer_index": review["reviewer_index"],
+                "decision": review["decision"],
+                "feedback": review.get("feedback") or "",
+            }
+            for review in matching_reviews
+        ]
+        matching_rework_exists = any(
+            rework.get("rejected_result_key") == result_key
+            for rework in rework_by_id.values()
+        )
+        matching_successor_exists = any(
+            candidate_id != assignment_id
+            and candidate.get("source_kind") == "rework_result"
+            and candidate.get("source_result_keys") == [result_key]
+            for candidate_id, candidate in assignment_by_id.items()
+        )
+        return bool(
+            context.get("failure_scope") == "assignment"
+            and context.get("reason_code") == "REWORK_LIMIT_EXCEEDED"
+            and failed_assignment.get("status") == "blocked"
+            and isinstance(occurrence, Mapping)
+            and occurrence.get("state") == "blocked"
+            and assignment_lineage
+            and assignment_lineage[-1] == assignment_id
+            and isinstance(receipt, Mapping)
+            and receipt.get("assignment_id") == assignment_id
+            and journal.get("state") == "REVIEWS_PENDING"
+            and journal.get("disposition") == "open"
+            and journal.get("rework_id") is None
+            and isinstance(rejecting_assignment, Mapping)
+            and rejecting_assignment.get("status") == "decided"
+            and rejecting_assignment.get("decision") == "REJECT"
+            and rejecting_assignment.get("source_assignment_id") == assignment_id
+            and rejecting_assignment.get("result_key") == result_key
+            and next_cycle > maximum
+            and context.get("normalized_error")
+            == {
+                "code": "REWORK_LIMIT_EXCEEDED",
+                "max_rework_cycles": maximum,
+                "next_rework_cycle": next_cycle,
+            }
+            and context.get("reviewer_feedback") == expected_reviewer_feedback
+            and not matching_rework_exists
+            and not matching_successor_exists
+        )
+
     terminal_evidence_context_ids: set[str] = set()
+    rework_limit_context_ids: set[str] = set()
+    rework_limit_assignment_ids: set[str] = set()
+    rework_limit_occurrence_ids: set[str] = set()
+    valid_successor_failure_signatures: set[
+        tuple[int, str, tuple[str, ...]]
+    ] = set()
     join_context_ids_by_integration: dict[str, list[str]] = {}
     join_context_ids_by_signature: dict[
         tuple[Any, Any, tuple[Any, ...], Any], list[str]
@@ -3957,6 +4305,93 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             and failed_assignment.get("status") in {"failed", "blocked"}
         ):
             terminal_evidence_context_ids.add(context_id)
+        if context.get("reason_code") == "REWORK_LIMIT_EXCEEDED":
+            if context_binding_valid and valid_rework_limit_context(
+                context, failed_assignment
+            ):
+                rework_limit_context_ids.add(context_id)
+                rework_limit_assignment_ids.add(str(failed_assignment_id))
+                occurrence_id = failed_assignment.get("occurrence_id")
+                if isinstance(occurrence_id, str):
+                    rework_limit_occurrence_ids.add(occurrence_id)
+            else:
+                add("REWORK_LIMIT_EVIDENCE_INVALID")
+        if context.get("reason_code") == "SUCCESSOR_PREPARATION_FAILED":
+            normalized_error = context.get("normalized_error")
+            target_revision = (
+                normalized_error.get("target_graph_revision")
+                if isinstance(normalized_error, Mapping)
+                else None
+            )
+            target_node_id = (
+                normalized_error.get("target_node_id")
+                if isinstance(normalized_error, Mapping)
+                else None
+            )
+            trigger_token_ids = (
+                normalized_error.get("trigger_token_ids")
+                if isinstance(normalized_error, Mapping)
+                else None
+            )
+            trigger_tokens = (
+                [token_by_id.get(token_id) for token_id in trigger_token_ids]
+                if isinstance(trigger_token_ids, list)
+                and all(isinstance(token_id, str) for token_id in trigger_token_ids)
+                else []
+            )
+            first_receipt = (
+                receipt_by_key.get(trigger_tokens[0].get("result_key"))
+                if trigger_tokens and isinstance(trigger_tokens[0], Mapping)
+                else None
+            )
+            successor_failure_valid = (
+                context_binding_valid
+                and isinstance(failed_assignment, Mapping)
+                and context.get("failure_scope") == "prepare"
+                and isinstance(normalized_error, Mapping)
+                and normalized_error.get("code")
+                == "SUCCESSOR_PREPARATION_FAILED"
+                and normalized_error.get("phase")
+                in {
+                    "INTEGRATION_PREPARE",
+                    "ASSIGNMENT_PREPARE",
+                    "PORT_RESERVATION",
+                    "ASSIGNMENT_COMMIT",
+                }
+                and isinstance(normalized_error.get("failure_code"), str)
+                and re.fullmatch(
+                    r"[A-Z][A-Z0-9_]*",
+                    str(normalized_error.get("failure_code")),
+                )
+                is not None
+                and isinstance(target_revision, int)
+                and not isinstance(target_revision, bool)
+                and target_revision == context_revision
+                and isinstance(target_node_id, str)
+                and target_node_id in nodes_by_revision.get(target_revision, {})
+                and isinstance(trigger_token_ids, list)
+                and bool(trigger_token_ids)
+                and all(isinstance(token_id, str) for token_id in trigger_token_ids)
+                and len(trigger_token_ids) == len(set(trigger_token_ids))
+                and len(trigger_tokens) == len(trigger_token_ids)
+                and all(
+                    isinstance(token, Mapping)
+                    and token.get("status") == "available"
+                    and token.get("target_graph_revision") is None
+                    and token.get("consumed_by_occurrence_id") is None
+                    and token.get("target_node_id") == target_node_id
+                    for token in trigger_tokens
+                )
+                and isinstance(first_receipt, Mapping)
+                and first_receipt.get("assignment_id")
+                == failed_assignment.get("assignment_id")
+            )
+            if successor_failure_valid:
+                valid_successor_failure_signatures.add(
+                    (target_revision, target_node_id, tuple(trigger_token_ids))
+                )
+            else:
+                add("SUCCESSOR_PREPARATION_EVIDENCE_INVALID")
 
     if any(
         len(join_context_ids_by_integration.get(integration_id, []))
@@ -4118,6 +4553,20 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 selected_commits.append(selected[3])
         if len(selected_token_ids) != len(expected_order):
             continue
+        if (
+            graph_revision,
+            target_node_id,
+            tuple(selected_token_ids),
+        ) in valid_successor_failure_signatures:
+            active_join_witness = True
+            continue
+        if (
+            graph_revision,
+            target_node_id,
+            tuple(selected_token_ids),
+        ) in pending_join_repair_targets:
+            active_join_witness = True
+            continue
         if len(set(selected_commits)) < 2:
             add("JOIN_READY_NOT_COMMITTED")
             continue
@@ -4175,11 +4624,16 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 continue
         active_join_witness = True
 
+    active_recovery_witness = any(
+        recovery.get("status") == "pending"
+        for recovery in recovery_by_id.values()
+    )
     if (
         status == "active"
         and not active_id_set
         and not active_join_witness
         and not active_scheduler_witness
+        and not active_recovery_witness
     ):
         add("ACTIVE_ASSIGNMENTS_INVALID")
 
@@ -4377,7 +4831,21 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             return None
         return {repair_id, occurrence_id, assignment_id, event_ids[0]}
 
+    def recovery_settles_context(recovery: Mapping[str, Any]) -> bool:
+        if recovery.get("status") == "completed":
+            return True
+        normalized_error = recovery.get("normalized_error")
+        return bool(
+            recovery.get("status") == "failed"
+            and recovery.get("action") == "ROUTE_REWORK"
+            and isinstance(normalized_error, Mapping)
+            and normalized_error.get("code") == "REWORK_LIMIT_EXCEEDED"
+            and recovery.get("assignment_id")
+            in rework_limit_assignment_ids
+        )
+
     recovery_keys: set[tuple[str, str]] = set()
+    settled_recovery_context_ids: set[str] = set()
     for recovery in recovery_by_id.values():
         coordinator_id = recovery.get("coordinator_id")
         idempotency_key = recovery.get("idempotency_key")
@@ -4425,6 +4893,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             or coordinator_id != coordinator_agent.get("id")
         ):
             add("RECOVERY_BINDING_INVALID")
+        if (
+            isinstance(context, Mapping)
+            and context.get("reason_code") == "REWORK_LIMIT_EXCEEDED"
+            and not legacy_runtime_v1
+            and not migrated_runtime_v1
+        ):
+            add("RECOVERY_BINDING_INVALID")
         action = recovery.get("action")
         parameters = recovery.get("parameters")
         parameters = parameters if isinstance(parameters, Mapping) else {}
@@ -4457,6 +4932,23 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 recovery_join_target,
             )
         )
+        normalized_recovery_error = recovery.get("normalized_error")
+        orphan_rework_limit_claim = bool(
+            recovery_status == "failed"
+            and action == "ROUTE_REWORK"
+            and isinstance(normalized_recovery_error, Mapping)
+            and normalized_recovery_error.get("code")
+            == "REWORK_LIMIT_EXCEEDED"
+            and assignment_id not in rework_limit_assignment_ids
+        )
+        if (
+            orphan_rework_limit_claim
+            and not legacy_runtime_v1
+            and not migrated_runtime_v1
+        ):
+            add("RECOVERY_BINDING_INVALID")
+        if recovery_settles_context(recovery) and isinstance(context_id, str):
+            settled_recovery_context_ids.add(context_id)
         if (
             recovery.get("request_fingerprint") != expected_fingerprint
             or recovery_target_count != 1
@@ -4541,6 +5033,9 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 import_attempt_id is not None
                 or not isinstance(receipt, Mapping)
                 or receipt.get("assignment_id") != assignment_id
+                or not isinstance(context, Mapping)
+                or context.get("reason_code") != "HANDOFF_DELIVERY_FAILED"
+                or context.get("failure_scope") != "recovery"
             ):
                 add("RECOVERY_BINDING_INVALID")
             if recovery_status == "completed":
@@ -4583,6 +5078,16 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                     for record_id in raw_produced_ids
                     if record_id in assignment_by_id and record_id != assignment_id
                 ]
+                continuation_assignment = (
+                    produced_assignments[0]
+                    if len(produced_assignments) == 1
+                    else None
+                )
+                source_journals = [
+                    journal
+                    for journal in journal_by_result.values()
+                    if journal.get("assignment_id") == assignment_id
+                ]
                 produced_assignment_ids = {
                     produced.get("assignment_id") for produced in produced_assignments
                 }
@@ -4601,11 +5106,43 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                     and isinstance(event.get("payload"), Mapping)
                 }
                 if (
-                    len(produced_assignments) != 1
-                    or produced_assignments[0].get("node_id")
+                    not isinstance(continuation_assignment, Mapping)
+                    or not isinstance(assignment, Mapping)
+                    or (
+                        not source_journals
+                        and assignment.get("status") not in {"failed", "blocked"}
+                    )
+                    or (
+                        source_journals
+                        and assignment.get("status") != "completed"
+                    )
+                    or continuation_assignment.get("occurrence_id")
+                    != assignment.get("occurrence_id")
+                    or continuation_assignment.get("node_id")
+                    != assignment.get("node_id")
+                    or continuation_assignment.get("graph_revision")
+                    != assignment.get("graph_revision")
+                    or continuation_assignment.get("source_kind")
+                    != assignment.get("source_kind")
+                    or continuation_assignment.get("source_result_keys")
+                    != assignment.get("source_result_keys")
+                    or continuation_assignment.get("integration_id")
+                    != assignment.get("integration_id")
+                    or continuation_assignment.get("rework_cycle")
+                    != assignment.get("rework_cycle")
+                    or continuation_assignment.get("node_id")
                     != parameters.get("node_id")
-                    or produced_assignments[0].get("source_commit")
+                    or continuation_assignment.get("source_commit")
                     != parameters.get("source_commit")
+                    or len(source_journals) > 1
+                    or (
+                        len(source_journals) == 1
+                        and (
+                            source_journals[0].get("state")
+                            != "REVIEWS_ACCEPTED"
+                            or source_journals[0].get("disposition") != "accepted"
+                        )
+                    )
                     or produced_assignment_ids != produced_outbox_assignment_ids
                     or len(produced_outbox_event_ids) != 1
                     or set(raw_produced_ids)
@@ -5458,10 +5995,66 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     ):
         add("PREPARING_STATE_HAS_ACTIVATED_WORK")
 
+    stranded_rework_limit_token_ids: set[str] = set()
+    current_definition = (
+        revision_by_number.get(graph_revision, {}).get("definition")
+        if valid_graph_revision
+        else None
+    )
+    available_tokens_by_target: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for token_id, token in token_by_id.items():
+        target_node_id = token.get("target_node_id")
+        if token.get("status") == "available" and isinstance(target_node_id, str):
+            available_tokens_by_target.setdefault(target_node_id, []).append(
+                (token_id, token)
+            )
+    for target_node_id, target_tokens in available_tokens_by_target.items():
+        target_node = nodes_by_revision.get(graph_revision, {}).get(target_node_id)
+        if (
+            not isinstance(target_node, Mapping)
+            or target_node.get("type", "task") != "task"
+            or target_node.get("activation_policy", "all_parents")
+            != "all_parents"
+        ):
+            continue
+        parent_order = target_node.get("join_parent_order")
+        if not isinstance(parent_order, list):
+            parent_order = definition_inbound_parent_ids(
+                current_definition, target_node_id
+            )
+        available_parent_ids = {
+            str(token.get("source_node_id")) for _token_id, token in target_tokens
+        }
+        missing_parent_ids = {
+            str(parent_id) for parent_id in parent_order
+        } - available_parent_ids
+        capped_parent_ids: set[str] = set()
+        for assignment_id in rework_limit_assignment_ids:
+            assignment = assignment_by_id.get(assignment_id)
+            if (
+                isinstance(assignment, Mapping)
+                and isinstance(assignment.get("node_id"), str)
+            ):
+                capped_parent_ids.add(str(assignment["node_id"]))
+        if missing_parent_ids.intersection(capped_parent_ids):
+            stranded_rework_limit_token_ids.update(
+                token_id for token_id, _token in target_tokens
+            )
+
     if status in {"completed", "failed", "blocked"}:
         terminal_tokens = [
             token for token in token_by_id.values() if token.get("status") == "terminal"
         ]
+        emitted_by_occurrence = {
+            token.get("source_occurrence_id") for token in token_by_id.values()
+        }
+        terminal_branch_coverage = (
+            emitted_by_occurrence | rework_limit_occurrence_ids
+        )
+        rework_limit_block = bool(
+            rework_limit_context_ids
+            and set(occurrence_by_id).issubset(terminal_branch_coverage)
+        )
         terminal_manifest_statuses = {
             nodes_by_revision.get(token.get("target_graph_revision"), {})
             .get(token.get("target_node_id"), {})
@@ -5473,19 +6066,22 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             if "FAILED" in terminal_manifest_statuses
             else "blocked"
             if "BLOCKED_EXTERNAL" in terminal_manifest_statuses
+            or rework_limit_block
             else "completed"
             if terminal_manifest_statuses == {"DONE"}
             else None
         )
-        if isinstance(workflow, Mapping) and not terminal_tokens:
+        if (
+            isinstance(workflow, Mapping)
+            and not terminal_tokens
+            and not rework_limit_block
+        ):
             add("TERMINAL_TOKEN_PROOF_MISSING")
-        if terminal_tokens and status != expected_terminal_status:
+        if expected_terminal_status is not None and status != expected_terminal_status:
             add("TERMINAL_STATUS_MISMATCH")
-        emitted_by_occurrence = {
-            token.get("source_occurrence_id") for token in token_by_id.values()
-        }
-        if isinstance(workflow, Mapping) and not set(occurrence_by_id).issubset(
-            emitted_by_occurrence
+        if (
+            isinstance(workflow, Mapping)
+            and not set(occurrence_by_id).issubset(terminal_branch_coverage)
         ):
             add("TERMINAL_BRANCH_PROOF_MISSING")
         live_occurrences = {
@@ -5510,7 +6106,29 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 process.get("state") in live_process_states
                 for process in process_by_id.values()
             )
-            or any(token.get("status") == "available" for token in token_by_id.values())
+            or (
+                not legacy_runtime_v1
+                and not migrated_runtime_v1
+                and any(
+                    recovery.get("status") == "pending"
+                    and recovery.get("action")
+                    in {
+                        "APPLY_REPAIR",
+                        "CONTINUE_NODE",
+                        "ROUTE_REWORK",
+                        "BLOCK_EXTERNAL",
+                    }
+                    and isinstance(workflow, Mapping)
+                    and recovery.get("context_id")
+                    not in settled_recovery_context_ids
+                    for recovery in recovery_by_id.values()
+                )
+            )
+            or any(
+                token.get("status") == "available"
+                and token_id not in stranded_rework_limit_token_ids
+                for token_id, token in token_by_id.items()
+            )
             or any(event.get("status") == "pending" for event in outbox_by_id.values())
         ):
             add("TERMINAL_STATE_HAS_LIVE_WORK")
@@ -5524,11 +6142,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 not terminal_tokens
                 or any(
                     occurrence.get("state") != "completed"
-                    for occurrence in occurrence_by_id.values()
+                    and occurrence_id not in rework_limit_occurrence_ids
+                    for occurrence_id, occurrence in occurrence_by_id.items()
                 )
                 or any(
                     assignment.get("status") != "completed"
-                    for assignment in assignment_by_id.values()
+                    and assignment_id not in rework_limit_assignment_ids
+                    for assignment_id, assignment in assignment_by_id.items()
                 )
                 or not completed_occurrence_ids.issubset(emitted_by_occurrence)
             ):
@@ -5673,12 +6293,17 @@ def managed_project_control_invariant_issues(
                 if isinstance(token, int) and not isinstance(token, bool):
                     successful_sprints_by_token.append((token, sprint_id))
 
+    recovery_parent_ids: set[str] = set()
     for record in records:
         if not isinstance(record, Mapping):
             continue
         parent_attempt_id = record.get("recovery_of_attempt_id")
         if parent_attempt_id is None:
             continue
+        if parent_attempt_id in recovery_parent_ids:
+            issues.append("START_RECOVERY_CHILD_DUPLICATE")
+        elif isinstance(parent_attempt_id, str):
+            recovery_parent_ids.add(parent_attempt_id)
         parent = record_by_attempt.get(parent_attempt_id)
         if (
             not isinstance(parent, Mapping)
@@ -5797,6 +6422,7 @@ __all__ = [
     "SprintTypeSelection",
     "SprintTypeUnsupported",
     "StartSprintFromGitRequest",
+    "apply_managed_repair_patch",
     "canonical_json_bytes",
     "canonical_json_sha256",
     "canonical_tuple_bytes",
@@ -5806,6 +6432,7 @@ __all__ = [
     "git_ref_format_valid",
     "managed_manifest_schema",
     "managed_activation_invariant_issues",
+    "managed_blocker_fingerprint",
     "managed_graph_semantic_issues",
     "managed_integration_id",
     "managed_integration_workspace_id",

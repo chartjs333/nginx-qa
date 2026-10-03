@@ -184,6 +184,43 @@ class PendingSprintsUiTests(unittest.TestCase):
         ):
             self.assertIn(marker, source)
 
+    def test_proxy_html_timeout_is_reconciled_without_raw_json_error(self) -> None:
+        for marker in (
+            "async function pendingSprintsResponseJson(response, fallback)",
+            'raw.trimStart().startsWith("<")',
+            "HTML-страницу прокси вместо JSON",
+        ):
+            self.assertIn(marker, self.javascript)
+        start_source = re.search(
+            r"async function startPendingSprint\(.*?\) \{(.*?)\n    \}\n\n"
+            r"    function applyPendingSprintsDeepLink",
+            self.javascript,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(start_source)
+        source = start_source.group(1)
+        for marker in (
+            "catch (responseError)",
+            "await refreshPendingSprints();",
+            "промежуточный ответ прокси был потерян",
+            "повторно загружать файл не нужно",
+        ):
+            self.assertIn(marker, source)
+        lost_response_branch = re.search(
+            r"if \(!refreshed\) \{(.*?)\n\s*return;",
+            source,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(lost_response_branch)
+        for marker in (
+            "await refreshAgents();",
+            "refreshQueues()",
+            "refreshScheduledTasks()",
+            "refreshHistory()",
+            "refreshProjectSprints()",
+        ):
+            self.assertIn(marker, lost_response_branch.group(1))
+
     @unittest.skipUnless(shutil.which("node"), "Node.js is required for JS syntax check")
     def test_rendered_javascript_passes_node_syntax_check(self) -> None:
         result = subprocess.run(

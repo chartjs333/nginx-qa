@@ -369,46 +369,75 @@ class BranchLeaseStore:
         try:
             with self._connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                row = connection.execute(
-                    "SELECT * FROM branch_leases WHERE lease_id = ?", (lease_id,)
-                ).fetchone()
-                if row is None:
-                    raise BranchLeaseError(
-                        "BRANCH_LEASE_NOT_FOUND", "branch lease does not exist"
-                    )
-                lease = _row_to_lease(row)
-                if lease.assignment_id != assignment_id:
-                    raise BranchLeaseError(
-                        "BRANCH_LEASE_OWNER_MISMATCH",
-                        "only the owning assignment may release a branch lease",
-                    )
-                if lease.status == "released":
-                    connection.commit()
-                    return lease
-                if not assignment_settled or not all_processes_stopped:
-                    raise BranchLeaseError(
-                        "BRANCH_LEASE_RELEASE_BLOCKED",
-                        "assignment must be settled and every owned process stopped",
-                    )
-                released_at = datetime.now(timezone.utc).isoformat()
-                connection.execute(
-                    """
-                    UPDATE branch_leases
-                    SET status = 'released', released_at = ?
-                    WHERE lease_id = ? AND status = 'active'
-                    """,
-                    (released_at, lease_id),
+                released = self.release_in_transaction(
+                    connection,
+                    lease_id,
+                    assignment_id,
+                    assignment_settled=assignment_settled,
+                    all_processes_stopped=all_processes_stopped,
+                    released_at=datetime.now(timezone.utc).isoformat(),
                 )
-                updated = connection.execute(
-                    "SELECT * FROM branch_leases WHERE lease_id = ?", (lease_id,)
-                ).fetchone()
                 connection.commit()
         except sqlite3.OperationalError as exc:
             raise BranchLeaseError(
                 "BRANCH_LEASE_STORE_UNAVAILABLE",
                 f"branch lease transaction failed: {exc.__class__.__name__}",
             ) from None
-        assert updated is not None
+        return released
+
+    @staticmethod
+    def release_in_transaction(
+        connection: sqlite3.Connection,
+        lease_id: str,
+        assignment_id: str,
+        *,
+        assignment_settled: bool,
+        all_processes_stopped: bool,
+        released_at: str,
+    ) -> BranchLease:
+        """Release a writer inside the caller's existing SQLite transaction.
+
+        Continuity settlement must change the normalized branch owner and the
+        matching runtime snapshot atomically.  The standalone :meth:`release`
+        method delegates here so both paths retain identical ownership and
+        lifecycle checks.
+        """
+
+        row = connection.execute(
+            "SELECT * FROM branch_leases WHERE lease_id = ?", (lease_id,)
+        ).fetchone()
+        if row is None:
+            raise BranchLeaseError(
+                "BRANCH_LEASE_NOT_FOUND", "branch lease does not exist"
+            )
+        lease = _row_to_lease(row)
+        if lease.assignment_id != assignment_id:
+            raise BranchLeaseError(
+                "BRANCH_LEASE_OWNER_MISMATCH",
+                "only the owning assignment may release a branch lease",
+            )
+        if lease.status == "released":
+            return lease
+        if not assignment_settled or not all_processes_stopped:
+            raise BranchLeaseError(
+                "BRANCH_LEASE_RELEASE_BLOCKED",
+                "assignment must be settled and every owned process stopped",
+            )
+        connection.execute(
+            """
+            UPDATE branch_leases
+            SET status = 'released', released_at = ?
+            WHERE lease_id = ? AND status = 'active'
+            """,
+            (released_at, lease_id),
+        )
+        updated = connection.execute(
+            "SELECT * FROM branch_leases WHERE lease_id = ?", (lease_id,)
+        ).fetchone()
+        if updated is None:
+            raise BranchLeaseError(
+                "BRANCH_LEASE_NOT_FOUND", "branch lease disappeared during release"
+            )
         return _row_to_lease(updated)
 
     def get(self, lease_id: str) -> BranchLease | None:

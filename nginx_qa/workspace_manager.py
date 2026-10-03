@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 import hashlib
 import os
@@ -9,7 +10,7 @@ from pathlib import Path
 import re
 import stat
 import sys
-from typing import Literal
+from typing import Iterator, Literal
 import uuid
 
 from .branch_leases import (
@@ -40,6 +41,9 @@ from .sprint_types import (
 
 
 _COMMIT_ID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+_INTEGRATION_WORKSPACE_ID = re.compile(
+    r"integration-workspace-[0-9a-f]{64}\Z"
+)
 _ACCESS_VALUES = frozenset({"read", "write"})
 _POLICIES = frozenset(
     {"create", "resume", "reject_if_exists", "require_exact_head"}
@@ -317,6 +321,153 @@ class ManagedWorkspaceManager:
                 )
         self._assert_no_parent_repository(root)
         return root
+
+    def integration_workspace_root(self, workspace_artifact_id: str) -> Path:
+        """Return one isolated, non-redirected integration workspace root."""
+
+        if _INTEGRATION_WORKSPACE_ID.fullmatch(workspace_artifact_id) is None:
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "integration workspace identity is invalid",
+            )
+        root = self.managed_root / "integration-workspaces" / workspace_artifact_id
+        resolved_candidate = _resolve_from_nearest_existing(root)
+        if _path_key(root.absolute()) != _path_key(resolved_candidate):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "integration workspace path contains a symlink or junction alias",
+            )
+        if not _is_strictly_within(resolved_candidate, self.managed_root):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_FORBIDDEN",
+                "integration workspace escaped the managed root",
+            )
+        for forbidden in (*self.protected_roots, *self.install_roots):
+            if _paths_overlap(resolved_candidate, forbidden):
+                raise WorkspaceError(
+                    "WORKSPACE_ROOT_FORBIDDEN",
+                    "integration workspace overlaps a protected root",
+                )
+        self._assert_no_parent_repository(root)
+        return root
+
+    def integration_workspace_lock_path(self, workspace_artifact_id: str) -> Path:
+        return self._workspace_lock_path(
+            self.integration_workspace_root(workspace_artifact_id)
+        )
+
+    def verify_integration_workspace(
+        self,
+        workspace_artifact_id: str,
+        repository: ManagedRepository,
+        parent_commits: tuple[str, ...],
+    ) -> Path:
+        """Verify an integration checkout owns all Git storage and frozen refs."""
+
+        if len(parent_commits) < 2 or any(
+            _COMMIT_ID.fullmatch(commit) is None for commit in parent_commits
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "integration parent identity is invalid",
+            )
+        root = self.integration_workspace_root(workspace_artifact_id)
+        if not root.is_dir() or root.is_symlink():
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "integration workspace root is missing or redirected",
+            )
+        resolved = Path(os.path.realpath(root.resolve(strict=True)))
+        if _path_key(root.absolute()) != _path_key(resolved):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "integration workspace root resolves to another path",
+            )
+        self._verify_git_root_only(
+            root, expected_object_format=repository.object_format
+        )
+        self._verify_remote(root, repository.spec)
+        for index, expected_commit in enumerate(parent_commits, 1):
+            actual = self.git_provider.runner.run(
+                (
+                    "-C",
+                    str(root),
+                    "rev-parse",
+                    "--verify",
+                    f"refs/nginx-qa/parents/{index}^{{commit}}",
+                ),
+                error_code="WORKSPACE_VERIFY_FAILED",
+            ).stdout.strip().lower()
+            if actual != expected_commit:
+                raise WorkspaceError(
+                    "WORKSPACE_HEAD_MISMATCH",
+                    "integration parent ref changed",
+                )
+        return root
+
+    def _workspace_lock_path(self, expected_root: Path) -> Path:
+        lock_digest = hashlib.sha256(
+            os.path.normcase(str(expected_root)).encode("utf-8")
+        ).hexdigest()
+        lock_path = self.workspace_locks_root / f"workspace-{lock_digest}.lock"
+        lock_root = _resolve_from_nearest_existing(self.workspace_locks_root)
+        if (
+            _path_key(self.workspace_locks_root.absolute()) != _path_key(lock_root)
+            or not _is_strictly_within(lock_root, self.managed_root)
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "workspace lock root contains a symlink or junction alias",
+            )
+        resolved_lock_path = _resolve_from_nearest_existing(lock_path)
+        if (
+            _path_key(lock_path.absolute()) != _path_key(resolved_lock_path)
+            or not _is_strictly_within(resolved_lock_path, self.managed_root)
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH", "workspace lock path is redirected"
+            )
+        return lock_path
+
+    @contextmanager
+    def verify_result(
+        self,
+        request: WorkspaceRequest,
+        repository: ManagedRepository,
+        *,
+        expected_root: Path,
+        result_commit: str,
+        branch_lease_id: str | None,
+    ) -> Iterator[ManagedWorkspace]:
+        """Hold the workspace fence through result verification and commit.
+
+        The caller performs its durable SQLite mutation inside this context.
+        Keeping the lock held closes the otherwise exploitable gap between a
+        clean/HEAD observation and publication of the immutable result receipt.
+        """
+
+        canonical_root = self.expected_root(request)
+        if os.path.normcase(str(canonical_root)) != os.path.normcase(
+            str(expected_root.resolve(strict=False))
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "durable workspace root differs from its canonical assignment root",
+            )
+        lock_path = self._workspace_lock_path(canonical_root)
+        try:
+            with ManagedFileLock(lock_path, timeout=self.workspace_lock_timeout):
+                yield self.verify(
+                    request,
+                    repository,
+                    expected_root=canonical_root,
+                    expected_initial_head=result_commit,
+                    branch_lease_id=branch_lease_id,
+                )
+        except FileLockTimeout:
+            raise WorkspaceError(
+                "WORKSPACE_LOCK_TIMEOUT", "timed out waiting for the workspace lock"
+            ) from None
 
     @staticmethod
     def _assert_no_parent_repository(
