@@ -345,6 +345,34 @@ class StagingQualificationRunnerTests(unittest.TestCase):
         self.assertIsInstance(proxy_handler, runner.urllib.request.ProxyHandler)
         self.assertEqual(proxy_handler.proxies, {})
 
+    def test_http_client_forwards_the_exact_configured_timeout(self) -> None:
+        class FakeResponse:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            @staticmethod
+            def geturl() -> str:
+                return "http://127.0.0.1:18025/health"
+
+            @staticmethod
+            def read(_limit: int) -> bytes:
+                return b"{}"
+
+        client = runner.LoopbackJsonClient(
+            "http://127.0.0.1:18025",
+            timeout=37.5,
+        )
+        with patch.object(
+            client._opener, "open", return_value=FakeResponse()
+        ) as open_request:
+            self.assertEqual(client.request("GET", "/health"), (200, {}))
+        self.assertEqual(open_request.call_args.kwargs["timeout"], 37.5)
+
     def test_context_key_is_unique_and_repository_bound(self) -> None:
         self.assertEqual(
             runner.build_context_key(
@@ -1325,10 +1353,12 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             _, start_response = runtime_fixture()
             start_response["deduplicated"] = True
             calls: list[str] = []
+            client_configs: list[tuple[str, float]] = []
 
             class FakeClient:
-                def __init__(self, base_url: str) -> None:
+                def __init__(self, base_url: str, *, timeout: float) -> None:
                     self.base_url = base_url
+                    client_configs.append((base_url, timeout))
 
                 def request(self, method: str, path: str, payload=None):
                     self.assert_post(method)
@@ -1371,6 +1401,10 @@ class StagingQualificationRunnerTests(unittest.TestCase):
                 result = runner.prepare(config)
             self.assertEqual(result["status"], "awaiting_external_restart")
             self.assertEqual(len(calls), 2)
+            self.assertEqual(
+                client_configs,
+                [(config.staging_url, config.timeout_seconds)],
+            )
             self.assertEqual(marker_mock.call_count, 3)
             self.assertEqual(host_mock.call_count, 4)
 

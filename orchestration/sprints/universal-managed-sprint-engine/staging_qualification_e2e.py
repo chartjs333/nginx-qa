@@ -2609,6 +2609,13 @@ def _require_same_staging_owner(
         raise QualificationError("staging listener ownership changed before HTTP POST")
 
 
+def _staging_client(config: PrepareConfig) -> LoopbackJsonClient:
+    return LoopbackJsonClient(
+        config.staging_url,
+        timeout=config.timeout_seconds,
+    )
+
+
 def prepare(config: PrepareConfig) -> dict[str, Any]:
     config = validate_config(config)
     git_proof = validate_git_source(config)
@@ -2670,7 +2677,7 @@ def prepare(config: PrepareConfig) -> dict[str, Any]:
         atomic_write_json(config.evidence_path, evidence)
     elif listener_before != host_proof["pid"]:
         raise QualificationError("pre-restart listener evidence differs from ownership proof")
-    client = LoopbackJsonClient(config.staging_url)
+    client = _staging_client(config)
     project_body = {
         "git_address": config.git_address,
         "git_context_key": inputs["git_context_key"],
@@ -2811,7 +2818,7 @@ def verify_after_restart(
     if pre_restart.get("child_os_ownership") != child_os:
         raise QualificationError("child OS/Job ownership changed across host restart")
     inputs = evidence["inputs"]
-    client = LoopbackJsonClient(config.staging_url)
+    client = _staging_client(config)
     start_path = f"/api/v1/projects/{urllib.parse.quote(project_id, safe='')}/sprints/start-from-git"
     _require_same_staging_owner(config, marker_proof, host_after)
     replay_status, replay = client.request("POST", start_path, _start_request(inputs))
