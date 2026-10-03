@@ -36,14 +36,14 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
-          "restart_policy": "never",
-          "max_restart_attempts": 0,
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
           "restart_backoff_seconds": 0,
-          "resource_limits": {"wall_time_seconds": 600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
         }
       },
       "transitions": {"DONE": "completed"}
@@ -55,14 +55,14 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
-          "restart_policy": "never",
-          "max_restart_attempts": 0,
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
           "restart_backoff_seconds": 0,
-          "resource_limits": {"wall_time_seconds": 600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
         }
       },
       "transitions": {"DONE": "completed"}
@@ -74,14 +74,14 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
-          "restart_policy": "never",
-          "max_restart_attempts": 0,
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
           "restart_backoff_seconds": 0,
-          "resource_limits": {"wall_time_seconds": 600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
         }
       },
       "transitions": {"DONE": "completed"}
@@ -93,14 +93,14 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
-          "restart_policy": "never",
-          "max_restart_attempts": 0,
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
           "restart_backoff_seconds": 0,
-          "resource_limits": {"wall_time_seconds": 600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
         }
       },
       "transitions": {"DONE": "completed"}
