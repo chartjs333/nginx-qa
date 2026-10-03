@@ -23,21 +23,25 @@ virtual environment: C:\nginx-qa-staging-state\umse-007\.venv
 runtime root: C:\nginx-qa-staging-state\umse-007\runtime_state
 prompt root: C:\nginx-qa-staging-state\umse-007\prompt
 managed root: C:\nginx-qa-staging-state\umse-007\managed
+legacy state root: C:\nginx-qa-staging-state\umse-007\legacy
 host: 127.0.0.1
 HTTP port: 18025
 managed child ports: 18100-18199
 ```
 
-`runtime_root`, `prompt_root`, `managed_root`, and the virtual environment are
-disjoint children of one dedicated owned state base. The state base and
+`runtime_root`, `prompt_root`, `managed_root`, `legacy state root`, and the
+virtual environment are disjoint children of one dedicated owned state base. The state base and
 `service_root` are disjoint. These authoritative mutable roots must not be
 created below the service checkout: that layout violates the frozen runtime
-configuration invariant and is rejected before startup. The launcher writes one
-ignored compatibility artifact at
-`service_root/runtime_state/sequential-prompt-settings.json`; it contains only
-routing templates that point to the isolated prompt root, and its exact path and
-content are guarded before startup. It is not an authoritative runtime, prompt,
-managed, or virtual-environment root.
+configuration invariant and is rejected before startup. A staging-only ASGI
+entry point rebinds every legacy mutable path (history, registries, pending
+sprints, attachments, screenshots and evidence) into the owned `legacy` root
+before the legacy application is imported. All corresponding top-level paths in
+the service checkout must remain absent. The ignored compatibility directory
+`service_root/runtime_state` may be absent; if it already exists on an owned
+restart, it must contain exactly one direct, non-reparse
+`sequential-prompt-settings.json` with the isolated prompt templates. The
+launcher does not create or use that compatibility file.
 
 На этой машине `D:\.git` является внешним repository marker, поэтому mutable
 roots и `.venv` размещаются под свежим dedicated base на `C:`; service checkout
@@ -74,6 +78,14 @@ Staging использует отдельные:
 - tunnel files;
 - PID/process records;
 - repository mirror/workspace root.
+
+The launcher starts `staging_host_app:app`, not `main:app`. The wrapper validates
+the exact service root, owned state base, ownership marker, protected-root
+separation and canonical non-reparse `legacy` root before importing `main`, then
+recursively rejects every existing symlink, junction, reparse point, or canonical
+alias below that root and rebinds all ten legacy mutable globals. Legacy queues
+and scheduled state follow the rebound history parent into
+`legacy/runtime_state`.
 
 ## Staging launcher
 
@@ -128,6 +140,13 @@ cleanup -> cleaned_awaiting_live_after
 finalize -> passed
 ```
 
+Внутри `prepare` каждый mutating POST имеет отдельный durable checkpoint:
+`project_intent_recorded` и `start_intent_recorded` записывают exact method/path/body
+до запроса. Resume повторяет только неоднозначный запрос с тем же intent;
+`project_provisioned` не создаёт project повторно, а `start_accepted` вообще не
+делает POST. Сохранённые intent/project/start proofs проверяются до следующего
+запроса и при несовпадении не перезаписываются.
+
 Сначала в отдельной host-консоли запустить staging через launcher. Все три команды
 принимают только полный SHA, который одновременно является локальным HEAD и
 remote head назначенной ветки:
@@ -146,13 +165,16 @@ $sha = (git rev-parse HEAD).Trim()
 консоль до checkpoint `awaiting_external_restart`.
 
 В рабочей консоли создать уникальные пути evidence и внешнего baseline. Snapshot
-tool не обращается к live по HTTP: он проверяет единственного OS-владельца
-`0.0.0.0:8025`, process start time, clean Git
-и два одинаковых обхода metadata
-точного durable-state scope: обязательных top-level state-файлов и всех non-log
-файлов `runtime_state`. Canonical hash использует ordinal `/`-path, size и UTC
-mtime ticks. Reparse points запрещены. Tool отказывается перезаписывать
-существующий JSON:
+tool выполняет единственный разрешённый read-only health check: proxyless GET без
+redirect на exact `http://127.0.0.1:8025/`, ожидает HTTP 200 и `text/html`, но не
+читает response body. Дополнительно он проверяет единственного OS-владельца
+`0.0.0.0:8025`, process start time и Git ref identity (`HEAD` и branch). Tool не
+читает и не перечисляет live state, queue либо `runtime_state`, а также не
+запускает Git status по live worktree. Output допускается только как новый
+безопасный `.json` leaf непосредственно внутри exact owned evidence root. Каждый
+существующий ancestor state base, ownership marker, evidence root и output
+проверяется на canonical path и отсутствие reparse point до любого write;
+UNC/device paths, ADS, reserved device names и trailing dot/space запрещены.
 
 ```powershell
 $repoRoot = (Resolve-Path .).Path
@@ -210,10 +232,13 @@ host-консоли и дождаться освобождения `18025`. За
 & $childPython -B $runner cleanup --evidence $evidence
 ```
 
-`cleanup` использует production supervisor для authenticated stop всех четырёх
-Windows Jobs, проверяет `STOPPED`, released leases и отсутствие listener на
-`18025,18100-18199`. Только после статуса `cleaned_awaiting_live_after` снять новый
-внешний live snapshot и завершить run:
+Перед созданием writable store/supervisor `cleanup` повторно читает SQLite только
+в read-only режиме и exact-сверяет sprint/fencing token, процессы, leases, child
+health, listener owners и Windows Job identities с `post_restart`. Любой drift
+завершает фазу до первого `stop()`. Затем production supervisor выполняет
+authenticated stop всех четырёх Windows Jobs; runner проверяет `STOPPED`, released
+leases и отсутствие listener на `18025,18100-18199`. Только после статуса
+`cleaned_awaiting_live_after` снять новый внешний live snapshot и завершить run:
 
 ```powershell
 & $snapshotTool -OutputPath $liveAfter
@@ -223,18 +248,18 @@ Windows Jobs, проверяет `STOPPED`, released leases и отсутств�
 ```
 
 Baseline, after-snapshot и evidence — три разных файла внутри exact owned evidence
-root. `finalize` требует свежий after-snapshot, снятый позже cleanup, exact scope и
-canonical-hash algorithm, точное совпадение live PID/start time, port,
-durable-state metadata и Git identity, а также повторно проверяет отсутствие всех
-staging listeners. Любое отклонение завершает run без `passed`.
+root. `finalize` требует свежий after-snapshot, снятый позже cleanup, exact schema и
+точное совпадение live PID/start time, port, read-only health result и Git
+identity, а также повторно проверяет отсутствие всех staging listeners. Любое
+отклонение завершает run без `passed`.
 
 ## Live health guard
 
 `capture_live_snapshot.ps1` выполняется непосредственно перед `prepare` и только
-после `cleanup`. Он не делает HTTP-запросов и ничего не записывает в live checkout.
-Изменение live PID, владельца порта, Git identity либо metadata файла из exact
-durable-state scope — квалификационный FAIL. Append-only transport/server `.log`
-исключены явно и не могут маскировать изменение durable state.
+после `cleanup`. Он делает только разрешённый read-only GET корневого live
+endpoint и ничего не записывает в live checkout. Изменение live PID, владельца
+порта, health result либо Git identity — квалификационный FAIL. Live filesystem
+state не является входом квалификации и остаётся полностью недоступным helper'у.
 
 ## Promotion
 

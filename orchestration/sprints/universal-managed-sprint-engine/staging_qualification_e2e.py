@@ -82,10 +82,6 @@ EXPECTED_RESOURCE_LIMITS = {
 EXPECTED_MANIFEST_SHA256 = (
     "41160737c713116d898bee907a35a3b393912c02444ecc140ae41112ad3a70fa"
 )
-LIVE_DURABLE_SCOPE = "nginx-qa:live-durable-state:v1"
-LIVE_DURABLE_ALGORITHM = (
-    "sha256:utf8:ordinal-posix-path-nul-size-nul-mtime-utc-ticks-lf:v1"
-)
 MAX_HTTP_BODY_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_AGE_SECONDS = 15 * 60
 MAX_PROCESS_CHAIN_DEPTH = 16
@@ -2161,7 +2157,7 @@ def validate_host_listener_ownership(
         "-B",
         "-m",
         "uvicorn",
-        "main:app",
+        "staging_host_app:app",
         "--host",
         "127.0.0.1",
         "--port",
@@ -2243,14 +2239,14 @@ def _scan_sensitive_keys(value: Any, path: str = "$") -> None:
 
 
 def validate_external_live_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
-    expected_top = {"schema_version", "captured_at", "listener", "files", "git"}
+    expected_top = {"schema_version", "captured_at", "listener", "health", "git"}
     if set(value) != expected_top or not _is_exact_int(
-        value.get("schema_version"), expected=1
+        value.get("schema_version"), expected=2
     ):
         raise QualificationError("external live snapshot schema is invalid")
     captured_at = value.get("captured_at")
     listener = value.get("listener")
-    files = value.get("files")
+    health = value.get("health")
     git = value.get("git")
     if not isinstance(captured_at, str) or not captured_at.strip():
         raise QualificationError("external live snapshot capture time is missing")
@@ -2270,50 +2266,33 @@ def validate_external_live_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
         or not str(listener.get("started_at")).strip()
     ):
         raise QualificationError("external live listener identity is invalid")
-    if not isinstance(files, Mapping) or set(files) != {
-        "root",
-        "scope",
-        "algorithm",
-        "count",
-        "total_bytes",
-        "metadata_sha256",
-        "newest_write_utc",
+    if not isinstance(health, Mapping) or set(health) != {
+        "endpoint",
+        "method",
+        "status_code",
+        "content_type",
     }:
-        raise QualificationError("external live file snapshot is invalid")
-    file_count = files.get("count")
-    total_bytes = files.get("total_bytes")
-    metadata_sha256 = files.get("metadata_sha256")
+        raise QualificationError("external live health snapshot is invalid")
     if (
-        _path_key(files.get("root")) != _path_key(str(EXPECTED_LIVE_ROOT))
-        or files.get("scope") != LIVE_DURABLE_SCOPE
-        or files.get("algorithm") != LIVE_DURABLE_ALGORITHM
-        or not isinstance(file_count, int)
-        or isinstance(file_count, bool)
-        or file_count <= 0
-        or not isinstance(total_bytes, int)
-        or isinstance(total_bytes, bool)
-        or total_bytes < 0
-        or not isinstance(metadata_sha256, str)
-        or re.fullmatch(r"[0-9a-f]{64}", metadata_sha256) is None
-        or not isinstance(files.get("newest_write_utc"), str)
-        or not str(files.get("newest_write_utc")).strip()
+        health.get("endpoint") != "http://127.0.0.1:8025/"
+        or health.get("method") != "GET"
+        or not _is_exact_int(health.get("status_code"), expected=200)
+        or health.get("content_type") != "text/html"
     ):
-        raise QualificationError("external live file identity is invalid")
-    if not isinstance(git, Mapping) or set(git) != {"head", "branch", "status"}:
+        raise QualificationError("external live health identity is invalid")
+    if not isinstance(git, Mapping) or set(git) != {"head", "branch"}:
         raise QualificationError("external live Git snapshot is invalid")
     if (
         not isinstance(git.get("head"), str)
         or HEX_SHA_RE.fullmatch(str(git.get("head"))) is None
         or not isinstance(git.get("branch"), str)
         or not str(git.get("branch")).strip()
-        or git.get("status") != "clean"
     ):
         raise QualificationError("external live Git identity is invalid")
     parsed_times: dict[str, datetime] = {}
     for label, timestamp in (
         ("capture", captured_at),
         ("listener start", listener.get("started_at")),
-        ("newest file write", files.get("newest_write_utc")),
     ):
         try:
             parsed = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
@@ -2324,10 +2303,7 @@ def validate_external_live_snapshot(value: Mapping[str, Any]) -> dict[str, Any]:
         if parsed.tzinfo is None:
             raise QualificationError(f"external live {label} time needs a timezone")
         parsed_times[label] = parsed.astimezone(timezone.utc)
-    if (
-        parsed_times["listener start"] > parsed_times["capture"]
-        or parsed_times["newest file write"] > parsed_times["capture"]
-    ):
+    if parsed_times["listener start"] > parsed_times["capture"]:
         raise QualificationError("external live snapshot timestamps are not causal")
     _scan_sensitive_keys(value)
     return deepcopy(dict(value))
@@ -2393,7 +2369,7 @@ def compare_external_live_snapshots(before: Mapping[str, Any], after: Mapping[st
     if not _json_exact_equal(
         _without_capture_times(checked_before), _without_capture_times(checked_after)
     ):
-        raise QualificationError("external live PID/port/file snapshot changed")
+        raise QualificationError("external live listener/health/Git snapshot changed")
 
 
 def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -2485,19 +2461,125 @@ def _start_request(inputs: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _request_intent(path: str, payload: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "method": "POST",
+        "path": path,
+        "payload": deepcopy(dict(payload)),
+    }
+
+
+def _require_exact_request_intent(
+    evidence: Mapping[str, Any],
+    key: str,
+    expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    actual = evidence.get(key)
+    if not isinstance(actual, Mapping) or not _json_exact_equal(actual, expected):
+        raise QualificationError(f"saved {key} does not match the exact request")
+    return deepcopy(dict(actual))
+
+
+_PREPARE_BASE_KEYS = {
+    "schema_version",
+    "qualification",
+    "status",
+    "created_at",
+    "updated_at",
+    "inputs",
+    "git",
+    "ownership_marker",
+    "pre_restart_host",
+    "external_live_baseline",
+    "checks",
+}
+_PREPARE_STAGE_KEYS = {
+    "initialized": set(),
+    "host_observed": {"pre_restart_listener_pid"},
+    "project_intent_recorded": {
+        "pre_restart_listener_pid",
+        "project_request_intent",
+    },
+    "project_provisioned": {
+        "pre_restart_listener_pid",
+        "project_request_intent",
+        "project",
+    },
+    "start_intent_recorded": {
+        "pre_restart_listener_pid",
+        "project_request_intent",
+        "project",
+        "start_request_intent",
+    },
+    "start_accepted": {
+        "pre_restart_listener_pid",
+        "project_request_intent",
+        "project",
+        "start_request_intent",
+        "start_http_status",
+        "start_response",
+    },
+}
+
+
+def _validate_prepare_checkpoint_shape(evidence: Mapping[str, Any]) -> str:
+    status = evidence.get("status")
+    stage_keys = _PREPARE_STAGE_KEYS.get(status)
+    if stage_keys is None:
+        raise QualificationError("prepare checkpoint status is not resumable")
+    if set(evidence) != _PREPARE_BASE_KEYS | stage_keys:
+        raise QualificationError(f"{status} prepare checkpoint shape is not exact")
+    return str(status)
+
+
+def _write_prepare_checkpoint(path: Path, evidence: Mapping[str, Any]) -> None:
+    _validate_prepare_checkpoint_shape(evidence)
+    atomic_write_json(path, evidence)
+
+
+def _record_exact_proof(evidence: dict[str, Any], key: str, value: Any) -> None:
+    if key in evidence:
+        if not _json_exact_equal(evidence[key], value):
+            raise QualificationError(f"saved {key} differs from the accepted proof")
+        return
+    evidence[key] = deepcopy(value)
+
+
 def _assert_project_response(
-    payload: Mapping[str, Any], inputs: Mapping[str, Any]
+    status: int, payload: Mapping[str, Any], inputs: Mapping[str, Any]
 ) -> str:
     project = payload.get("project")
     phone = payload.get("project_phone")
     if (
-        not isinstance(project, Mapping)
+        not _is_exact_int(status, expected=200)
+        or not isinstance(project, Mapping)
         or project.get("git_context_key") != inputs["git_context_key"]
         or not isinstance(phone, str)
-        or not phone
+        or re.fullmatch(r"9[0-9]{3}", phone) is None
+        or project.get("project_phone") != phone
+        or project.get("project_id") != phone
+        or not isinstance(payload.get("created"), bool)
     ):
         raise QualificationError("project manager returned a different project context")
     return phone
+
+
+def _project_from_checkpoint(
+    evidence: Mapping[str, Any], inputs: Mapping[str, Any]
+) -> str:
+    project = evidence.get("project")
+    if (
+        not isinstance(project, Mapping)
+        or set(project)
+        != {"http_status", "project_phone", "git_context_key", "created"}
+        or not _is_exact_int(project.get("http_status"), expected=200)
+        or project.get("git_context_key") != inputs["git_context_key"]
+        or not isinstance(project.get("project_phone"), str)
+        or re.fullmatch(r"9[0-9]{3}", str(project.get("project_phone"))) is None
+        or not isinstance(project.get("created"), bool)
+    ):
+        raise QualificationError("saved project proof is missing or inconsistent")
+    return str(project["project_phone"])
 
 
 def _assert_start_response(
@@ -2513,7 +2595,7 @@ def _assert_start_response(
     if not isinstance(deduplicated, bool):
         raise QualificationError("start response lacks an exact deduplication flag")
     expected_status = 200 if deduplicated else 201
-    if status != expected_status:
+    if not _is_exact_int(status, expected=expected_status):
         raise QualificationError("start response HTTP/deduplication status mismatch")
     if deduplicated and not allow_deduplicated:
         raise QualificationError("fresh unique project unexpectedly deduplicated start")
@@ -2535,6 +2617,28 @@ def _assert_start_response(
         or len(set(assignments)) != EXPECTED_CHILD_COUNT
     ):
         raise QualificationError("start response is not pinned to expected four-child source")
+
+
+def _start_from_checkpoint(
+    evidence: Mapping[str, Any],
+    *,
+    config: PrepareConfig,
+    project_id: str,
+    expected_manifest_sha256: str,
+) -> dict[str, Any]:
+    status = evidence.get("start_http_status")
+    payload = evidence.get("start_response")
+    if not _is_exact_int(status) or not isinstance(payload, Mapping):
+        raise QualificationError("saved start proof is missing or inconsistent")
+    _assert_start_response(
+        status,
+        payload,
+        config=config,
+        project_id=project_id,
+        allow_deduplicated=True,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+    return deepcopy(dict(payload))
 
 
 def wait_for_healthy(
@@ -2624,8 +2728,8 @@ def prepare(config: PrepareConfig) -> dict[str, Any]:
     marker_proof = validate_ownership_marker(config)
     host_proof = validate_host_listener_ownership(config, marker_proof)
     inputs = _inputs(config)
-    fresh = not config.evidence_path.exists()
-    if fresh:
+    new_evidence = not config.evidence_path.exists()
+    if new_evidence:
         live_baseline = load_external_snapshot(config.live_baseline_path)
         require_fresh_external_snapshot(live_baseline)
         evidence: dict[str, Any] = {
@@ -2646,10 +2750,11 @@ def prepare(config: PrepareConfig) -> dict[str, Any]:
             ],
         }
         evidence["external_live_baseline"] = live_baseline
-        atomic_write_json(config.evidence_path, evidence)
+        _write_prepare_checkpoint(config.evidence_path, evidence)
     else:
         evidence = _read_evidence(config.evidence_path)
-        if evidence.get("inputs") != inputs:
+        _validate_prepare_checkpoint_shape(evidence)
+        if not _json_exact_equal(evidence.get("inputs"), inputs):
             raise QualificationError("existing evidence belongs to different inputs")
         if (
             evidence.get("git") != git_proof
@@ -2657,62 +2762,165 @@ def prepare(config: PrepareConfig) -> dict[str, Any]:
             or evidence.get("pre_restart_host") != host_proof
         ):
             raise QualificationError("source or staging host ownership changed during prepare")
-        resumable_statuses = {
-            "initialized",
-            "host_observed",
-            "project_provisioned",
-            "start_accepted",
-        }
-        if evidence.get("status") not in resumable_statuses:
-            raise QualificationError(
-                "prepare cannot resume after its pre-restart checkpoint"
-            )
     _, staging_port = validate_loopback_url(config.staging_url)
     listener_before = evidence.get("pre_restart_listener_pid")
-    if not isinstance(listener_before, int):
+    if listener_before is None:
+        if evidence.get("status") != "initialized":
+            raise QualificationError("pre-restart listener proof is missing")
         listener_before = int(host_proof["pid"])
         evidence["pre_restart_listener_pid"] = listener_before
         evidence["status"] = "host_observed"
         evidence["updated_at"] = utc_now()
-        atomic_write_json(config.evidence_path, evidence)
-    elif listener_before != host_proof["pid"]:
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+    elif (
+        not _is_exact_int(listener_before, minimum=1)
+        or listener_before != host_proof["pid"]
+    ):
         raise QualificationError("pre-restart listener evidence differs from ownership proof")
-    client = _staging_client(config)
+    elif evidence.get("status") == "initialized":
+        evidence["status"] = "host_observed"
+        evidence["updated_at"] = utc_now()
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+
+    client: LoopbackJsonClient | None = None
+
+    def issue_saved_intent(intent: Mapping[str, Any]) -> tuple[int, dict[str, Any]]:
+        nonlocal client
+        if client is None:
+            client = _staging_client(config)
+        return client.request(
+            str(intent["method"]),
+            str(intent["path"]),
+            deepcopy(intent["payload"]),
+        )
+
     project_body = {
         "git_address": config.git_address,
         "git_context_key": inputs["git_context_key"],
         "project_name": f"UMSE staging qualification {config.run_id}",
     }
-    _require_same_staging_owner(config, marker_proof, host_proof)
-    _, project_response = client.request("POST", "/project-manager/0001", project_body)
-    project_id = _assert_project_response(project_response, inputs)
-    if fresh and project_response.get("created") is not True:
-        raise QualificationError("unique project context already exists")
-    evidence["project"] = {
-        "project_phone": project_id,
-        "git_context_key": inputs["git_context_key"],
-        "created": project_response.get("created") is True,
-    }
-    evidence["status"] = "project_provisioned"
-    evidence["updated_at"] = utc_now()
-    atomic_write_json(config.evidence_path, evidence)
-    start_path = f"/api/v1/projects/{urllib.parse.quote(project_id, safe='')}/sprints/start-from-git"
-    _require_same_staging_owner(config, marker_proof, host_proof)
-    start_status, start_response = client.request(
-        "POST", start_path, _start_request(inputs)
+    expected_project_intent = _request_intent(
+        "/project-manager/0001",
+        project_body,
     )
-    _assert_start_response(
-        start_status,
-        start_response,
-        config=config,
-        project_id=project_id,
-        allow_deduplicated=not fresh,
-        expected_manifest_sha256=str(git_proof["manifest_sha256"]),
+    prepare_status = evidence.get("status")
+    project_intent_is_new = False
+    if prepare_status == "host_observed":
+        if any(
+            key in evidence
+            for key in (
+                "project_request_intent",
+                "project",
+                "start_request_intent",
+                "start_http_status",
+                "start_response",
+            )
+        ):
+            raise QualificationError("host checkpoint contains later request proof")
+        evidence["project_request_intent"] = expected_project_intent
+        evidence["status"] = "project_intent_recorded"
+        evidence["updated_at"] = utc_now()
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+        project_intent_is_new = True
+    elif prepare_status not in {
+        "project_intent_recorded",
+        "project_provisioned",
+        "start_intent_recorded",
+        "start_accepted",
+    }:
+        raise QualificationError("prepare project checkpoint is invalid")
+    project_intent = _require_exact_request_intent(
+        evidence,
+        "project_request_intent",
+        expected_project_intent,
     )
-    evidence["start_response"] = deepcopy(start_response)
-    evidence["status"] = "start_accepted"
-    evidence["updated_at"] = utc_now()
-    atomic_write_json(config.evidence_path, evidence)
+    prepare_status = evidence.get("status")
+    if prepare_status == "project_intent_recorded":
+        if any(
+            key in evidence
+            for key in (
+                "project",
+                "start_request_intent",
+                "start_http_status",
+                "start_response",
+            )
+        ):
+            raise QualificationError("project intent checkpoint contains later proof")
+        _require_same_staging_owner(config, marker_proof, host_proof)
+        project_status, project_response = issue_saved_intent(project_intent)
+        project_id = _assert_project_response(
+            project_status,
+            project_response,
+            inputs,
+        )
+        if project_intent_is_new and project_response["created"] is not True:
+            raise QualificationError("unique project context already exists")
+        _record_exact_proof(evidence, "project", {
+            "http_status": project_status,
+            "project_phone": project_id,
+            "git_context_key": inputs["git_context_key"],
+            "created": project_response["created"],
+        })
+        evidence["status"] = "project_provisioned"
+        evidence["updated_at"] = utc_now()
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+    else:
+        project_id = _project_from_checkpoint(evidence, inputs)
+
+    start_path = (
+        f"/api/v1/projects/{urllib.parse.quote(project_id, safe='')}"
+        "/sprints/start-from-git"
+    )
+    expected_start_intent = _request_intent(
+        start_path,
+        _start_request(inputs),
+    )
+    prepare_status = evidence.get("status")
+    start_intent_is_new = False
+    if prepare_status == "project_provisioned":
+        if any(
+            key in evidence
+            for key in ("start_request_intent", "start_http_status", "start_response")
+        ):
+            raise QualificationError("project checkpoint contains later start proof")
+        evidence["start_request_intent"] = expected_start_intent
+        evidence["status"] = "start_intent_recorded"
+        evidence["updated_at"] = utc_now()
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+        start_intent_is_new = True
+    elif prepare_status not in {"start_intent_recorded", "start_accepted"}:
+        raise QualificationError("prepare start checkpoint is invalid")
+    start_intent = _require_exact_request_intent(
+        evidence,
+        "start_request_intent",
+        expected_start_intent,
+    )
+    prepare_status = evidence.get("status")
+    if prepare_status == "start_intent_recorded":
+        if "start_http_status" in evidence or "start_response" in evidence:
+            raise QualificationError("start intent checkpoint contains accepted proof")
+        _require_same_staging_owner(config, marker_proof, host_proof)
+        start_status, start_response = issue_saved_intent(start_intent)
+        _assert_start_response(
+            start_status,
+            start_response,
+            config=config,
+            project_id=project_id,
+            allow_deduplicated=not start_intent_is_new,
+            expected_manifest_sha256=str(git_proof["manifest_sha256"]),
+        )
+        _record_exact_proof(evidence, "start_http_status", start_status)
+        _record_exact_proof(evidence, "start_response", start_response)
+        evidence["status"] = "start_accepted"
+        evidence["updated_at"] = utc_now()
+        _write_prepare_checkpoint(config.evidence_path, evidence)
+    else:
+        start_response = _start_from_checkpoint(
+            evidence,
+            config=config,
+            project_id=project_id,
+            expected_manifest_sha256=str(git_proof["manifest_sha256"]),
+        )
     reader = ManagedStateReader(config.managed_db)
     summary, health, child_os = wait_for_healthy(
         reader,
@@ -2974,6 +3182,114 @@ def _validate_cleanup_runtime_config(
     return deepcopy(dict(runtime_config))
 
 
+def _reprove_cleanup_checkpoint(
+    config: PrepareConfig,
+    evidence: Mapping[str, Any],
+    bundle: Mapping[str, Any],
+    *,
+    project_id: str,
+) -> dict[str, Any]:
+    """Re-authenticate the exact verified children before any cleanup mutation."""
+
+    start_response = evidence.get("start_response")
+    post_restart = evidence.get("post_restart")
+    if (
+        not isinstance(start_response, Mapping)
+        or not isinstance(post_restart, Mapping)
+        or not isinstance(post_restart.get("runtime"), Mapping)
+        or not isinstance(post_restart.get("child_health"), list)
+        or not isinstance(post_restart.get("child_os_ownership"), list)
+    ):
+        raise QualificationError("verified evidence lacks the cleanup checkpoint proof")
+
+    summary = validate_runtime_snapshot(
+        bundle,
+        expected_sha=config.expected_sha,
+        expected_ref=config.ref,
+        project_id=project_id,
+        start_response=start_response,
+        expected_child_python=config.expected_child_python,
+        expected_runtime_root=config.expected_runtime_root,
+        expected_managed_root=config.expected_managed_root,
+        expected_service_root=config.repo_root,
+        expected_protected_roots=config.protected_roots,
+        expected_canonical_remote=canonical_repository_key(config.git_address),
+    )
+    runtime_proof = _evidence_summary(summary)
+    if not _json_exact_equal(runtime_proof, post_restart["runtime"]):
+        raise QualificationError(
+            "managed runtime changed after the verified post-restart checkpoint"
+        )
+
+    health = verify_child_health(summary)
+    if not _json_exact_equal(health, post_restart["child_health"]):
+        raise QualificationError(
+            "child health identity changed after the verified post-restart checkpoint"
+        )
+
+    child_os = verify_child_os_ownership(summary, health)
+    if not _json_exact_equal(child_os, post_restart["child_os_ownership"]):
+        raise QualificationError(
+            "child OS/Job ownership changed after the verified post-restart checkpoint"
+        )
+
+    state = bundle.get("state")
+    runtime_config = state.get("runtime_config") if isinstance(state, Mapping) else None
+    if not isinstance(runtime_config, Mapping):
+        raise QualificationError("cleanup runtime config is missing")
+    return {
+        "runtime_config": _validate_cleanup_runtime_config(config, runtime_config),
+        "runtime": deepcopy(runtime_proof),
+        "child_health": deepcopy(health),
+        "child_os_ownership": deepcopy(child_os),
+    }
+
+
+def _record_pre_cleanup_checkpoint(
+    evidence_path: Path,
+    evidence: dict[str, Any],
+    proof: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Durably record the exact authenticated state before writable cleanup."""
+
+    required_proof = {
+        "runtime_config",
+        "runtime",
+        "child_health",
+        "child_os_ownership",
+    }
+    if set(proof) != required_proof:
+        raise QualificationError("cleanup checkpoint proof shape is invalid")
+    checkpoint_values = {
+        "staging_host_listener": {
+            "port": STAGING_HTTP_PORT,
+            "owners": {},
+        },
+        **{key: deepcopy(proof[key]) for key in sorted(required_proof)},
+    }
+    existing = evidence.get("pre_cleanup")
+    if existing is not None:
+        if (
+            not isinstance(existing, Mapping)
+            or set(existing) != {"observed_at", *checkpoint_values}
+            or not isinstance(existing.get("observed_at"), str)
+            or not existing["observed_at"].strip()
+            or any(
+                not _json_exact_equal(existing.get(key), value)
+                for key, value in checkpoint_values.items()
+            )
+        ):
+            raise QualificationError("stored pre-cleanup checkpoint differs")
+        return deepcopy(dict(existing))
+
+    observed_at = utc_now()
+    checkpoint = {"observed_at": observed_at, **checkpoint_values}
+    evidence["pre_cleanup"] = checkpoint
+    evidence["updated_at"] = observed_at
+    atomic_write_json(evidence_path, evidence)
+    return deepcopy(checkpoint)
+
+
 def _validate_cleanup_snapshot(
     bundle: Mapping[str, Any],
     *,
@@ -3069,6 +3385,30 @@ def cleanup(evidence_path: Path) -> dict[str, Any]:
         raise QualificationError("staging ownership marker changed before cleanup")
     project_id, sprint_id, processes, leases = _cleanup_resources(evidence)
 
+    if _windows_listener_snapshot().get(STAGING_HTTP_PORT):
+        raise QualificationError("stop the staging host before authenticated cleanup")
+    reader = ManagedStateReader(config.managed_db)
+    before = reader.read(project_id, sprint_id)
+    if before is None:
+        raise QualificationError("cleanup cannot load the managed sprint")
+    pre_cleanup_proof = _reprove_cleanup_checkpoint(
+        config,
+        evidence,
+        before,
+        project_id=project_id,
+    )
+
+    # Health and Windows Job reproof can be slow.  Re-read the durable state and
+    # recheck the staging host listener immediately before exposing writable
+    # cleanup objects.  Any drift fails with no store/supervisor construction.
+    after_reproof = reader.read(project_id, sprint_id)
+    if after_reproof is None or not _json_exact_equal(after_reproof, before):
+        raise QualificationError("managed runtime changed during cleanup reproof")
+    if _windows_listener_snapshot().get(STAGING_HTTP_PORT):
+        raise QualificationError("staging host listener reappeared before cleanup")
+    _record_pre_cleanup_checkpoint(evidence_path, evidence, pre_cleanup_proof)
+    exact_runtime_config = pre_cleanup_proof["runtime_config"]
+
     if str(config.repo_root) not in sys.path:
         sys.path.insert(0, str(config.repo_root))
     from nginx_qa.managed_import import (  # pylint: disable=import-outside-toplevel
@@ -3079,17 +3419,6 @@ def cleanup(evidence_path: Path) -> dict[str, Any]:
         ManagedProcessSupervisor,
         ManagedProcessSupervisorError,
     )
-
-    if _windows_listener_snapshot().get(STAGING_HTTP_PORT):
-        raise QualificationError("stop the staging host before authenticated cleanup")
-    reader = ManagedStateReader(config.managed_db)
-    before = reader.read(project_id, sprint_id)
-    if before is None or not isinstance(before.get("state"), Mapping):
-        raise QualificationError("cleanup cannot load the managed sprint")
-    runtime_config = before["state"].get("runtime_config")
-    if not isinstance(runtime_config, Mapping):
-        raise QualificationError("cleanup runtime config is missing")
-    exact_runtime_config = _validate_cleanup_runtime_config(config, runtime_config)
 
     store = ManagedImportStore(config.managed_db)
     reservations = ManagedPortReservationRegistry()

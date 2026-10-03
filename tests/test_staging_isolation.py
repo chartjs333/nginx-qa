@@ -64,6 +64,14 @@ def launcher_testable_functions() -> str:
     return launcher[begin:end]
 
 
+def snapshot_testable_functions() -> str:
+    snapshot_tool = LIVE_SNAPSHOT_TOOL.read_text(encoding="utf-8")
+    begin = snapshot_tool.index("# BEGIN TESTABLE SNAPSHOT FUNCTIONS")
+    end_marker = "# END TESTABLE SNAPSHOT FUNCTIONS"
+    end = snapshot_tool.index(end_marker) + len(end_marker)
+    return snapshot_tool[begin:end]
+
+
 def powershell_literal(value: str | Path) -> str:
     return "'" + str(value).replace("'", "''") + "'"
 
@@ -80,6 +88,41 @@ def run_powershell(body: str, *, timeout: int = 60) -> subprocess.CompletedProce
         )
     )
     with tempfile.TemporaryDirectory(prefix="nginx-qa-staging-ps-") as raw_temp:
+        script_path = Path(raw_temp) / "test.ps1"
+        script_path.write_text(script, encoding="utf-8-sig")
+        return subprocess.run(
+            [
+                POWERSHELL,
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_path),
+            ],
+            cwd=REPOSITORY_ROOT,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+
+
+def run_snapshot_powershell(
+    body: str, *, timeout: int = 60
+) -> subprocess.CompletedProcess[str]:
+    if POWERSHELL is None:
+        raise unittest.SkipTest("Windows PowerShell is unavailable")
+    script = "\n".join(
+        (
+            "Set-StrictMode -Version Latest",
+            '$ErrorActionPreference = "Stop"',
+            snapshot_testable_functions(),
+            textwrap.dedent(body),
+        )
+    )
+    with tempfile.TemporaryDirectory(prefix="nginx-qa-snapshot-ps-") as raw_temp:
         script_path = Path(raw_temp) / "test.ps1"
         script_path.write_text(script, encoding="utf-8-sig")
         return subprocess.run(
@@ -244,7 +287,7 @@ class StagingIsolationTests(unittest.TestCase):
             '"leader_pid": pid',
             '"pid": int(listener_pid)',
             "ManagedWorkspaceManager.validate_isolated_root",
-            "-m uvicorn main:app",
+            "-m uvicorn staging_host_app:app",
         )
         for fragment in required_fragments:
             self.assertIn(fragment, launcher)
@@ -606,25 +649,135 @@ class StagingIsolationTests(unittest.TestCase):
             "$listeners.Count -ne 1",
             "$listeners[0].LocalAddress -cne '0.0.0.0'",
             "GIT_OPTIONAL_LOCKS",
-            "--untracked-files=all",
-            "$RequiredTopLevelState",
-            "Get-ChildItem -LiteralPath $runtimeRoot -Force -Recurse",
-            "$entry.Extension -ine '.log'",
-            "$filesBefore.Canonical -cne $filesAfter.Canonical",
+            "'symbolic-ref',",
+            "$LiveHealthUri = 'http://127.0.0.1:8025/'",
+            "Add-Type -AssemblyName System.Net.Http",
+            "[System.Net.Http.HttpClientHandler]::new()",
+            "$handler.AllowAutoRedirect = $false",
+            "$handler.UseProxy = $false",
+            "[System.Net.Http.HttpCompletionOption]::ResponseHeadersRead",
+            "schema_version = 2",
+            "health         = $health",
             ".nginx-qa-staging-owner.json",
+            "Assert-SnapshotCanonicalNonReparsePath",
+            "Assert-SafeSnapshotLeafName",
             "Refusing to replace an existing snapshot",
         )
         for fragment in required_fragments:
             self.assertIn(fragment, snapshot_tool)
         for forbidden_live_fragment in (
+            "runtime_state",
+            "pending_project_sprints.json",
+            "project_sprints.json",
+            "agents.json",
+            "conversation_log.jsonl",
+            "port_git_map.json",
+            "Get-ChildItem",
+            "--untracked-files",
             "Set-Content -LiteralPath $ResolvedLiveRoot",
             "Out-File -LiteralPath $ResolvedLiveRoot",
             "Remove-Item -LiteralPath $ResolvedLiveRoot",
             "Invoke-WebRequest",
             "Invoke-RestMethod",
-            "http://127.0.0.1:$LivePort/",
         ):
             self.assertNotIn(forbidden_live_fragment, snapshot_tool)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_snapshot_output_rejects_junction_ancestor_before_write(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nginx-qa-snapshot-junction-") as raw_temp:
+            root = Path(raw_temp)
+            state_base = root / "state"
+            evidence_root = state_base / "evidence"
+            junction_target = root / "redirect-target"
+            output = evidence_root / "capture.json"
+            completed = run_snapshot_powershell(
+                f"""
+                $stateBase = {powershell_literal(state_base)}
+                $evidenceRoot = {powershell_literal(evidence_root)}
+                $junctionTarget = {powershell_literal(junction_target)}
+                $output = {powershell_literal(output)}
+                New-Item -ItemType Directory -Path $stateBase | Out-Null
+                New-Item -ItemType Directory -Path $junctionTarget | Out-Null
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $stateBase ".nginx-qa-staging-owner.json"),
+                    "{{}}"
+                )
+                try {{
+                    New-Item `
+                        -ItemType Junction `
+                        -Path $evidenceRoot `
+                        -Target $junctionTarget | Out-Null
+                    $rejected = $false
+                    try {{
+                        $null = Initialize-SnapshotOutputBoundary `
+                            -RequestedOutput $output `
+                            -StateBase $stateBase `
+                            -EvidenceRoot $evidenceRoot
+                    }} catch {{
+                        $rejected = $true
+                    }}
+                    if (-not $rejected) {{
+                        throw "junction output ancestor was accepted"
+                    }}
+                    if (Test-Path -LiteralPath (Join-Path $junctionTarget "capture.json")) {{
+                        throw "snapshot was written through a junction"
+                    }}
+                }} finally {{
+                    if (Test-Path -LiteralPath $evidenceRoot) {{
+                        Remove-Item -LiteralPath $evidenceRoot -Force
+                    }}
+                }}
+                "snapshot junction behavior OK"
+                """
+            )
+            assert_powershell_success(self, completed)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_snapshot_output_rejects_ads_device_and_unsafe_leaf_before_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="nginx-qa-snapshot-leaf-") as raw_temp:
+            root = Path(raw_temp)
+            state_base = root / "state"
+            evidence_root = state_base / "evidence"
+            ads_output = str(evidence_root / "capture.json") + ":secret"
+            reserved_output = evidence_root / "NUL.json"
+            completed = run_snapshot_powershell(
+                f"""
+                $stateBase = {powershell_literal(state_base)}
+                $evidenceRoot = {powershell_literal(evidence_root)}
+                New-Item -ItemType Directory -Path $stateBase | Out-Null
+                [System.IO.File]::WriteAllText(
+                    (Join-Path $stateBase ".nginx-qa-staging-owner.json"),
+                    "{{}}"
+                )
+                $unsafeOutputs = @(
+                    {powershell_literal(ads_output)},
+                    {powershell_literal(reserved_output)},
+                    "\\\\?\\C:\\snapshot.json",
+                    "\\\\server\\share\\snapshot.json"
+                )
+                foreach ($unsafeOutput in $unsafeOutputs) {{
+                    $rejected = $false
+                    try {{
+                        $null = Initialize-SnapshotOutputBoundary `
+                            -RequestedOutput $unsafeOutput `
+                            -StateBase $stateBase `
+                            -EvidenceRoot $evidenceRoot
+                    }} catch {{
+                        $rejected = $true
+                    }}
+                    if (-not $rejected) {{
+                        throw "unsafe output was accepted: $unsafeOutput"
+                    }}
+                }}
+                if (Test-Path -LiteralPath $evidenceRoot) {{
+                    throw "unsafe output validation performed a write"
+                }}
+                "snapshot leaf behavior OK"
+                """
+            )
+            assert_powershell_success(self, completed)
 
 
 if __name__ == "__main__":

@@ -424,23 +424,132 @@ function Initialize-OwnershipMarker {
         -ExpectedRecord $ExpectedRecord
 }
 
-function Assert-LegacyStateOwnership {
+function Assert-ExactLegacyPromptSettings {
     param(
-        [Parameter(Mandatory = $true)][string[]]$Paths,
-        [Parameter(Mandatory = $true)][bool]$OwnershipEstablished
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$ExpectedSettings
     )
 
-    foreach ($path in $Paths) {
-        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-        if ($null -eq $item) {
-            continue
-        }
-        if (-not $OwnershipEstablished) {
-            throw "Unknown legacy staging state exists before ownership initialization: $path"
-        }
-        $null = Assert-CanonicalNonReparsePath `
-            -Path $path -PathKind Any -Label "owned legacy staging state"
+    $resolved = Assert-CanonicalNonReparsePath `
+        -Path $Path -PathKind Leaf -Label "staging prompt settings"
+    $item = Get-Item -LiteralPath $resolved -Force
+    if ($item.Length -gt 32768) {
+        throw "Staging prompt settings are unexpectedly large."
     }
+    try {
+        $actual = Get-Content -LiteralPath $resolved -Raw | ConvertFrom-Json
+    }
+    catch {
+        throw "Staging prompt settings are not valid JSON."
+    }
+    $actualNames = @($actual.PSObject.Properties | Select-Object -ExpandProperty Name)
+    $expectedNames = @($ExpectedSettings.Keys | ForEach-Object { [string]$_ })
+    if (
+        $actualNames.Count -ne $expectedNames.Count -or
+        [string]::Join([char]0, $actualNames) -cne
+            [string]::Join([char]0, $expectedNames)
+    ) {
+        throw "Staging prompt settings schema is not exact."
+    }
+    foreach ($name in $expectedNames) {
+        $property = $actual.PSObject.Properties[$name]
+        if (
+            $null -eq $property -or
+            $property.Value -isnot [string] -or
+            [string]$property.Value -cne [string]$ExpectedSettings[$name]
+        ) {
+            throw "Staging prompt settings content is not exact."
+        }
+    }
+}
+
+function Assert-LegacyStateInventory {
+    param(
+        [Parameter(Mandatory = $true)][string]$ServiceRoot,
+        [Parameter(Mandatory = $true)][string]$LegacyRuntimeRoot,
+        [Parameter(Mandatory = $true)][bool]$OwnershipEstablished,
+        [Parameter(Mandatory = $true)]
+        [System.Collections.IDictionary]$ExpectedPromptSettings
+    )
+
+    $service = Assert-CanonicalNonReparsePath `
+        -Path $ServiceRoot -PathKind Container -Label "legacy staging service root"
+    $runtime = Resolve-NormalizedPath $LegacyRuntimeRoot
+    if ((Resolve-NormalizedPath (Split-Path -Parent $runtime)) -ine $service) {
+        throw "Legacy runtime root must be a direct child of the service root."
+    }
+
+    $legacyFiles = @(
+        "conversation_log.jsonl",
+        "conversation_log.jsonl.lock",
+        "agents.json",
+        "agents.json.lock",
+        "specializations.json",
+        "email_routes.json",
+        "port_git_map.json",
+        "port_git_map.json.lock",
+        "project_sprints.json",
+        "project_sprints.json.lock",
+        "pending_project_sprints.json",
+        "pending_project_sprints.json.lock"
+    )
+    $legacyDirectories = @(
+        "attachments",
+        "screenshot_folders",
+        "evidence_folders"
+    )
+    foreach ($name in @($legacyFiles) + @($legacyDirectories)) {
+        $path = Join-Path $service $name
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item) {
+            if (-not $OwnershipEstablished) {
+                throw "Unknown legacy staging state exists before ownership initialization: $path"
+            }
+            throw "Legacy mutable state must remain absent from the service checkout: $path"
+        }
+    }
+
+    $staleArtifacts = @(
+        Get-ChildItem -LiteralPath $service -Force -ErrorAction Stop |
+            Where-Object {
+                $_.Name -like "queue_backup_before_restart_*.json" -or
+                $_.Name -like ".port_git_map.json.*.tmp" -or
+                $_.Name -like ".pending_project_sprints.json.*.tmp"
+            }
+    )
+    if ($staleArtifacts.Count -gt 0) {
+        throw (
+            "Stale or non-canonical legacy staging artifacts exist: " +
+            (($staleArtifacts | Select-Object -ExpandProperty Name) -join ", ")
+        )
+    }
+
+    if (-not (Test-Path -LiteralPath $runtime)) {
+        return
+    }
+    if (-not $OwnershipEstablished) {
+        throw "Unknown legacy staging state exists before ownership initialization: $runtime"
+    }
+    $runtime = Assert-CanonicalNonReparsePath `
+        -Path $runtime -PathKind Container -Label "owned legacy staging runtime root"
+    $entries = @(Get-ChildItem -LiteralPath $runtime -Force -ErrorAction Stop)
+    $promptSettingsPath = Join-Path $runtime "sequential-prompt-settings.json"
+    if (
+        $entries.Count -ne 1 -or
+        $entries[0].Name -cne "sequential-prompt-settings.json" -or
+        $entries[0].PSIsContainer -or
+        (Resolve-NormalizedPath $entries[0].FullName) -ine
+            (Resolve-NormalizedPath $promptSettingsPath)
+    ) {
+        throw (
+            "Legacy staging runtime root must contain only the direct " +
+            "sequential-prompt-settings.json file."
+        )
+    }
+    Assert-ExactLegacyPromptSettings `
+        -Path $promptSettingsPath `
+        -ExpectedSettings $ExpectedPromptSettings
 }
 
 function ConvertTo-AllowedChildOwnerMap {
@@ -659,17 +768,30 @@ $promptRoot = Assert-CanonicalNonReparsePath `
 $managedRoot = Assert-CanonicalNonReparsePath `
     -Path (Get-RequiredEnvironmentValue "NGINX_QA_MANAGED_ROOT") `
     -PathKind Container -AllowMissing -Label "managed workspace root"
-$legacyRuntimeRoot = Assert-CanonicalNonReparsePath `
+$serviceLegacyRuntimeRoot = Assert-CanonicalNonReparsePath `
     -Path (Join-Path $serviceRoot "runtime_state") `
     -PathKind Container -AllowMissing -Label "legacy staging runtime root"
+$legacyStateRoot = Assert-CanonicalNonReparsePath `
+    -Path (Join-Path $stateBase "legacy") `
+    -PathKind Container -AllowMissing -Label "external legacy state root"
+$legacyRuntimeRoot = Assert-CanonicalNonReparsePath `
+    -Path (Join-Path $legacyStateRoot "runtime_state") `
+    -PathKind Container -AllowMissing -Label "external legacy runtime root"
 
-foreach ($root in @($venvRoot, $runtimeRoot, $promptRoot, $managedRoot)) {
+foreach ($root in @($venvRoot, $runtimeRoot, $promptRoot, $managedRoot, $legacyStateRoot)) {
     $parent = Resolve-NormalizedPath (Split-Path -Parent $root)
     if ($parent -ine $stateBase) {
         throw "Every mutable staging root must be an immediate child of $stateBase; got $root."
     }
 }
-$isolatedRoots = @($serviceRoot, $venvRoot, $runtimeRoot, $promptRoot, $managedRoot)
+$isolatedRoots = @(
+    $serviceRoot,
+    $venvRoot,
+    $runtimeRoot,
+    $promptRoot,
+    $managedRoot,
+    $legacyStateRoot
+)
 for ($index = 0; $index -lt $isolatedRoots.Count; $index++) {
     foreach ($protectedRoot in $normalizedProtectedRoots) {
         if (Test-PathOverlap -First $isolatedRoots[$index] -Second $protectedRoot) {
@@ -753,7 +875,7 @@ $ownershipRecord = [ordered]@{
     runtime_root = $runtimeRoot
     prompt_root = $promptRoot
     managed_root = $managedRoot
-    legacy_runtime_root = $legacyRuntimeRoot
+    legacy_runtime_root = $serviceLegacyRuntimeRoot
     http_host = Get-RequiredEnvironmentValue "NGINX_QA_HTTP_HOST"
     http_port = [int](Get-RequiredEnvironmentValue "NGINX_QA_HTTP_PORT")
     child_port_range = Get-RequiredEnvironmentValue "NGINX_QA_CHILD_PORT_RANGE"
@@ -764,36 +886,16 @@ $ownershipState = Get-OwnershipState `
     -MarkerPath $ownershipMarkerPath `
     -ExpectedRecord $ownershipRecord
 
-$legacyMutablePaths = @(
-    $legacyRuntimeRoot,
-    (Join-Path $serviceRoot "conversation_log.jsonl"),
-    (Join-Path $serviceRoot "conversation_log.jsonl.lock"),
-    (Join-Path $serviceRoot "agents.json"),
-    (Join-Path $serviceRoot "agents.json.lock"),
-    (Join-Path $serviceRoot "specializations.json"),
-    (Join-Path $serviceRoot "email_routes.json"),
-    (Join-Path $serviceRoot "port_git_map.json"),
-    (Join-Path $serviceRoot "port_git_map.json.lock"),
-    (Join-Path $serviceRoot "project_sprints.json"),
-    (Join-Path $serviceRoot "project_sprints.json.lock"),
-    (Join-Path $serviceRoot "pending_project_sprints.json"),
-    (Join-Path $serviceRoot "pending_project_sprints.json.lock"),
-    (Join-Path $serviceRoot "attachments"),
-    (Join-Path $serviceRoot "screenshot_folders"),
-    (Join-Path $serviceRoot "evidence_folders")
-)
-$legacyMutablePaths += @(
-    Get-ChildItem -LiteralPath $serviceRoot -Force -ErrorAction SilentlyContinue |
-        Where-Object {
-            $_.Name -like "queue_backup_before_restart_*.json" -or
-            $_.Name -like ".port_git_map.json.*.tmp" -or
-            $_.Name -like ".pending_project_sprints.json.*.tmp"
-        } |
-        Select-Object -ExpandProperty FullName
-)
-Assert-LegacyStateOwnership `
-    -Paths $legacyMutablePaths `
-    -OwnershipEstablished ($ownershipState.Mode -eq "Restart")
+$promptSettingsPath = Join-Path $legacyRuntimeRoot "sequential-prompt-settings.json"
+$expectedPromptSettings = [ordered]@{
+    directory_template = Join-Path $promptRoot "{repository}"
+    agent_latest_file_template = Join-Path $promptRoot "{repository}_{agent_phone}-latest.prompt"
+}
+Assert-LegacyStateInventory `
+    -ServiceRoot $serviceRoot `
+    -LegacyRuntimeRoot $serviceLegacyRuntimeRoot `
+    -OwnershipEstablished ($ownershipState.Mode -eq "Restart") `
+    -ExpectedPromptSettings $expectedPromptSettings
 
 $rangeParts = (Get-RequiredEnvironmentValue "NGINX_QA_CHILD_PORT_RANGE").Split("-")
 $httpPort = [int](Get-RequiredEnvironmentValue "NGINX_QA_HTTP_PORT")
@@ -953,6 +1055,11 @@ if ($ownershipState.Mode -eq "FirstUse") {
         -StateBase $stateBase `
         -MarkerPath $ownershipMarkerPath `
         -ExpectedRecord $ownershipRecord
+    Assert-LegacyStateInventory `
+        -ServiceRoot $serviceRoot `
+        -LegacyRuntimeRoot $serviceLegacyRuntimeRoot `
+        -OwnershipEstablished $true `
+        -ExpectedPromptSettings $expectedPromptSettings
 }
 
 if ($ownershipState.Mode -ne "Restart") {
@@ -1008,7 +1115,7 @@ if ($Action -eq "Check") {
     exit 0
 }
 
-foreach ($path in @($runtimeRoot, $promptRoot, $managedRoot)) {
+foreach ($path in @($runtimeRoot, $promptRoot, $managedRoot, $legacyStateRoot)) {
     if (-not (Test-Path -LiteralPath $path)) {
         New-Item -ItemType Directory -Path $path | Out-Null
     }
@@ -1016,26 +1123,15 @@ foreach ($path in @($runtimeRoot, $promptRoot, $managedRoot)) {
         -Path $path -PathKind Container -Label "owned mutable staging root"
 }
 
-$promptSettingsPath = Join-Path $legacyRuntimeRoot "sequential-prompt-settings.json"
-$expectedPromptSettings = [ordered]@{
-    directory_template = Join-Path $promptRoot "{repository}"
-    agent_latest_file_template = Join-Path $promptRoot "{repository}_{agent_phone}-latest.prompt"
-}
 if (-not (Test-Path -LiteralPath $legacyRuntimeRoot)) {
     New-Item -ItemType Directory -Path $legacyRuntimeRoot | Out-Null
 }
 $null = Assert-CanonicalNonReparsePath `
     -Path $legacyRuntimeRoot -PathKind Container -Label "owned legacy staging runtime root"
 if (Test-Path -LiteralPath $promptSettingsPath -PathType Leaf) {
-    $null = Assert-CanonicalNonReparsePath `
-        -Path $promptSettingsPath -PathKind Leaf -Label "staging prompt settings"
-    $actualPromptSettings = Get-Content -LiteralPath $promptSettingsPath -Raw | ConvertFrom-Json
-    if (
-        $actualPromptSettings.directory_template -cne $expectedPromptSettings.directory_template -or
-        $actualPromptSettings.agent_latest_file_template -cne $expectedPromptSettings.agent_latest_file_template
-    ) {
-        throw "Existing staging prompt settings do not use the isolated prompt root."
-    }
+    Assert-ExactLegacyPromptSettings `
+        -Path $promptSettingsPath `
+        -ExpectedSettings $expectedPromptSettings
 }
 else {
     $temporaryPromptSettings = Join-Path $legacyRuntimeRoot `
@@ -1054,6 +1150,14 @@ else {
         }
     }
 }
+Assert-LegacyStateInventory `
+    -ServiceRoot $serviceRoot `
+    -LegacyRuntimeRoot $serviceLegacyRuntimeRoot `
+    -OwnershipEstablished $true `
+    -ExpectedPromptSettings $expectedPromptSettings
+Assert-ExactLegacyPromptSettings `
+    -Path $promptSettingsPath `
+    -ExpectedSettings $expectedPromptSettings
 
 foreach ($name in @(
     "TELEGRAM_BOT_TOKEN",
@@ -1068,7 +1172,7 @@ foreach ($name in @(
 
 Push-Location $serviceRoot
 try {
-    & $pythonPath -E -s -B -m uvicorn main:app `
+    & $pythonPath -E -s -B -m uvicorn staging_host_app:app `
         --host (Get-RequiredEnvironmentValue "NGINX_QA_HTTP_HOST") `
         --port (Get-RequiredEnvironmentValue "NGINX_QA_HTTP_PORT")
     exit $LASTEXITCODE

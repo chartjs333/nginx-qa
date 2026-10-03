@@ -7,37 +7,244 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.Net.Http
 
-$ExpectedLiveRoot = [System.IO.Path]::GetFullPath('D:\nginx-qa').TrimEnd([char]92)
-$ExpectedStateBase = [System.IO.Path]::GetFullPath(
+# BEGIN TESTABLE SNAPSHOT FUNCTIONS
+function Resolve-SnapshotNormalizedPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        throw 'Path must not be empty.'
+    }
+    $raw = $Path.Replace('/', '\')
+    if ($raw.StartsWith('\')) {
+        throw "UNC and device paths are not allowed: $Path"
+    }
+    if ($raw -notmatch '^[A-Za-z]:\\') {
+        throw "Path must be an absolute DOS path: $Path"
+    }
+
+    $relative = $raw.Substring(3)
+    if ($relative) {
+        $invalidCharacters = [System.IO.Path]::GetInvalidFileNameChars()
+        foreach ($segment in $relative.Split([char]'\')) {
+            if ([string]::IsNullOrEmpty($segment)) {
+                throw "Path contains an empty component: $Path"
+            }
+            if ($segment -eq '.' -or $segment -eq '..') {
+                throw "Path traversal components are not allowed: $Path"
+            }
+            if ($segment.EndsWith(' ') -or $segment.EndsWith('.')) {
+                throw "Path components must not end in a space or dot: $Path"
+            }
+            if ($segment.IndexOfAny($invalidCharacters) -ge 0) {
+                throw "Path contains an invalid or alternate-stream component: $Path"
+            }
+        }
+    }
+
+    $full = [System.IO.Path]::GetFullPath($raw)
+    $root = [System.IO.Path]::GetPathRoot($full)
+    if (-not $root -or $root -notmatch '^[A-Za-z]:[\\/]$') {
+        throw "Path must be an absolute DOS path: $Path"
+    }
+    $normalized = $full.Replace('/', '\').TrimEnd('\')
+    if ($normalized -match '^[A-Za-z]:$') {
+        $normalized += '\'
+    }
+    return $normalized
+}
+
+function Assert-SnapshotCanonicalNonReparsePath {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [ValidateSet('Any', 'Container', 'Leaf')]
+        [string]$PathKind = 'Any',
+        [switch]$AllowMissing,
+        [string]$Label = 'path'
+    )
+
+    $full = Resolve-SnapshotNormalizedPath $Path
+    $root = [System.IO.Path]::GetPathRoot($full)
+    $relative = $full.Substring($root.Length).Trim('\')
+    $components = [System.Collections.Generic.List[string]]::new()
+    $components.Add($root)
+    $current = $root
+    if ($relative) {
+        foreach ($segment in $relative.Split([char]'\')) {
+            $current = Join-Path $current $segment
+            $components.Add($current)
+        }
+    }
+
+    foreach ($candidate in $components) {
+        $item = Get-Item -LiteralPath $candidate -Force -ErrorAction SilentlyContinue
+        if ($null -eq $item) {
+            continue
+        }
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+            throw "$Label contains a filesystem reparse point: $candidate"
+        }
+        $itemPath = Resolve-SnapshotNormalizedPath $item.FullName
+        $candidatePath = Resolve-SnapshotNormalizedPath $candidate
+        if ($itemPath -ine $candidatePath) {
+            throw "$Label contains a filesystem alias: $candidate -> $itemPath"
+        }
+    }
+
+    $exists = Test-Path -LiteralPath $full
+    if (-not $exists) {
+        if (-not $AllowMissing) {
+            throw "$Label does not exist: $full"
+        }
+        return $full
+    }
+    if (
+        $PathKind -eq 'Container' -and
+        -not (Test-Path -LiteralPath $full -PathType Container)
+    ) {
+        throw "$Label must be a directory: $full"
+    }
+    if (
+        $PathKind -eq 'Leaf' -and
+        -not (Test-Path -LiteralPath $full -PathType Leaf)
+    ) {
+        throw "$Label must be a regular file: $full"
+    }
+    return $full
+}
+
+function Assert-SafeSnapshotLeafName {
+    param(
+        [Parameter(Mandatory = $true)][string]$LeafName,
+        [switch]$RequireJson
+    )
+
+    if (
+        [string]::IsNullOrWhiteSpace($LeafName) -or
+        $LeafName -in @('.', '..') -or
+        $LeafName.EndsWith(' ') -or
+        $LeafName.EndsWith('.') -or
+        $LeafName.Contains(':') -or
+        $LeafName.IndexOfAny([System.IO.Path]::GetInvalidFileNameChars()) -ge 0 -or
+        $LeafName -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+    ) {
+        throw "Unsafe snapshot file name: $LeafName"
+    }
+    $deviceStem = $LeafName.Split([char]'.')[0]
+    if ($deviceStem -match '^(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$') {
+        throw "Reserved device name is not allowed: $LeafName"
+    }
+    if (
+        $RequireJson -and
+        -not $LeafName.EndsWith(
+            '.json',
+            [System.StringComparison]::OrdinalIgnoreCase
+        )
+    ) {
+        throw 'OutputPath must name a JSON file.'
+    }
+}
+
+function Initialize-SnapshotOutputBoundary {
+    param(
+        [Parameter(Mandatory = $true)][string]$RequestedOutput,
+        [Parameter(Mandatory = $true)][string]$StateBase,
+        [Parameter(Mandatory = $true)][string]$EvidenceRoot
+    )
+
+    $expectedStateBase = Resolve-SnapshotNormalizedPath $StateBase
+    $expectedEvidenceRoot = Resolve-SnapshotNormalizedPath $EvidenceRoot
+    if (-not [string]::Equals(
+        (Resolve-SnapshotNormalizedPath (
+            [System.IO.Path]::GetDirectoryName($expectedEvidenceRoot)
+        )),
+        $expectedStateBase,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'The evidence root must be a direct child of the owned state base.'
+    }
+
+    $resolvedOutput = Resolve-SnapshotNormalizedPath $RequestedOutput
+    $outputLeaf = [System.IO.Path]::GetFileName($resolvedOutput)
+    Assert-SafeSnapshotLeafName -LeafName $outputLeaf -RequireJson
+    $outputParent = Resolve-SnapshotNormalizedPath (
+        [System.IO.Path]::GetDirectoryName($resolvedOutput)
+    )
+    if (-not [string]::Equals(
+        $outputParent,
+        $expectedEvidenceRoot,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "OutputPath must be directly inside: $expectedEvidenceRoot"
+    }
+
+    $ownershipMarker = Join-Path $expectedStateBase '.nginx-qa-staging-owner.json'
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $expectedStateBase -PathKind Container `
+        -Label 'exact staging state base'
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $ownershipMarker -PathKind Leaf `
+        -Label 'staging ownership marker'
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $expectedEvidenceRoot -PathKind Container -AllowMissing `
+        -Label 'owned evidence root'
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $resolvedOutput -PathKind Leaf -AllowMissing `
+        -Label 'snapshot output path'
+    if (Test-Path -LiteralPath $resolvedOutput) {
+        throw "Refusing to replace an existing snapshot: $resolvedOutput"
+    }
+
+    if (-not (Test-Path -LiteralPath $expectedEvidenceRoot -PathType Container)) {
+        # Re-prove every ancestor immediately before the first filesystem write.
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $expectedStateBase -PathKind Container `
+            -Label 'exact staging state base'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $ownershipMarker -PathKind Leaf `
+            -Label 'staging ownership marker'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $expectedEvidenceRoot -PathKind Container -AllowMissing `
+            -Label 'owned evidence root'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $resolvedOutput -PathKind Leaf -AllowMissing `
+            -Label 'snapshot output path'
+        New-Item -ItemType Directory -Path $expectedEvidenceRoot | Out-Null
+    }
+
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $expectedEvidenceRoot -PathKind Container `
+        -Label 'owned evidence root'
+    $null = Assert-SnapshotCanonicalNonReparsePath `
+        -Path $resolvedOutput -PathKind Leaf -AllowMissing `
+        -Label 'snapshot output path'
+    if (Test-Path -LiteralPath $resolvedOutput) {
+        throw "Refusing to replace an existing snapshot: $resolvedOutput"
+    }
+
+    return [pscustomobject]@{
+        StateBase      = $expectedStateBase
+        EvidenceRoot   = $expectedEvidenceRoot
+        OwnershipMarker = $ownershipMarker
+        OutputPath     = $resolvedOutput
+        OutputLeaf     = $outputLeaf
+    }
+}
+# END TESTABLE SNAPSHOT FUNCTIONS
+
+$ExpectedLiveRoot = Resolve-SnapshotNormalizedPath 'D:\nginx-qa'
+$ExpectedStateBase = Resolve-SnapshotNormalizedPath (
     'C:\nginx-qa-staging-state\umse-007'
-).TrimEnd([char]92)
-$ExpectedEvidenceRoot = [System.IO.Path]::GetFullPath(
+)
+$ExpectedEvidenceRoot = Resolve-SnapshotNormalizedPath (
     'C:\nginx-qa-staging-state\umse-007\evidence'
-).TrimEnd([char]92)
+)
 $LivePort = 8025
-$DurableScope = 'nginx-qa:live-durable-state:v1'
-$DurableAlgorithm = (
-    'sha256:utf8:ordinal-posix-path-nul-size-nul-mtime-utc-ticks-lf:v1'
-)
-$RequiredTopLevelState = @(
-    'agents.json',
-    'agents.json.lock',
-    'conversation_log.jsonl',
-    'conversation_log.jsonl.lock',
-    'email_routes.json',
-    'group_templates.json',
-    'pending_project_sprints.json',
-    'pending_project_sprints.json.lock',
-    'port_git_map.json',
-    'port_git_map.json.lock',
-    'project_sprints.json',
-    'project_sprints.json.lock',
-    'specializations.json'
-)
-$OptionalTopLevelState = @('group_templates.json.lock')
+$LiveHealthUri = 'http://127.0.0.1:8025/'
 
-$ResolvedLiveRoot = (Resolve-Path -LiteralPath $LiveRoot).Path.TrimEnd([char]92)
+$ResolvedLiveRoot = Assert-SnapshotCanonicalNonReparsePath `
+    -Path $LiveRoot -PathKind Container -Label 'protected live checkout'
 if (-not [string]::Equals(
     $ResolvedLiveRoot,
     $ExpectedLiveRoot,
@@ -45,70 +252,13 @@ if (-not [string]::Equals(
 )) {
     throw "LiveRoot must be the exact protected checkout: $ExpectedLiveRoot"
 }
-$LiveRootItem = Get-Item -LiteralPath $ResolvedLiveRoot -Force
-if (
-    -not $LiveRootItem.PSIsContainer -or
-    ($LiveRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-) {
-    throw 'The protected live checkout must be a real directory.'
-}
 
-$ResolvedOutput = $null
+$OutputBoundary = $null
 if ($PSBoundParameters.ContainsKey('OutputPath')) {
-    if (
-        [string]::IsNullOrWhiteSpace($OutputPath) -or
-        -not [System.IO.Path]::IsPathFullyQualified($OutputPath)
-    ) {
-        throw 'OutputPath must be an absolute JSON path.'
-    }
-    $ResolvedOutput = [System.IO.Path]::GetFullPath($OutputPath)
-    if (-not $ResolvedOutput.EndsWith(
-        '.json',
-        [System.StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw 'OutputPath must name a JSON file.'
-    }
-    $OutputParent = [System.IO.Path]::GetDirectoryName($ResolvedOutput)
-    if (-not [string]::Equals(
-        $OutputParent.TrimEnd([char]92),
-        $ExpectedEvidenceRoot,
-        [System.StringComparison]::OrdinalIgnoreCase
-    )) {
-        throw "OutputPath must be directly inside: $ExpectedEvidenceRoot"
-    }
-    if (Test-Path -LiteralPath $ResolvedOutput) {
-        throw "Refusing to replace an existing snapshot: $ResolvedOutput"
-    }
-    if (-not (Test-Path -LiteralPath $ExpectedStateBase -PathType Container)) {
-        throw 'The exact staging state base is missing; run Setup first.'
-    }
-    $StateBaseItem = Get-Item -LiteralPath $ExpectedStateBase -Force
-    if ($StateBaseItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-        throw 'The exact staging state base must not be a reparse point.'
-    }
-    $OwnershipMarker = Join-Path $ExpectedStateBase '.nginx-qa-staging-owner.json'
-    if (-not (Test-Path -LiteralPath $OwnershipMarker -PathType Leaf)) {
-        throw 'The exact staging ownership marker is missing; run Setup first.'
-    }
-    $MarkerItem = Get-Item -LiteralPath $OwnershipMarker -Force
-    if ($MarkerItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-        throw 'The staging ownership marker must not be a reparse point.'
-    }
-    if (-not (Test-Path -LiteralPath $ExpectedEvidenceRoot -PathType Container)) {
-        New-Item -ItemType Directory -Path $ExpectedEvidenceRoot | Out-Null
-    }
-    $EvidenceRootItem = Get-Item -LiteralPath $ExpectedEvidenceRoot -Force
-    if (
-        -not $EvidenceRootItem.PSIsContainer -or
-        ($EvidenceRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -or
-        -not [string]::Equals(
-            $EvidenceRootItem.FullName.TrimEnd([char]92),
-            $ExpectedEvidenceRoot,
-            [System.StringComparison]::OrdinalIgnoreCase
-        )
-    ) {
-        throw 'The owned evidence root is not an exact real directory.'
-    }
+    $OutputBoundary = Initialize-SnapshotOutputBoundary `
+        -RequestedOutput $OutputPath `
+        -StateBase $ExpectedStateBase `
+        -EvidenceRoot $ExpectedEvidenceRoot
 }
 
 function Get-LiveListenerIdentity {
@@ -161,11 +311,11 @@ function Get-LiveGitIdentity {
         $head = (
             Invoke-ReadOnlyGit -Arguments @('rev-parse', '--verify', 'HEAD')
         ).ToLowerInvariant()
-        $branch = Invoke-ReadOnlyGit -Arguments @('branch', '--show-current')
-        $status = Invoke-ReadOnlyGit -Arguments @(
-            'status',
-            '--porcelain=v1',
-            '--untracked-files=all'
+        $branch = Invoke-ReadOnlyGit -Arguments @(
+            'symbolic-ref',
+            '--quiet',
+            '--short',
+            'HEAD'
         )
     }
     finally {
@@ -177,7 +327,7 @@ function Get-LiveGitIdentity {
     }
 
     if (-not [string]::Equals(
-        [System.IO.Path]::GetFullPath($top).TrimEnd([char]92),
+        (Resolve-SnapshotNormalizedPath $top),
         $ExpectedLiveRoot,
         [System.StringComparison]::OrdinalIgnoreCase
     )) {
@@ -189,133 +339,56 @@ function Get-LiveGitIdentity {
     ) {
         throw 'Live Git identity is invalid.'
     }
-    if (-not [string]::IsNullOrEmpty($status)) {
-        throw 'The protected live Git worktree is not clean.'
-    }
     return [ordered]@{
         head   = $head
         branch = $branch
-        status = 'clean'
     }
 }
 
-function Get-LiveFileIdentity {
-    $paths = [System.Collections.Generic.List[string]]::new()
-    foreach ($name in $RequiredTopLevelState) {
-        $path = Join-Path $ResolvedLiveRoot $name
-        if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
-            throw "Required live state file is missing: $name"
-        }
-        $paths.Add($path)
-    }
-    foreach ($name in $OptionalTopLevelState) {
-        $path = Join-Path $ResolvedLiveRoot $name
-        if (Test-Path -LiteralPath $path -PathType Leaf) {
-            $paths.Add($path)
-        }
-    }
-
-    $runtimeRoot = Join-Path $ResolvedLiveRoot 'runtime_state'
-    $runtimeRootItem = Get-Item -LiteralPath $runtimeRoot -Force -ErrorAction Stop
-    if (
-        -not $runtimeRootItem.PSIsContainer -or
-        ($runtimeRootItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-    ) {
-        throw 'runtime_state must be a real directory.'
-    }
-    foreach ($entry in (
-        Get-ChildItem -LiteralPath $runtimeRoot -Force -Recurse -ErrorAction Stop
-    )) {
-        if ($entry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
-            throw "Reparse point found in runtime_state: $($entry.FullName)"
-        }
-        if (-not $entry.PSIsContainer -and $entry.Extension -ine '.log') {
-            $paths.Add($entry.FullName)
-        }
-    }
-
-    $seen = [System.Collections.Generic.HashSet[string]]::new(
-        [System.StringComparer]::OrdinalIgnoreCase
+function Get-LiveHealthIdentity {
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.AllowAutoRedirect = $false
+    $handler.UseProxy = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [timespan]::FromSeconds(5)
+    $request = [System.Net.Http.HttpRequestMessage]::new(
+        [System.Net.Http.HttpMethod]::Get,
+        [uri]$LiveHealthUri
     )
-    $records = [System.Collections.Generic.List[string]]::new()
-    [long]$totalBytes = 0
-    [long]$newestTicks = 0
-    foreach ($path in $paths) {
-        $file = Get-Item -LiteralPath $path -Force -ErrorAction Stop
-        $file.Refresh()
-        if (
-            -not $file.Exists -or
-            $file.PSIsContainer -or
-            ($file.Attributes -band [System.IO.FileAttributes]::ReparsePoint)
-        ) {
-            throw "Live state file is not an exact regular file: $path"
-        }
-        $relative = [System.IO.Path]::GetRelativePath(
-            $ResolvedLiveRoot,
-            $file.FullName
-        ).Replace([char]92, [char]47)
-        if (-not $seen.Add($relative)) {
-            throw "Duplicate live state path: $relative"
-        }
-
-        [long]$length = $file.Length
-        [long]$ticks = $file.LastWriteTimeUtc.Ticks
-        $records.Add(
-            $relative + [char]0 +
-            $length.ToString([System.Globalization.CultureInfo]::InvariantCulture) +
-            [char]0 +
-            $ticks.ToString([System.Globalization.CultureInfo]::InvariantCulture)
-        )
-        $totalBytes += $length
-        if ($ticks -gt $newestTicks) {
-            $newestTicks = $ticks
-        }
-    }
-    if ($records.Count -eq 0) {
-        throw 'The durable live state scope unexpectedly contains no files.'
-    }
-
-    $orderedRecords = $records.ToArray()
-    [System.Array]::Sort(
-        $orderedRecords,
-        [System.StringComparer]::Ordinal
-    )
-    $canonicalMaterial = [string]::Join("`n", $orderedRecords) + "`n"
-    $hasher = [System.Security.Cryptography.SHA256]::Create()
+    $response = $null
     try {
-        $digest = [System.Convert]::ToHexString(
-            $hasher.ComputeHash(
-                [System.Text.Encoding]::UTF8.GetBytes($canonicalMaterial)
-            )
-        ).ToLowerInvariant()
+        $response = $client.SendAsync(
+            $request,
+            [System.Net.Http.HttpCompletionOption]::ResponseHeadersRead
+        ).GetAwaiter().GetResult()
+        $statusCode = [int]$response.StatusCode
+        if ($statusCode -ne 200) {
+            throw "Live health endpoint returned HTTP $statusCode."
+        }
+        $contentType = [string]$response.Content.Headers.ContentType.MediaType
+        if ($contentType -cne 'text/html') {
+            throw "Live health endpoint returned unexpected content type: $contentType"
+        }
+        return [ordered]@{
+            endpoint     = $LiveHealthUri
+            method       = 'GET'
+            status_code  = $statusCode
+            content_type = $contentType
+        }
     }
     finally {
-        $hasher.Dispose()
-    }
-
-    return [pscustomobject]@{
-        Public = [ordered]@{
-            root             = $ExpectedLiveRoot.Replace([char]92, [char]47)
-            scope            = $DurableScope
-            algorithm        = $DurableAlgorithm
-            count            = [int]$orderedRecords.Length
-            total_bytes      = $totalBytes
-            metadata_sha256  = $digest
-            newest_write_utc = (
-                [datetime]::new($newestTicks, [System.DateTimeKind]::Utc)
-            ).ToString(
-                'o',
-                [System.Globalization.CultureInfo]::InvariantCulture
-            )
+        if ($null -ne $response) {
+            $response.Dispose()
         }
-        Canonical = $canonicalMaterial
+        $request.Dispose()
+        $client.Dispose()
+        $handler.Dispose()
     }
 }
 
 $listenerBefore = Get-LiveListenerIdentity
 $gitBefore = Get-LiveGitIdentity
-$filesBefore = Get-LiveFileIdentity
-$filesAfter = Get-LiveFileIdentity
+$health = Get-LiveHealthIdentity
 $gitAfter = Get-LiveGitIdentity
 $listenerAfter = Get-LiveListenerIdentity
 
@@ -329,31 +402,68 @@ if (($gitBefore | ConvertTo-Json -Compress) -cne (
 )) {
     throw 'Live Git identity changed while the snapshot was captured.'
 }
-if ($filesBefore.Canonical -cne $filesAfter.Canonical) {
-    throw 'Live durable-state metadata changed while the snapshot was captured.'
-}
 
 $snapshot = [ordered]@{
-    schema_version = 1
+    schema_version = 2
     captured_at    = [datetime]::UtcNow.ToString(
         'o',
         [System.Globalization.CultureInfo]::InvariantCulture
     )
     listener       = $listenerAfter
-    files          = $filesAfter.Public
+    health         = $health
     git            = $gitAfter
 }
 $json = $snapshot | ConvertTo-Json -Depth 6 -Compress
 
-if ($null -ne $ResolvedOutput) {
-    $temporary = "$ResolvedOutput.tmp.$PID.$([guid]::NewGuid().ToString('N'))"
+if ($null -ne $OutputBoundary) {
+    $resolvedOutput = $OutputBoundary.OutputPath
+    $temporaryLeaf = (
+        $OutputBoundary.OutputLeaf +
+        ".tmp.$PID.$([guid]::NewGuid().ToString('N'))"
+    )
+    Assert-SafeSnapshotLeafName -LeafName $temporaryLeaf
+    $temporary = Join-Path $OutputBoundary.EvidenceRoot $temporaryLeaf
     try {
+        # Re-prove the complete owned boundary immediately before writing.
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $OutputBoundary.StateBase -PathKind Container `
+            -Label 'exact staging state base'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $OutputBoundary.OwnershipMarker -PathKind Leaf `
+            -Label 'staging ownership marker'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $OutputBoundary.EvidenceRoot -PathKind Container `
+            -Label 'owned evidence root'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $resolvedOutput -PathKind Leaf -AllowMissing `
+            -Label 'snapshot output path'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $temporary -PathKind Leaf -AllowMissing `
+            -Label 'snapshot temporary path'
+        if (
+            (Test-Path -LiteralPath $resolvedOutput) -or
+            (Test-Path -LiteralPath $temporary)
+        ) {
+            throw 'Snapshot output path appeared before the atomic write.'
+        }
         [System.IO.File]::WriteAllText(
             $temporary,
             $json + [Environment]::NewLine,
             [System.Text.UTF8Encoding]::new($false)
         )
-        Move-Item -LiteralPath $temporary -Destination $ResolvedOutput
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $temporary -PathKind Leaf `
+            -Label 'snapshot temporary path'
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $resolvedOutput -PathKind Leaf -AllowMissing `
+            -Label 'snapshot output path'
+        if (Test-Path -LiteralPath $resolvedOutput) {
+            throw "Refusing to replace an existing snapshot: $resolvedOutput"
+        }
+        Move-Item -LiteralPath $temporary -Destination $resolvedOutput
+        $null = Assert-SnapshotCanonicalNonReparsePath `
+            -Path $resolvedOutput -PathKind Leaf `
+            -Label 'written snapshot output path'
     }
     finally {
         if (Test-Path -LiteralPath $temporary) {

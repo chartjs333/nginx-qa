@@ -290,7 +290,7 @@ def validate_runtime(bundle: dict, response: dict, **overrides):
 
 def live_snapshot(captured_at: str) -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "captured_at": captured_at,
         "listener": {
             "host": "0.0.0.0",
@@ -298,16 +298,13 @@ def live_snapshot(captured_at: str) -> dict:
             "pid": 7000,
             "started_at": "2026-10-03T09:00:00+00:00",
         },
-        "files": {
-            "root": "D:/nginx-qa",
-            "scope": runner.LIVE_DURABLE_SCOPE,
-            "algorithm": runner.LIVE_DURABLE_ALGORITHM,
-            "count": 12,
-            "total_bytes": 12345,
-            "metadata_sha256": "f" * 64,
-            "newest_write_utc": "2026-10-03T09:30:00+00:00",
+        "health": {
+            "endpoint": "http://127.0.0.1:8025/",
+            "method": "GET",
+            "status_code": 200,
+            "content_type": "text/html",
         },
-        "git": {"head": SHA, "branch": "main", "status": "clean"},
+        "git": {"head": SHA, "branch": "main"},
     }
 
 
@@ -479,6 +476,60 @@ class StagingQualificationRunnerTests(unittest.TestCase):
                 allow_deduplicated=False,
                 expected_manifest_sha256=MANIFEST_SHA256,
             )
+        exact_response = runtime_fixture()[1]
+        with self.assertRaisesRegex(runner.QualificationError, "HTTP/deduplication"):
+            runner._assert_start_response(
+                201.0,
+                exact_response,
+                config=config_fixture(),
+                project_id=PROJECT_ID,
+                allow_deduplicated=False,
+                expected_manifest_sha256=MANIFEST_SHA256,
+            )
+        exact_response["deduplicated"] = True
+        with self.assertRaisesRegex(runner.QualificationError, "unexpectedly deduplicated"):
+            runner._assert_start_response(
+                200,
+                exact_response,
+                config=config_fixture(),
+                project_id=PROJECT_ID,
+                allow_deduplicated=False,
+                expected_manifest_sha256=MANIFEST_SHA256,
+            )
+
+    def test_project_response_requires_exact_http_200(self) -> None:
+        inputs = runner._inputs(config_fixture())
+        payload = {
+            "project": {
+                "git_context_key": inputs["git_context_key"],
+                "project_phone": PROJECT_ID,
+                "project_id": PROJECT_ID,
+            },
+            "project_phone": PROJECT_ID,
+            "created": True,
+        }
+        self.assertEqual(
+            runner._assert_project_response(200, payload, inputs), PROJECT_ID
+        )
+        for invalid_status in (201, 200.0, True):
+            with self.subTest(status=invalid_status), self.assertRaisesRegex(
+                runner.QualificationError, "different project context"
+            ):
+                runner._assert_project_response(invalid_status, payload, inputs)
+        for nested_key, nested_value in (
+            ("project_phone", "9998"),
+            ("project_id", "9998"),
+        ):
+            invalid = deepcopy(payload)
+            invalid["project"][nested_key] = nested_value
+            with self.subTest(nested_key=nested_key), self.assertRaisesRegex(
+                runner.QualificationError, "different project context"
+            ):
+                runner._assert_project_response(200, invalid, inputs)
+        invalid = deepcopy(payload)
+        invalid["project_phone"] = "phone-9001"
+        with self.assertRaisesRegex(runner.QualificationError, "different project context"):
+            runner._assert_project_response(200, invalid, inputs)
 
     def test_runtime_snapshot_proves_four_exact_owned_children(self) -> None:
         bundle, response = runtime_fixture()
@@ -807,7 +858,7 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             "-B",
             "-m",
             "uvicorn",
-            "main:app",
+            "staging_host_app:app",
             "--host",
             "127.0.0.1",
             "--port",
@@ -852,7 +903,7 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             "-B",
             "-m",
             "uvicorn",
-            "main:app",
+            "staging_host_app:app",
             "--host",
             "127.0.0.1",
             "--port",
@@ -974,7 +1025,7 @@ class StagingQualificationRunnerTests(unittest.TestCase):
         before = live_snapshot("2026-10-03T10:00:00+00:00")
         after = live_snapshot("2026-10-03T10:01:00+00:00")
         runner.compare_external_live_snapshots(before, after)
-        after["files"]["count"] += 1
+        after["git"]["head"] = "d" * 40
         with self.assertRaisesRegex(runner.QualificationError, "snapshot changed"):
             runner.compare_external_live_snapshots(before, after)
         invalid = live_snapshot("not-a-time")
@@ -985,12 +1036,12 @@ class StagingQualificationRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(runner.QualificationError, "listener identity"):
             runner.validate_external_live_snapshot(invalid)
         invalid = live_snapshot("2026-10-03T10:00:00+00:00")
-        invalid["files"]["scope"] = "whole-tree"
-        with self.assertRaisesRegex(runner.QualificationError, "file identity"):
+        invalid["health"]["endpoint"] = "http://0.0.0.0:8025/"
+        with self.assertRaisesRegex(runner.QualificationError, "health identity"):
             runner.validate_external_live_snapshot(invalid)
         invalid = live_snapshot("2026-10-03T10:00:00+00:00")
-        del invalid["files"]["scope"]
-        with self.assertRaisesRegex(runner.QualificationError, "file snapshot"):
+        del invalid["health"]["method"]
+        with self.assertRaisesRegex(runner.QualificationError, "health snapshot"):
             runner.validate_external_live_snapshot(invalid)
         invalid = live_snapshot("2026-10-03T10:00:00+00:00")
         invalid["schema_version"] = True
@@ -1000,16 +1051,16 @@ class StagingQualificationRunnerTests(unittest.TestCase):
         invalid["listener"]["port"] = float(runner.LIVE_HTTP_PORT)
         with self.assertRaisesRegex(runner.QualificationError, "listener identity"):
             runner.validate_external_live_snapshot(invalid)
+        invalid = live_snapshot("2026-10-03T10:00:00+00:00")
+        invalid["health"]["status_code"] = 200.0
+        with self.assertRaisesRegex(runner.QualificationError, "health identity"):
+            runner.validate_external_live_snapshot(invalid)
         for field in ("started_at",):
             with self.subTest(field=field):
                 invalid = live_snapshot("2026-10-03T10:00:00+00:00")
                 invalid["listener"][field] = "2026-10-03T10:00:01+00:00"
                 with self.assertRaisesRegex(runner.QualificationError, "not causal"):
                     runner.validate_external_live_snapshot(invalid)
-        invalid = live_snapshot("2026-10-03T10:00:00+00:00")
-        invalid["files"]["newest_write_utc"] = "2026-10-03T10:00:01+00:00"
-        with self.assertRaisesRegex(runner.QualificationError, "not causal"):
-            runner.validate_external_live_snapshot(invalid)
 
     def test_live_after_snapshot_path_is_directly_owned_and_distinct(self) -> None:
         config = config_fixture()
@@ -1123,6 +1174,9 @@ class StagingQualificationRunnerTests(unittest.TestCase):
 
     def test_ownership_marker_requires_exact_environment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
+            base_executable = Path(
+                getattr(sys, "_base_executable", sys.executable)
+            ).resolve()
             base = Path(temporary)
             service = base / "service"
             state = base / "state"
@@ -1151,10 +1205,10 @@ class StagingQualificationRunnerTests(unittest.TestCase):
                 "branch": REF.removeprefix("refs/heads/"),
                 "state_base": str(state),
                 "venv_root": str(venv),
-                "base_python": sys.executable,
+                "base_python": str(base_executable),
                 "base_python_prefix": sys.base_prefix,
                 "base_python_version": runner.platform.python_version(),
-                "base_python_sha256": runner._hash_file(Path(sys.executable)),
+                "base_python_sha256": runner._hash_file(base_executable),
                 "runtime_root": str(runtime_root),
                 "prompt_root": str(prompt_root),
                 "managed_root": str(managed_root),
@@ -1318,7 +1372,277 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             finally:
                 verification.close()
 
-    def test_prepare_resumes_checkpoint_and_reproves_owner_before_posts(self) -> None:
+    def test_prepare_resumes_only_the_unfinished_durable_intent(self) -> None:
+        cases = {
+            "initialized": ["/project-manager/0001", "start"],
+            "host_observed": ["/project-manager/0001", "start"],
+            "project_intent_recorded": ["/project-manager/0001", "start"],
+            "project_provisioned": ["start"],
+            "start_intent_recorded": ["start"],
+            "start_accepted": [],
+        }
+        for initial_status, expected_calls in cases.items():
+            with self.subTest(status=initial_status), tempfile.TemporaryDirectory() as temporary:
+                evidence_path = Path(temporary) / "evidence.json"
+                config = config_fixture(evidence_path=evidence_path)
+                inputs = runner._inputs(config)
+                git_proof = {"manifest_sha256": MANIFEST_SHA256, "head": SHA}
+                marker_proof = {"marker_sha256": "e" * 64}
+                host_proof = {
+                    "pid": 9000,
+                    "birth_token_sha256": "f" * 64,
+                    "executable_path": "C:/Python312/python.exe",
+                    "cwd": str(SERVICE_ROOT),
+                    "venv_ancestry": True,
+                    "command_sha256": "1" * 64,
+                }
+                project_body = {
+                    "git_address": config.git_address,
+                    "git_context_key": inputs["git_context_key"],
+                    "project_name": f"UMSE staging qualification {config.run_id}",
+                }
+                project_intent = runner._request_intent(
+                    "/project-manager/0001", project_body
+                )
+                start_path = (
+                    f"/api/v1/projects/{PROJECT_ID}/sprints/start-from-git"
+                )
+                start_intent = runner._request_intent(
+                    start_path, runner._start_request(inputs)
+                )
+                evidence = {
+                    "schema_version": runner.EVIDENCE_SCHEMA_VERSION,
+                    "qualification": runner.QUALIFICATION_ID,
+                    "status": initial_status,
+                    "created_at": "2026-10-03T10:00:00+00:00",
+                    "updated_at": "2026-10-03T10:00:00+00:00",
+                    "inputs": inputs,
+                    "git": git_proof,
+                    "ownership_marker": marker_proof,
+                    "pre_restart_host": host_proof,
+                    "external_live_baseline": live_snapshot(
+                        "2026-10-03T10:00:00+00:00"
+                    ),
+                    "checks": [],
+                }
+                if initial_status != "initialized":
+                    evidence["pre_restart_listener_pid"] = 9000
+                if initial_status != "host_observed":
+                    if initial_status != "initialized":
+                        evidence["project_request_intent"] = deepcopy(project_intent)
+                if initial_status in {
+                    "project_provisioned",
+                    "start_intent_recorded",
+                    "start_accepted",
+                }:
+                    evidence["project"] = {
+                        "http_status": 200,
+                        "project_phone": PROJECT_ID,
+                        "git_context_key": inputs["git_context_key"],
+                        "created": True,
+                    }
+                if initial_status in {"start_intent_recorded", "start_accepted"}:
+                    evidence["start_request_intent"] = deepcopy(start_intent)
+                _, accepted_start = runtime_fixture()
+                if initial_status == "start_accepted":
+                    evidence["start_http_status"] = 201
+                    evidence["start_response"] = deepcopy(accepted_start)
+                runner.atomic_write_json(evidence_path, evidence)
+
+                calls: list[tuple[str, str, dict]] = []
+                client_configs: list[tuple[str, float]] = []
+                test_case = self
+
+                class FakeClient:
+                    def __init__(self, base_url: str, *, timeout: float) -> None:
+                        client_configs.append((base_url, timeout))
+
+                    def request(self, method: str, path: str, payload=None):
+                        durable = json.loads(evidence_path.read_text(encoding="utf-8"))
+                        calls.append((method, path, deepcopy(payload)))
+                        if path == "/project-manager/0001":
+                            test_case.assertEqual(
+                                durable["status"], "project_intent_recorded"
+                            )
+                            test_case.assertEqual(
+                                durable["project_request_intent"], project_intent
+                            )
+                            test_case.assertEqual(payload, project_intent["payload"])
+                            return 200, {
+                                "project": {
+                                    "git_context_key": inputs["git_context_key"],
+                                    "project_phone": PROJECT_ID,
+                                    "project_id": PROJECT_ID,
+                                },
+                                "project_phone": PROJECT_ID,
+                                "created": initial_status
+                                in {"initialized", "host_observed"},
+                            }
+                        test_case.assertEqual(path, start_path)
+                        test_case.assertEqual(
+                            durable["status"], "start_intent_recorded"
+                        )
+                        test_case.assertEqual(
+                            durable["start_request_intent"], start_intent
+                        )
+                        test_case.assertEqual(payload, start_intent["payload"])
+                        response = deepcopy(accepted_start)
+                        ambiguous = initial_status == "start_intent_recorded"
+                        response["deduplicated"] = ambiguous
+                        return (200 if ambiguous else 201), response
+
+                health = [
+                    {"leader_pid": 4100 + index, "worker_pid": 5100 + index}
+                    for index in range(4)
+                ]
+                summary = {
+                    "processes": [{"pid": 4100 + index} for index in range(4)]
+                }
+                with (
+                    patch.object(runner, "validate_config", return_value=config),
+                    patch.object(runner, "validate_git_source", return_value=git_proof),
+                    patch.object(
+                        runner, "validate_ownership_marker", return_value=marker_proof
+                    ),
+                    patch.object(
+                        runner,
+                        "validate_host_listener_ownership",
+                        return_value=host_proof,
+                    ),
+                    patch.object(runner, "LoopbackJsonClient", FakeClient),
+                    patch.object(runner, "ManagedStateReader"),
+                    patch.object(
+                        runner,
+                        "wait_for_healthy",
+                        return_value=(summary, health, [{"job": "stable"}]),
+                    ),
+                ):
+                    result = runner.prepare(config)
+
+                self.assertEqual(result["status"], "awaiting_external_restart")
+                observed_paths = [
+                    "/project-manager/0001" if path == "/project-manager/0001" else "start"
+                    for _, path, _ in calls
+                ]
+                self.assertEqual(observed_paths, expected_calls)
+                self.assertTrue(all(method == "POST" for method, _, _ in calls))
+                self.assertEqual(
+                    client_configs,
+                    []
+                    if not expected_calls
+                    else [(config.staging_url, config.timeout_seconds)],
+                )
+                self.assertEqual(result["project_request_intent"], project_intent)
+                self.assertEqual(result["project"]["http_status"], 200)
+                self.assertEqual(result["start_request_intent"], start_intent)
+                if initial_status == "start_accepted":
+                    self.assertEqual(result["start_http_status"], 201)
+                    self.assertEqual(result["start_response"], accepted_start)
+
+    def test_prepare_rejects_saved_intent_or_proof_drift_without_post(self) -> None:
+        mutations = {
+            "project_intent": lambda evidence: evidence[
+                "project_request_intent"
+            ]["payload"].__setitem__("project_name", "different"),
+            "project_proof": lambda evidence: evidence["project"].__setitem__(
+                "project_phone", "9999"
+            ),
+            "project_http_status": lambda evidence: evidence["project"].__setitem__(
+                "http_status", 201
+            ),
+            "start_intent": lambda evidence: evidence["start_request_intent"][
+                "payload"
+            ].__setitem__("idempotency_key", "different"),
+            "start_proof": lambda evidence: evidence["start_response"][
+                "identity"
+            ].__setitem__("commit", "d" * 40),
+            "start_http_status_type": lambda evidence: evidence.__setitem__(
+                "start_http_status", 201.0
+            ),
+            "unexpected_downstream_shape": lambda evidence: evidence.__setitem__(
+                "pre_restart", {}
+            ),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                evidence_path = Path(temporary) / "evidence.json"
+                config = config_fixture(evidence_path=evidence_path)
+                inputs = runner._inputs(config)
+                git_proof = {"manifest_sha256": MANIFEST_SHA256, "head": SHA}
+                marker_proof = {"marker_sha256": "e" * 64}
+                host_proof = {
+                    "pid": 9000,
+                    "birth_token_sha256": "f" * 64,
+                    "executable_path": "C:/Python312/python.exe",
+                    "cwd": str(SERVICE_ROOT),
+                    "venv_ancestry": True,
+                    "command_sha256": "1" * 64,
+                }
+                project_intent = runner._request_intent(
+                    "/project-manager/0001",
+                    {
+                        "git_address": config.git_address,
+                        "git_context_key": inputs["git_context_key"],
+                        "project_name": f"UMSE staging qualification {config.run_id}",
+                    },
+                )
+                start_path = (
+                    f"/api/v1/projects/{PROJECT_ID}/sprints/start-from-git"
+                )
+                _, start_response = runtime_fixture()
+                evidence = {
+                    "schema_version": runner.EVIDENCE_SCHEMA_VERSION,
+                    "qualification": runner.QUALIFICATION_ID,
+                    "status": "start_accepted",
+                    "created_at": "2026-10-03T10:00:00+00:00",
+                    "updated_at": "2026-10-03T10:00:00+00:00",
+                    "inputs": inputs,
+                    "git": git_proof,
+                    "ownership_marker": marker_proof,
+                    "pre_restart_host": host_proof,
+                    "pre_restart_listener_pid": 9000,
+                    "external_live_baseline": live_snapshot(
+                        "2026-10-03T10:00:00+00:00"
+                    ),
+                    "checks": [],
+                    "project_request_intent": project_intent,
+                    "project": {
+                        "http_status": 200,
+                        "project_phone": PROJECT_ID,
+                        "git_context_key": inputs["git_context_key"],
+                        "created": True,
+                    },
+                    "start_request_intent": runner._request_intent(
+                        start_path, runner._start_request(inputs)
+                    ),
+                    "start_http_status": 201,
+                    "start_response": start_response,
+                }
+                mutate(evidence)
+                runner.atomic_write_json(evidence_path, evidence)
+                before = evidence_path.read_bytes()
+                with (
+                    patch.object(runner, "validate_config", return_value=config),
+                    patch.object(runner, "validate_git_source", return_value=git_proof),
+                    patch.object(
+                        runner, "validate_ownership_marker", return_value=marker_proof
+                    ),
+                    patch.object(
+                        runner,
+                        "validate_host_listener_ownership",
+                        return_value=host_proof,
+                    ),
+                    patch.object(
+                        runner,
+                        "_staging_client",
+                        side_effect=AssertionError("HTTP client must not be created"),
+                    ),
+                ):
+                    with self.assertRaises(runner.QualificationError):
+                        runner.prepare(config)
+                self.assertEqual(evidence_path.read_bytes(), before)
+
+    def test_prepare_rejects_initialized_downstream_field_before_write(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             evidence_path = Path(temporary) / "evidence.json"
             config = config_fixture(evidence_path=evidence_path)
@@ -1336,77 +1660,41 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             evidence = {
                 "schema_version": runner.EVIDENCE_SCHEMA_VERSION,
                 "qualification": runner.QUALIFICATION_ID,
-                "status": "project_provisioned",
+                "status": "initialized",
                 "created_at": "2026-10-03T10:00:00+00:00",
                 "updated_at": "2026-10-03T10:00:00+00:00",
                 "inputs": inputs,
                 "git": git_proof,
                 "ownership_marker": marker_proof,
                 "pre_restart_host": host_proof,
-                "pre_restart_listener_pid": 9000,
                 "external_live_baseline": live_snapshot(
                     "2026-10-03T10:00:00+00:00"
                 ),
                 "checks": [],
+                "project_request_intent": {"unexpected": "downstream"},
             }
             runner.atomic_write_json(evidence_path, evidence)
-            _, start_response = runtime_fixture()
-            start_response["deduplicated"] = True
-            calls: list[str] = []
-            client_configs: list[tuple[str, float]] = []
-
-            class FakeClient:
-                def __init__(self, base_url: str, *, timeout: float) -> None:
-                    self.base_url = base_url
-                    client_configs.append((base_url, timeout))
-
-                def request(self, method: str, path: str, payload=None):
-                    self.assert_post(method)
-                    calls.append(path)
-                    if path == "/project-manager/0001":
-                        return 200, {
-                            "project": {"git_context_key": inputs["git_context_key"]},
-                            "project_phone": PROJECT_ID,
-                            "created": False,
-                        }
-                    return 200, deepcopy(start_response)
-
-                @staticmethod
-                def assert_post(method: str) -> None:
-                    if method != "POST":
-                        raise AssertionError(method)
-
-            health = [
-                {"leader_pid": 4100 + index, "worker_pid": 5100 + index}
-                for index in range(4)
-            ]
-            summary = {"processes": [{"pid": 4100 + index} for index in range(4)]}
+            before = evidence_path.read_bytes()
             with (
                 patch.object(runner, "validate_config", return_value=config),
                 patch.object(runner, "validate_git_source", return_value=git_proof),
                 patch.object(
                     runner, "validate_ownership_marker", return_value=marker_proof
-                ) as marker_mock,
-                patch.object(
-                    runner, "validate_host_listener_ownership", return_value=host_proof
-                ) as host_mock,
-                patch.object(runner, "LoopbackJsonClient", FakeClient),
-                patch.object(runner, "ManagedStateReader"),
+                ),
                 patch.object(
                     runner,
-                    "wait_for_healthy",
-                    return_value=(summary, health, [{"job": "stable"}]),
+                    "validate_host_listener_ownership",
+                    return_value=host_proof,
+                ),
+                patch.object(
+                    runner,
+                    "_staging_client",
+                    side_effect=AssertionError("HTTP client must not be created"),
                 ),
             ):
-                result = runner.prepare(config)
-            self.assertEqual(result["status"], "awaiting_external_restart")
-            self.assertEqual(len(calls), 2)
-            self.assertEqual(
-                client_configs,
-                [(config.staging_url, config.timeout_seconds)],
-            )
-            self.assertEqual(marker_mock.call_count, 3)
-            self.assertEqual(host_mock.call_count, 4)
+                with self.assertRaisesRegex(runner.QualificationError, "shape"):
+                    runner.prepare(config)
+            self.assertEqual(evidence_path.read_bytes(), before)
 
 
 if __name__ == "__main__":
