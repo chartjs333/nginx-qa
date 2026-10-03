@@ -1,0 +1,296 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-03T21:59:57.347Z",
+  "repository": "https://github.com/chartjs333/nginx-qa.git",
+  "release_branch": "agent/umse-09-release-qualification",
+  "qualified_runtime": {
+    "commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+    "tree": "c994b07dc2d194326bd3bf7c0469578cfcc78171",
+    "release_record_base_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+    "remote_branches": [
+      "agent/umse-07-staging-qualification",
+      "agent/umse-08-legacy-regression",
+      "agent/umse-09-release-qualification"
+    ],
+    "remote_heads_verified_equal": true,
+    "live_source_commit": "3c42efc1701a0297d3563d7d31e66e532b072394",
+    "live_source_branch": "agent/groups-cycles-graph-ui",
+    "commit_count_from_live_source": 38,
+    "diff_from_live_source": {
+      "files": 65,
+      "insertions": 77801,
+      "deletions": 19,
+      "production_runtime_files": 13,
+      "test_files": 19,
+      "schema_files": 16,
+      "documentation_orchestration_example_files": 13
+    }
+  },
+  "accepted_chain": [
+    {
+      "index": 1,
+      "node": "architecture-contract",
+      "outcome": "DONE",
+      "assignment_id": "7618c7b1-72f3-41d6-bf40-a5bbce6fa42e",
+      "branch": "agent/umse-01-architecture-contract",
+      "commit": "274385c9ad5adf57826483e91c6ec3673c53a9f5",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/3",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "8e39b356-d46c-4ece-a4c6-39a199233f2d", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "b708a334-06e7-418f-bfd3-45630c018968", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 2,
+      "node": "workspace-core",
+      "outcome": "DONE",
+      "assignment_id": "8e136597-56d4-456c-83bd-84aa3b5e2d4e",
+      "branch": "agent/umse-02-workspace-core",
+      "commit": "8d1260a880fbfd63d50fc6f004db3582dc9e3a4c",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/4",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "a316afc0-bd16-4d02-942d-bfa8d32d5bbb", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "b8b23ead-475b-4cb3-92e5-4cde687803a4", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 3,
+      "node": "sprint-type-dispatch",
+      "outcome": "DONE",
+      "assignment_id": "8dbb275a-be33-4cc6-9a33-61fbc01d9707",
+      "branch": "agent/umse-03-sprint-type-dispatch",
+      "commit": "643b669d5a4d7fce5d136e636d42a499abcea526",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/5",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "31a49ee2-392e-4cda-9081-291d2f876355", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "e6cb776d-dbc3-4fd4-96d4-11ba5e11cc76", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 4,
+      "node": "transactional-import",
+      "outcome": "DONE",
+      "assignment_id": "ed9f7f4e-af2f-4831-b4d5-c0c63b6dda6d",
+      "branch": "agent/umse-04-transactional-import",
+      "commit": "ce23c90ca8ffdc36b41f7dbcf727d6fdc5f36107",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/6",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "0e67be0a-6854-4f00-a773-24be98b49925", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "a3e16951-ce1a-48be-8c3d-90dc0daf8bec", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 5,
+      "node": "concurrent-runtime",
+      "outcome": "DONE",
+      "assignment_id": "0cd0ec82-ddd8-410f-8e41-388c355b1338",
+      "branch": "agent/umse-05-concurrent-runtime",
+      "commit": "e213cbaa1392de44dcc8cb1bda7c7574e1fe147d",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/7",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "e3a74a82-53f9-443d-9175-f0e2e9c34889", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "10072e9d-ab11-4ee7-9437-017c58182016", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 6,
+      "node": "continuity-runtime",
+      "outcome": "DONE",
+      "assignment_id": "bf3a6520-f005-4a9f-b64b-0762fd6bff29",
+      "branch": "agent/umse-06-continuity-runtime",
+      "commit": "ec593fe552aa6a7f56fa550801830fdbb84c8ee0",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/8",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "f03453b9-0f35-41c8-90e1-722a554cc59b", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "7e80253d-e6a3-47e0-bee6-b2560318976b", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 7,
+      "node": "staging-qualification",
+      "outcome": "PASS",
+      "assignment_id": "9f4148a5-b8ca-4179-886f-3083f92b6ce3",
+      "branch": "agent/umse-07-staging-qualification",
+      "commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+      "pull_request": "https://github.com/chartjs333/nginx-qa/pull/9",
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "6ee65e5c-1ec0-42a4-a427-8d007236801c", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "77aa9867-dea5-4e29-9edb-508e80adf9ae", "decision": "APPROVE"}
+      ]
+    },
+    {
+      "index": 8,
+      "node": "legacy-regression",
+      "outcome": "PASS",
+      "assignment_id": "28713c4d-2683-48a8-b95f-e50a437bdef3",
+      "branch": "agent/umse-08-legacy-regression",
+      "commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+      "pull_request": null,
+      "no_delta": true,
+      "reviews": [
+        {"kind": "architecture", "assignment_id": "e8cc42c1-3f4c-4633-a588-43aef5248b97", "decision": "APPROVE"},
+        {"kind": "evidence", "assignment_id": "313625cb-6345-4709-8289-d3352b680b4f", "decision": "APPROVE"}
+      ]
+    }
+  ],
+  "closed_rework": {
+    "rework_cycle_count": 8,
+    "rejected_commits": [
+      "c8413607fc8fd536e5e4bf2a1e946d1a9bdf042a",
+      "fcd514886e6c0f47d5f95375b4aacbf7648d7af7",
+      "6bbabae8811f7c2999633bfa8e67fb440c43aac2",
+      "9d4ec59bc3443b46b5ed8f556dcf03f6342d838f",
+      "8f2e532be89a032e58e44013d0de37068dfc3d0d",
+      "f6f36c88092f6b0edf1c51e79db9b1645e0a5855",
+      "2f0b8ef316e513d5a3834f4fd8612b3ebcb2e43b",
+      "57cf409663ded3d71ec803facd90fab07b346aed"
+    ],
+    "all_findings_closed_by_later_approved_commits": true
+  },
+  "tests": {
+    "final_serialized_suite": {
+      "runner": "pytest 9.0.0 on C:/Python312/python.exe",
+      "collected": 587,
+      "passed": 587,
+      "failed": 0,
+      "skipped": 0,
+      "subtests": 260,
+      "duration_seconds": 2020.49,
+      "source": "UMSE Evidence Reviewer assignment 313625cb-6345-4709-8289-d3352b680b4f"
+    },
+    "complete_shard_accounting": [
+      {"family": "legacy, UI, Telegram, queue and sprint-type", "passed": 201},
+      {"family": "continuity, import recovery and merge Git", "passed": 81},
+      {"family": "process supervisor", "passed": 69},
+      {"family": "staging qualification", "passed": 62},
+      {"family": "branch leases, Git provider and workspace safety", "passed": 33},
+      {"family": "managed workspaces", "passed": 20},
+      {"family": "port leases", "passed": 10},
+      {"family": "managed import", "passed": 108},
+      {"family": "pytest-only Windows launcher", "passed": 3}
+    ],
+    "legacy_baseline": {
+      "commit": "8d1260a880fbfd63d50fc6f004db3582dc9e3a4c",
+      "historical_actor_import_tests": 50,
+      "historical_tests_missing_on_candidate": 0,
+      "new_dispatch_compatibility_tests": 7,
+      "absent_sprint_type_effective_value": "legacy_v1",
+      "absent_sprint_type_remains_absent_on_serialization": true,
+      "explicit_legacy_v1_uses_same_pipeline": true
+    }
+  },
+  "staging": {
+    "qualification": "managed-staging-four-child-adoption",
+    "status": "passed",
+    "run_id": "umse-007-20261003t195221287z-1504f6fe",
+    "created_at": "2026-10-03T21:52:48.864538+02:00",
+    "updated_at": "2026-10-03T21:57:44.903048+02:00",
+    "evidence_path": "C:/nginx-qa-staging-state/umse-007/evidence/umse-007-20261003T195221287Z-1504f6fe.json",
+    "evidence_sha256": "842f964f419e6ba7ede563e00ba035f9e0c5be1afd313b9eb06abcd8024b9941",
+    "evidence_size": 54309,
+    "source": {
+      "head": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+      "advertised_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+      "ref": "refs/heads/agent/umse-07-staging-qualification",
+      "worktree": "clean",
+      "manifest_git_blob_sha1": "66648cba5f320f811164937cad1bc4398409be12",
+      "manifest_git_blob_sha256": "41160737c713116d898bee907a35a3b393912c02444ecc140ae41112ad3a70fa",
+      "fixture_sha256": "7a593b77d4f35744b85ff20e57ec44e956cad2deddf31f95351085c9215298f0"
+    },
+    "start_http_status": 201,
+    "start_deduplicated": false,
+    "replay_deduplicated": true,
+    "restart": {
+      "pre_host_pid": 51704,
+      "post_host_pid": 37176,
+      "host_pid_changed": true,
+      "child_identity_preserved": true,
+      "children": [
+        {"leader_pid": 28584, "worker_pid": 64736, "port": 18100},
+        {"leader_pid": 49888, "worker_pid": 40260, "port": 18101},
+        {"leader_pid": 59912, "worker_pid": 56860, "port": 18102},
+        {"leader_pid": 39372, "worker_pid": 63392, "port": 18103}
+      ]
+    },
+    "cleanup": {
+      "completed_at": "2026-10-03T21:57:08.153796+02:00",
+      "processes_stopped": 4,
+      "leases_released": 4,
+      "staging_host_stopped": true,
+      "remaining_staging_listeners": 0
+    },
+    "logs": {
+      "issue_lines_matching_error_traceback_exception_critical_warning": 0,
+      "host": [
+        {"file": "host-1.stderr.log", "sha256": "7fb64c9a0b617b3804bf228e3c2fffb5fb6e356a7906f6aeded81b7487a769a5"},
+        {"file": "host-1.stdout.log", "sha256": "890a8da7b508d30cf5676d828683c68a57533141eaeca22909eadf21e361d9cd"},
+        {"file": "host-2.stderr.log", "sha256": "3b85cbbc5814a5d3109e74d2580ab1fbf8b43154bf660792083677415837540e"},
+        {"file": "host-2.stdout.log", "sha256": "0499fa9247d7c43860ea2fb63c9f54c7e3034e6f8a982a55a45340e4e39fac9b"}
+      ],
+      "child_log_pairs": [
+        {"process": "process-7bf1b4cc63a1619f91280044aaee5be3f26c027c431dbd7e75be6ad519b87438", "stdout_and_stderr_sha256": "2129cdef1f43168c2d851239ead4cb182edc76b5ae21634c26f87d3e9e512a1e"},
+        {"process": "process-81769d89d316a194d1590ac02310fd36d306c652eb55d5901b10be52d72d5986", "stdout_and_stderr_sha256": "57a6837732e5a09ae36aaeecfc05fda45ed9d56a95e378f913d2190dcc4821e8"},
+        {"process": "process-985067cfe6ef18dadc2b179804e36921354db7170821a2873b0764ac7088edf7", "stdout_and_stderr_sha256": "7e31ac9d9ea873c0c9e06d16c089c750d90d8ce4fab7ca474ab69897e5a7fa3b"},
+        {"process": "process-9f5feb6eb1a254bb269d451fdb72504e1517e530f0ca48f0021596ec23163c4a", "stdout_and_stderr_sha256": "f1f01d5d2a37ba58e2d055e425afab964f42220cf14f68946c0c3f5f2e27c439"}
+      ]
+    }
+  },
+  "live_non_mutation": {
+    "before_snapshot_sha256": "9555dac7e9302f98a3da153a92876d354209652a61deacc0d19c9985305878ba",
+    "after_snapshot_sha256": "5e5f5b2272901c5c4ecf7871c4b328909717e2b5df81b7df3b80803876fc0fdf",
+    "listener_pid_before": 47304,
+    "listener_pid_after": 47304,
+    "process_started_utc": "2026-10-02T10:01:50.6897592Z",
+    "http_before": 200,
+    "http_after": 200,
+    "git_commit_before": "3c42efc1701a0297d3563d7d31e66e532b072394",
+    "git_commit_after": "3c42efc1701a0297d3563d7d31e66e532b072394",
+    "git_branch_before": "agent/groups-cycles-graph-ui",
+    "git_branch_after": "agent/groups-cycles-graph-ui",
+    "current_read_only_recheck_matches": true
+  },
+  "qualified_environment": {
+    "operating_system": "Microsoft Windows 10 Pro 10.0.19045 x64",
+    "powershell": "7.6.6",
+    "git": "2.49.0.windows.1",
+    "git_system_core_autocrlf": true,
+    "python": "3.12.1",
+    "pytest": "9.0.0",
+    "package_count": 36,
+    "sorted_freeze_sha256": "56865f9826e33ae3440c9a6421fbd2bee2f7a07a078d1aa36c7de59dd691f689",
+    "freeze_file": "docs/universal-managed-sprint-qualified-environment.txt"
+  },
+  "security_review": {
+    "candidate_diff_high_confidence_secret_shapes": 5,
+    "candidate_diff_non_test_secret_shapes": 0,
+    "candidate_diff_secret_shape_disposition": "All five are deliberate GitHub-token-shaped negative fixtures in tests/test_git_provider.py and tests/test_sprint_type_contract.py.",
+    "staging_evidence_and_log_high_confidence_secret_shapes": 0,
+    "evidence_sensitive_key_scan": "passed",
+    "protected_live_runtime_read_by_staging_runner": false,
+    "staging_telegram_disabled": true,
+    "staging_tunnel_disabled": true,
+    "credentials_persisted_in_release_record": false
+  },
+  "spec_manifest_note": {
+    "path": "orchestration/sprints/universal-managed-sprint-engine/FILE-MANIFEST.json",
+    "sha256": "4743a88b999bde9aaaae070719ef5e420b136482d41241d3c3bfc9596381843b",
+    "scope": "original specification snapshot",
+    "is_release_candidate_manifest": false,
+    "reason": "The protected specification manifest intentionally was not rewritten by downstream implementation nodes; staging-isolation.md evolved after that snapshot. Release identity is the exact Git tree plus the source-bound staging manifest and evidence hashes above."
+  },
+  "known_non_blocking_caveats": [
+    "Runtime requirements are ranges rather than a complete lock; the exact qualified Windows package freeze is recorded separately.",
+    "The deliberately uncollected _test_legacy_sequential_whoami_moves_to_next_role_without_parallel_work is pre-baseline test debt and fails identically on baseline and candidate; its active replacement passes.",
+    "Pull requests 3 through 9 remain stacked and unmerged; merge and live promotion are explicit operator actions after the terminal graph gate.",
+    "This release-record commit is documentation-only on top of the qualified runtime commit; reviewers must confirm no executable diff from the qualified runtime SHA."
+  ],
+  "promotion_gate": {
+    "software_qualification": "PASS",
+    "automatic_deployment": false,
+    "live_restart_performed": false,
+    "operator_approval_required": true,
+    "cold_backup_and_restore_validation_required": true,
+    "final_graph_reviews_required": 2,
+    "promotion_status": "NOT_AUTHORIZED"
+  }
+}
