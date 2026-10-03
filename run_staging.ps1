@@ -186,7 +186,7 @@ if issues:
 '@
 Push-Location $serviceRoot
 try {
-    & $pythonPath -c $validationScript
+    $validationScript | & $pythonPath -
     if ($LASTEXITCODE -ne 0) {
         throw "Managed staging configuration validation failed."
     }
