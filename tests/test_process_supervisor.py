@@ -1519,13 +1519,35 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
             len({workspace["actual_git_toplevel"] for workspace in state["workspaces"]}),
             4,
         )
+        contexts_by_process_id = {
+            str(context.process["process_id"]): context
+            for context in supervisor._repository.contexts()
+        }
         for process in processes:
             marker = Path(process["runtime_root"]) / "managed-child-marker.json"
             self.assertTrue(marker.is_file())
             marker_value = json.loads(marker.read_text(encoding="utf-8"))
             self.assertEqual(marker_value["process_id"], process["process_id"])
             self.assertEqual(marker_value["port"], process["health_endpoint"]["port"])
-            self.assertEqual(marker_value["pid"], process["pid"])
+            # Windows may keep a venv redirector as the authenticated Job
+            # leader while the base interpreter descendant owns the health
+            # socket.  Both PIDs are valid only when the listener is inside
+            # the exact durable process scope; equality would make this test
+            # depend on which Python launcher ran unittest.
+            marker_pid = int(marker_value["pid"])
+            self.assertIn(
+                marker_pid,
+                port_owner_pids(
+                    str(process["health_endpoint"]["host"]),
+                    int(process["health_endpoint"]["port"]),
+                ),
+            )
+            self.assertTrue(
+                supervisor._scope_contains_pid(
+                    contexts_by_process_id[str(process["process_id"])],
+                    marker_pid,
+                )
+            )
             self.assertEqual(
                 os.path.normcase(marker_value["cwd"]),
                 os.path.normcase(process["cwd"]),
@@ -1548,7 +1570,7 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
                     process["health_endpoint"]["host"],
                     process["health_endpoint"]["port"],
                 ),
-                frozenset({process["pid"]}),
+                frozenset({marker_pid}),
             )
             receipt = json.loads(
                 (
