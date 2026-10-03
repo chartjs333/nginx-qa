@@ -17,11 +17,21 @@
 ## Staging defaults
 
 ```text
-root: D:\nginx-qa-staging\universal-managed-sprint-engine
+stage root: D:\nginx-qa-staging
+service checkout: D:\nginx-qa-staging\universal-managed-sprint-engine
+virtual environment: D:\nginx-qa-staging\.venv
+runtime root: D:\nginx-qa-staging\runtime_state
+prompt root: D:\nginx-qa-staging\prompt
+managed root: D:\nginx-qa-staging\managed
 host: 127.0.0.1
 HTTP port: 18025
 managed child ports: 18100-18199
 ```
+
+`service_root`, `runtime_root`, `prompt_root`, `managed_root`, and the virtual
+environment are disjoint siblings. In particular, mutable roots must not be
+created below the service checkout: that layout violates the frozen runtime
+configuration invariant and is rejected before startup.
 
 Staging создаётся из Git в новом каталоге. Если каталог существует, имеет неизвестное
 содержимое или dirty state, запуск fail closed; автоматическая очистка запрещена.
@@ -49,9 +59,12 @@ Staging использует отдельные:
 ```text
 NGINX_QA_HTTP_HOST=127.0.0.1
 NGINX_QA_HTTP_PORT=18025
+NGINX_QA_SERVICE_ROOT=<stage>/universal-managed-sprint-engine
+NGINX_QA_PROTECTED_ROOTS=["D:/nginx-qa","D:/nginx-qa-umse","D:/Prompt"]
 NGINX_QA_RUNTIME_ROOT=<stage>/runtime_state
 NGINX_QA_PROMPT_ROOT=<stage>/prompt
 NGINX_QA_MANAGED_ROOT=<stage>/managed
+NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS=120
 NGINX_QA_CHILD_PORT_RANGE=18100-18199
 NGINX_QA_INSTANCE_ID=universal-managed-sprint-engine-staging
 NGINX_QA_DISABLE_TELEGRAM=1
