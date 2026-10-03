@@ -4247,20 +4247,32 @@ class SprintSchemaContractTests(unittest.TestCase):
         migrated_process = process_fixture()
         migrated_process["migrated_from_runtime_schema_version"] = 1
         migrated_duplicate_completion["processes"] = [migrated_process]
+        self.validator("managed-runtime-state-v2.schema.json").validate(
+            migrated_duplicate_completion
+        )
+        migrated_duplicate_issues = managed_activation_invariant_issues(
+            migrated_duplicate_completion
+        )
         self.assertNotIn(
             "RECOVERY_CONTEXT_COMPLETION_DUPLICATE",
-            managed_activation_invariant_issues(migrated_duplicate_completion),
+            migrated_duplicate_issues,
         )
 
-        strict_duplicate_completion = copy.deepcopy(legacy_duplicate_completion)
-        strict_duplicate_completion["schema_version"] = 2
+        native_v2_legacy_duplicate_completion = copy.deepcopy(
+            legacy_duplicate_completion
+        )
+        native_v2_legacy_duplicate_completion["schema_version"] = 2
         self.validator("managed-runtime-state-v2.schema.json").validate(
-            strict_duplicate_completion
+            native_v2_legacy_duplicate_completion
         )
-        self.assertIn(
+        native_v2_duplicate_issues = managed_activation_invariant_issues(
+            native_v2_legacy_duplicate_completion
+        )
+        self.assertNotIn(
             "RECOVERY_CONTEXT_COMPLETION_DUPLICATE",
-            managed_activation_invariant_issues(strict_duplicate_completion),
+            native_v2_duplicate_issues,
         )
+        self.assertEqual(native_v2_duplicate_issues, ())
 
         legacy_terminal_pending = copy.deepcopy(
             blocked_by_completed_recovery

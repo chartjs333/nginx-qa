@@ -1626,7 +1626,6 @@ class ManagedContinuityTests(unittest.TestCase):
             "graph_revision": 1,
             "idempotency_key": "orphan-route-cap",
             "request_fingerprint": fingerprint,
-            "durable_request_fingerprint": fingerprint,
             "action": "ROUTE_REWORK",
             "parameters": parameters,
             "import_attempt_id": None,
@@ -2931,6 +2930,7 @@ class ManagedContinuityTests(unittest.TestCase):
             if item["source_assignment_id"] == "assignment-1"
             and item["assignment_id"] != review["assignment_id"]
         )
+        before_late_review = canonical_json_bytes(branch_scoped)
         with self.assertRaises(ManagedContinuityError) as late:
             self.runtime.submit_if_managed(
                 "project-id",
@@ -2944,7 +2944,11 @@ class ManagedContinuityTests(unittest.TestCase):
                 "parallel-review-after-cap",
             )
         self.assertEqual(late.exception.code, REVIEW_CONFLICT)
+        self.assertEqual(late.exception.http_status, 409)
         after_late_review = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(
+            canonical_json_bytes(after_late_review), before_late_review
+        )
         self.assertEqual(len(after_late_review["reviews"]), 1)
         self.assertEqual(
             next(
@@ -2966,6 +2970,76 @@ class ManagedContinuityTests(unittest.TestCase):
         )
         self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
         self.assertTrue(replay.response["deduplicated"])
+
+        legacy_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        cap_context = legacy_pending["coordinator_contexts"][0]
+        source_assignment = assignments["assignment-1"]
+        definition = legacy_pending["graph_revisions"][-1]["definition"]
+        coordinator_node = next(
+            item
+            for item in definition["nodes"]
+            if item["id"] == definition["coordinator"]["node_id"]
+        )
+        pending_parameters = {
+            "node_id": source_assignment["node_id"],
+            "source_commit": source_assignment["source_commit"],
+        }
+        legacy_pending["recovery_records"].append(
+            {
+                "recovery_id": "recovery-legacy-pending-at-rework-cap",
+                "coordinator_id": coordinator_node["agent"]["id"],
+                "context_id": cap_context["context_id"],
+                "graph_revision": cap_context["graph_revision"],
+                "idempotency_key": "legacy-pending-at-rework-cap",
+                "request_fingerprint": recovery_request_fingerprint(
+                    cap_context["context_id"],
+                    cap_context["graph_revision"],
+                    "CONTINUE_NODE",
+                    None,
+                    cap_context["failed_assignment_id"],
+                    pending_parameters,
+                    None,
+                ),
+                "action": "CONTINUE_NODE",
+                "parameters": pending_parameters,
+                "import_attempt_id": None,
+                "assignment_id": cap_context["failed_assignment_id"],
+                "join_target": None,
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "status": "pending",
+                "created_at": TIMESTAMP,
+                "completed_at": None,
+            }
+        )
+        self.assertEqual(managed_activation_invariant_issues(legacy_pending), ())
+        self.replace_state(legacy_pending)
+        before_legacy_replay = canonical_json_bytes(legacy_pending)
+        with self.assertRaises(ManagedContinuityError) as capped_replay:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(
+                    {
+                        "assignment_id": cap_context["context_id"],
+                        "idempotency_key": "legacy-pending-at-rework-cap",
+                        "action": "CONTINUE_NODE",
+                        "parameters": pending_parameters,
+                    }
+                ),
+                "legacy-pending-at-rework-cap",
+            )
+        self.assertEqual(capped_replay.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(capped_replay.exception.http_status, 409)
+        self.assertEqual(
+            canonical_json_bytes(
+                self.store.runtime_state("project-id", SPRINT_ID)
+            ),
+            before_legacy_replay,
+        )
+        self.assertIsNone(self.runtime.current_identity("project-id", "2860"))
 
         sibling_result = self.runtime.submit_if_managed(
             "project-id",
@@ -3002,7 +3076,7 @@ class ManagedContinuityTests(unittest.TestCase):
                 "parallel-sibling-review",
             )
         terminal = self.store.runtime_state("project-id", SPRINT_ID)
-        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(terminal["status"], "blocked")
         self.assertEqual(terminal["active_assignment_ids"], [])
         self.assertEqual(
             [
@@ -3117,10 +3191,62 @@ class ManagedContinuityTests(unittest.TestCase):
             ["REWORK_ROUTING_FAILED", "REWORK_LIMIT_EXCEEDED"],
         )
         self.assertEqual(managed_activation_invariant_issues(branch_scoped), ())
-        cap_identity = self.runtime.current_identity("project-id", "2860")
+        self.assertIsNone(self.runtime.current_identity("project-id", "2860"))
+
+        cap_context = next(
+            item
+            for item in branch_scoped["coordinator_contexts"]
+            if item["reason_code"] == "REWORK_LIMIT_EXCEEDED"
+        )
+        strict_cap_state = deepcopy(branch_scoped)
+        strict_cap_state["schema_version"] = 2
+        forged_cap_recovery = deepcopy(recovery)
+        forged_cap_recovery.update(
+            {
+                "recovery_id": "recovery-forged-cap-context",
+                "context_id": cap_context["context_id"],
+                "graph_revision": cap_context["graph_revision"],
+                "idempotency_key": "forged-cap-context-recovery",
+                "request_fingerprint": recovery_request_fingerprint(
+                    cap_context["context_id"],
+                    cap_context["graph_revision"],
+                    recovery["action"],
+                    recovery["import_attempt_id"],
+                    recovery["assignment_id"],
+                    recovery["parameters"],
+                    recovery["join_target"],
+                ),
+            }
+        )
+        strict_cap_state["recovery_records"].append(forged_cap_recovery)
+        self.assertIn(
+            "RECOVERY_BINDING_INVALID",
+            managed_activation_invariant_issues(strict_cap_state),
+        )
+        capped_continue = {
+            "assignment_id": cap_context["context_id"],
+            "idempotency_key": "parallel-cap-must-not-continue",
+            "action": "CONTINUE_NODE",
+            "parameters": {
+                "node_id": source["node_id"],
+                "source_commit": source["source_commit"],
+            },
+        }
+        before_capped_continue = canonical_json_bytes(branch_scoped)
+        with self.assertRaises(ManagedContinuityError) as capped:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(capped_continue),
+                "parallel-cap-continue-conflict",
+            )
+        self.assertEqual(capped.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(capped.exception.http_status, 409)
         self.assertEqual(
-            cap_identity["assignment"]["context"]["reason_code"],
-            "REWORK_LIMIT_EXCEEDED",
+            canonical_json_bytes(
+                self.store.runtime_state("project-id", SPRINT_ID)
+            ),
+            before_capped_continue,
         )
 
         with self.assertRaises(ManagedContinuityError) as replay:
@@ -3290,8 +3416,26 @@ class ManagedContinuityTests(unittest.TestCase):
         )
         terminal = self.store.runtime_state("project-id", SPRINT_ID)
         self.assertEqual(response.response["status"], "REWORK_ENQUEUED")
-        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(terminal["status"], "blocked")
         self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+        failed_priority = deepcopy(terminal)
+        definition = failed_priority["graph_revisions"][0]["definition"]
+        terminal_target_id = failed_priority["workflow"]["transition_tokens"][0][
+            "target_node_id"
+        ]
+        terminal_target = next(
+            node for node in definition["nodes"] if node["id"] == terminal_target_id
+        )
+        terminal_target["status"] = "FAILED"
+        failed_priority["graph_revisions"][0]["definition_sha256"] = (
+            hashlib.sha256(canonical_json_bytes(definition)).hexdigest()
+        )
+        failed_priority["status"] = "failed"
+        self.assertEqual(
+            self.runtime._terminal_status_when_quiescent(failed_priority), "failed"
+        )
+        self.assertEqual(managed_activation_invariant_issues(failed_priority), ())
 
     def test_parallel_rework_cap_accepts_multiple_blocked_branches(self) -> None:
         self.configure_parallel_active_sibling(maximum=0)
@@ -3618,6 +3762,33 @@ class ManagedContinuityTests(unittest.TestCase):
         self.runtime.fault_injector = None
         pending = self.store.runtime_state("project-id", SPRINT_ID)
         self.assertEqual(pending["recovery_records"][0]["status"], "pending")
+        owner = pending["recovery_records"][0]
+        owner_recovery_id = owner["recovery_id"]
+        loser = deepcopy(owner)
+        loser_repair_request = deepcopy(repair_request)
+        loser_repair_request["idempotency_key"] = (
+            "assignment-repair-legacy-loser"
+        )
+        loser_parameters = {"request": loser_repair_request}
+        loser.update(
+            {
+                "recovery_id": "recovery-legacy-earlier-repair-choice",
+                "idempotency_key": "assignment-recovery-legacy-loser",
+                "request_fingerprint": recovery_request_fingerprint(
+                    loser["context_id"],
+                    loser["graph_revision"],
+                    loser["action"],
+                    loser["import_attempt_id"],
+                    loser["assignment_id"],
+                    loser_parameters,
+                    loser["join_target"],
+                ),
+                "parameters": loser_parameters,
+            }
+        )
+        pending["recovery_records"].insert(0, loser)
+        self.assertEqual(managed_activation_invariant_issues(pending), ())
+        self.replace_state(pending)
 
         provider = Mock(unsafe=True)
         provider.ensure_mirror.return_value = object()
@@ -3631,8 +3802,54 @@ class ManagedContinuityTests(unittest.TestCase):
             )
         interrupted = self.store.runtime_state("project-id", SPRINT_ID)
         repair_id = interrupted["repairs"][0]["repair_id"]
-        self.assertEqual(interrupted["recovery_records"][0]["status"], "pending")
+        self.assertEqual(
+            [item["status"] for item in interrupted["recovery_records"]],
+            ["pending", "pending"],
+        )
         self.assertEqual(managed_activation_invariant_issues(interrupted), ())
+
+        multiple_owners = deepcopy(interrupted)
+        second_owner = deepcopy(
+            next(
+                item
+                for item in multiple_owners["recovery_records"]
+                if item["recovery_id"] == owner_recovery_id
+            )
+        )
+        second_owner.update(
+            {
+                "recovery_id": "recovery-legacy-second-repair-owner",
+                "idempotency_key": "assignment-recovery-second-owner",
+            }
+        )
+        multiple_owners["recovery_records"].append(second_owner)
+        self.assertEqual(managed_activation_invariant_issues(multiple_owners), ())
+        with self.assertRaises(ManagedContinuityError) as effect_free:
+            self.runtime._recovery_for_completion(
+                multiple_owners,
+                "recovery-legacy-earlier-repair-choice",
+                context["context_id"],
+                "multiple-effect-owners-loser",
+            )
+        self.assertEqual(effect_free.exception.code, RECOVERY_CONFLICT)
+        selected_owner = self.runtime._recovery_for_completion(
+            multiple_owners,
+            owner_recovery_id,
+            context["context_id"],
+            "multiple-effect-owners-winner",
+            supersede_pending_at=TIMESTAMP,
+        )
+        self.assertEqual(selected_owner["recovery_id"], owner_recovery_id)
+        selection_records = {
+            item["recovery_id"]: item
+            for item in multiple_owners["recovery_records"]
+        }
+        self.assertEqual(
+            selection_records["recovery-legacy-earlier-repair-choice"]["status"],
+            "failed",
+        )
+        self.assertEqual(second_owner["status"], "pending")
+        self.assertEqual(managed_activation_invariant_issues(multiple_owners), ())
 
         with patch.object(
             self.importer,
@@ -3649,7 +3866,186 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(resumed.response["produced_record_ids"], [repair_id])
         self.assertFalse(resumed.response["deduplicated"])
         self.assertEqual(len(recovered["repairs"]), 1)
-        self.assertEqual(recovered["recovery_records"][0]["status"], "completed")
+        recoveries = {
+            item["recovery_id"]: item for item in recovered["recovery_records"]
+        }
+        self.assertEqual(recoveries[owner_recovery_id]["status"], "completed")
+        self.assertEqual(
+            recoveries[owner_recovery_id]["produced_record_ids"], [repair_id]
+        )
+        self.assertEqual(
+            recoveries["recovery-legacy-earlier-repair-choice"]["status"],
+            "failed",
+        )
+        self.assertEqual(
+            recoveries["recovery-legacy-earlier-repair-choice"][
+                "normalized_error"
+            ],
+            {"code": RECOVERY_CONFLICT, "http_status": 409},
+        )
+        self.assertEqual(
+            recoveries["recovery-legacy-earlier-repair-choice"][
+                "produced_record_ids"
+            ],
+            [],
+        )
+        self.assertIsNone(
+            recoveries["recovery-legacy-earlier-repair-choice"]["response"]
+        )
+        self.assertEqual(recovered["graph_revision"], 2)
+        self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+        replay = self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(request),
+            "assignment-repair-replay",
+        )
+        self.assertTrue(replay.response["deduplicated"])
+        self.assertEqual(replay.response["produced_record_ids"], [repair_id])
+
+    def test_published_repair_owner_completes_after_context_terminalizes(
+        self,
+    ) -> None:
+        self.configure_terminal_result("BLOCKED_EXTERNAL")
+        self.submit_result()
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        for review in pending["review_assignments"]:
+            self.runtime.submit_if_managed(
+                "project-id",
+                review["reviewer_phone"],
+                canonical_json_bytes(
+                    {"assignment_id": review["assignment_id"], "status": "APPROVE"}
+                ),
+                f"terminal-repair-review-{review['reviewer_index']}",
+            )
+
+        staged = self.store.runtime_state("project-id", SPRINT_ID)
+        context = staged["coordinator_contexts"][0]
+        content = b"terminal repair artifact\n"
+        digest = hashlib.sha256(content).hexdigest()
+        repair_commit = "e" * 40
+        repair_request = {
+            "expected_revision": 1,
+            "repair_source_commit": repair_commit,
+            "idempotency_key": "terminal-published-repair",
+            "patch": {
+                "checksum_metadata": [
+                    {"path": "orchestration/README.md", "sha256": digest},
+                    {"path": "service.py", "sha256": digest},
+                ]
+            },
+        }
+        provider = Mock(unsafe=True)
+        provider.ensure_mirror.return_value = object()
+        provider.assert_commit.return_value = repair_commit
+        provider.read_blob.return_value = content
+        with patch.object(
+            self.importer, "provider_for_durable_repository", return_value=provider
+        ):
+            self.runtime.repair(
+                SPRINT_ID, repair_request, "terminal-published-repair"
+            )
+        repaired = self.store.runtime_state("project-id", SPRINT_ID)
+        repair_id = repaired["repairs"][0]["repair_id"]
+
+        block_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "terminal-settled-choice",
+            "action": "BLOCK_EXTERNAL",
+            "parameters": {
+                "reason_code": context["reason_code"],
+                "operator_action": "Acknowledge the terminal branch",
+            },
+        }
+        self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(block_request),
+            "terminal-settled-choice",
+        )
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(terminal["status"], "blocked")
+        settled = terminal["recovery_records"][0]
+
+        owner_id = "recovery-terminal-published-repair-owner"
+        owner_parameters = {"request": repair_request}
+        owner_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "terminal-published-repair-owner",
+            "action": "APPLY_REPAIR",
+            "parameters": owner_parameters,
+        }
+        terminal["schema_version"] = 2
+        terminal["recovery_records"].append(
+            {
+                "recovery_id": owner_id,
+                "coordinator_id": settled["coordinator_id"],
+                "context_id": context["context_id"],
+                "graph_revision": context["graph_revision"],
+                "idempotency_key": owner_request["idempotency_key"],
+                "request_fingerprint": recovery_request_fingerprint(
+                    context["context_id"],
+                    context["graph_revision"],
+                    owner_request["action"],
+                    None,
+                    context["failed_assignment_id"],
+                    owner_parameters,
+                    None,
+                ),
+                "action": owner_request["action"],
+                "parameters": owner_parameters,
+                "import_attempt_id": None,
+                "assignment_id": context["failed_assignment_id"],
+                "join_target": None,
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "status": "pending",
+                "created_at": settled["created_at"],
+                "completed_at": None,
+            }
+        )
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+        self.replace_state(terminal)
+
+        before_startup_reconcile = canonical_json_bytes(terminal)
+        startup_progress = self.runtime.reconcile_all()
+        self.assertNotEqual(startup_progress.get(SPRINT_ID), -1)
+        after_startup_reconcile = self.store.runtime_state("project-id", SPRINT_ID)
+        startup_owner = next(
+            item
+            for item in after_startup_reconcile["recovery_records"]
+            if item["recovery_id"] == owner_id
+        )
+        self.assertEqual(startup_owner["status"], "pending")
+        self.assertEqual(
+            canonical_json_bytes(after_startup_reconcile), before_startup_reconcile
+        )
+
+        with patch.object(
+            self.importer,
+            "provider_for_durable_repository",
+            side_effect=AssertionError("durable repair must not be fetched again"),
+        ):
+            resumed = self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(owner_request),
+                "terminal-published-repair-owner",
+            )
+        recovered = self.store.runtime_state("project-id", SPRINT_ID)
+        owner = next(
+            item
+            for item in recovered["recovery_records"]
+            if item["recovery_id"] == owner_id
+        )
+        self.assertEqual(resumed.response["produced_record_ids"], [repair_id])
+        self.assertEqual(owner["status"], "completed")
+        self.assertEqual(owner["produced_record_ids"], [repair_id])
+        self.assertEqual(len(recovered["repairs"]), 1)
+        self.assertEqual(recovered["status"], "blocked")
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
 
     def test_terminal_block_is_staged_then_completed_by_coordinator(self) -> None:
@@ -3842,13 +4238,35 @@ class ManagedContinuityTests(unittest.TestCase):
             recovery["parameters"]["operator_action"],
             "Restore [REDACTED] and retry",
         )
+        redacted_fingerprint = recovery_request_fingerprint(
+            recovery["context_id"],
+            recovery["graph_revision"],
+            recovery["action"],
+            recovery["import_attempt_id"],
+            recovery["assignment_id"],
+            recovery["parameters"],
+            recovery["join_target"],
+        )
+        raw_fingerprint = recovery_request_fingerprint(
+            recovery["context_id"],
+            recovery["graph_revision"],
+            recovery["action"],
+            recovery["import_attempt_id"],
+            recovery["assignment_id"],
+            request["parameters"],
+            recovery["join_target"],
+        )
+        self.assertEqual(recovery["request_fingerprint"], redacted_fingerprint)
         self.assertNotEqual(
             recovery["request_fingerprint"],
-            recovery["durable_request_fingerprint"],
+            raw_fingerprint,
         )
-        self.assertNotIn(secret, canonical_json_bytes(terminal).decode("utf-8"))
+        self.assertNotIn("durable_request_fingerprint", recovery)
+        serialized = canonical_json_bytes(terminal).decode("utf-8")
+        self.assertNotIn(secret, serialized)
+        self.assertNotIn(raw_fingerprint, serialized)
         self.assertNotIn(
-            alternate_secret, canonical_json_bytes(terminal).decode("utf-8")
+            alternate_secret, serialized
         )
         self.assertEqual(managed_activation_invariant_issues(terminal), ())
 
@@ -3864,10 +4282,20 @@ class ManagedContinuityTests(unittest.TestCase):
         )
         self.assertTrue(replay.response["deduplicated"])
 
-        changed = deepcopy(request)
-        changed["parameters"]["operator_action"] = (
+        equivalent = deepcopy(request)
+        equivalent["parameters"]["operator_action"] = (
             f"Restore {alternate_secret} and retry"
         )
+        alternate_replay = self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(equivalent),
+            "recovery-secret-equivalent-replay",
+        )
+        self.assertTrue(alternate_replay.response["deduplicated"])
+
+        changed = deepcopy(request)
+        changed["parameters"]["operator_action"] = "Use a different recovery plan"
         with self.assertRaises(ManagedContinuityError) as conflict:
             self.runtime.submit_if_managed(
                 "project-id",
@@ -3877,7 +4305,7 @@ class ManagedContinuityTests(unittest.TestCase):
             )
         self.assertEqual(conflict.exception.code, RECOVERY_CONFLICT)
 
-    def test_legacy_redacted_recovery_fingerprint_replays_exact_request(
+    def test_unknown_recovery_fingerprint_extension_is_ignored_on_replay(
         self,
     ) -> None:
         secret = "legacy-private-recovery-token"
@@ -3921,9 +4349,7 @@ class ManagedContinuityTests(unittest.TestCase):
         legacy = self.store.runtime_state("project-id", SPRINT_ID)
         recovery = legacy["recovery_records"][0]
         recovery_id = recovery["recovery_id"]
-        recovery["request_fingerprint"] = recovery.pop(
-            "durable_request_fingerprint"
-        )
+        recovery["durable_request_fingerprint"] = "0" * 64
         self.assertEqual(managed_activation_invariant_issues(legacy), ())
         self.replace_state(legacy)
 

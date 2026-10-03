@@ -4893,6 +4893,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             or coordinator_id != coordinator_agent.get("id")
         ):
             add("RECOVERY_BINDING_INVALID")
+        if (
+            isinstance(context, Mapping)
+            and context.get("reason_code") == "REWORK_LIMIT_EXCEEDED"
+            and not legacy_runtime_v1
+            and not migrated_runtime_v1
+        ):
+            add("RECOVERY_BINDING_INVALID")
         action = recovery.get("action")
         parameters = recovery.get("parameters")
         parameters = parameters if isinstance(parameters, Mapping) else {}
@@ -4925,11 +4932,6 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 recovery_join_target,
             )
         )
-        durable_fingerprint = (
-            recovery.get("durable_request_fingerprint")
-            if "durable_request_fingerprint" in recovery
-            else recovery.get("request_fingerprint")
-        )
         normalized_recovery_error = recovery.get("normalized_error")
         orphan_rework_limit_claim = bool(
             recovery_status == "failed"
@@ -4946,15 +4948,9 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         ):
             add("RECOVERY_BINDING_INVALID")
         if recovery_settles_context(recovery) and isinstance(context_id, str):
-            if (
-                context_id in settled_recovery_context_ids
-                and not legacy_runtime_v1
-                and not migrated_runtime_v1
-            ):
-                add("RECOVERY_CONTEXT_COMPLETION_DUPLICATE")
             settled_recovery_context_ids.add(context_id)
         if (
-            durable_fingerprint != expected_fingerprint
+            recovery.get("request_fingerprint") != expected_fingerprint
             or recovery_target_count != 1
             or (
                 isinstance(context, Mapping)
@@ -6056,8 +6052,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             emitted_by_occurrence | rework_limit_occurrence_ids
         )
         rework_limit_block = bool(
-            not terminal_tokens
-            and rework_limit_context_ids
+            rework_limit_context_ids
             and set(occurrence_by_id).issubset(terminal_branch_coverage)
         )
         terminal_manifest_statuses = {
@@ -6071,10 +6066,9 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             if "FAILED" in terminal_manifest_statuses
             else "blocked"
             if "BLOCKED_EXTERNAL" in terminal_manifest_statuses
+            or rework_limit_block
             else "completed"
             if terminal_manifest_statuses == {"DONE"}
-            else "blocked"
-            if rework_limit_block
             else None
         )
         if (
