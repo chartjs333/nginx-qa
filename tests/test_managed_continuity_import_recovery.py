@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from copy import deepcopy
 import json
 import unittest
 from unittest.mock import Mock, patch
@@ -700,7 +701,57 @@ class ManagedContinuityImportRecoveryTests(ManagedImportFixture):
         self.assertEqual(blocked["blocker_observations"], [])
         self.assertEqual(managed_activation_invariant_issues(blocked), ())
 
-        replay = runtime.submit_if_managed(
+        stale = deepcopy(blocked["recovery_records"][0])
+        stale.update(
+            {
+                "recovery_id": "recovery-stale-import-choice",
+                "idempotency_key": "coordinator-stale-import-choice",
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "status": "pending",
+                "completed_at": None,
+            }
+        )
+
+        def add_stale_choice(state, _connection) -> None:
+            state["recovery_records"].insert(0, deepcopy(stale))
+
+        importer.store.mutate_runtime_state(
+            self.project_id,
+            str(failed["sprint_id"]),
+            add_stale_choice,
+            require_active=False,
+        )
+        restarted = ManagedContinuityRuntime(
+            self.importer(clock=lambda: FIXED_CLOCK),
+            clock=lambda: FIXED_CLOCK,
+        )
+        progress = restarted.reconcile_all()
+        self.assertGreater(progress[str(failed["sprint_id"])], 0)
+        repaired = restarted.store.runtime_state(
+            self.project_id,
+            str(failed["sprint_id"]),
+        )
+        assert repaired is not None
+        repaired_recoveries = {
+            item["recovery_id"]: item
+            for item in repaired["recovery_records"]
+        }
+        self.assertEqual(
+            repaired_recoveries["recovery-stale-import-choice"]["status"],
+            "failed",
+        )
+        self.assertEqual(
+            repaired_recoveries["recovery-stale-import-choice"][
+                "normalized_error"
+            ],
+            {"code": "RECOVERY_CONFLICT", "http_status": 409},
+        )
+        self.assertEqual(managed_activation_invariant_issues(repaired), ())
+
+        replay = restarted.submit_if_managed(
             self.project_id,
             "2860",
             body,
@@ -728,7 +779,7 @@ class ManagedContinuityImportRecoveryTests(ManagedImportFixture):
             str(failed["sprint_id"]),
         )
         assert decided_state is not None
-        self.assertEqual(len(decided_state["recovery_records"]), 1)
+        self.assertEqual(len(decided_state["recovery_records"]), 2)
 
     def test_retry_conflict_is_frozen_and_allows_block_external(self) -> None:
         parent, failed, context = self._failed_import()

@@ -2127,7 +2127,79 @@ class ManagedImportStore:
                     )
                 states.append(deepcopy(state))
             connection.commit()
-        return tuple(states)
+            return tuple(states)
+
+    def superseded_pending_recovery_states(
+        self,
+    ) -> tuple[tuple[str, str], ...]:
+        """List runtimes with a pending recovery behind a settled choice.
+
+        Older writers could durably persist two choices for one Coordinator
+        context.  Terminal and failed runtimes are not part of the ordinary
+        active scheduler scan, so expose only this narrow repair work for
+        startup reconciliation.  The later mutation path performs the full
+        schema, relational, and row-fence validation before changing data.
+        """
+
+        if not self.database_path.exists():
+            return ()
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT project_id, sprint_id, state_json
+                FROM managed_sprints
+                ORDER BY project_id, sprint_id
+                """
+            ).fetchall()
+        candidates: list[tuple[str, str]] = []
+        for row in rows:
+            try:
+                state = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            if not isinstance(state, Mapping):
+                continue
+            recoveries = [
+                recovery
+                for recovery in state.get("recovery_records", [])
+                if isinstance(recovery, Mapping)
+            ]
+            rework_limit_assignment_ids = {
+                str(context["failed_assignment_id"])
+                for context in state.get("coordinator_contexts", [])
+                if isinstance(context, Mapping)
+                and context.get("reason_code") == "REWORK_LIMIT_EXCEEDED"
+                and isinstance(context.get("failed_assignment_id"), str)
+            }
+            settled_context_ids = {
+                str(recovery["context_id"])
+                for recovery in recoveries
+                if isinstance(recovery.get("context_id"), str)
+                and (
+                    recovery.get("status") == "completed"
+                    or (
+                        recovery.get("status") == "failed"
+                        and recovery.get("action") == "ROUTE_REWORK"
+                        and isinstance(
+                            recovery.get("normalized_error"), Mapping
+                        )
+                        and recovery["normalized_error"].get("code")
+                        == "REWORK_LIMIT_EXCEEDED"
+                        and recovery.get("assignment_id")
+                        in rework_limit_assignment_ids
+                    )
+                )
+            }
+            if any(
+                recovery.get("status") == "pending"
+                and recovery.get("context_id") in settled_context_ids
+                for recovery in recoveries
+            ):
+                candidates.append(
+                    (str(row["project_id"]), str(row["sprint_id"]))
+                )
+        return tuple(candidates)
 
     def lookup(self, project_id: str, key: str) -> dict[str, Any] | None:
         control = self.project_control(project_id)
@@ -3763,6 +3835,7 @@ class ManagedImportStore:
                 raise ManagedRetryImportConflict(
                     "managed retry recovery is not pending"
                 )
+            context_id = recovery.get("context_id")
             if state.get("status") != "failed" or state.get("workflow") is not None:
                 raise ManagedRetryImportConflict(
                     "managed retry target is not a failed import"
@@ -3879,6 +3952,30 @@ class ManagedImportStore:
                 raise ManagedRetryImportConflict(
                     "managed retry parent already has a child"
                 )
+            if any(
+                item is not recovery
+                and item.get("context_id") == context_id
+                and item.get("status") == "completed"
+                for item in state.get("recovery_records", [])
+                if isinstance(item, Mapping)
+            ):
+                # The import child and the recovery receipt commit together,
+                # so enforce the same one-decision-per-context fence inside
+                # this transaction before allocating any durable child state.
+                raise ManagedRetryImportConflict(
+                    "managed retry context already has a completed recovery"
+                )
+            pending_for_context = [
+                item
+                for item in state.get("recovery_records", [])
+                if isinstance(item, dict)
+                and item.get("context_id") == context_id
+                and item.get("status") == "pending"
+            ]
+            if pending_for_context and pending_for_context[0] is not recovery:
+                raise ManagedRetryImportConflict(
+                    "managed retry context has an earlier pending recovery"
+                )
             nonterminal = [
                 item
                 for item in control.get("start_idempotency_records", [])
@@ -3892,6 +3989,20 @@ class ManagedImportStore:
                 )
             now = _utc_now(clock)
             now_text = now.isoformat()
+            for loser in pending_for_context[1:]:
+                loser.update(
+                    {
+                        "produced_record_ids": [],
+                        "response": None,
+                        "normalized_error": {
+                            "code": "RECOVERY_CONFLICT",
+                            "http_status": 409,
+                        },
+                        "evidence": {},
+                        "status": "failed",
+                        "completed_at": now_text,
+                    }
+                )
             counter = int(control.get("activation_fencing_counter") or 0) + 1
             child_attempt_id = attempt_id_factory()
             if (

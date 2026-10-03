@@ -4146,6 +4146,210 @@ class SprintSchemaContractTests(unittest.TestCase):
             (),
         )
 
+        legacy_extended_blocker = copy.deepcopy(blocked_by_completed_recovery)
+        legacy_extended_blocker["blocker_observations"][0].update(
+            {
+                "reason_code": "EXTERNAL_DEPENDENCY",
+                "normalized_error": {"code": "EXTERNAL_DEPENDENCY"},
+            }
+        )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            legacy_extended_blocker
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(legacy_extended_blocker), ()
+        )
+
+        migrated_extended_blocker = active_runtime_fixture(
+            include_process_definition=True
+        )
+        migrated_extended_blocker["schema_version"] = 2
+        migrated_extended_blocker["migrated_from_runtime_schema_version"] = 1
+        migrated_process = process_fixture()
+        migrated_process.update(
+            {
+                "migrated_from_runtime_schema_version": 1,
+                "restart_policy": "never",
+                "max_restart_attempts": 0,
+            }
+        )
+        migrated_extended_blocker["processes"] = [migrated_process]
+        migrated_extended_blocker["port_leases"] = [
+            {
+                "lease_id": "port-lease-1",
+                "instance_id": "umse-staging",
+                "network_namespace_id": "host",
+                "assignment_id": "assignment-1",
+                "process_id": None,
+                "host": "127.0.0.1",
+                "port": 18100,
+                "status": "reserved",
+                "bind_verified": False,
+                "acquired_at": TIMESTAMP,
+                "released_at": None,
+            }
+        ]
+        migrated_extended_blocker["blocker_observations"] = [
+            copy.deepcopy(legacy_extended_blocker["blocker_observations"][0])
+        ]
+        self.validator("managed-runtime-state-v2.schema.json").validate(
+            migrated_extended_blocker
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(migrated_extended_blocker), ()
+        )
+
+        strict_extended_blocker = copy.deepcopy(migrated_extended_blocker)
+        strict_extended_blocker.pop("migrated_from_runtime_schema_version")
+        strict_extended_blocker["processes"][0].pop(
+            "migrated_from_runtime_schema_version"
+        )
+        self.validator("managed-runtime-state-v2.schema.json").validate(
+            strict_extended_blocker
+        )
+        self.assertIn(
+            "BLOCKER_OBSERVATION_FINGERPRINT_INVALID",
+            managed_activation_invariant_issues(strict_extended_blocker),
+        )
+
+        legacy_duplicate_completion = copy.deepcopy(
+            blocked_by_completed_recovery
+        )
+        duplicate_recovery = copy.deepcopy(
+            legacy_duplicate_completion["recovery_records"][0]
+        )
+        duplicate_recovery.update(
+            {
+                "recovery_id": "recovery-blocked-duplicate",
+                "idempotency_key": "block-external-duplicate",
+            }
+        )
+        duplicate_recovery["response"]["recovery_id"] = (
+            "recovery-blocked-duplicate"
+        )
+        legacy_duplicate_completion["recovery_records"].append(
+            duplicate_recovery
+        )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            legacy_duplicate_completion
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(legacy_duplicate_completion), ()
+        )
+
+        migrated_duplicate_completion = copy.deepcopy(
+            legacy_duplicate_completion
+        )
+        migrated_duplicate_completion["schema_version"] = 2
+        migrated_duplicate_completion[
+            "migrated_from_runtime_schema_version"
+        ] = 1
+        migrated_process = process_fixture()
+        migrated_process["migrated_from_runtime_schema_version"] = 1
+        migrated_duplicate_completion["processes"] = [migrated_process]
+        self.assertNotIn(
+            "RECOVERY_CONTEXT_COMPLETION_DUPLICATE",
+            managed_activation_invariant_issues(migrated_duplicate_completion),
+        )
+
+        strict_duplicate_completion = copy.deepcopy(legacy_duplicate_completion)
+        strict_duplicate_completion["schema_version"] = 2
+        self.validator("managed-runtime-state-v2.schema.json").validate(
+            strict_duplicate_completion
+        )
+        self.assertIn(
+            "RECOVERY_CONTEXT_COMPLETION_DUPLICATE",
+            managed_activation_invariant_issues(strict_duplicate_completion),
+        )
+
+        legacy_terminal_pending = copy.deepcopy(
+            blocked_by_completed_recovery
+        )
+        pending_context = copy.deepcopy(context)
+        pending_context["context_id"] = "context-blocked-pending"
+        pending_recovery = copy.deepcopy(recovery)
+        pending_recovery.update(
+            {
+                "recovery_id": "recovery-blocked-pending",
+                "context_id": pending_context["context_id"],
+                "idempotency_key": "block-external-pending",
+                "request_fingerprint": recovery_request_fingerprint(
+                    pending_context["context_id"],
+                    1,
+                    "BLOCK_EXTERNAL",
+                    None,
+                    "assignment-1",
+                    parameters,
+                ),
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "status": "pending",
+                "completed_at": None,
+            }
+        )
+        legacy_terminal_pending["coordinator_contexts"].append(
+            pending_context
+        )
+        legacy_terminal_pending["recovery_records"].append(
+            pending_recovery
+        )
+        legacy_terminal_pending["outbox"].append(
+            {
+                "event_id": "coordinator-event-blocked-pending",
+                "dedupe_key": (
+                    f"enqueue:coordinator:{SPRINT_ID}:"
+                    f"{pending_context['context_id']}"
+                ),
+                "event_type": "COORDINATOR_ENQUEUE",
+                "payload": {
+                    "sprint_id": SPRINT_ID,
+                    "context_id": pending_context["context_id"],
+                    "coordinator_phone": "2860",
+                    "reason_code": pending_context["reason_code"],
+                },
+                "status": "delivered",
+                "created_at": TIMESTAMP,
+                "delivered_at": TIMESTAMP,
+                "queue_receipt_id": "coordinator-queue-receipt-pending",
+            }
+        )
+        self.validator("managed-runtime-state-v1.schema.json").validate(
+            legacy_terminal_pending
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(legacy_terminal_pending), ()
+        )
+
+        migrated_terminal_pending = copy.deepcopy(legacy_terminal_pending)
+        migrated_terminal_pending["schema_version"] = 2
+        migrated_terminal_pending["migrated_from_runtime_schema_version"] = 1
+        migrated_process = process_fixture()
+        migrated_process.update(
+            {
+                "migrated_from_runtime_schema_version": 1,
+                "state": "FAILED",
+                "failed_at": TIMESTAMP,
+                "terminal_reason": "failure",
+            }
+        )
+        migrated_terminal_pending["processes"] = [migrated_process]
+        self.assertNotIn(
+            "TERMINAL_STATE_HAS_LIVE_WORK",
+            managed_activation_invariant_issues(migrated_terminal_pending),
+        )
+
+        strict_terminal_pending = copy.deepcopy(legacy_terminal_pending)
+        strict_terminal_pending["schema_version"] = 2
+        self.validator("managed-runtime-state-v2.schema.json").validate(
+            strict_terminal_pending
+        )
+        self.assertIn(
+            "TERMINAL_STATE_HAS_LIVE_WORK",
+            managed_activation_invariant_issues(strict_terminal_pending),
+        )
+
         recovery_with_unrelated_effect = copy.deepcopy(
             blocked_by_completed_recovery
         )

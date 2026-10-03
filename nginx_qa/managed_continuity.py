@@ -211,6 +211,30 @@ def _records_by(
     return result
 
 
+def _recovery_settles_context(
+    state: Mapping[str, Any], recovery: Mapping[str, Any]
+) -> bool:
+    """Return whether a recovery is the context's irreversible decision."""
+
+    if recovery.get("status") == "completed":
+        return True
+    normalized_error = recovery.get("normalized_error")
+    assignment_id = recovery.get("assignment_id")
+    return bool(
+        recovery.get("status") == "failed"
+        and recovery.get("action") == "ROUTE_REWORK"
+        and isinstance(normalized_error, Mapping)
+        and normalized_error.get("code") == "REWORK_LIMIT_EXCEEDED"
+        and isinstance(assignment_id, str)
+        and any(
+            isinstance(context, Mapping)
+            and context.get("reason_code") == "REWORK_LIMIT_EXCEEDED"
+            and context.get("failed_assignment_id") == assignment_id
+            for context in state.get("coordinator_contexts", [])
+        )
+    )
+
+
 def _graph_revision(
     state: Mapping[str, Any], revision: int
 ) -> dict[str, Any]:
@@ -465,12 +489,12 @@ class ManagedContinuityRuntime:
             )
             if not isinstance(agent, Mapping):
                 raise RuntimeError("managed Coordinator identity is corrupt")
-            completed = next(
+            settled = next(
                 (
                     item
                     for item in recoveries
                     if item.get("context_id") == context_id
-                    and item.get("status") == "completed"
+                    and _recovery_settles_context(state, item)
                 ),
                 None,
             )
@@ -490,7 +514,7 @@ class ManagedContinuityRuntime:
                 "graph_revision": revision,
                 "coordinator_id": str(agent["id"]),
                 "coordinator_phone": str(agent["phone"]),
-                "status": "decided" if completed is not None else "active",
+                "status": "decided" if settled is not None else "active",
                 "created_at": (
                     enqueue.get("created_at")
                     if isinstance(enqueue, Mapping)
@@ -498,8 +522,8 @@ class ManagedContinuityRuntime:
                 ),
                 "context": deepcopy(dict(context)),
             }
-            if completed is not None:
-                record["response"] = deepcopy(completed.get("response"))
+            if settled is not None:
+                record["response"] = deepcopy(settled.get("response"))
             result.append(
                 _AssignmentBinding(
                     project_id,
@@ -621,6 +645,16 @@ class ManagedContinuityRuntime:
         if binding.state.get("status") != "active":
             return False
         result_key = binding.record.get("result_key")
+        source_assignment_id = binding.record.get("source_assignment_id")
+        source_assignment = next(
+            (
+                item
+                for item in binding.state.get("assignments", [])
+                if isinstance(item, Mapping)
+                and item.get("assignment_id") == source_assignment_id
+            ),
+            None,
+        )
         journal = next(
             (
                 item
@@ -631,6 +665,8 @@ class ManagedContinuityRuntime:
         )
         return bool(
             isinstance(journal, Mapping)
+            and isinstance(source_assignment, Mapping)
+            and source_assignment.get("status") == "reviews_pending"
             and journal.get("state") == "REVIEWS_PENDING"
             and journal.get("disposition") == "open"
         )
@@ -643,7 +679,7 @@ class ManagedContinuityRuntime:
             str(recovery["context_id"])
             for recovery in state.get("recovery_records", [])
             if isinstance(recovery, Mapping)
-            and recovery.get("status") == "completed"
+            and _recovery_settles_context(state, recovery)
             and isinstance(recovery.get("context_id"), str)
         }
         return any(
@@ -1479,7 +1515,9 @@ class ManagedContinuityRuntime:
                 now=now,
                 deliver_immediately=True,
             )
-            state["status"] = "blocked"
+            terminal_status = self._terminal_status_when_quiescent(state)
+            if terminal_status is not None:
+                state["status"] = terminal_status
             return response
 
         _state, response = self.store.mutate_runtime_state(
@@ -1506,15 +1544,43 @@ class ManagedContinuityRuntime:
     ) -> None:
         """Freeze a legacy/staged rework recovery that already exceeds its cap."""
 
+        snapshot = self.store.runtime_state(project_id, sprint_id)
+        if snapshot is None:
+            raise RuntimeError("managed sprint runtime disappeared")
+        snapshot_recovery = _records_by(
+            snapshot, "recovery_records", "recovery_id"
+        ).get(recovery_id)
+        snapshot_context_id = (
+            snapshot_recovery.get("context_id")
+            if isinstance(snapshot_recovery, Mapping)
+            else None
+        )
+        if not isinstance(snapshot_context_id, str):
+            raise RuntimeError("managed recovery record disappeared")
+        self._recovery_for_completion(
+            snapshot,
+            recovery_id,
+            snapshot_context_id,
+            correlation_id,
+        )
         self._stop_assignment_processes(project_id, sprint_id, assignment_id)
         now = _timestamp(self.clock)
 
         def mutate(
             state: dict[str, Any], connection: sqlite3.Connection
         ) -> None:
-            recovery = _records_by(
+            recovery_snapshot = _records_by(
                 state, "recovery_records", "recovery_id"
             ).get(recovery_id)
+            if not isinstance(recovery_snapshot, Mapping):
+                raise RuntimeError("managed recovery record disappeared")
+            recovery = self._recovery_for_completion(
+                state,
+                recovery_id,
+                str(recovery_snapshot.get("context_id")),
+                correlation_id,
+                supersede_pending_at=now,
+            )
             source = _records_by(
                 state, "assignments", "assignment_id"
             ).get(assignment_id)
@@ -1556,7 +1622,22 @@ class ManagedContinuityRuntime:
                 now=now,
                 deliver_immediately=True,
             )
-            state["status"] = "blocked"
+            recovery.update(
+                {
+                    "produced_record_ids": [],
+                    "response": None,
+                    "normalized_error": {
+                        "code": "REWORK_LIMIT_EXCEEDED",
+                        "http_status": 409,
+                    },
+                    "evidence": {},
+                    "status": "failed",
+                    "completed_at": now,
+                }
+            )
+            terminal_status = self._terminal_status_when_quiescent(state)
+            if terminal_status is not None:
+                state["status"] = terminal_status
 
         self.store.mutate_runtime_state(project_id, sprint_id, mutate)
         raise ManagedContinuityError(
@@ -1809,6 +1890,242 @@ class ManagedContinuityRuntime:
                 {"status": released.status, "released_at": released.released_at}
             )
         return occurrence
+
+    @classmethod
+    def _terminal_live_work_exists(cls, state: Mapping[str, Any]) -> bool:
+        """Return whether terminalizing one blocked branch would strand work."""
+
+        workflow = state.get("workflow")
+        occurrences = (
+            workflow.get("occurrences", [])
+            if isinstance(workflow, Mapping)
+            else []
+        )
+        tokens = (
+            workflow.get("transition_tokens", [])
+            if isinstance(workflow, Mapping)
+            else []
+        )
+        settled_recovery_context_ids = {
+            str(recovery["context_id"])
+            for recovery in state.get("recovery_records", [])
+            if isinstance(recovery, Mapping)
+            and _recovery_settles_context(state, recovery)
+            and isinstance(recovery.get("context_id"), str)
+        }
+        stranded_token_ids = cls._stranded_rework_limit_token_ids(state)
+        return bool(
+            state.get("active_assignment_ids")
+            or state.get("allowed_outcomes_by_assignment")
+            or any(
+                isinstance(assignment, Mapping)
+                and assignment.get("status")
+                in {"prepared", "active", "reviews_pending"}
+                for assignment in state.get("assignments", [])
+            )
+            or any(
+                isinstance(occurrence, Mapping)
+                and occurrence.get("state")
+                in {"prepared", "active", "reviews_pending"}
+                for occurrence in occurrences
+            )
+            or any(
+                isinstance(integration, Mapping)
+                and integration.get("status") == "PREPARED"
+                for integration in state.get("integrations", [])
+            )
+            or any(
+                isinstance(lease, Mapping) and lease.get("status") == "active"
+                for lease in state.get("branch_leases", [])
+            )
+            or any(
+                isinstance(lease, Mapping)
+                and lease.get("status") in {"reserved", "bound"}
+                for lease in state.get("port_leases", [])
+            )
+            or any(
+                isinstance(process, Mapping)
+                and process.get("state")
+                in {"PREPARED", "STARTING", "HEALTHY", "STOPPING"}
+                for process in state.get("processes", [])
+            )
+            or (
+                isinstance(workflow, Mapping)
+                and any(
+                    isinstance(recovery, Mapping)
+                    and recovery.get("status") == "pending"
+                    and recovery.get("action")
+                    in {
+                        "APPLY_REPAIR",
+                        "CONTINUE_NODE",
+                        "ROUTE_REWORK",
+                        "BLOCK_EXTERNAL",
+                    }
+                    and recovery.get("context_id")
+                    not in settled_recovery_context_ids
+                    for recovery in state.get("recovery_records", [])
+                )
+            )
+            or any(
+                isinstance(token, Mapping)
+                and token.get("status") == "available"
+                and token.get("token_id") not in stranded_token_ids
+                for token in tokens
+            )
+            or any(
+                isinstance(event, Mapping) and event.get("status") == "pending"
+                for event in state.get("outbox", [])
+            )
+        )
+
+    @staticmethod
+    def _rework_limit_occurrence_ids(state: Mapping[str, Any]) -> set[str]:
+        assignments = {
+            str(assignment.get("assignment_id")): assignment
+            for assignment in state.get("assignments", [])
+            if isinstance(assignment, Mapping)
+            and isinstance(assignment.get("assignment_id"), str)
+        }
+        result: set[str] = set()
+        for context in state.get("coordinator_contexts", []):
+            if (
+                not isinstance(context, Mapping)
+                or context.get("reason_code") != "REWORK_LIMIT_EXCEEDED"
+            ):
+                continue
+            assignment = assignments.get(str(context.get("failed_assignment_id")))
+            occurrence_id = (
+                assignment.get("occurrence_id")
+                if isinstance(assignment, Mapping)
+                and assignment.get("status") == "blocked"
+                else None
+            )
+            if isinstance(occurrence_id, str):
+                result.add(occurrence_id)
+        return result
+
+    @classmethod
+    def _stranded_rework_limit_token_ids(
+        cls, state: Mapping[str, Any]
+    ) -> set[str]:
+        """Return available all-parent tokens made unschedulable by a cap.
+
+        A capped occurrence emits no transition token.  If another parent has
+        already emitted to the same ``all_parents`` target, that token can
+        never form a complete cohort.  It remains immutable evidence, but is
+        no longer live scheduler work.
+        """
+
+        workflow = state.get("workflow")
+        if not isinstance(workflow, Mapping):
+            return set()
+        available = [
+            token
+            for token in workflow.get("transition_tokens", [])
+            if isinstance(token, Mapping)
+            and token.get("status") == "available"
+            and isinstance(token.get("token_id"), str)
+            and isinstance(token.get("target_node_id"), str)
+        ]
+        if not available:
+            return set()
+
+        assignments = {
+            str(assignment.get("assignment_id")): assignment
+            for assignment in state.get("assignments", [])
+            if isinstance(assignment, Mapping)
+            and isinstance(assignment.get("assignment_id"), str)
+        }
+        capped_parent_ids: set[str] = set()
+        for context in state.get("coordinator_contexts", []):
+            if (
+                not isinstance(context, Mapping)
+                or context.get("reason_code") != "REWORK_LIMIT_EXCEEDED"
+            ):
+                continue
+            assignment = assignments.get(str(context.get("failed_assignment_id")))
+            if (
+                not isinstance(assignment, Mapping)
+                or assignment.get("status") != "blocked"
+                or not isinstance(assignment.get("node_id"), str)
+            ):
+                continue
+            capped_parent_ids.add(str(assignment["node_id"]))
+
+        try:
+            current_revision = int(state["graph_revision"])
+            definition = _graph_revision(state, current_revision)["definition"]
+        except (KeyError, TypeError, ValueError):
+            return set()
+        stranded: set[str] = set()
+        for target_node_id in sorted(
+            {str(token["target_node_id"]) for token in available}
+        ):
+            try:
+                target = _node(state, current_revision, target_node_id)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if target.get("activation_policy", "all_parents") != "all_parents":
+                continue
+            parent_order = target.get("join_parent_order")
+            if not isinstance(parent_order, list):
+                parent_order = cls._inbound_parent_ids(definition, target_node_id)
+            available_parents = {
+                str(token.get("source_node_id"))
+                for token in available
+                if token.get("target_node_id") == target_node_id
+            }
+            missing_parents = {
+                str(parent_id) for parent_id in parent_order
+            } - available_parents
+            if not missing_parents.intersection(capped_parent_ids):
+                continue
+            stranded.update(
+                str(token["token_id"])
+                for token in available
+                if token.get("target_node_id") == target_node_id
+            )
+        return stranded
+
+    @classmethod
+    def _terminal_status_when_quiescent(
+        cls, state: Mapping[str, Any]
+    ) -> str | None:
+        """Combine terminal tokens with branch-scoped rework-cap evidence."""
+
+        if cls._terminal_live_work_exists(state):
+            return None
+        workflow = state.get("workflow")
+        tokens = (
+            workflow.get("transition_tokens", [])
+            if isinstance(workflow, Mapping)
+            else []
+        )
+        terminal_tokens = [
+            token
+            for token in tokens
+            if isinstance(token, Mapping) and token.get("status") == "terminal"
+        ]
+        capped_occurrences = cls._rework_limit_occurrence_ids(state)
+        if not terminal_tokens and not capped_occurrences:
+            return None
+        terminal_statuses = {
+            _node(
+                state,
+                int(token["target_graph_revision"]),
+                str(token["target_node_id"]),
+            ).get("status")
+            for token in terminal_tokens
+        }
+        if "FAILED" in terminal_statuses:
+            return "failed"
+        if "BLOCKED_EXTERNAL" in terminal_statuses:
+            return "blocked"
+        if terminal_statuses == {"DONE"}:
+            return "completed"
+        if not terminal_tokens and capped_occurrences:
+            return "blocked"
+        return None
 
     @staticmethod
     def _terminal_failure_target(
@@ -2185,8 +2502,9 @@ class ManagedContinuityRuntime:
         self._resume_after_durable_ack(binding.project_id, binding.sprint_id)
         return ManagedContinuityResult(response)
 
-    @staticmethod
+    @classmethod
     def _append_transition_token(
+        cls,
         state: dict[str, Any],
         assignment: Mapping[str, Any],
         journal: dict[str, Any],
@@ -2238,26 +2556,9 @@ class ManagedContinuityRuntime:
                 "updated_at": now,
             }
         )
-        if terminal and not state["active_assignment_ids"] and not any(
-            item.get("status") == "available"
-            for item in state["workflow"]["transition_tokens"]
-        ):
-            terminal_nodes = [
-                _node(
-                    state,
-                    int(item["target_graph_revision"]),
-                    str(item["target_node_id"]),
-                )
-                for item in state["workflow"]["transition_tokens"]
-                if item.get("status") == "terminal"
-            ]
-            terminal_statuses = {item.get("status") for item in terminal_nodes}
-            if "FAILED" in terminal_statuses:
-                state["status"] = "failed"
-            elif "BLOCKED_EXTERNAL" in terminal_statuses:
-                state["status"] = "blocked"
-            elif terminal_statuses == {"DONE"}:
-                state["status"] = "completed"
+        terminal_status = cls._terminal_status_when_quiescent(state)
+        if terminal_status is not None:
+            state["status"] = terminal_status
         return token
 
     @staticmethod
@@ -2268,6 +2569,71 @@ class ManagedContinuityRuntime:
         replay = deepcopy(dict(response))
         replay["deduplicated"] = True
         return ManagedContinuityResult(replay)
+
+    @staticmethod
+    def _recovery_for_completion(
+        state: Mapping[str, Any],
+        recovery_id: str,
+        context_id: str,
+        correlation_id: str,
+        *,
+        supersede_pending_at: str | None = None,
+    ) -> dict[str, Any]:
+        """Return one pending/completed recovery behind the context decision fence."""
+
+        recovery = _records_by(
+            state, "recovery_records", "recovery_id"
+        ).get(recovery_id)
+        if (
+            not isinstance(recovery, dict)
+            or recovery.get("context_id") != context_id
+        ):
+            raise RuntimeError("managed recovery binding disappeared")
+        status = recovery.get("status")
+        if status not in {"pending", "completed"}:
+            raise ManagedContinuityError(
+                RECOVERY_CONFLICT, 409, correlation_id
+            )
+        if status == "pending" and any(
+            item is not recovery
+            and item.get("context_id") == context_id
+            and _recovery_settles_context(state, item)
+            for item in state.get("recovery_records", [])
+            if isinstance(item, Mapping)
+        ):
+            raise ManagedContinuityError(
+                RECOVERY_CONFLICT, 409, correlation_id
+            )
+        if status == "pending":
+            pending_for_context = [
+                item
+                for item in state.get("recovery_records", [])
+                if isinstance(item, dict)
+                and item.get("context_id") == context_id
+                and item.get("status") == "pending"
+            ]
+            if pending_for_context and pending_for_context[0] is not recovery:
+                # Older runtimes could persist more than one in-flight choice.
+                # Preserve the first durable decision and reject later racers.
+                raise ManagedContinuityError(
+                    RECOVERY_CONFLICT, 409, correlation_id
+                )
+            if supersede_pending_at is not None:
+                for loser in pending_for_context[1:]:
+                    loser.update(
+                        {
+                            "produced_record_ids": [],
+                            "response": None,
+                            "normalized_error": {
+                                "code": RECOVERY_CONFLICT,
+                                "http_status": 409,
+                            },
+                            "evidence": {},
+                            "status": "failed",
+                            "completed_at": supersede_pending_at,
+                        }
+                    )
+        return recovery
 
     def _submit_recovery(
         self,
@@ -2460,39 +2826,6 @@ class ManagedContinuityRuntime:
             )
 
         context_id = str(context["context_id"])
-        existing = next(
-            (
-                item
-                for item in state.get("recovery_records", [])
-                if isinstance(item, Mapping)
-                and item.get("coordinator_id") == coordinator_id
-                and item.get("idempotency_key") == idempotency_key
-            ),
-            None,
-        )
-        if existing is None and any(
-            item.get("context_id") == context_id
-            and item.get("status") == "completed"
-            for item in state.get("recovery_records", [])
-            if isinstance(item, Mapping)
-        ):
-            raise ManagedContinuityError(
-                RECOVERY_CONFLICT, 409, correlation_id
-            )
-
-        if action == "RETRY_IMPORT":
-            durable_parameters = deepcopy(dict(parameters))
-        else:
-            try:
-                secret_values = self._resolved_secret_values(state)
-            except (LookupError, RuntimeError, ValueError) as exc:
-                raise ManagedContinuityError(
-                    CONTINUITY_RUNTIME_FAILED, 503, correlation_id
-                ) from exc
-            durable_parameters = _redact_json_strings(parameters, secret_values)
-        if not isinstance(durable_parameters, dict):
-            raise RuntimeError("managed recovery parameters are corrupt")
-
         graph_revision = int(context["graph_revision"])
         import_attempt_id = context.get("import_attempt_id")
         assignment_id = context.get("failed_assignment_id")
@@ -2503,11 +2836,89 @@ class ManagedContinuityRuntime:
             action,
             str(import_attempt_id) if isinstance(import_attempt_id, str) else None,
             str(assignment_id) if isinstance(assignment_id, str) else None,
-            durable_parameters,
+            parameters,
             join_target if isinstance(join_target, Mapping) else None,
         )
+        existing = next(
+            (
+                item
+                for item in state.get("recovery_records", [])
+                if isinstance(item, Mapping)
+                and item.get("coordinator_id") == coordinator_id
+                and item.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+        if (
+            existing is None
+            and isinstance(state.get("workflow"), Mapping)
+            and state.get("status") != "active"
+            and action
+            in {
+                "APPLY_REPAIR",
+                "CONTINUE_NODE",
+                "ROUTE_REWORK",
+                "BLOCK_EXTERNAL",
+            }
+        ):
+            # These choices mutate live workflow state.  Terminal handoff
+            # contexts remain addressable for RETRY_HANDOFF replay/recovery,
+            # but must not stage a new workflow mutation behind a terminal
+            # aggregate (native v2 also rejects that pending intermediate).
+            raise ManagedContinuityError(
+                RECOVERY_CONFLICT, 409, correlation_id
+            )
+        if existing is None and any(
+            item.get("context_id") == context_id
+            and (
+                item.get("status") == "pending"
+                or _recovery_settles_context(state, item)
+            )
+            for item in state.get("recovery_records", [])
+            if isinstance(item, Mapping)
+        ):
+            raise ManagedContinuityError(
+                RECOVERY_CONFLICT, 409, correlation_id
+            )
+
         if existing is not None:
-            if existing.get("request_fingerprint") != fingerprint:
+            fingerprint_matches = existing.get("request_fingerprint") == fingerprint
+            if (
+                not fingerprint_matches
+                and "durable_request_fingerprint" not in existing
+            ):
+                # Pre-fix v2 records stored only the post-redaction digest.
+                # They cannot recover the original secret-bearing digest, so
+                # compare the incoming durable projection for compatibility.
+                if action == "RETRY_IMPORT":
+                    legacy_parameters = deepcopy(dict(parameters))
+                else:
+                    try:
+                        secret_values = self._resolved_secret_values(state)
+                    except (LookupError, RuntimeError, ValueError) as exc:
+                        raise ManagedContinuityError(
+                            CONTINUITY_RUNTIME_FAILED, 503, correlation_id
+                        ) from exc
+                    legacy_parameters = _redact_json_strings(
+                        parameters, secret_values
+                    )
+                legacy_fingerprint = recovery_request_fingerprint(
+                    context_id,
+                    graph_revision,
+                    action,
+                    str(import_attempt_id)
+                    if isinstance(import_attempt_id, str)
+                    else None,
+                    str(assignment_id)
+                    if isinstance(assignment_id, str)
+                    else None,
+                    legacy_parameters,
+                    join_target if isinstance(join_target, Mapping) else None,
+                )
+                fingerprint_matches = (
+                    existing.get("request_fingerprint") == legacy_fingerprint
+                )
+            if not fingerprint_matches:
                 raise ManagedContinuityError(
                     RECOVERY_CONFLICT, 409, correlation_id
                 )
@@ -2554,15 +2965,83 @@ class ManagedContinuityRuntime:
                 raise ManagedContinuityError(
                     error_code, http_status, correlation_id
                 )
+            if any(
+                item is not existing
+                and item.get("context_id") == context_id
+                and _recovery_settles_context(state, item)
+                for item in state.get("recovery_records", [])
+                if isinstance(item, Mapping)
+            ):
+                self._fail_pending_recovery(
+                    project_id,
+                    sprint_id,
+                    str(existing["recovery_id"]),
+                    error_code=RECOVERY_CONFLICT,
+                    http_status=409,
+                )
+                raise ManagedContinuityError(
+                    RECOVERY_CONFLICT, 409, correlation_id
+                )
+            self._recovery_for_completion(
+                state,
+                str(existing["recovery_id"]),
+                context_id,
+                correlation_id,
+            )
+            durable_parameters = deepcopy(existing.get("parameters"))
+            if not isinstance(durable_parameters, dict):
+                raise RuntimeError("managed recovery parameters are corrupt")
+            durable_fingerprint = existing.get("durable_request_fingerprint")
+            if durable_fingerprint is None:
+                durable_fingerprint = recovery_request_fingerprint(
+                    context_id,
+                    graph_revision,
+                    action,
+                    str(import_attempt_id)
+                    if isinstance(import_attempt_id, str)
+                    else None,
+                    str(assignment_id) if isinstance(assignment_id, str) else None,
+                    durable_parameters,
+                    join_target if isinstance(join_target, Mapping) else None,
+                )
+        else:
+            if action == "RETRY_IMPORT":
+                durable_parameters = deepcopy(dict(parameters))
+            else:
+                try:
+                    secret_values = self._resolved_secret_values(state)
+                except (LookupError, RuntimeError, ValueError) as exc:
+                    raise ManagedContinuityError(
+                        CONTINUITY_RUNTIME_FAILED, 503, correlation_id
+                    ) from exc
+                durable_parameters = _redact_json_strings(parameters, secret_values)
+            if not isinstance(durable_parameters, dict):
+                raise RuntimeError("managed recovery parameters are corrupt")
+            durable_fingerprint = recovery_request_fingerprint(
+                context_id,
+                graph_revision,
+                action,
+                str(import_attempt_id)
+                if isinstance(import_attempt_id, str)
+                else None,
+                str(assignment_id) if isinstance(assignment_id, str) else None,
+                durable_parameters,
+                join_target if isinstance(join_target, Mapping) else None,
+            )
 
-        recovery_id = _stable_id(
-            "recovery",
-            sprint_id,
-            coordinator_id,
-            idempotency_key,
-            fingerprint,
-            compact=True,
-        )
+        if existing is not None:
+            recovery_id = existing.get("recovery_id")
+            if not isinstance(recovery_id, str) or not recovery_id:
+                raise RuntimeError("managed recovery identity is corrupt")
+        else:
+            recovery_id = _stable_id(
+                "recovery",
+                sprint_id,
+                coordinator_id,
+                idempotency_key,
+                fingerprint,
+                compact=True,
+            )
         created_at = _timestamp(self.clock)
         if existing is None:
 
@@ -2586,13 +3065,16 @@ class ManagedContinuityRuntime:
                     return
                 if any(
                     item.get("context_id") == context_id
-                    and item.get("status") == "completed"
+                    and (
+                        item.get("status") == "pending"
+                        or _recovery_settles_context(candidate, item)
+                    )
                     for item in candidate["recovery_records"]
                     if isinstance(item, Mapping)
                 ):
-                    # A decided Coordinator context is immutable.  Only the
-                    # exact idempotency-key replay above may observe it again;
-                    # a new key must target a newly emitted failure context.
+                    # A context has one in-flight or decided recovery.  Only
+                    # the exact idempotency-key replay above may resume it; a
+                    # new key must target a newly emitted failure context.
                     raise ManagedContinuityError(
                         RECOVERY_CONFLICT, 409, correlation_id
                     )
@@ -2604,6 +3086,7 @@ class ManagedContinuityRuntime:
                         "graph_revision": graph_revision,
                         "idempotency_key": idempotency_key,
                         "request_fingerprint": fingerprint,
+                        "durable_request_fingerprint": durable_fingerprint,
                         "action": action,
                         "parameters": deepcopy(durable_parameters),
                         "import_attempt_id": (
@@ -2834,6 +3317,9 @@ class ManagedContinuityRuntime:
                     "completed_at": failed_at,
                 }
             )
+            terminal_status = self._terminal_status_when_quiescent(state)
+            if terminal_status is not None:
+                state["status"] = terminal_status
 
         self.store.mutate_runtime_state(
             project_id,
@@ -2853,26 +3339,32 @@ class ManagedContinuityRuntime:
     ) -> ManagedContinuityResult:
         """Retry every durable result-bound queue effect, then freeze a receipt."""
 
+        snapshot = self.store.runtime_state(project_id, sprint_id)
+        if snapshot is None:
+            raise RuntimeError("managed sprint runtime disappeared")
+        self._recovery_for_completion(
+            snapshot, recovery_id, context_id, correlation_id
+        )
         self.drain_outbox(project_id, sprint_id)
         completed_at = _timestamp(self.clock)
 
         def complete(
             state: dict[str, Any], _connection: sqlite3.Connection
         ) -> dict[str, Any]:
-            recovery = _records_by(
-                state, "recovery_records", "recovery_id"
-            ).get(recovery_id)
+            recovery = self._recovery_for_completion(
+                state,
+                recovery_id,
+                context_id,
+                correlation_id,
+                supersede_pending_at=completed_at,
+            )
             context = _records_by(
                 state, "coordinator_contexts", "context_id"
             ).get(context_id)
-            if not isinstance(recovery, dict) or not isinstance(context, Mapping):
+            if not isinstance(context, Mapping):
                 raise RuntimeError("managed handoff recovery disappeared")
             if recovery.get("status") == "completed":
                 return deepcopy(dict(recovery["response"]))
-            if recovery.get("status") != "pending":
-                raise ManagedContinuityError(
-                    RECOVERY_CONFLICT, 409, correlation_id
-                )
             parameters = recovery.get("parameters")
             assignment_id = context.get("failed_assignment_id")
             result_key = (
@@ -2946,6 +3438,9 @@ class ManagedContinuityRuntime:
                     "completed_at": completed_at,
                 }
             )
+            terminal_status = self._terminal_status_when_quiescent(state)
+            if terminal_status is not None:
+                state["status"] = terminal_status
             return response
 
         _state, response = self.store.mutate_runtime_state(
@@ -2965,13 +3460,13 @@ class ManagedContinuityRuntime:
     ) -> ManagedContinuityResult:
         """Settle one failed assignment and continue its pinned occurrence."""
 
-        self.drain_outbox(project_id, sprint_id)
         state = self.store.runtime_state(project_id, sprint_id)
         if state is None:
             raise RuntimeError("managed sprint runtime disappeared")
-        recovery = _records_by(state, "recovery_records", "recovery_id").get(
-            recovery_id
+        recovery = self._recovery_for_completion(
+            state, recovery_id, context_id, correlation_id
         )
+        self.drain_outbox(project_id, sprint_id)
         context = _records_by(state, "coordinator_contexts", "context_id").get(
             context_id
         )
@@ -3067,23 +3562,23 @@ class ManagedContinuityRuntime:
             def complete(
                 candidate: dict[str, Any], connection: sqlite3.Connection
             ) -> dict[str, Any]:
-                current_recovery = _records_by(
-                    candidate, "recovery_records", "recovery_id"
-                ).get(recovery_id)
+                current_recovery = self._recovery_for_completion(
+                    candidate,
+                    recovery_id,
+                    context_id,
+                    correlation_id,
+                    supersede_pending_at=completed_at,
+                )
                 current_context = _records_by(
                     candidate, "coordinator_contexts", "context_id"
                 ).get(context_id)
                 source = _records_by(
                     candidate, "assignments", "assignment_id"
                 ).get(str(assignment_id))
-                if not isinstance(current_recovery, dict):
-                    raise RuntimeError("managed continuation recovery disappeared")
                 if current_recovery.get("status") == "completed":
                     return deepcopy(dict(current_recovery["response"]))
                 if (
-                    current_recovery.get("status") != "pending"
-                    or not isinstance(current_context, Mapping)
-                    or current_recovery.get("context_id") != context_id
+                    not isinstance(current_context, Mapping)
                     or not isinstance(source, dict)
                     or source.get("status")
                     not in {"active", "reviews_pending", "failed", "blocked"}
@@ -3210,13 +3705,13 @@ class ManagedContinuityRuntime:
     ) -> ManagedContinuityResult:
         """Publish the deterministic replacement for an already rejected result."""
 
-        self.drain_outbox(project_id, sprint_id)
         state = self.store.runtime_state(project_id, sprint_id)
         if state is None:
             raise RuntimeError("managed sprint runtime disappeared")
-        recovery = _records_by(state, "recovery_records", "recovery_id").get(
-            recovery_id
+        recovery = self._recovery_for_completion(
+            state, recovery_id, context_id, correlation_id
         )
+        self.drain_outbox(project_id, sprint_id)
         context = _records_by(state, "coordinator_contexts", "context_id").get(
             context_id
         )
@@ -3323,22 +3818,23 @@ class ManagedContinuityRuntime:
             def complete(
                 candidate: dict[str, Any], connection: sqlite3.Connection
             ) -> dict[str, Any]:
-                current_recovery = _records_by(
-                    candidate, "recovery_records", "recovery_id"
-                ).get(recovery_id)
+                current_recovery = self._recovery_for_completion(
+                    candidate,
+                    recovery_id,
+                    context_id,
+                    correlation_id,
+                    supersede_pending_at=completed_at,
+                )
                 source = _records_by(
                     candidate, "assignments", "assignment_id"
                 ).get(str(assignment_id))
                 current_journal = _records_by(
                     candidate, "transition_journal", "result_key"
                 ).get(str(result_key))
-                if not isinstance(current_recovery, dict):
-                    raise RuntimeError("managed rework recovery disappeared")
                 if current_recovery.get("status") == "completed":
                     return deepcopy(dict(current_recovery["response"]))
                 if (
-                    current_recovery.get("status") != "pending"
-                    or not isinstance(source, dict)
+                    not isinstance(source, dict)
                     or not isinstance(current_journal, dict)
                     or current_journal.get("state") != "REVIEWS_PENDING"
                     or current_journal.get("disposition") != "open"
@@ -3436,10 +3932,13 @@ class ManagedContinuityRuntime:
         recovery_id: str,
         correlation_id: str,
     ) -> ManagedContinuityResult:
-        self.drain_outbox(project_id, sprint_id)
         state = self.store.runtime_state(project_id, sprint_id)
         if state is None:
             raise RuntimeError("managed sprint runtime disappeared")
+        self._recovery_for_completion(
+            state, recovery_id, context_id, correlation_id
+        )
+        self.drain_outbox(project_id, sprint_id)
         context = _records_by(state, "coordinator_contexts", "context_id").get(
             context_id
         )
@@ -3502,17 +4001,15 @@ class ManagedContinuityRuntime:
         def complete(
             candidate: dict[str, Any], connection: sqlite3.Connection
         ) -> dict[str, Any]:
-            recovery = _records_by(
-                candidate, "recovery_records", "recovery_id"
-            ).get(recovery_id)
-            if not isinstance(recovery, dict):
-                raise RuntimeError("managed recovery record disappeared")
+            recovery = self._recovery_for_completion(
+                candidate,
+                recovery_id,
+                context_id,
+                correlation_id,
+                supersede_pending_at=completed_at,
+            )
             if recovery.get("status") == "completed":
                 return deepcopy(dict(recovery["response"]))
-            if recovery.get("status") != "pending":
-                raise ManagedContinuityError(
-                    RECOVERY_CONFLICT, 409, correlation_id
-                )
             current_context = _records_by(
                 candidate, "coordinator_contexts", "context_id"
             ).get(context_id)
@@ -3619,6 +4116,9 @@ class ManagedContinuityRuntime:
                     "completed_at": completed_at,
                 }
             )
+            terminal_status = self._terminal_status_when_quiescent(candidate)
+            if terminal_status is not None:
+                candidate["status"] = terminal_status
             return response
 
         _state, response = self.store.mutate_runtime_state(
@@ -3644,20 +4144,18 @@ class ManagedContinuityRuntime:
         def complete(
             state: dict[str, Any], _connection: sqlite3.Connection
         ) -> dict[str, Any]:
-            recovery = _records_by(
-                state, "recovery_records", "recovery_id"
-            ).get(recovery_id)
-            if not isinstance(recovery, dict):
-                raise RuntimeError("managed recovery record disappeared")
+            recovery = self._recovery_for_completion(
+                state,
+                recovery_id,
+                context_id,
+                correlation_id,
+                supersede_pending_at=completed_at,
+            )
             if recovery.get("status") == "completed":
                 response = recovery.get("response")
                 if not isinstance(response, Mapping):
                     raise RuntimeError("managed recovery response is corrupt")
                 return deepcopy(dict(response))
-            if recovery.get("status") != "pending":
-                raise ManagedContinuityError(
-                    RECOVERY_CONFLICT, 409, correlation_id
-                )
             context = _records_by(
                 state, "coordinator_contexts", "context_id"
             ).get(context_id)
@@ -3739,6 +4237,17 @@ class ManagedContinuityRuntime:
         correlation_id: str,
     ) -> ManagedContinuityResult:
         self._validate_schema(payload, _REVIEW_SCHEMA, correlation_id)
+        source_assignment_id = str(binding.record["source_assignment_id"])
+        if binding.record.get("status") != "decided":
+            source_snapshot = _records_by(
+                binding.state, "assignments", "assignment_id"
+            ).get(source_assignment_id)
+            if not isinstance(source_snapshot, Mapping):
+                raise RuntimeError("managed review source disappeared")
+            if source_snapshot.get("status") != "reviews_pending":
+                raise ManagedContinuityError(
+                    REVIEW_CONFLICT, 409, correlation_id
+                )
         # A direct retry may arrive after the durable review assignment but
         # before its outbox record was marked delivered.  Close that crash gap
         # before a first decision, whose terminal transition admits no pending
@@ -3774,7 +4283,6 @@ class ManagedContinuityRuntime:
         ):
             raise ManagedContinuityError(REVIEW_CONFLICT, 409, correlation_id)
 
-        source_assignment_id = str(binding.record["source_assignment_id"])
         result_key = str(binding.record["result_key"])
         journals = _records_by(
             binding.state, "transition_journal", "result_key"
@@ -3993,6 +4501,15 @@ class ManagedContinuityRuntime:
                     raise ManagedContinuityError(
                         REVIEW_CONFLICT, 409, correlation_id
                     )
+                source = _records_by(
+                    state, "assignments", "assignment_id"
+                ).get(source_assignment_id)
+                if not isinstance(source, dict):
+                    raise RuntimeError("managed review source disappeared")
+                if source.get("status") != "reviews_pending":
+                    raise ManagedContinuityError(
+                        REVIEW_CONFLICT, 409, correlation_id
+                    )
                 response = {
                     "assignment_id": review_assignment_id,
                     "source_assignment_id": source_assignment_id,
@@ -4031,11 +4548,6 @@ class ManagedContinuityRuntime:
                     }
                 )
 
-                source = _records_by(
-                    state, "assignments", "assignment_id"
-                ).get(source_assignment_id)
-                if not isinstance(source, dict):
-                    raise RuntimeError("managed review source disappeared")
                 result_reviews = [
                     item
                     for item in state["reviews"]
@@ -6862,61 +7374,18 @@ class ManagedContinuityRuntime:
     ) -> bool:
         if state.get("status") != "active":
             return False
-        if state.get("active_assignment_ids") or state.get(
-            "allowed_outcomes_by_assignment"
-        ):
-            return False
-        if any(
-            token.get("status") == "available"
-            for token in state["workflow"]["transition_tokens"]
-        ):
-            return False
-        if any(event.get("status") == "pending" for event in state["outbox"]):
-            return False
-        if any(
-            lease.get("status") == "active" for lease in state["branch_leases"]
-        ) or any(
-            lease.get("status") in {"reserved", "bound"}
-            for lease in state["port_leases"]
-        ) or any(
-            process.get("state") in {"PREPARED", "STARTING", "HEALTHY", "STOPPING"}
-            for process in state["processes"]
-        ):
-            return False
-        terminal_tokens = [
-            token
-            for token in state["workflow"]["transition_tokens"]
-            if token.get("status") == "terminal"
-        ]
-        if not terminal_tokens:
+        target_status = self._terminal_status_when_quiescent(state)
+        if target_status is None:
             return False
         emitted = {
             token.get("source_occurrence_id")
             for token in state["workflow"]["transition_tokens"]
         }
+        terminally_settled = emitted | self._rework_limit_occurrence_ids(state)
         if any(
-            occurrence.get("occurrence_id") not in emitted
+            occurrence.get("occurrence_id") not in terminally_settled
             for occurrence in state["workflow"]["occurrences"]
         ):
-            return False
-        statuses = {
-            _node(
-                state,
-                int(token["target_graph_revision"]),
-                str(token["target_node_id"]),
-            ).get("status")
-            for token in terminal_tokens
-        }
-        target_status = (
-            "failed"
-            if "FAILED" in statuses
-            else "blocked"
-            if "BLOCKED_EXTERNAL" in statuses
-            else "completed"
-            if statuses == {"DONE"}
-            else None
-        )
-        if target_status is None:
             return False
 
         def mutate(candidate: dict[str, Any], _connection: sqlite3.Connection) -> bool:
@@ -6927,6 +7396,73 @@ class ManagedContinuityRuntime:
 
         _state, changed = self.store.mutate_runtime_state(
             project_id, sprint_id, mutate
+        )
+        return bool(changed)
+
+    def _settle_superseded_pending_recoveries(
+        self, project_id: str, sprint_id: str, state: Mapping[str, Any]
+    ) -> bool:
+        """Fail legacy pending choices after another choice already completed."""
+
+        settled_context_ids = {
+            str(recovery["context_id"])
+            for recovery in state.get("recovery_records", [])
+            if isinstance(recovery, Mapping)
+            and _recovery_settles_context(state, recovery)
+            and isinstance(recovery.get("context_id"), str)
+        }
+        stale_ids = {
+            str(recovery["recovery_id"])
+            for recovery in state.get("recovery_records", [])
+            if isinstance(recovery, Mapping)
+            and recovery.get("status") == "pending"
+            and recovery.get("context_id") in settled_context_ids
+            and isinstance(recovery.get("recovery_id"), str)
+        }
+        if not stale_ids:
+            return False
+        failed_at = _timestamp(self.clock)
+
+        def mutate(
+            candidate: dict[str, Any], _connection: sqlite3.Connection
+        ) -> bool:
+            settled = {
+                str(recovery["context_id"])
+                for recovery in candidate.get("recovery_records", [])
+                if isinstance(recovery, Mapping)
+                and _recovery_settles_context(candidate, recovery)
+                and isinstance(recovery.get("context_id"), str)
+            }
+            changed = False
+            for recovery in candidate.get("recovery_records", []):
+                if (
+                    isinstance(recovery, dict)
+                    and recovery.get("recovery_id") in stale_ids
+                    and recovery.get("status") == "pending"
+                    and recovery.get("context_id") in settled
+                ):
+                    recovery.update(
+                        {
+                            "produced_record_ids": [],
+                            "response": None,
+                            "normalized_error": {
+                                "code": RECOVERY_CONFLICT,
+                                "http_status": 409,
+                            },
+                            "evidence": {},
+                            "status": "failed",
+                            "completed_at": failed_at,
+                        }
+                    )
+                    changed = True
+            if changed:
+                terminal_status = self._terminal_status_when_quiescent(candidate)
+                if terminal_status is not None:
+                    candidate["status"] = terminal_status
+            return changed
+
+        _state, changed = self.store.mutate_runtime_state(
+            project_id, sprint_id, mutate, require_active=False
         )
         return bool(changed)
 
@@ -7101,6 +7637,11 @@ class ManagedContinuityRuntime:
             state = self.store.runtime_state(project_id, sprint_id)
             if state is None or state.get("status") != "active":
                 return progress
+            if self._settle_superseded_pending_recoveries(
+                project_id, sprint_id, state
+            ):
+                progress += 1
+                continue
             if self._record_exhausted_process_failure(
                 project_id, sprint_id, state
             ):
@@ -7125,6 +7666,23 @@ class ManagedContinuityRuntime:
 
     def reconcile_all(self) -> dict[str, int]:
         results: dict[str, int] = {}
+        for project_id, sprint_id in (
+            self.store.superseded_pending_recovery_states()
+        ):
+            try:
+                with self._sprint_lock(sprint_id, timeout=0.05):
+                    state = self.store.runtime_state(project_id, sprint_id)
+                    if state is None:
+                        continue
+                    changed = self._settle_superseded_pending_recoveries(
+                        project_id, sprint_id, state
+                    )
+                if changed:
+                    results[sprint_id] = results.get(sprint_id, 0) + 1
+            except Exception:
+                # Legacy repair is isolated to its own aggregate; one corrupt
+                # historical row must not starve unrelated startup work.
+                results[sprint_id] = -1
         for project_id, sprint_id, attempt_id in (
             self.store.retryable_import_attempts()
         ):
@@ -7308,15 +7866,18 @@ class ManagedContinuityRuntime:
         def complete(
             candidate: dict[str, Any], connection: sqlite3.Connection
         ) -> dict[str, Any]:
-            current_recovery = _records_by(
-                candidate, "recovery_records", "recovery_id"
-            ).get(recovery_id)
+            current_recovery = self._recovery_for_completion(
+                candidate,
+                recovery_id,
+                str(recovery_context_id),
+                correlation,
+                supersede_pending_at=now,
+            )
             current_repair = _records_by(
                 candidate, "repairs", "repair_id"
             ).get(repair_id)
             if (
-                not isinstance(current_recovery, dict)
-                or current_recovery.get("status") != "pending"
+                current_recovery.get("status") != "pending"
                 or current_recovery.get("action") != "APPLY_REPAIR"
                 or current_recovery.get("context_id") != recovery_context_id
                 or current_recovery.get("parameters") != {"request": request}
@@ -7897,9 +8458,16 @@ class ManagedContinuityRuntime:
         recovery_record: Mapping[str, Any] | None = None
         recovery_context: Mapping[str, Any] | None = None
         if recovery_id is not None:
-            recovery_record = _records_by(
-                state, "recovery_records", "recovery_id"
-            ).get(recovery_id)
+            if recovery_context_id is None:
+                raise ManagedContinuityError(
+                    RECOVERY_CONFLICT, 409, correlation
+                )
+            recovery_record = self._recovery_for_completion(
+                state,
+                recovery_id,
+                recovery_context_id,
+                correlation,
+            )
             recovery_context = _records_by(
                 state, "coordinator_contexts", "context_id"
             ).get(str(recovery_context_id))
@@ -8155,12 +8723,15 @@ class ManagedContinuityRuntime:
                     )
             stored_result: dict[str, Any] = deepcopy(response)
             if recovery_id is not None:
-                current_recovery = _records_by(
-                    candidate, "recovery_records", "recovery_id"
-                ).get(str(recovery_id))
+                current_recovery = self._recovery_for_completion(
+                    candidate,
+                    str(recovery_id),
+                    str(recovery_context_id),
+                    correlation,
+                    supersede_pending_at=now,
+                )
                 if (
-                    not isinstance(current_recovery, dict)
-                    or current_recovery.get("status") != "pending"
+                    current_recovery.get("status") != "pending"
                     or current_recovery.get("context_id")
                     != recovery_context_id
                 ):
@@ -8198,25 +8769,9 @@ class ManagedContinuityRuntime:
                     }
                 )
                 stored_result = recovery_response
-            if (
-                not candidate["active_assignment_ids"]
-                and not any(
-                    token.get("status") == "available"
-                    for token in candidate["workflow"]["transition_tokens"]
-                )
-            ):
-                terminal_nodes = [
-                    _node(
-                        candidate,
-                        int(token["target_graph_revision"]),
-                        str(token["target_node_id"]),
-                    )
-                    for token in candidate["workflow"]["transition_tokens"]
-                    if token.get("status") == "terminal"
-                ]
-                terminal_statuses = {item.get("status") for item in terminal_nodes}
-                if terminal_statuses == {"DONE"}:
-                    candidate["status"] = "completed"
+            terminal_status = self._terminal_status_when_quiescent(candidate)
+            if terminal_status is not None:
+                candidate["status"] = terminal_status
             preview_issues = managed_activation_invariant_issues(candidate)
             mapped = next(
                 (

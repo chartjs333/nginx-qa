@@ -1602,9 +1602,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     for fingerprint, observation in blocker_by_fingerprint.items():
         reason_code = observation.get("reason_code")
         normalized_error = observation.get("normalized_error")
-        if reason_code is None and normalized_error is None:
-            # Frozen v1 records created before the continuity runtime did not
-            # retain the canonical fingerprint inputs.  They remain readable.
+        if legacy_runtime_v1 or migrated_runtime_v1 or (
+            reason_code is None and normalized_error is None
+        ):
+            # The frozen v1 contract allowed blocker extensions without
+            # canonical-fingerprint semantics.  Newer runtimes must keep every
+            # schema-valid v1 snapshot readable; v2 records that predate the
+            # retained inputs receive the same narrow compatibility treatment.
             continue
         try:
             expected_fingerprint = managed_blocker_fingerprint(
@@ -4021,6 +4025,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
 
     terminal_evidence_context_ids: set[str] = set()
     rework_limit_context_ids: set[str] = set()
+    rework_limit_assignment_ids: set[str] = set()
+    rework_limit_occurrence_ids: set[str] = set()
     valid_successor_failure_signatures: set[
         tuple[int, str, tuple[str, ...]]
     ] = set()
@@ -4304,6 +4310,10 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 context, failed_assignment
             ):
                 rework_limit_context_ids.add(context_id)
+                rework_limit_assignment_ids.add(str(failed_assignment_id))
+                occurrence_id = failed_assignment.get("occurrence_id")
+                if isinstance(occurrence_id, str):
+                    rework_limit_occurrence_ids.add(occurrence_id)
             else:
                 add("REWORK_LIMIT_EVIDENCE_INVALID")
         if context.get("reason_code") == "SUCCESSOR_PREPARATION_FAILED":
@@ -4614,11 +4624,16 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 continue
         active_join_witness = True
 
+    active_recovery_witness = any(
+        recovery.get("status") == "pending"
+        for recovery in recovery_by_id.values()
+    )
     if (
         status == "active"
         and not active_id_set
         and not active_join_witness
         and not active_scheduler_witness
+        and not active_recovery_witness
     ):
         add("ACTIVE_ASSIGNMENTS_INVALID")
 
@@ -4816,7 +4831,21 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             return None
         return {repair_id, occurrence_id, assignment_id, event_ids[0]}
 
+    def recovery_settles_context(recovery: Mapping[str, Any]) -> bool:
+        if recovery.get("status") == "completed":
+            return True
+        normalized_error = recovery.get("normalized_error")
+        return bool(
+            recovery.get("status") == "failed"
+            and recovery.get("action") == "ROUTE_REWORK"
+            and isinstance(normalized_error, Mapping)
+            and normalized_error.get("code") == "REWORK_LIMIT_EXCEEDED"
+            and recovery.get("assignment_id")
+            in rework_limit_assignment_ids
+        )
+
     recovery_keys: set[tuple[str, str]] = set()
+    settled_recovery_context_ids: set[str] = set()
     for recovery in recovery_by_id.values():
         coordinator_id = recovery.get("coordinator_id")
         idempotency_key = recovery.get("idempotency_key")
@@ -4896,8 +4925,36 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 recovery_join_target,
             )
         )
+        durable_fingerprint = (
+            recovery.get("durable_request_fingerprint")
+            if "durable_request_fingerprint" in recovery
+            else recovery.get("request_fingerprint")
+        )
+        normalized_recovery_error = recovery.get("normalized_error")
+        orphan_rework_limit_claim = bool(
+            recovery_status == "failed"
+            and action == "ROUTE_REWORK"
+            and isinstance(normalized_recovery_error, Mapping)
+            and normalized_recovery_error.get("code")
+            == "REWORK_LIMIT_EXCEEDED"
+            and assignment_id not in rework_limit_assignment_ids
+        )
         if (
-            recovery.get("request_fingerprint") != expected_fingerprint
+            orphan_rework_limit_claim
+            and not legacy_runtime_v1
+            and not migrated_runtime_v1
+        ):
+            add("RECOVERY_BINDING_INVALID")
+        if recovery_settles_context(recovery) and isinstance(context_id, str):
+            if (
+                context_id in settled_recovery_context_ids
+                and not legacy_runtime_v1
+                and not migrated_runtime_v1
+            ):
+                add("RECOVERY_CONTEXT_COMPLETION_DUPLICATE")
+            settled_recovery_context_ids.add(context_id)
+        if (
+            durable_fingerprint != expected_fingerprint
             or recovery_target_count != 1
             or (
                 isinstance(context, Mapping)
@@ -5942,14 +5999,66 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     ):
         add("PREPARING_STATE_HAS_ACTIVATED_WORK")
 
+    stranded_rework_limit_token_ids: set[str] = set()
+    current_definition = (
+        revision_by_number.get(graph_revision, {}).get("definition")
+        if valid_graph_revision
+        else None
+    )
+    available_tokens_by_target: dict[str, list[tuple[str, Mapping[str, Any]]]] = {}
+    for token_id, token in token_by_id.items():
+        target_node_id = token.get("target_node_id")
+        if token.get("status") == "available" and isinstance(target_node_id, str):
+            available_tokens_by_target.setdefault(target_node_id, []).append(
+                (token_id, token)
+            )
+    for target_node_id, target_tokens in available_tokens_by_target.items():
+        target_node = nodes_by_revision.get(graph_revision, {}).get(target_node_id)
+        if (
+            not isinstance(target_node, Mapping)
+            or target_node.get("type", "task") != "task"
+            or target_node.get("activation_policy", "all_parents")
+            != "all_parents"
+        ):
+            continue
+        parent_order = target_node.get("join_parent_order")
+        if not isinstance(parent_order, list):
+            parent_order = definition_inbound_parent_ids(
+                current_definition, target_node_id
+            )
+        available_parent_ids = {
+            str(token.get("source_node_id")) for _token_id, token in target_tokens
+        }
+        missing_parent_ids = {
+            str(parent_id) for parent_id in parent_order
+        } - available_parent_ids
+        capped_parent_ids: set[str] = set()
+        for assignment_id in rework_limit_assignment_ids:
+            assignment = assignment_by_id.get(assignment_id)
+            if (
+                isinstance(assignment, Mapping)
+                and isinstance(assignment.get("node_id"), str)
+            ):
+                capped_parent_ids.add(str(assignment["node_id"]))
+        if missing_parent_ids.intersection(capped_parent_ids):
+            stranded_rework_limit_token_ids.update(
+                token_id for token_id, _token in target_tokens
+            )
+
     if status in {"completed", "failed", "blocked"}:
         terminal_tokens = [
             token for token in token_by_id.values() if token.get("status") == "terminal"
         ]
+        emitted_by_occurrence = {
+            token.get("source_occurrence_id") for token in token_by_id.values()
+        }
+        terminal_branch_coverage = (
+            emitted_by_occurrence | rework_limit_occurrence_ids
+        )
         rework_limit_block = bool(
-            status == "blocked"
-            and not terminal_tokens
-            and len(rework_limit_context_ids) == 1
+            not terminal_tokens
+            and rework_limit_context_ids
+            and set(occurrence_by_id).issubset(terminal_branch_coverage)
         )
         terminal_manifest_statuses = {
             nodes_by_revision.get(token.get("target_graph_revision"), {})
@@ -5964,6 +6073,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             if "BLOCKED_EXTERNAL" in terminal_manifest_statuses
             else "completed"
             if terminal_manifest_statuses == {"DONE"}
+            else "blocked"
+            if rework_limit_block
             else None
         )
         if (
@@ -5972,15 +6083,11 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             and not rework_limit_block
         ):
             add("TERMINAL_TOKEN_PROOF_MISSING")
-        if terminal_tokens and status != expected_terminal_status:
+        if expected_terminal_status is not None and status != expected_terminal_status:
             add("TERMINAL_STATUS_MISMATCH")
-        emitted_by_occurrence = {
-            token.get("source_occurrence_id") for token in token_by_id.values()
-        }
         if (
             isinstance(workflow, Mapping)
-            and not rework_limit_block
-            and not set(occurrence_by_id).issubset(emitted_by_occurrence)
+            and not set(occurrence_by_id).issubset(terminal_branch_coverage)
         ):
             add("TERMINAL_BRANCH_PROOF_MISSING")
         live_occurrences = {
@@ -6005,7 +6112,29 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 process.get("state") in live_process_states
                 for process in process_by_id.values()
             )
-            or any(token.get("status") == "available" for token in token_by_id.values())
+            or (
+                not legacy_runtime_v1
+                and not migrated_runtime_v1
+                and any(
+                    recovery.get("status") == "pending"
+                    and recovery.get("action")
+                    in {
+                        "APPLY_REPAIR",
+                        "CONTINUE_NODE",
+                        "ROUTE_REWORK",
+                        "BLOCK_EXTERNAL",
+                    }
+                    and isinstance(workflow, Mapping)
+                    and recovery.get("context_id")
+                    not in settled_recovery_context_ids
+                    for recovery in recovery_by_id.values()
+                )
+            )
+            or any(
+                token.get("status") == "available"
+                and token_id not in stranded_rework_limit_token_ids
+                for token_id, token in token_by_id.items()
+            )
             or any(event.get("status") == "pending" for event in outbox_by_id.values())
         ):
             add("TERMINAL_STATE_HAS_LIVE_WORK")
@@ -6019,11 +6148,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 not terminal_tokens
                 or any(
                     occurrence.get("state") != "completed"
-                    for occurrence in occurrence_by_id.values()
+                    and occurrence_id not in rework_limit_occurrence_ids
+                    for occurrence_id, occurrence in occurrence_by_id.items()
                 )
                 or any(
                     assignment.get("status") != "completed"
-                    for assignment in assignment_by_id.values()
+                    and assignment_id not in rework_limit_assignment_ids
+                    for assignment_id, assignment in assignment_by_id.items()
                 )
                 or not completed_occurrence_ids.issubset(emitted_by_occurrence)
             ):

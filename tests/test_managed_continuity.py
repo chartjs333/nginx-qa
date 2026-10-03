@@ -20,6 +20,7 @@ from nginx_qa.managed_continuity import (
     RESULT_CONFLICT,
     REVIEW_CONFLICT,
     _PreparedAssignment,
+    _recovery_settles_context,
     _stable_id,
 )
 from nginx_qa.managed_import import ManagedImportStore, TransactionalSprintImporter
@@ -28,6 +29,7 @@ from nginx_qa.sprint_types import (
     managed_activation_invariant_issues,
     managed_blocker_fingerprint,
     managed_occurrence_id,
+    recovery_request_fingerprint,
     review_request_fingerprint,
 )
 from nginx_qa.workspace_manager import ManagedWorkspace, WorkspaceRequest
@@ -159,6 +161,247 @@ class ManagedContinuityTests(unittest.TestCase):
                 ),
             )
             connection.commit()
+
+    def configure_parallel_active_sibling(
+        self, *, maximum: int = 0
+    ) -> None:
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        definition = state["graph_revisions"][0]["definition"]
+        build = definition["nodes"][0]
+        lint = deepcopy(build)
+        lint.update(
+            {
+                "id": "lint",
+                "agent": {
+                    "id": "linter",
+                    "name": "Linter",
+                    "phone": "2862",
+                },
+                "tasks": [
+                    {
+                        "task_id": "LINT-1",
+                        "queue": "worker-all",
+                        "message": "Lint",
+                    }
+                ],
+                "workspace": {"access": "read"},
+            }
+        )
+        definition["nodes"].insert(1, lint)
+        definition["execution"].pop("start_node")
+        definition["execution"].update(
+            {
+                "mode": "parallel",
+                "start_nodes": ["build", "lint"],
+                "max_rework_cycles": maximum,
+            }
+        )
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+
+        sibling_assignment_id = "assignment-parallel"
+        sibling_workspace_id = "workspace-parallel"
+        sibling_occurrence_id = managed_occurrence_id(
+            SPRINT_ID, 1, "lint", 1, []
+        )
+        source_assignment = state["assignments"][0]
+        sibling_assignment = deepcopy(source_assignment)
+        sibling_assignment.update(
+            {
+                "assignment_id": sibling_assignment_id,
+                "occurrence_id": sibling_occurrence_id,
+                "node_id": "lint",
+                "agent_id": "linter",
+                "agent_phone": "2862",
+                "workspace_id": sibling_workspace_id,
+                "branch_lease_id": None,
+            }
+        )
+        source_workspace = state["workspaces"][0]
+        workspace_root = (
+            source_workspace["expected_root"].split("/nodes/", 1)[0]
+            + f"/nodes/lint/{sibling_assignment_id}"
+        )
+        sibling_workspace = deepcopy(source_workspace)
+        sibling_workspace.update(
+            {
+                "workspace_id": sibling_workspace_id,
+                "node_id": "lint",
+                "assignment_id": sibling_assignment_id,
+                "expected_root": workspace_root,
+                "actual_git_toplevel": workspace_root,
+                "actual_git_dir": workspace_root + "/.git",
+                "assigned_branch": None,
+            }
+        )
+        state["workflow"].update(
+            {
+                "execution_mode": "parallel",
+                "entry_node_ids": ["build", "lint"],
+                "entry_occurrence_ids": [
+                    state["workflow"]["entry_occurrence_ids"][0],
+                    sibling_occurrence_id,
+                ],
+            }
+        )
+        state["workflow"]["occurrences"].append(
+            {
+                "occurrence_id": sibling_occurrence_id,
+                "node_id": "lint",
+                "graph_revision": 1,
+                "generation": 1,
+                "activation_policy": "entry",
+                "trigger_token_ids": [],
+                "state": "active",
+                "assignment_ids": [sibling_assignment_id],
+                "created_at": TIMESTAMP,
+                "completed_at": None,
+            }
+        )
+        state["assignments"].append(sibling_assignment)
+        state["workspaces"].append(sibling_workspace)
+        state["active_assignment_ids"].append(sibling_assignment_id)
+        state["allowed_outcomes_by_assignment"][sibling_assignment_id] = list(
+            sibling_assignment["allowed_outcomes"]
+        )
+        state["outbox"].append(
+            {
+                "event_id": "event-assignment-parallel",
+                "dedupe_key": (
+                    f"enqueue:assignment:{SPRINT_ID}:{sibling_assignment_id}"
+                ),
+                "event_type": "ASSIGNMENT_ENQUEUE",
+                "payload": {
+                    "sprint_id": SPRINT_ID,
+                    "graph_revision": 1,
+                    "assignment_id": sibling_assignment_id,
+                    "node_id": "lint",
+                    "agent_phone": "2862",
+                },
+                "status": "delivered",
+                "created_at": TIMESTAMP,
+                "delivered_at": TIMESTAMP,
+                "queue_receipt_id": "queue-receipt-assignment-parallel",
+            }
+        )
+        attempt = state["import_attempts"][0]
+        attempt["prepared_artifact_ids"].append(sibling_workspace_id)
+        attempt["activation_response"].update(
+            {
+                "execution_mode": "parallel",
+                "initial_assignment_ids": [
+                    "assignment-1",
+                    sibling_assignment_id,
+                ],
+            }
+        )
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+
+    def assert_all_parent_cap_settles(self, capped_outcome: str) -> None:
+        self.configure_parallel_active_sibling(maximum=0)
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        definition = state["graph_revisions"][0]["definition"]
+        build = next(node for node in definition["nodes"] if node["id"] == "build")
+        lint = next(node for node in definition["nodes"] if node["id"] == "lint")
+        join = deepcopy(lint)
+        join.update(
+            {
+                "id": "join",
+                "agent": {
+                    "id": "joiner",
+                    "name": "Joiner",
+                    "phone": "2863",
+                },
+                "tasks": [
+                    {
+                        "task_id": "JOIN-1",
+                        "queue": "worker-all",
+                        "message": "Join",
+                    }
+                ],
+                "activation_policy": "all_parents",
+                "join_parent_order": ["build", "lint"],
+                "workspace": {
+                    "access": "read",
+                    "join_strategy": "require_same_commit",
+                },
+                "transitions": {"DONE": "completed"},
+            }
+        )
+        build["transitions"]["DONE"] = "join"
+        lint["transitions"]["DONE"] = "join"
+        definition["nodes"].insert(2, join)
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+
+        self.submit_result(status=capped_outcome)
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        review = next(
+            item
+            for item in pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-1"
+        )
+        self.runtime.submit_if_managed(
+            "project-id",
+            review["reviewer_phone"],
+            canonical_json_bytes(
+                {
+                    "assignment_id": review["assignment_id"],
+                    "status": "REJECT",
+                    "feedback": "The all-parent branch exhausted its budget",
+                }
+            ),
+            f"all-parent-cap-{capped_outcome.lower()}",
+        )
+        self.runtime.submit_if_managed(
+            "project-id",
+            "2862",
+            canonical_json_bytes(
+                {
+                    "assignment_id": "assignment-parallel",
+                    "status": "DONE",
+                    "result": "The sibling reached the all-parent join",
+                    "from_commit": COMMIT,
+                    "git_commit": COMMIT,
+                    "git_branch": None,
+                }
+            ),
+            f"all-parent-sibling-{capped_outcome.lower()}",
+        )
+        sibling_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        for sibling_review in [
+            item
+            for item in sibling_pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-parallel"
+        ]:
+            self.runtime.submit_if_managed(
+                "project-id",
+                sibling_review["reviewer_phone"],
+                canonical_json_bytes(
+                    {
+                        "assignment_id": sibling_review["assignment_id"],
+                        "status": "APPROVE",
+                    }
+                ),
+                f"all-parent-review-{capped_outcome.lower()}",
+            )
+
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(terminal["status"], "blocked")
+        self.assertEqual(terminal["active_assignment_ids"], [])
+        available = [
+            token
+            for token in terminal["workflow"]["transition_tokens"]
+            if token["status"] == "available"
+        ]
+        self.assertEqual(len(available), 1)
+        self.assertEqual(available[0]["target_node_id"], "join")
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
 
     def configure_terminal_result(self, terminal_status: str) -> None:
         state = self.store.runtime_state("project-id", SPRINT_ID)
@@ -1219,6 +1462,195 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(replay.response["produced_record_ids"], expected_ids)
         self.assertTrue(replay.response["deduplicated"])
 
+    def test_pending_recovery_excludes_competing_key_and_action(self) -> None:
+        self.submit_result()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        result_key = state["result_receipts"][0]["result_key"]
+        context = self.add_assignment_coordinator_context(
+            state,
+            context_id="context-recovery-decision-fence",
+            reason_code="HANDOFF_DELIVERY_FAILED",
+        )
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+        first_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "recovery-decision-first",
+            "action": "RETRY_HANDOFF",
+            "parameters": {"result_key": result_key},
+        }
+
+        def fault(point: str, _context: dict) -> None:
+            if point == "after_recovery_pending":
+                raise InjectedCrash("after recovery pending")
+
+        self.runtime.fault_injector = fault
+        with self.assertRaises(InjectedCrash):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(first_request),
+                "recovery-decision-first-crash",
+            )
+        self.runtime.fault_injector = None
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(pending["recovery_records"]), 1)
+        self.assertEqual(pending["recovery_records"][0]["status"], "pending")
+
+        competing = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "recovery-decision-second",
+            "action": "BLOCK_EXTERNAL",
+            "parameters": {
+                "reason_code": "HANDOFF_DELIVERY_FAILED",
+                "operator_action": "Choose a different recovery effect",
+            },
+        }
+        with self.assertRaises(ManagedContinuityError) as conflict:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(competing),
+                "recovery-decision-second-conflict",
+            )
+        self.assertEqual(conflict.exception.code, RECOVERY_CONFLICT)
+        unchanged = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(unchanged["recovery_records"]), 1)
+        self.assertEqual(unchanged["graph_revision"], 1)
+        self.assertEqual(unchanged["repairs"], [])
+
+        completed = self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(first_request),
+            "recovery-decision-first-resume",
+        )
+        self.assertEqual(completed.response["status"], "RECOVERY_COMPLETED")
+        recovered = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(recovered["recovery_records"][0]["status"], "completed")
+        self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_unrelated_failed_recovery_code_does_not_settle_context(self) -> None:
+        self.submit_result()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        result_key = state["result_receipts"][0]["result_key"]
+        context = self.add_assignment_coordinator_context(
+            state,
+            context_id="context-unrelated-cap-error",
+            reason_code="HANDOFF_DELIVERY_FAILED",
+        )
+        self.replace_state(state)
+        first_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "unrelated-cap-error-first",
+            "action": "RETRY_HANDOFF",
+            "parameters": {"result_key": result_key},
+        }
+
+        def fault(point: str, _context: dict) -> None:
+            if point == "after_recovery_pending":
+                raise InjectedCrash("after recovery pending")
+
+        self.runtime.fault_injector = fault
+        with self.assertRaises(InjectedCrash):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(first_request),
+                "unrelated-cap-error-first",
+            )
+        self.runtime.fault_injector = None
+        failed = self.store.runtime_state("project-id", SPRINT_ID)
+        failed["recovery_records"][0].update(
+            {
+                "normalized_error": {
+                    "code": "REWORK_LIMIT_EXCEEDED",
+                    "http_status": 409,
+                },
+                "status": "failed",
+                "completed_at": TIMESTAMP,
+            }
+        )
+        self.assertEqual(managed_activation_invariant_issues(failed), ())
+        self.replace_state(failed)
+        identity = self.runtime.current_identity("project-id", "2860")
+        self.assertEqual(
+            identity["assignment"]["context_id"], context["context_id"]
+        )
+
+        retry = deepcopy(first_request)
+        retry["idempotency_key"] = "unrelated-cap-error-second"
+        completed = self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(retry),
+            "unrelated-cap-error-second",
+        )
+        self.assertEqual(completed.response["status"], "RECOVERY_COMPLETED")
+        recovered = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(
+            [item["status"] for item in recovered["recovery_records"]],
+            ["failed", "completed"],
+        )
+        self.assertNotIn(
+            "RECOVERY_CONTEXT_COMPLETION_DUPLICATE",
+            managed_activation_invariant_issues(recovered),
+        )
+        self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_orphan_route_rework_cap_claim_is_not_a_settled_choice(self) -> None:
+        self.submit_result()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        result_key = state["result_receipts"][0]["result_key"]
+        context = self.add_assignment_coordinator_context(
+            state,
+            context_id="context-orphan-route-cap",
+            reason_code="REWORK_ROUTING_FAILED",
+        )
+        parameters = {
+            "rejected_result_key": result_key,
+            "feedback": "This failure has no durable cap evidence",
+        }
+        fingerprint = recovery_request_fingerprint(
+            context["context_id"],
+            1,
+            "ROUTE_REWORK",
+            None,
+            "assignment-1",
+            parameters,
+        )
+        orphan = {
+            "recovery_id": "recovery-orphan-route-cap",
+            "coordinator_id": "coordinator",
+            "context_id": context["context_id"],
+            "graph_revision": 1,
+            "idempotency_key": "orphan-route-cap",
+            "request_fingerprint": fingerprint,
+            "durable_request_fingerprint": fingerprint,
+            "action": "ROUTE_REWORK",
+            "parameters": parameters,
+            "import_attempt_id": None,
+            "assignment_id": "assignment-1",
+            "join_target": None,
+            "produced_record_ids": [],
+            "response": None,
+            "normalized_error": {
+                "code": "REWORK_LIMIT_EXCEEDED",
+                "http_status": 409,
+            },
+            "evidence": {},
+            "status": "failed",
+            "created_at": TIMESTAMP,
+            "completed_at": TIMESTAMP,
+        }
+        state["recovery_records"].append(orphan)
+        self.assertFalse(_recovery_settles_context(state, orphan))
+        state["schema_version"] = 2
+        self.assertIn(
+            "RECOVERY_BINDING_INVALID",
+            managed_activation_invariant_issues(state),
+        )
+
     def test_handoff_context_remains_resolvable_after_terminal_completion(
         self,
     ) -> None:
@@ -1248,12 +1680,35 @@ class ManagedContinuityTests(unittest.TestCase):
 
         terminal = self.store.runtime_state("project-id", SPRINT_ID)
         self.assertEqual(terminal["status"], "completed")
+        terminal["schema_version"] = 2
+        self.replace_state(terminal)
         identity = self.runtime.current_identity("project-id", "2860")
         self.assertIsNotNone(identity)
         assert identity is not None
         self.assertEqual(
             identity["assignment"]["assignment_id"], context["context_id"]
         )
+
+        with self.assertRaises(ManagedContinuityError) as terminal_mutation:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(
+                    {
+                        "assignment_id": context["context_id"],
+                        "idempotency_key": "terminal-handoff-block",
+                        "action": "BLOCK_EXTERNAL",
+                        "parameters": {
+                            "reason_code": "HANDOFF_DELIVERY_FAILED",
+                            "operator_action": "Do not mutate terminal workflow",
+                        },
+                    }
+                ),
+                "terminal-handoff-block",
+            )
+        self.assertEqual(terminal_mutation.exception.code, RECOVERY_CONFLICT)
+        unchanged = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(unchanged["recovery_records"], [])
 
         completed = self.runtime.submit_if_managed(
             "project-id",
@@ -2403,6 +2858,523 @@ class ManagedContinuityTests(unittest.TestCase):
                 self.assertIn("TERMINAL_TOKEN_PROOF_MISSING", issues)
                 self.assertIn("TERMINAL_BRANCH_PROOF_MISSING", issues)
 
+    def test_parallel_direct_review_cap_preserves_and_settles_live_sibling(
+        self,
+    ) -> None:
+        self.configure_parallel_active_sibling(maximum=0)
+        self.submit_result()
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        review = next(
+            item
+            for item in pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-1"
+        )
+        request = {
+            "assignment_id": review["assignment_id"],
+            "status": "REJECT",
+            "feedback": "The parallel branch exhausted its rework budget",
+        }
+        response = self.runtime.submit_if_managed(
+            "project-id",
+            review["reviewer_phone"],
+            canonical_json_bytes(request),
+            "parallel-review-cap",
+        )
+
+        branch_scoped = self.store.runtime_state("project-id", SPRINT_ID)
+        assignments = {
+            item["assignment_id"]: item for item in branch_scoped["assignments"]
+        }
+        occurrences = {
+            item["occurrence_id"]: item
+            for item in branch_scoped["workflow"]["occurrences"]
+        }
+        self.assertEqual(response.response["status"], "REWORK_ENQUEUED")
+        self.assertEqual(branch_scoped["status"], "active")
+        self.assertEqual(assignments["assignment-1"]["status"], "blocked")
+        self.assertEqual(assignments["assignment-parallel"]["status"], "active")
+        self.assertEqual(
+            occurrences[assignments["assignment-1"]["occurrence_id"]]["state"],
+            "blocked",
+        )
+        self.assertEqual(
+            occurrences[assignments["assignment-parallel"]["occurrence_id"]][
+                "state"
+            ],
+            "active",
+        )
+        self.assertEqual(
+            branch_scoped["active_assignment_ids"], ["assignment-parallel"]
+        )
+        self.assertEqual(
+            set(branch_scoped["allowed_outcomes_by_assignment"]),
+            {"assignment-parallel"},
+        )
+        self.assertEqual(branch_scoped["reworks"], [])
+        self.assertEqual(
+            [
+                context["reason_code"]
+                for context in branch_scoped["coordinator_contexts"]
+            ],
+            ["REWORK_LIMIT_EXCEEDED"],
+        )
+        self.assertEqual(managed_activation_invariant_issues(branch_scoped), ())
+        sibling_identity = self.runtime.current_identity("project-id", "2862")
+        self.assertEqual(
+            sibling_identity["assignment"]["assignment_id"],
+            "assignment-parallel",
+        )
+
+        late_review = next(
+            item
+            for item in branch_scoped["review_assignments"]
+            if item["source_assignment_id"] == "assignment-1"
+            and item["assignment_id"] != review["assignment_id"]
+        )
+        with self.assertRaises(ManagedContinuityError) as late:
+            self.runtime.submit_if_managed(
+                "project-id",
+                late_review["reviewer_phone"],
+                canonical_json_bytes(
+                    {
+                        "assignment_id": late_review["assignment_id"],
+                        "status": "APPROVE",
+                    }
+                ),
+                "parallel-review-after-cap",
+            )
+        self.assertEqual(late.exception.code, REVIEW_CONFLICT)
+        after_late_review = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(after_late_review["reviews"]), 1)
+        self.assertEqual(
+            next(
+                item
+                for item in after_late_review["review_assignments"]
+                if item["assignment_id"] == late_review["assignment_id"]
+            )["status"],
+            "active",
+        )
+        self.assertEqual(
+            managed_activation_invariant_issues(after_late_review), ()
+        )
+
+        replay = self.runtime.submit_if_managed(
+            "project-id",
+            review["reviewer_phone"],
+            canonical_json_bytes(request),
+            "parallel-review-cap-replay",
+        )
+        self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
+        self.assertTrue(replay.response["deduplicated"])
+
+        sibling_result = self.runtime.submit_if_managed(
+            "project-id",
+            "2862",
+            canonical_json_bytes(
+                {
+                    "assignment_id": "assignment-parallel",
+                    "status": "DONE",
+                    "result": "The sibling completed independently",
+                    "from_commit": COMMIT,
+                    "git_commit": COMMIT,
+                    "git_branch": None,
+                }
+            ),
+            "parallel-sibling-result",
+        )
+        self.assertEqual(sibling_result.response["status"], "REVIEWS_PENDING")
+        sibling_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        sibling_reviews = [
+            item
+            for item in sibling_pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-parallel"
+        ]
+        for sibling_review in sibling_reviews:
+            self.runtime.submit_if_managed(
+                "project-id",
+                sibling_review["reviewer_phone"],
+                canonical_json_bytes(
+                    {
+                        "assignment_id": sibling_review["assignment_id"],
+                        "status": "APPROVE",
+                    }
+                ),
+                "parallel-sibling-review",
+            )
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(terminal["active_assignment_ids"], [])
+        self.assertEqual(
+            [
+                item["status"]
+                for item in terminal["workflow"]["transition_tokens"]
+            ],
+            ["terminal"],
+        )
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+    def test_parallel_route_rework_cap_is_atomic_and_replayable(self) -> None:
+        self.configure_parallel_active_sibling(maximum=0)
+        self.submit_result()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        source = state["assignments"][0]
+        result_key = state["result_receipts"][0]["result_key"]
+        feedback = "Recover the rejected branch without stopping its sibling"
+        review = state["review_assignments"][0]
+        request_fingerprint = review_request_fingerprint(
+            review["assignment_id"], "REJECT", feedback
+        )
+        review_response = {
+            "assignment_id": review["assignment_id"],
+            "source_assignment_id": source["assignment_id"],
+            "result_key": result_key,
+            "decision": "REJECT",
+            "status": "REWORK_ENQUEUED",
+            "deduplicated": False,
+        }
+        review.update(
+            {
+                "status": "decided",
+                "decision": "REJECT",
+                "request_fingerprint": request_fingerprint,
+                "response": deepcopy(review_response),
+                "decided_at": review["activated_at"],
+            }
+        )
+        state["reviews"].append(
+            {
+                "assignment_id": review["assignment_id"],
+                "source_assignment_id": source["assignment_id"],
+                "result_key": result_key,
+                "result_commit": review["result_commit"],
+                "result_outcome": review["result_outcome"],
+                "reviewer_id": review["reviewer_id"],
+                "reviewer_index": review["reviewer_index"],
+                "decision": "REJECT",
+                "feedback": feedback,
+                "request_fingerprint": request_fingerprint,
+                "response": deepcopy(review_response),
+                "decided_at": review["activated_at"],
+            }
+        )
+        context = self.add_assignment_coordinator_context(
+            state,
+            context_id="context-parallel-route-rework-cap",
+            reason_code="REWORK_ROUTING_FAILED",
+        )
+        context["failure_scope"] = "review"
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+        request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "parallel-route-rework-cap",
+            "action": "ROUTE_REWORK",
+            "parameters": {
+                "rejected_result_key": result_key,
+                "feedback": feedback,
+            },
+        }
+
+        with (
+            patch.object(
+                self.runtime,
+                "_fail_pending_recovery",
+                side_effect=InjectedCrash("after atomic cap settlement"),
+            ),
+            self.assertRaises(InjectedCrash),
+        ):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "parallel-route-rework-cap-first",
+            )
+
+        branch_scoped = self.store.runtime_state("project-id", SPRINT_ID)
+        assignments = {
+            item["assignment_id"]: item for item in branch_scoped["assignments"]
+        }
+        recovery = branch_scoped["recovery_records"][0]
+        self.assertEqual(branch_scoped["status"], "active")
+        self.assertEqual(assignments["assignment-1"]["status"], "blocked")
+        self.assertEqual(assignments["assignment-parallel"]["status"], "active")
+        self.assertEqual(
+            branch_scoped["active_assignment_ids"], ["assignment-parallel"]
+        )
+        self.assertEqual(branch_scoped["reworks"], [])
+        self.assertEqual(recovery["status"], "failed")
+        self.assertEqual(recovery["produced_record_ids"], [])
+        self.assertIsNone(recovery["response"])
+        self.assertEqual(
+            recovery["normalized_error"],
+            {"code": "REWORK_LIMIT_EXCEEDED", "http_status": 409},
+        )
+        self.assertEqual(
+            [
+                item["reason_code"]
+                for item in branch_scoped["coordinator_contexts"]
+            ],
+            ["REWORK_ROUTING_FAILED", "REWORK_LIMIT_EXCEEDED"],
+        )
+        self.assertEqual(managed_activation_invariant_issues(branch_scoped), ())
+        cap_identity = self.runtime.current_identity("project-id", "2860")
+        self.assertEqual(
+            cap_identity["assignment"]["context"]["reason_code"],
+            "REWORK_LIMIT_EXCEEDED",
+        )
+
+        with self.assertRaises(ManagedContinuityError) as replay:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "parallel-route-rework-cap-replay",
+            )
+        self.assertEqual(replay.exception.code, "REWORK_LIMIT_EXCEEDED")
+        self.assertEqual(replay.exception.http_status, 409)
+        replayed = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(replayed["recovery_records"]), 1)
+        self.assertEqual(managed_activation_invariant_issues(replayed), ())
+
+        content = b"must not be read\n"
+        digest = hashlib.sha256(content).hexdigest()
+        repair_commit = "d" * 40
+        competing_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "parallel-route-rework-cap-competing-repair",
+            "action": "APPLY_REPAIR",
+            "parameters": {
+                "request": {
+                    "expected_revision": 1,
+                    "repair_source_commit": repair_commit,
+                    "idempotency_key": "parallel-route-rework-cap-repair",
+                    "patch": {
+                        "checksum_metadata": [
+                            {
+                                "path": "orchestration/README.md",
+                                "sha256": digest,
+                            },
+                            {"path": "service.py", "sha256": digest},
+                        ]
+                    },
+                }
+            },
+        }
+        provider = Mock(unsafe=True)
+        with (
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            self.assertRaises(ManagedContinuityError) as competing,
+        ):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(competing_request),
+                "parallel-route-rework-cap-competing-repair",
+            )
+        self.assertEqual(competing.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(competing.exception.http_status, 409)
+        provider.ensure_mirror.assert_not_called()
+        fenced = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(fenced["graph_revision"], 1)
+        self.assertEqual(fenced["repairs"], [])
+        self.assertEqual(len(fenced["recovery_records"]), 1)
+        self.assertEqual(
+            next(
+                item
+                for item in fenced["assignments"]
+                if item["assignment_id"] == "assignment-parallel"
+            )["status"],
+            "active",
+        )
+        self.assertEqual(managed_activation_invariant_issues(fenced), ())
+
+        legacy_cap = deepcopy(fenced)
+        legacy_cap["recovery_records"][0]["normalized_error"].pop(
+            "http_status"
+        )
+        self.assertEqual(managed_activation_invariant_issues(legacy_cap), ())
+        self.replace_state(legacy_cap)
+        legacy_request = deepcopy(competing_request)
+        legacy_request["idempotency_key"] = (
+            "parallel-route-rework-cap-legacy-competing-repair"
+        )
+        legacy_provider = Mock(unsafe=True)
+        with (
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=legacy_provider,
+            ),
+            self.assertRaises(ManagedContinuityError) as legacy_conflict,
+        ):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(legacy_request),
+                "parallel-route-rework-cap-legacy-conflict",
+            )
+        self.assertEqual(legacy_conflict.exception.code, RECOVERY_CONFLICT)
+        legacy_provider.ensure_mirror.assert_not_called()
+        legacy_fenced = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(legacy_fenced["recovery_records"]), 1)
+        self.assertEqual(legacy_fenced["graph_revision"], 1)
+
+    def test_parallel_rework_cap_combines_prior_terminal_sibling(self) -> None:
+        self.configure_parallel_active_sibling(maximum=0)
+        sibling_result = self.runtime.submit_if_managed(
+            "project-id",
+            "2862",
+            canonical_json_bytes(
+                {
+                    "assignment_id": "assignment-parallel",
+                    "status": "DONE",
+                    "result": "The sibling reached its terminal first",
+                    "from_commit": COMMIT,
+                    "git_commit": COMMIT,
+                    "git_branch": None,
+                }
+            ),
+            "parallel-terminal-first-result",
+        )
+        self.assertEqual(sibling_result.response["status"], "REVIEWS_PENDING")
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        for review in [
+            item
+            for item in pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-parallel"
+        ]:
+            self.runtime.submit_if_managed(
+                "project-id",
+                review["reviewer_phone"],
+                canonical_json_bytes(
+                    {
+                        "assignment_id": review["assignment_id"],
+                        "status": "APPROVE",
+                    }
+                ),
+                "parallel-terminal-first-review",
+            )
+        sibling_terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(sibling_terminal["status"], "active")
+        self.assertEqual(
+            [
+                item["status"]
+                for item in sibling_terminal["workflow"]["transition_tokens"]
+            ],
+            ["terminal"],
+        )
+        self.assertEqual(managed_activation_invariant_issues(sibling_terminal), ())
+
+        self.submit_result()
+        source_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        source_review = next(
+            item
+            for item in source_pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-1"
+        )
+        response = self.runtime.submit_if_managed(
+            "project-id",
+            source_review["reviewer_phone"],
+            canonical_json_bytes(
+                {
+                    "assignment_id": source_review["assignment_id"],
+                    "status": "REJECT",
+                    "feedback": "The remaining branch exhausted its budget",
+                }
+            ),
+            "parallel-terminal-first-cap",
+        )
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(response.response["status"], "REWORK_ENQUEUED")
+        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+    def test_parallel_rework_cap_accepts_multiple_blocked_branches(self) -> None:
+        self.configure_parallel_active_sibling(maximum=0)
+        self.submit_result()
+        first_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        first_review = next(
+            item
+            for item in first_pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-1"
+        )
+        self.runtime.submit_if_managed(
+            "project-id",
+            first_review["reviewer_phone"],
+            canonical_json_bytes(
+                {
+                    "assignment_id": first_review["assignment_id"],
+                    "status": "REJECT",
+                    "feedback": "The build branch exhausted its budget",
+                }
+            ),
+            "parallel-first-cap",
+        )
+        self.runtime.submit_if_managed(
+            "project-id",
+            "2862",
+            canonical_json_bytes(
+                {
+                    "assignment_id": "assignment-parallel",
+                    "status": "DONE",
+                    "result": "The lint branch also needs rework",
+                    "from_commit": COMMIT,
+                    "git_commit": COMMIT,
+                    "git_branch": None,
+                }
+            ),
+            "parallel-second-cap-result",
+        )
+        second_pending = self.store.runtime_state("project-id", SPRINT_ID)
+        second_review = next(
+            item
+            for item in second_pending["review_assignments"]
+            if item["source_assignment_id"] == "assignment-parallel"
+        )
+        self.runtime.submit_if_managed(
+            "project-id",
+            second_review["reviewer_phone"],
+            canonical_json_bytes(
+                {
+                    "assignment_id": second_review["assignment_id"],
+                    "status": "REJECT",
+                    "feedback": "The lint branch exhausted its budget",
+                }
+            ),
+            "parallel-second-cap",
+        )
+
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(terminal["status"], "blocked")
+        self.assertEqual(terminal["active_assignment_ids"], [])
+        self.assertEqual(
+            [
+                item["status"]
+                for item in terminal["assignments"]
+                if item["assignment_id"]
+                in {"assignment-1", "assignment-parallel"}
+            ],
+            ["blocked", "blocked"],
+        )
+        self.assertEqual(
+            [
+                item["reason_code"]
+                for item in terminal["coordinator_contexts"]
+            ],
+            ["REWORK_LIMIT_EXCEEDED", "REWORK_LIMIT_EXCEEDED"],
+        )
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+    def test_all_parent_join_blocks_when_done_parent_is_capped(self) -> None:
+        self.assert_all_parent_cap_settles("DONE")
+
+    def test_all_parent_join_blocks_when_stopped_parent_is_capped(self) -> None:
+        self.assert_all_parent_cap_settles("STOP")
+
     def test_rework_limit_evidence_allows_an_approval_before_rejection(self) -> None:
         state = self.store.runtime_state("project-id", SPRINT_ID)
         definition = state["graph_revisions"][0]["definition"]
@@ -2747,6 +3719,53 @@ class ManagedContinuityTests(unittest.TestCase):
             )
         self.assertEqual(caught.exception.code, RECOVERY_CONFLICT)
 
+        legacy_race = self.store.runtime_state("project-id", SPRINT_ID)
+        stale = deepcopy(legacy_race["recovery_records"][0])
+        stale.update(
+            {
+                "recovery_id": "recovery-stale-before-completed-winner",
+                "idempotency_key": "terminal-block-stale-choice",
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "status": "pending",
+                "completed_at": None,
+            }
+        )
+        legacy_race["recovery_records"].insert(0, stale)
+        legacy_race["status"] = "active"
+        self.assertEqual(managed_activation_invariant_issues(legacy_race), ())
+        self.replace_state(legacy_race)
+
+        restarted = ManagedContinuityRuntime(
+            self.importer,
+            result_verifier=lambda *_: nullcontext(),
+        )
+        progress = restarted.reconcile_all()
+        self.assertGreater(progress[SPRINT_ID], 0)
+        reconciled = self.store.runtime_state("project-id", SPRINT_ID)
+        recoveries = {
+            recovery["recovery_id"]: recovery
+            for recovery in reconciled["recovery_records"]
+        }
+        self.assertEqual(reconciled["status"], "blocked")
+        self.assertEqual(
+            recoveries["recovery-stale-before-completed-winner"]["status"],
+            "failed",
+        )
+        self.assertEqual(
+            recoveries["recovery-stale-before-completed-winner"][
+                "normalized_error"
+            ],
+            {"code": RECOVERY_CONFLICT, "http_status": 409},
+        )
+        self.assertEqual(
+            recoveries[terminal["recovery_records"][0]["recovery_id"]]["status"],
+            "completed",
+        )
+        self.assertEqual(managed_activation_invariant_issues(reconciled), ())
+
     def test_terminal_failed_is_settled_only_after_explicit_recovery(self) -> None:
         self.configure_terminal_result("FAILED")
         self.submit_result()
@@ -2786,7 +3805,8 @@ class ManagedContinuityTests(unittest.TestCase):
         self,
     ) -> None:
         secret = "ultra-private-recovery-token"
-        self.runtime.secret_values = (secret,)
+        alternate_secret = "alternate-private-recovery-token"
+        self.runtime.secret_values = (secret, alternate_secret)
         self.configure_terminal_result("BLOCKED_EXTERNAL")
         self.submit_result()
         state = self.store.runtime_state("project-id", SPRINT_ID)
@@ -2822,7 +3842,14 @@ class ManagedContinuityTests(unittest.TestCase):
             recovery["parameters"]["operator_action"],
             "Restore [REDACTED] and retry",
         )
+        self.assertNotEqual(
+            recovery["request_fingerprint"],
+            recovery["durable_request_fingerprint"],
+        )
         self.assertNotIn(secret, canonical_json_bytes(terminal).decode("utf-8"))
+        self.assertNotIn(
+            alternate_secret, canonical_json_bytes(terminal).decode("utf-8")
+        )
         self.assertEqual(managed_activation_invariant_issues(terminal), ())
 
         replay = self.runtime.submit_if_managed(
@@ -2836,6 +3863,82 @@ class ManagedContinuityTests(unittest.TestCase):
             completed.response["produced_record_ids"],
         )
         self.assertTrue(replay.response["deduplicated"])
+
+        changed = deepcopy(request)
+        changed["parameters"]["operator_action"] = (
+            f"Restore {alternate_secret} and retry"
+        )
+        with self.assertRaises(ManagedContinuityError) as conflict:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(changed),
+                "recovery-secret-conflict",
+            )
+        self.assertEqual(conflict.exception.code, RECOVERY_CONFLICT)
+
+    def test_legacy_redacted_recovery_fingerprint_replays_exact_request(
+        self,
+    ) -> None:
+        secret = "legacy-private-recovery-token"
+        self.runtime.secret_values = (secret,)
+        self.configure_terminal_result("BLOCKED_EXTERNAL")
+        self.submit_result()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        for review in state["review_assignments"]:
+            self.runtime.submit_if_managed(
+                "project-id",
+                review["reviewer_phone"],
+                canonical_json_bytes(
+                    {"assignment_id": review["assignment_id"], "status": "APPROVE"}
+                ),
+                "legacy-secret-review",
+            )
+        identity = self.runtime.current_identity("project-id", "2860")
+        request = {
+            "assignment_id": identity["assignment"]["context_id"],
+            "idempotency_key": "legacy-secret-recovery",
+            "action": "BLOCK_EXTERNAL",
+            "parameters": {
+                "reason_code": "BLOCKED_EXTERNAL",
+                "operator_action": f"Restore {secret} and retry",
+            },
+        }
+
+        def fault(point: str, _context: dict) -> None:
+            if point == "after_recovery_pending":
+                raise InjectedCrash("after recovery pending")
+
+        self.runtime.fault_injector = fault
+        with self.assertRaises(InjectedCrash):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "legacy-secret-pending",
+            )
+        self.runtime.fault_injector = None
+        legacy = self.store.runtime_state("project-id", SPRINT_ID)
+        recovery = legacy["recovery_records"][0]
+        recovery_id = recovery["recovery_id"]
+        recovery["request_fingerprint"] = recovery.pop(
+            "durable_request_fingerprint"
+        )
+        self.assertEqual(managed_activation_invariant_issues(legacy), ())
+        self.replace_state(legacy)
+
+        completed = self.runtime.submit_if_managed(
+            "project-id",
+            "2860",
+            canonical_json_bytes(request),
+            "legacy-secret-resume",
+        )
+        self.assertEqual(completed.response["recovery_id"], recovery_id)
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(terminal["status"], "blocked")
+        self.assertEqual(terminal["recovery_records"][0]["status"], "completed")
+        self.assertNotIn(secret, canonical_json_bytes(terminal).decode("utf-8"))
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
 
     def test_join_apply_repair_records_exact_recheck_boundary(self) -> None:
         state, trigger_ids = prepared_integration_runtime_fixture()
