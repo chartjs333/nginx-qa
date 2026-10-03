@@ -14,6 +14,14 @@ from nginx_qa.sprint_types import (
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_EXAMPLE = REPOSITORY_ROOT / ".env.staging.example"
 LAUNCHER = REPOSITORY_ROOT / "run_staging.ps1"
+E2E_MANIFEST = (
+    REPOSITORY_ROOT
+    / "orchestration"
+    / "sprints"
+    / "universal-managed-sprint-engine"
+    / "staging-e2e-manifest.json"
+)
+STAGING_PYTHON = "D:/nginx-qa-staging/.venv/Scripts/python.exe"
 
 
 def parse_environment_example() -> dict[str, str]:
@@ -116,6 +124,17 @@ class StagingIsolationTests(unittest.TestCase):
 
         self.assertIn(".env.*", ignore_rules.splitlines())
         self.assertIn("!.env.staging.example", ignore_rules.splitlines())
+
+    def test_e2e_children_use_the_isolated_staging_interpreter(self) -> None:
+        manifest = json.loads(E2E_MANIFEST.read_text(encoding="utf-8"))
+        commands = [
+            node["workspace"]["process"]["command"]
+            for node in manifest["nodes"]
+            if "process" in node.get("workspace", {})
+        ]
+
+        self.assertEqual(4, len(commands))
+        self.assertEqual({STAGING_PYTHON}, {command[0] for command in commands})
 
 
 if __name__ == "__main__":

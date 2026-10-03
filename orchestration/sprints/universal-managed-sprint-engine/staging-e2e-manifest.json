@@ -36,7 +36,7 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["C:/Python312/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
@@ -55,7 +55,7 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["C:/Python312/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
@@ -74,7 +74,7 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["C:/Python312/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
@@ -93,7 +93,7 @@
       "workspace": {
         "access": "read",
         "process": {
-          "command": ["C:/Python312/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "command": ["D:/nginx-qa-staging/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
           "cwd": ".",
           "environment": {},
           "health_path": "/health",
