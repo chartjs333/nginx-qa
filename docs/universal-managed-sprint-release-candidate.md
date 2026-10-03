@@ -27,14 +27,18 @@ package set is in `docs/universal-managed-sprint-qualified-environment.txt`.
 | Qualified runtime source | `1504f6fe27fe1ebc117afbc3b56f349978c29556` |
 | Runtime tree | `c994b07dc2d194326bd3bf7c0469578cfcc78171` |
 | Release-record branch | `agent/umse-09-release-qualification` |
-| Diff from live source | 38 commits; 65 files; 77,801 insertions; 19 deletions |
+| Release-record review | PR #10; exact accepted head is bound by the UMSE-009 transition |
+| Qualified runtime diff from live source | 38 commits; 65 files; 77,801 insertions; 19 deletions |
 | Runtime/executable files in that diff | 13 |
 | Release-record scope | Documentation/evidence only |
 
-Remote heads for the staging, legacy, and release branches were independently
-confirmed at `1504f6fe...` before this record was created. PRs #3 through #9
-are open, non-draft, and `CLEAN`; they form the accepted stack. The legacy and
-release qualification branches intentionally began as no-delta branches.
+Remote heads for the staging and legacy branches were independently confirmed
+at `1504f6fe...`. The release branch is now a documentation-only descendant of
+that runtime and is reviewed in PR #10. An accepted UMSE-009 result must bind
+`from_commit=1504f6fe...` and `git_commit` to the exact final remote release
+head; its diff from the qualified runtime must contain exactly the three
+release-record files and zero runtime or protected-file changes. PRs #3 through
+#10 are open, non-draft, and `CLEAN` at the time of this record.
 
 ## Accepted graph chain
 
@@ -49,13 +53,17 @@ release qualification branches intentionally began as no-delta branches.
 | staging-qualification | `1504f6fe27fe1ebc117afbc3b56f349978c29556` | #9 | `6ee65e5c-1ec0-42a4-a427-8d007236801c` | `77aa9867-dea5-4e29-9edb-508e80adf9ae` |
 | legacy-regression | `1504f6fe27fe1ebc117afbc3b56f349978c29556` | no delta | `e8cc42c1-3f4c-4633-a588-43aef5248b97` | `313625cb-6345-4709-8289-d3352b680b4f` |
 
-The graph records exactly eight rejected visits. Each actionable finding was
-closed by a later commit and then approved twice. The closed findings covered
-prospective transition-token validity, crash-atomic repository binding,
-single-active import fencing, Windows EOL reproducibility, v1 migration
-compatibility, per-process v2 strictness, parallel rework-limit settlement,
-continuity fingerprints/recovery, and staging live-read/cleanup/resume/path
-boundaries.
+The graph records nine rework cycles: eight implementation/staging findings
+closed by later commits and two approvals, plus one UMSE-009 release-provenance
+rework. The ninth occurred because a PASS result named runtime `1504f6fe...`
+after the release branch had advanced to documentation commit `8ba0be7c...`.
+This hardened documentation descendant is not accepted until it is submitted
+at its exact remote head and approved by both UMSE-009 reviewers. The earlier
+closed findings covered prospective transition-token validity, crash-atomic
+repository binding, single-active import fencing, Windows EOL reproducibility,
+v1 migration compatibility, per-process v2 strictness, parallel rework-limit
+settlement, continuity fingerprints/recovery, and staging
+live-read/cleanup/resume/path boundaries.
 
 ## Acceptance evidence
 
@@ -95,8 +103,17 @@ live stop, restart, deployment, or state read was performed by qualification.
 - High-confidence credential-shape scanning found no candidate value outside
   tests and no value in the staging evidence/log set. Five GitHub-token-shaped
   values are deliberate negative fixtures in two test modules.
+- `gitleaks`, `trufflehog`, and `pip-audit` were unavailable in the qualification
+  environment. The credential-shape scan is targeted evidence only: no formal
+  secret-scanning, SAST, or SCA claim is made. Promotion requires exact-candidate
+  reports from approved tools or explicit named security-risk acceptance.
 - Managed credentials are references, not persisted literals. Redaction occurs
   before durable state, logs, or evidence.
+- The application has no in-app caller authentication on mutating managed
+  routes, including `POST /api/v1/projects/{project_id}/sprints/start-from-git`
+  and `POST /api/v1/sprints/{sprint_id}/repair`. Production exposure is
+  **NO-GO** until a tested authenticated gateway or ACL (for example mTLS or
+  Cloudflare Access) is enforced. Loopback binding alone is not authorization.
 - Git roots, remotes, branch ownership, dirty/diverged worktrees, path
   canonicalization, reparse points, ADS, UNC/device names, process birth
   identity, Windows Jobs, and loopback health are fail-closed.
@@ -110,6 +127,9 @@ live stop, restart, deployment, or state read was performed by qualification.
 - Runtime requirements contain ranges. The qualified staging environment was
   Python 3.12.1 with a 36-package sorted freeze hash of
   `56865f9826e33ae3440c9a6421fbd2bee2f7a07a078d1aa36c7de59dd691f689`.
+  Promotion requires a fully resolved offline wheelhouse with every wheel hash
+  recorded. If its package set differs from that freeze, rerun the full suite
+  and exact-source staging qualification before promotion.
 
 ## Operator-only promotion plan
 
@@ -124,72 +144,104 @@ sprint executor to run it.
    and user-visible outage plan.
 3. Resolve the full remote SHA of
    `refs/heads/agent/umse-09-release-qualification`; require it to equal the
-   final SHA recorded by the accepted UMSE-009 result.
+   final SHA recorded by the accepted UMSE-009 result and PR #10 head.
 4. Verify that its parent chain contains `1504f6fe...`, that
    `3c42efc...` is an ancestor, and that the diff from `1504f6fe...` is limited
    to the three release-record files.
 5. Recheck the evidence JSON hash, exact Git tree, PR states, live PID/start
    identity, port 8025 health, and a clean live worktree. Abort on any mismatch.
+6. Obtain explicit production service/runbook approval and approve the stable
+   route-cutover and authenticated-gateway configuration before the window.
 
 ### 2. Prepare without touching live state
 
-1. Reserve a backup destination outside `D:\nginx-qa`, verify free space, and
+1. Prepare a fresh checkout such as
+   `D:\nginx-qa-release\umse-<short-sha>`, detached at the exact accepted
+   release SHA. Do not change the existing live checkout or venv.
+2. Reserve a backup destination outside both checkouts, verify free space, and
    test archive creation and restore on disposable data.
-2. Download/build a Windows Python 3.12.1 wheelhouse from the candidate
-   `requirements.txt`, constrained by the qualified-environment file. Record
-   every wheel hash and perform import/compile smoke tests in a disposable venv.
-3. Keep Telegram credentials only in the existing protected `.env`/secret
-   store. Never put them in the release checkout, evidence, command history, or
-   backup manifest.
-4. Do not copy any staging `.env`, `.venv`, SQLite database, runtime state,
+3. Build a fresh Windows Python 3.12.1 venv offline from the approved,
+   hash-verified wheelhouse. Record every wheel hash and run import/compile
+   smoke tests. Requalify the exact package set if it differs from the recorded
+   36-package freeze.
+4. Keep Telegram credentials only in the protected secret store. Never put
+   them in the release checkout, evidence, command history, or backup manifest.
+5. Do not copy any staging `.env`, `.venv`, SQLite database, runtime state,
    queues, pending files, prompts, logs, PID/lease files, workspaces, or evidence
-   into live.
-5. Prefer a dark first deployment: leave `NGINX_QA_MANAGED_ROOT` unset so
-   legacy starts without creating managed state. Enable managed mode later in a
-   separately approved window with dedicated absolute roots outside the source
-   checkout.
+   into production.
+6. Define an approved production service with a unique instance identity,
+   isolated absolute state/runtime/prompt/managed roots, loopback candidate port
+   `18025` (or another approved non-live port), and a separately approved child
+   range such as `18100-18199`. Protected roots must cover old live, development,
+   and staging paths.
+7. Do not use the current `run.bat` for a side-by-side launch: it binds 8025,
+   may resolve dependencies online, and can start a tunnel. Keep Telegram and
+   tunnel startup disabled until deliberately approved.
+8. Prefer a dark legacy-compatible start with `NGINX_QA_MANAGED_ROOT` unset.
+   Enable managed mode only in a separately approved window with its isolated
+   production roots and authenticated control plane.
 
-### 3. Cold backup and source cutover
+### 3. Freeze, back up, and start green
 
-1. Enter maintenance and prevent new mutating requests.
-2. Stop only the live nginx-qa process under the operator's normal service
-   control. Confirm PID 47304 and all descendants exited and port 8025 is free.
-3. Before changing tracked files, make a cold, checksummed backup of the entire
-   live source/state directory and the external prompt archive. It must include
-   `.env`, legacy registries/history, agents, pending sprints, attachments,
-   evidence/screenshot indexes, `runtime_state` queues/schedules/settings, and
-   any configured managed SQLite/root. Store credentials encrypted and access
-   controlled. Record archive hash and successfully restore it to a disposable
-   path.
-4. Preserve the old branch pointer. Fetch the exact approved SHA, verify a
-   clean worktree, and switch the live checkout to that SHA in detached mode.
-   Do not use force push, `reset --hard`, or clean/remove commands.
-5. Replace the runtime venv only with the prebuilt, hash-verified environment;
-   retain the old venv intact for rollback. Use an offline wheelhouse and the
-   recorded constraints so `run.bat` cannot resolve newer packages during the
-   window.
-6. Start nginx-qa under the normal operator service control. Do not enable a
-   second tunnel/webhook instance or bind 8026.
+1. Enter maintenance, close mutating ingress at the authenticated gateway, and
+   prove that writes are frozen.
+2. Stop only the old live service through its real supervisor. Confirm its
+   recorded PID and descendants exited and port 8025 is free. Never run old and
+   green instances concurrently against the same mutable state.
+3. Make a cold, checksummed backup of the complete live consistency unit. It
+   includes protected configuration/secret references, legacy registries and
+   history, agents, pending sprints, attachments, evidence/screenshot indexes,
+   `runtime_state` queues/schedules/settings, external prompts, and any managed
+   SQLite/root. Preserve ACLs, encrypt credentials, record the archive hash, and
+   successfully restore the archive to a disposable path.
+4. Restore only the approved live mutable artifacts into the isolated green
+   production roots. Never restore staging artifacts and never modify the old
+   checkout, old venv, or old service definition.
+5. Launch the exact detached SHA under the approved service manager with the
+   fresh venv, for example `<venv>\Scripts\python.exe -B -m uvicorn main:app
+   --host 127.0.0.1 --port 18025`. Keep the candidate loopback-only and dark.
 
-### 4. Validate and decide
+### 4. Validate and cut over
 
-Within the rollback window, require all of the following before reopening
-writes:
+Before reopening writes, require all of the following:
 
-- exactly one expected owner of port 8025 with a new recorded PID/start time;
-- HTTP 200 and `text/html` on `/` plus successful legacy read-only UI/history;
-- exact approved Git SHA and clean worktree;
+- exactly one expected green owner of the approved internal port with a newly
+  recorded PID/start time and no owner of the old live port;
+- HTTP 200 and `text/html` on `/` through the authenticated gateway plus
+  successful legacy read-only UI/history;
+- exact accepted Git SHA, expected tree, clean fresh checkout, approved service
+  definition, and hash-verified environment;
 - restored queue/schedule/pending counts equal the cold snapshot;
 - no unexpected managed migration, recovery, Coordinator, duplicate lease, or
   process-owner event;
-- Telegram webhook/tunnel identity remains the operator-approved one;
 - a bounded legacy smoke import on disposable data preserves absent
   `sprint_type` semantics;
+- if managed mode is approved, a new isolated managed test project starts and
+  is drained through the authenticated supervisor, leaving no owned process,
+  Job, listener, recovery task, or durable lease;
 - logs contain no startup traceback, invariant failure, secret value, or
   repeated restart.
 
-Only the named operator may declare promotion complete. Preserve the backup,
-old venv, evidence, and change log for the retention period.
+Only after those checks may the named operator move the stable route from the
+old origin to green, verify the public URL/webhook/client identity, observe the
+approved smoke window, and unfreeze writes. Keep the old checkout, venv, service
+definition, backup, evidence, and change log intact for rollback and retention.
+
+### 5. Explicit NO-GO conditions
+
+Promotion is **NO-GO** if any of these is absent or mismatched:
+
+- both UMSE-009 approvals and terminal graph state;
+- exact accepted SHA, PR #10 head, three-file docs-only diff, or evidence hashes;
+- tested authenticated gateway/ACL or controlled stable-route cutover;
+- approved production service definition and runbook;
+- hash-verified qualified wheelhouse, or full requalification of a changed set;
+- rehearsed consistent backup/restore and named rollback owner;
+- rehearsed authenticated drain of all managed processes and leases;
+- isolated ports, roots, credentials, and production instance identity;
+- approved formal security reports or named risk acceptance for unavailable
+  secret/SAST/SCA scanners; or
+- expected unchanged live identity at the start of the operator window.
 
 ## Rollback plan
 
@@ -198,20 +250,28 @@ migration, legacy semantic change, queue/pending count drift, port/process/Job
 ownership mismatch, webhook/tunnel duplication, secret exposure, or repeated
 process restart.
 
-1. Close writes and stop the candidate process; prove port 8025 and candidate
-   descendants are gone.
-2. Archive any post-promotion managed root read-only for diagnosis. Do not feed
-   managed records to the legacy importer and do not rewrite them as legacy.
-3. Switch the source back to the preserved
-   `agent/groups-cycles-graph-ui@3c42efc...` pointer without reset/clean.
-4. Restore the entire cold pre-promotion state snapshot as one consistency unit,
-   including external prompts and the prior venv/config. Do not mix individual
-   files from before and after promotion.
-5. Start the old service through normal operator control and verify its exact
-   SHA/branch, single port owner, new recorded PID/start time, HTTP 200,
-   queue/pending counts, webhook identity, and legacy smoke behavior.
-6. Keep writes closed and escalate if either source or state verification fails.
-   Record the rollback archive hash and incident evidence.
+1. Close writes and route traffic away from green. If managed mode has never
+   been activated, stop green through normal service control, prove its internal
+   port and descendants are gone, restore the cold snapshot, start the untouched
+   old service, validate it, and route back.
+2. After any managed activation, keep green available behind the authenticated
+   control plane and use the authenticated supervisor path to drain every
+   process in `PREPARED`, `STARTING`, `HEALTHY`, or `STOPPING` state. Prove no
+   owned PID, Windows Job, child listener, recovery task, reserved/bound port, or
+   durable lease remains before stopping the green host.
+3. Archive the drained managed roots read-only for diagnosis. Do not feed their
+   records to the legacy importer and do not rewrite them as legacy.
+4. Restore the entire cold pre-promotion state snapshot as one consistency unit.
+   Never mix individual files from before and after promotion.
+5. Start the untouched old checkout/venv/service definition at
+   `agent/groups-cycles-graph-ui@3c42efc...` through normal operator control.
+   Verify exact SHA/branch, single expected port owner, new recorded PID/start
+   time, HTTP 200, queue/pending counts, webhook identity, and legacy behavior,
+   then move the stable route back.
+6. If complete managed drain cannot be proved, abort the legacy rollback and
+   recover the exact candidate/config under incident control. Do not force-kill,
+   manually release ownership records, reset/clean, or mix state merely to make
+   rollback appear complete. Record all archive hashes and incident evidence.
 
 ## Known non-blocking debt
 
@@ -222,6 +282,12 @@ process restart.
   above.
 - PRs are intentionally still stacked and unmerged. Final merge/tag strategy is
   an operator/repository-owner decision after the terminal graph gate.
+- `gitleaks`, `trufflehog`, and `pip-audit` were unavailable, so formal security
+  reports remain an operator gate; the performed targeted scan is not SAST/SCA.
+- The release-record commits are unsigned (`git signature status N`); the exact
+  accepted SHA, tree, remote advertisement, PR #10 head, and evidence hashes
+  must be recorded together.
 
-There is no known P0/P1 software blocker. The unresolved hard gate is external:
-explicit operator authorization with a verified cold backup and rollback drill.
+There is no known P0/P1 software blocker. All unresolved hard gates are external
+operator controls enumerated in the NO-GO list; this qualification grants no
+permission to deploy, restart live, migrate state, or change routes.
