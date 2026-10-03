@@ -4198,6 +4198,19 @@ class SprintSchemaContractTests(unittest.TestCase):
             managed_project_control_invariant_issues(bad_recovery),
         )
 
+        sibling_recovery = copy.deepcopy(child)
+        sibling_recovery.update(
+            {
+                "idempotency_key": "recovery-key-sibling",
+                "attempt_id": "attempt-3",
+            }
+        )
+        bad_recovery["start_idempotency_records"].append(sibling_recovery)
+        self.assertIn(
+            "START_RECOVERY_CHILD_DUPLICATE",
+            managed_project_control_invariant_issues(bad_recovery),
+        )
+
         missing_active_pointer = project_control_fixture()
         missing_active_pointer["active_sprint_id"] = None
         self.validator("managed-project-control-v1.schema.json").validate(

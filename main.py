@@ -40,6 +40,11 @@ from nginx_qa.managed_import import (
     normalize_managed_runtime_config,
     parse_start_request_bytes,
 )
+from nginx_qa.managed_continuity import (
+    INVALID_MANAGED_SPRINT_REQUEST,
+    ManagedContinuityError,
+    ManagedContinuityRuntime,
+)
 from nginx_qa.process_supervisor import (
     ManagedProcessSupervisor,
 )
@@ -54,11 +59,32 @@ from nginx_qa.sprint_types import (
 managed_port_reservation_registry = ManagedPortReservationRegistry()
 managed_process_supervisor: ManagedProcessSupervisor | None = None
 managed_process_supervisor_lock = threading.RLock()
+managed_continuity_runtime: ManagedContinuityRuntime | None = None
+managed_continuity_stop_event: threading.Event | None = None
+managed_continuity_thread: threading.Thread | None = None
+_MANAGED_CONTINUITY_RECONCILE_SECONDS = 5.0
+
+
+def _reconcile_managed_continuity_background(
+    runtime: ManagedContinuityRuntime,
+    stop_event: threading.Event,
+    interval_seconds: float,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            runtime.reconcile_all()
+        except Exception:
+            # HTTP readiness and legacy traffic must not depend on a transient
+            # Git/workspace failure in one managed sprint.  The recurring loop
+            # and every request/replay retry the durable reconciliation path.
+            pass
+        stop_event.wait(interval_seconds)
 
 
 @asynccontextmanager
 async def app_lifespan(_: FastAPI):
-    global managed_process_supervisor
+    global managed_continuity_runtime, managed_process_supervisor
+    global managed_continuity_stop_event, managed_continuity_thread
     await restore_runtime_state()
     try:
         if os.environ.get("NGINX_QA_MANAGED_ROOT"):
@@ -66,6 +92,7 @@ async def app_lifespan(_: FastAPI):
             managed_bootstrap = TransactionalSprintImporter(
                 managed_runtime_config,
                 {},
+                credential_resolver=managed_git_credential_resolver,
                 port_reservations=managed_port_reservation_registry,
             )
             await asyncio.to_thread(
@@ -76,6 +103,26 @@ async def app_lifespan(_: FastAPI):
                 managed_runtime_config,
                 managed_bootstrap.store,
             )
+            if callable(
+                getattr(managed_bootstrap.store, "active_runtime_states", None)
+            ):
+                managed_continuity_runtime = managed_continuity_runtime_factory(
+                    managed_runtime_config,
+                    importer=managed_bootstrap,
+                    process_supervisor=managed_process_supervisor,
+                )
+                managed_continuity_stop_event = threading.Event()
+                managed_continuity_thread = threading.Thread(
+                    target=_reconcile_managed_continuity_background,
+                    args=(
+                        managed_continuity_runtime,
+                        managed_continuity_stop_event,
+                        _MANAGED_CONTINUITY_RECONCILE_SECONDS,
+                    ),
+                    name="managed-continuity-reconcile",
+                    daemon=True,
+                )
+                managed_continuity_thread.start()
             # Child launch/health timeouts must not delay HTTP readiness.
             # start_background() wakes the monitor immediately, while each
             # assignment remains independently fail-closed in durable state.
@@ -84,9 +131,23 @@ async def app_lifespan(_: FastAPI):
     finally:
         supervisor_quiescent = True
         close_error: Exception | None = None
+        continuity_stop = managed_continuity_stop_event
+        continuity_thread = managed_continuity_thread
+        if continuity_stop is not None:
+            continuity_stop.set()
+        if continuity_thread is not None:
+            await asyncio.to_thread(continuity_thread.join, 30.0)
+            if continuity_thread.is_alive():
+                supervisor_quiescent = False
+                close_error = RuntimeError(
+                    "managed continuity reconciler did not quiesce"
+                )
+            else:
+                managed_continuity_stop_event = None
+                managed_continuity_thread = None
         with managed_process_supervisor_lock:
             supervisor = managed_process_supervisor
-        if supervisor is not None:
+        if supervisor is not None and supervisor_quiescent:
             try:
                 supervisor.close()
             except Exception as exc:
@@ -98,6 +159,7 @@ async def app_lifespan(_: FastAPI):
             with managed_process_supervisor_lock:
                 if managed_process_supervisor is supervisor:
                     managed_process_supervisor = None
+                managed_continuity_runtime = None
         try:
             await shutdown_runtime_state()
         finally:
@@ -16789,6 +16851,19 @@ def render_index_v2() -> str:
       return fallback;
     }
 
+    async function pendingSprintsResponseJson(response, fallback) {
+      const raw = await response.text();
+      try {
+        return JSON.parse(raw);
+      } catch (_error) {
+        const proxyHtml = raw.trimStart().startsWith("<");
+        const responseKind = proxyHtml
+          ? "HTML-страницу прокси вместо JSON"
+          : "некорректный ответ вместо JSON";
+        throw new Error(`${fallback} Сервер вернул ${responseKind} (HTTP ${response.status}).`);
+      }
+    }
+
     function pendingSprintsFetchOptions(options = {}) {
       const requestOptions = {...options};
       const headers = new Headers(options.headers || {});
@@ -16955,7 +17030,10 @@ def render_index_v2() -> str:
         `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}`,
         pendingSprintsFetchOptions()
       );
-      const data = await response.json();
+      const data = await pendingSprintsResponseJson(
+        response,
+        "Не удалось загрузить JSON спринта."
+      );
       if (
         requestVersion !== pendingSprintPreviewRequestVersion
         || projectPhone !== pendingSprintsActiveProjectPhone()
@@ -16998,7 +17076,10 @@ def render_index_v2() -> str:
         `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints`,
         pendingSprintsFetchOptions()
       );
-      const data = await response.json();
+      const data = await pendingSprintsResponseJson(
+        response,
+        "Не удалось загрузить ожидающие спринты."
+      );
       if (
         requestVersion !== pendingSprintsRequestVersion
         || projectPhone !== pendingSprintsActiveProjectPhone()
@@ -17062,7 +17143,50 @@ def render_index_v2() -> str:
           `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}/start`,
           pendingSprintsFetchOptions({method: "POST"})
         );
-        const data = await response.json();
+        let data;
+        try {
+          data = await pendingSprintsResponseJson(
+            response,
+            "Не удалось получить итог запуска."
+          );
+        } catch (responseError) {
+          // A long activation can outlive the public proxy timeout. The
+          // backend has already durably claimed the sprint by then, so query
+          // its authoritative state before reporting a false upload failure.
+          await refreshPendingSprints();
+          if (projectPhone !== pendingSprintsActiveProjectPhone()) {
+            return;
+          }
+          const refreshed = pendingSprints.find(
+            (item) => String(item.id || "") === selectedId
+          );
+          if (!refreshed) {
+            pendingSprintsSelectedId = "";
+            clearPendingSprintPreview();
+            syncPendingSprintsUrl();
+            await refreshAgents();
+            await Promise.all([
+              refreshPendingSprints(),
+              refreshQueues(),
+              refreshScheduledTasks(),
+              refreshHistory(),
+              refreshProjectSprints()
+            ]);
+            setPendingSprintsStatus(
+              `Спринт «${title}» запущен; промежуточный ответ прокси был потерян.`,
+              "ok"
+            );
+            return;
+          }
+          if (String(refreshed.status || "").trim().toLowerCase() === "activating") {
+            setPendingSprintsStatus(
+              `Спринт «${title}» продолжает запускаться на сервере. Обновите список позже; повторно загружать файл не нужно.`,
+              "ok"
+            );
+            return;
+          }
+          throw responseError;
+        }
         if (!response.ok) {
           throw new Error(pendingSprintErrorMessage(data, "Не удалось запустить спринт."));
         }
@@ -28193,6 +28317,45 @@ def managed_sprint_importer_factory(
     )
 
 
+def managed_continuity_runtime_factory(
+    runtime_config: dict[str, Any],
+    *,
+    importer: TransactionalSprintImporter | None = None,
+    process_supervisor: ManagedProcessSupervisor | None = None,
+) -> ManagedContinuityRuntime:
+    """Build continuity from the same frozen store and supervisor boundary."""
+
+    bootstrap = importer or managed_sprint_importer_factory(runtime_config, {})
+    supervisor = process_supervisor or managed_process_supervisor_for(
+        runtime_config, bootstrap.store
+    )
+    return ManagedContinuityRuntime(
+        bootstrap,
+        process_supervisor=supervisor,
+    )
+
+
+def managed_continuity_runtime_for_requests() -> ManagedContinuityRuntime | None:
+    """Return the configured singleton without affecting legacy-only installs."""
+
+    global managed_continuity_runtime
+    if not os.environ.get("NGINX_QA_MANAGED_ROOT"):
+        return None
+    runtime_config = load_managed_runtime_config()
+    with managed_process_supervisor_lock:
+        current = managed_continuity_runtime
+        if current is not None and (
+            current.store.database_path.resolve(strict=False)
+            == (
+                Path(runtime_config["lease_root"]) / "managed-import.sqlite3"
+            ).resolve(strict=False)
+        ) and current.importer.runtime_config == runtime_config:
+            return current
+        current = managed_continuity_runtime_factory(runtime_config)
+        managed_continuity_runtime = current
+        return current
+
+
 def managed_process_secret_resolver(reference: str) -> str:
     """Resolve an ephemeral ``env:NAME`` child secret without persisting it."""
 
@@ -28282,6 +28445,12 @@ def managed_git_credential_resolver(reference: str) -> dict[str, str]:
 
 
 def managed_start_error_response(error: ManagedImportError) -> JSONResponse:
+    return JSONResponse(status_code=error.http_status, content=error.envelope)
+
+
+def managed_continuity_error_response(
+    error: ManagedContinuityError,
+) -> JSONResponse:
     return JSONResponse(status_code=error.http_status, content=error.envelope)
 
 
@@ -28415,6 +28584,64 @@ async def start_managed_project_sprint_from_git(
             )
         )
     return JSONResponse(status_code=result.http_status, content=result.response)
+
+
+@app.post("/api/v1/sprints/{sprint_id}/repair")
+async def repair_managed_sprint(
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    correlation_id = f"repair-request-{uuid4().hex}"
+    try:
+        runtime = managed_continuity_runtime_for_requests()
+        if runtime is None:
+            raise ManagedContinuityError(
+                "MANAGED_RUNTIME_UNAVAILABLE",
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                correlation_id,
+            )
+        declared_length = request.headers.get("content-length")
+        if declared_length is not None:
+            try:
+                parsed_length = int(declared_length)
+                if parsed_length < 0 or parsed_length > 4 * 1024 * 1024:
+                    raise ValueError
+            except ValueError:
+                raise ManagedContinuityError(
+                    INVALID_MANAGED_SPRINT_REQUEST,
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                ) from None
+        bounded_body = bytearray()
+        async for chunk in request.stream():
+            if len(chunk) > 4 * 1024 * 1024 - len(bounded_body):
+                raise ManagedContinuityError(
+                    INVALID_MANAGED_SPRINT_REQUEST,
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                )
+            bounded_body.extend(chunk)
+        body = bytes(bounded_body)
+        result = await asyncio.to_thread(
+            runtime.repair,
+            sprint_id,
+            body,
+            correlation_id,
+        )
+        return JSONResponse(
+            status_code=result.http_status,
+            content=result.response,
+        )
+    except ManagedContinuityError as exc:
+        return managed_continuity_error_response(exc)
+    except Exception:
+        return managed_continuity_error_response(
+            ManagedContinuityError(
+                "CONTINUITY_RUNTIME_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+            )
+        )
 
 
 @app.get("/api/v1/projects/{project_id}/sprints")
@@ -28821,10 +29048,53 @@ async def identify_project_agent(
     project_id: str,
     agent_phone: str,
     request: Request,
-) -> dict[str, Any]:
+) -> Any:
     request_message = "Кто я?"
     identity_payload: dict[str, Any] = {}
     raw_body = await request.body()
+    if os.environ.get("NGINX_QA_MANAGED_ROOT"):
+        correlation_id = f"continuity-request-{uuid4().hex}"
+        try:
+            managed_project_id = project_id
+            config = await read_git_config()
+            try:
+                _, _, project_entry, _ = project_for_group_api(config, project_id)
+            except HTTPException:
+                # Preserve the frozen legacy resolver/error path for unknown
+                # project identifiers.  A test or an older managed row may
+                # still use the literal key, so continuity gets one exact-key
+                # lookup before legacy handling resumes.
+                pass
+            else:
+                managed_project_id = normalize_project_phone(
+                    project_entry.get("project_phone")
+                )
+                if not managed_project_id:
+                    raise RuntimeError("managed project identity is corrupt")
+            continuity = managed_continuity_runtime_for_requests()
+            if continuity is not None:
+                managed_result = await asyncio.to_thread(
+                    continuity.submit_if_managed,
+                    managed_project_id,
+                    agent_phone,
+                    raw_body,
+                    correlation_id,
+                )
+                if managed_result is not None:
+                    return JSONResponse(
+                        status_code=managed_result.http_status,
+                        content=managed_result.response,
+                    )
+        except ManagedContinuityError as exc:
+            return managed_continuity_error_response(exc)
+        except Exception:
+            return managed_continuity_error_response(
+                ManagedContinuityError(
+                    "CONTINUITY_RUNTIME_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                )
+            )
     if raw_body:
         try:
             payload = json.loads(raw_body)

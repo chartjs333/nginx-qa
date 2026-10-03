@@ -207,6 +207,12 @@ def _strict_json_object(blob: bytes) -> dict[str, Any]:
     return value
 
 
+def parse_strict_json_object(blob: bytes) -> dict[str, Any]:
+    """Public strict-JSON parser shared by managed runtime endpoints."""
+
+    return _strict_json_object(blob)
+
+
 def _schema_errors(
     instance: Any,
     filename: str,
@@ -250,6 +256,17 @@ def _schema_errors(
             }
         )
     return result
+
+
+def managed_schema_errors(
+    instance: Any,
+    filename: str,
+    *,
+    issue_code: str = "MANAGED_REQUEST_SCHEMA_INVALID",
+) -> list[dict[str, str]]:
+    """Validate a managed public payload with stable, value-free issues."""
+
+    return _schema_errors(instance, filename, issue_code=issue_code)
 
 
 _RUNTIME_STATE_SCHEMA_BY_VERSION = {
@@ -352,6 +369,12 @@ class ManagedImportError(RuntimeError):
         )
         error.envelope = deepcopy(dict(envelope))
         return error
+
+
+class ManagedRetryImportConflict(RuntimeError):
+    """Expected RETRY_IMPORT ineligibility, safe to expose as a 409 conflict."""
+
+    code = "RECOVERY_CONFLICT"
 
 
 _DEFAULT_MANAGED_PORT_RESERVATIONS = ManagedPortReservationRegistry()
@@ -637,6 +660,14 @@ class ManagedImportStore:
                 CREATE UNIQUE INDEX IF NOT EXISTS managed_live_process_assignment
                     ON managed_process_owners(assignment_id)
                     WHERE state IN ('PREPARED', 'STARTING', 'HEALTHY', 'STOPPING');
+                CREATE TABLE IF NOT EXISTS managed_queue_items (
+                    dedupe_key TEXT PRIMARY KEY,
+                    event_id TEXT NOT NULL UNIQUE,
+                    event_type TEXT NOT NULL,
+                    payload_json TEXT NOT NULL,
+                    receipt_id TEXT NOT NULL UNIQUE,
+                    created_at TEXT NOT NULL
+                );
                 """
                 )
                 connection.execute("BEGIN IMMEDIATE")
@@ -852,7 +883,10 @@ class ManagedImportStore:
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
             if self._reconcile_superseded_attempts(
-                control, updated_at=migration_time
+                control,
+                updated_at=migration_time,
+                connection=connection,
+                project_id=project_id,
             ):
                 self._write_control(connection, control, revision)
             return validate(connection, control)
@@ -918,30 +952,51 @@ class ManagedImportStore:
             issues.append("RUNTIME_STATE_INVARIANT_INVALID")
 
         records = control.get("start_idempotency_records")
-        successful = (
-            [
-                record
-                for record in records
-                if isinstance(record, Mapping)
-                and record.get("status") == "SUCCEEDED"
-            ]
+        all_records = (
+            [record for record in records if isinstance(record, Mapping)]
             if isinstance(records, list)
             else []
         )
-        matching = [
-            record for record in successful if record.get("sprint_id") == row_sprint_id
-        ]
-        matching_fence = (
-            matching[0].get("fencing_token") if len(matching) == 1 else None
+        successful = (
+            [
+                record
+                for record in all_records
+                if record.get("status") == "SUCCEEDED"
+            ]
         )
-        if (
-            len(matching) != 1
-            or not isinstance(row_fence, int)
-            or isinstance(row_fence, bool)
-            or not isinstance(matching_fence, int)
-            or isinstance(matching_fence, bool)
-            or matching_fence != row_fence
-        ):
+        matching_fenced = [
+            record
+            for record in all_records
+            if record.get("sprint_id") == row_sprint_id
+            and record.get("fencing_token") == row_fence
+        ]
+        workflow = state.get("workflow")
+        preactivation = workflow is None and row_status in {"preparing", "failed"}
+        matching_status = (
+            matching_fenced[0].get("status")
+            if len(matching_fenced) == 1
+            else None
+        )
+        fence_owner_valid = bool(
+            len(matching_fenced) == 1
+            and isinstance(row_fence, int)
+            and not isinstance(row_fence, bool)
+            and (
+                (
+                    preactivation
+                    and row_status == "preparing"
+                    and matching_status in {"PREPARING", "ACTIVATING"}
+                )
+                or (
+                    preactivation
+                    and row_status == "failed"
+                    and matching_status
+                    in {"VALIDATING", "PREPARING", "ACTIVATING", "FAILED"}
+                )
+                or (not preactivation and matching_status == "SUCCEEDED")
+            )
+        )
+        if not fence_owner_valid:
             issues.append("RUNTIME_ACTIVATION_FENCE_MISMATCH")
         active_sprint_id = control.get("active_sprint_id")
         if row_status == "active" and active_sprint_id != row_sprint_id:
@@ -958,9 +1013,10 @@ class ManagedImportStore:
                 and not isinstance(record.get("fencing_token"), bool)
             ]
             if (
-                len(matching) == 1
+                len(matching_fenced) == 1
                 and successful_fences
-                and matching[0].get("fencing_token") != max(successful_fences)
+                and matching_fenced[0].get("fencing_token")
+                != max(successful_fences)
             ):
                 issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
         return tuple(dict.fromkeys(issues))
@@ -1045,6 +1101,965 @@ class ManagedImportStore:
                 )
             return deepcopy(value)
 
+    def runtime_state_by_sprint(
+        self, sprint_id: str
+    ) -> tuple[str, dict[str, Any]] | None:
+        """Resolve one globally unique managed sprint without trusting a caller path.
+
+        Stable sprint IDs include their project provenance, but the repair route
+        intentionally omits ``project_id``.  Refuse duplicate/corrupt rows
+        instead of choosing one nondeterministically.
+        """
+
+        if not self.database_path.exists():
+            return None
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints WHERE sprint_id = ? ORDER BY project_id
+                """,
+                (sprint_id,),
+            ).fetchall()
+            if not rows:
+                return None
+            if len(rows) != 1:
+                raise RuntimeError("managed sprint identity is not globally unique")
+            row = rows[0]
+            project_id = str(row["project_id"])
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            try:
+                state = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("managed sprint runtime is corrupt") from exc
+            issues = self._runtime_row_issues(
+                control, row, state, require_indexed=False
+            )
+            if issues or not isinstance(state, dict):
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: "
+                    + ",".join(issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                )
+            return project_id, deepcopy(state)
+
+    def runtime_states_for_project(
+        self, project_id: str
+    ) -> tuple[dict[str, Any], ...]:
+        """Return every validated runtime generation for one project.
+
+        Managed result/review replay is deliberately resolved from durable
+        assignment history instead of only the current active assignment.  A
+        late exact replay must therefore remain on the managed path after the
+        sprint becomes terminal, while an unrelated legacy phone must still
+        be allowed to fall through to the legacy dispatcher.
+        """
+
+        if not self.database_path.exists():
+            return ()
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            rows = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ?
+                ORDER BY fencing_token DESC, sprint_id
+                """,
+                (project_id,),
+            ).fetchall()
+            states: list[dict[str, Any]] = []
+            for row in rows:
+                try:
+                    state = json.loads(row["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("managed sprint runtime is corrupt") from exc
+                issues = self._runtime_row_issues(
+                    control, row, state, require_indexed=False
+                )
+                if issues or not isinstance(state, dict):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                    )
+                states.append(deepcopy(state))
+            return tuple(states)
+
+    def runtime_binding_snapshots_for_project(
+        self, project_id: str
+    ) -> tuple[dict[str, Any], ...]:
+        """Return snapshots or safe ownership hints for binding discovery.
+
+        Project-specific ``whoami`` is also a frozen legacy endpoint.  A
+        corrupt *unrelated* managed row must therefore not claim or fail that
+        request before an assignment/phone match exists.  A parseable corrupt
+        row still exposes only its assignment identifiers, phones, and live
+        flags as a tagged hint.  Continuity uses a matching hint to fail
+        closed, while unrelated legacy phones can still fall through.  Valid
+        snapshots are re-read through ``runtime_state`` after a concrete
+        binding is selected.
+        """
+
+        if not self.database_path.exists():
+            return ()
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            rows = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ?
+                ORDER BY fencing_token DESC, sprint_id
+                """,
+                (project_id,),
+            ).fetchall()
+            states: list[dict[str, Any]] = []
+            for row in rows:
+                corrupt_shell = {
+                    "__managed_binding_corrupt__": True,
+                    "sprint_id": str(row["sprint_id"]),
+                    "project_wide": True,
+                    "ownership": [],
+                }
+                try:
+                    state = json.loads(row["state_json"])
+                except (TypeError, json.JSONDecodeError):
+                    # There is no safe way to prove that an opaque managed row
+                    # does *not* own the requested phone or assignment.  Never
+                    # let it fall through to the legacy mutator.
+                    states.append(corrupt_shell)
+                    continue
+                if not isinstance(state, dict):
+                    states.append(corrupt_shell)
+                    continue
+                try:
+                    issues = self._runtime_row_issues(
+                        control, row, state, require_indexed=False
+                    )
+                except (KeyError, TypeError, ValueError, RuntimeError):
+                    issues = ("RUNTIME_STATE_CORRUPT",)
+                if not issues:
+                    states.append(deepcopy(state))
+                    continue
+
+                evidence: dict[tuple[str, str], dict[str, Any]] = {}
+                opaque_ownership = False
+
+                def binding(kind: str, assignment_id: Any) -> dict[str, Any] | None:
+                    if not isinstance(assignment_id, str) or not assignment_id:
+                        return None
+                    return evidence.setdefault(
+                        (kind, assignment_id),
+                        {
+                            "kind": kind,
+                            "assignment_id": assignment_id,
+                            "graph_phones": set(),
+                            "outbox_phones": set(),
+                            "record_phones": set(),
+                            "live": False,
+                            "terminal": False,
+                        },
+                    )
+
+                def add_phone(
+                    owner: dict[str, Any] | None, source: str, phone: Any
+                ) -> None:
+                    if (
+                        owner is not None
+                        and isinstance(phone, str)
+                        and phone.strip()
+                    ):
+                        owner[f"{source}_phones"].add(phone.strip())
+
+                def graph_definition(revision_number: Any) -> Mapping[str, Any] | None:
+                    definition = revision_definitions.get(revision_number)
+                    return definition if isinstance(definition, Mapping) else None
+
+                revisions = state.get("graph_revisions")
+                revisions = revisions if isinstance(revisions, list) else []
+                revision_definitions: dict[int, Mapping[str, Any]] = {}
+                for revision in revisions:
+                    if not isinstance(revision, Mapping):
+                        continue
+                    revision_number = revision.get("revision")
+                    definition = revision.get("definition")
+                    expected_digest = revision.get("definition_sha256")
+                    if (
+                        not isinstance(revision_number, int)
+                        or isinstance(revision_number, bool)
+                        or not isinstance(definition, Mapping)
+                        or not isinstance(expected_digest, str)
+                    ):
+                        continue
+                    try:
+                        digest_matches = (
+                            canonical_json_sha256(definition) == expected_digest
+                        )
+                    except (TypeError, ValueError):
+                        digest_matches = False
+                    if digest_matches:
+                        revision_definitions[revision_number] = definition
+
+                assignment_records: dict[str, Mapping[str, Any]] = {}
+                assignments = state.get("assignments")
+                if not isinstance(assignments, list):
+                    opaque_ownership = True
+                    assignments = []
+                for record in assignments:
+                    if not isinstance(record, Mapping):
+                        opaque_ownership = True
+                        continue
+                    assignment_id = record.get("assignment_id")
+                    owner = binding("assignment", assignment_id)
+                    if owner is None:
+                        opaque_ownership = True
+                        continue
+                    assignment_records[str(assignment_id)] = record
+                    add_phone(owner, "record", record.get("agent_phone"))
+                    if record.get("status") in {
+                        "completed",
+                        "failed",
+                        "blocked",
+                    }:
+                        owner["terminal"] = True
+                    else:
+                        owner["live"] = True
+                    definition = graph_definition(record.get("graph_revision"))
+                    nodes = (
+                        definition.get("nodes")
+                        if isinstance(definition, Mapping)
+                        else None
+                    )
+                    node = next(
+                        (
+                            item
+                            for item in (nodes if isinstance(nodes, list) else [])
+                            if isinstance(item, Mapping)
+                            and item.get("id") == record.get("node_id")
+                        ),
+                        None,
+                    )
+                    agent = node.get("agent") if isinstance(node, Mapping) else None
+                    if isinstance(agent, Mapping):
+                        add_phone(owner, "graph", agent.get("phone"))
+
+                active_assignment_ids = state.get("active_assignment_ids")
+                if not isinstance(active_assignment_ids, list):
+                    opaque_ownership = True
+                    active_assignment_ids = []
+                for assignment_id in active_assignment_ids:
+                    owner = binding("assignment", assignment_id)
+                    if owner is not None:
+                        owner["live"] = True
+                    else:
+                        opaque_ownership = True
+                allowed = state.get("allowed_outcomes_by_assignment")
+                if isinstance(allowed, Mapping):
+                    for assignment_id in allowed:
+                        owner = binding("assignment", assignment_id)
+                        if owner is not None:
+                            owner["live"] = True
+                        else:
+                            opaque_ownership = True
+                else:
+                    opaque_ownership = True
+                workflow = state.get("workflow")
+                occurrences = (
+                    workflow.get("occurrences")
+                    if isinstance(workflow, Mapping)
+                    else None
+                )
+                if isinstance(workflow, Mapping) and not isinstance(
+                    occurrences, list
+                ):
+                    opaque_ownership = True
+                for occurrence in (
+                    occurrences if isinstance(occurrences, list) else []
+                ):
+                    if not isinstance(occurrence, Mapping):
+                        opaque_ownership = True
+                        continue
+                    occurrence_live = occurrence.get("state") in {
+                        "active",
+                        "reviews_pending",
+                    }
+                    definition = graph_definition(
+                        occurrence.get("graph_revision")
+                    )
+                    nodes = (
+                        definition.get("nodes")
+                        if isinstance(definition, Mapping)
+                        else None
+                    )
+                    node = next(
+                        (
+                            item
+                            for item in (nodes if isinstance(nodes, list) else [])
+                            if isinstance(item, Mapping)
+                            and item.get("id") == occurrence.get("node_id")
+                        ),
+                        None,
+                    )
+                    agent = node.get("agent") if isinstance(node, Mapping) else None
+                    graph_phone = (
+                        agent.get("phone") if isinstance(agent, Mapping) else None
+                    )
+                    occurrence_assignment_ids = occurrence.get("assignment_ids")
+                    for assignment_id in (
+                        occurrence_assignment_ids
+                        if isinstance(occurrence_assignment_ids, list)
+                        else []
+                    ):
+                        owner = binding("assignment", assignment_id)
+                        if owner is not None:
+                            add_phone(owner, "graph", graph_phone)
+                            owner["live"] = owner["live"] or occurrence_live
+                        else:
+                            opaque_ownership = True
+
+                raw_journals = state.get("transition_journal")
+                if not isinstance(raw_journals, list):
+                    opaque_ownership = True
+                    raw_journals = []
+                elif any(not isinstance(item, Mapping) for item in raw_journals):
+                    opaque_ownership = True
+                open_result_keys = {
+                    str(journal["result_key"])
+                    for journal in raw_journals
+                    if isinstance(journal, Mapping)
+                    and journal.get("state") == "REVIEWS_PENDING"
+                    and journal.get("disposition") == "open"
+                    and isinstance(journal.get("result_key"), str)
+                }
+                raw_reviews = state.get("reviews")
+                if not isinstance(raw_reviews, list):
+                    opaque_ownership = True
+                    raw_reviews = []
+                elif any(not isinstance(item, Mapping) for item in raw_reviews):
+                    opaque_ownership = True
+                decided_review_ids = {
+                    str(review["assignment_id"])
+                    for review in raw_reviews
+                    if isinstance(review, Mapping)
+                    and isinstance(review.get("assignment_id"), str)
+                }
+                review_records = state.get("review_assignments")
+                if not isinstance(review_records, list):
+                    opaque_ownership = True
+                    review_records = []
+                for record in review_records:
+                    if not isinstance(record, Mapping):
+                        opaque_ownership = True
+                        continue
+                    review_id = record.get("assignment_id")
+                    owner = binding("review", review_id)
+                    if owner is None:
+                        opaque_ownership = True
+                        continue
+                    add_phone(owner, "record", record.get("reviewer_phone"))
+                    if record.get("status") == "decided":
+                        owner["terminal"] = True
+                    else:
+                        owner["live"] = True
+                    owner["live"] = owner["live"] or (
+                        review_id not in decided_review_ids
+                        and record.get("result_key") in open_result_keys
+                    )
+                    source = assignment_records.get(
+                        str(record.get("source_assignment_id") or "")
+                    )
+                    definition = (
+                        graph_definition(source.get("graph_revision"))
+                        if isinstance(source, Mapping)
+                        else None
+                    )
+                    execution = (
+                        definition.get("execution")
+                        if isinstance(definition, Mapping)
+                        else None
+                    )
+                    reviewers = (
+                        execution.get("reviewers")
+                        if isinstance(execution, Mapping)
+                        else None
+                    )
+                    reviewers = reviewers if isinstance(reviewers, list) else []
+                    reviewer = next(
+                        (
+                            item
+                            for item in reviewers
+                            if isinstance(item, Mapping)
+                            and item.get("id") == record.get("reviewer_id")
+                        ),
+                        None,
+                    )
+                    if reviewer is None:
+                        reviewer_index = record.get("reviewer_index")
+                        if (
+                            isinstance(reviewer_index, int)
+                            and not isinstance(reviewer_index, bool)
+                            and 1 <= reviewer_index <= len(reviewers)
+                            and isinstance(reviewers[reviewer_index - 1], Mapping)
+                        ):
+                            reviewer = reviewers[reviewer_index - 1]
+                    if isinstance(reviewer, Mapping):
+                        add_phone(owner, "graph", reviewer.get("phone"))
+
+                completed_context_ids = {
+                    str(record["context_id"])
+                    for record in (
+                        state.get("recovery_records")
+                        if isinstance(state.get("recovery_records"), list)
+                        else []
+                    )
+                    if isinstance(record, Mapping)
+                    and record.get("status") == "completed"
+                    and isinstance(record.get("context_id"), str)
+                }
+                contexts = state.get("coordinator_contexts")
+                if not isinstance(contexts, list):
+                    opaque_ownership = True
+                    contexts = []
+                for context in contexts:
+                    if not isinstance(context, Mapping):
+                        opaque_ownership = True
+                        continue
+                    context_id = context.get("context_id")
+                    owner = binding("coordinator", context_id)
+                    if owner is None:
+                        opaque_ownership = True
+                        continue
+                    if context_id in completed_context_ids:
+                        owner["terminal"] = True
+                    else:
+                        owner["live"] = True
+                    definition = graph_definition(context.get("graph_revision"))
+                    coordinator = (
+                        definition.get("coordinator")
+                        if isinstance(definition, Mapping)
+                        else None
+                    )
+                    nodes = (
+                        definition.get("nodes")
+                        if isinstance(definition, Mapping)
+                        else None
+                    )
+                    coordinator_node_id = (
+                        coordinator.get("node_id")
+                        if isinstance(coordinator, Mapping)
+                        else None
+                    )
+                    coordinator_node = next(
+                        (
+                            node
+                            for node in (nodes if isinstance(nodes, list) else [])
+                            if isinstance(node, Mapping)
+                            and node.get("id") == coordinator_node_id
+                        ),
+                        None,
+                    )
+                    agent = (
+                        coordinator_node.get("agent")
+                        if isinstance(coordinator_node, Mapping)
+                        else None
+                    )
+                    if isinstance(agent, Mapping):
+                        add_phone(owner, "graph", agent.get("phone"))
+
+                outbox = state.get("outbox")
+                if not isinstance(outbox, list):
+                    opaque_ownership = True
+                    outbox = []
+                for event in outbox:
+                    payload = (
+                        event.get("payload")
+                        if isinstance(event, Mapping)
+                        else None
+                    )
+                    if not isinstance(event, Mapping) or not isinstance(
+                        payload, Mapping
+                    ):
+                        opaque_ownership = True
+                        continue
+                    event_type = event.get("event_type")
+                    if event_type == "ASSIGNMENT_ENQUEUE":
+                        owner = binding("assignment", payload.get("assignment_id"))
+                        if owner is None:
+                            opaque_ownership = True
+                        add_phone(owner, "outbox", payload.get("agent_phone"))
+                        if owner is not None and event.get("status") != "delivered":
+                            owner["live"] = True
+                    elif event_type == "REVIEW_ENQUEUE":
+                        owner = binding(
+                            "review", payload.get("review_assignment_id")
+                        )
+                        if owner is None:
+                            opaque_ownership = True
+                        add_phone(owner, "outbox", payload.get("reviewer_phone"))
+                        if (
+                            owner is not None
+                            and (
+                                event.get("status") != "delivered"
+                                or (
+                                    payload.get("review_assignment_id")
+                                    not in decided_review_ids
+                                    and payload.get("result_key")
+                                    in open_result_keys
+                                )
+                            )
+                        ):
+                            owner["live"] = True
+                    elif event_type == "COORDINATOR_ENQUEUE":
+                        context_id = payload.get("context_id")
+                        owner = binding("coordinator", context_id)
+                        if owner is None:
+                            opaque_ownership = True
+                        add_phone(owner, "outbox", payload.get("coordinator_phone"))
+                        if owner is not None:
+                            if event.get("status") != "delivered":
+                                owner["live"] = True
+                            elif context_id in completed_context_ids:
+                                owner["terminal"] = True
+                            else:
+                                owner["live"] = True
+                    else:
+                        opaque_ownership = True
+
+                ownership: list[dict[str, Any]] = []
+                project_wide = opaque_ownership
+                for owner in evidence.values():
+                    # A discovered owner is conservatively live until a known
+                    # terminal record proves otherwise.  This covers a
+                    # delivered outbox whose reciprocal owner record was lost:
+                    # delivery alone cannot prove that assignment/review has
+                    # already settled.
+                    owner["live"] = bool(
+                        owner["live"] or not owner.pop("terminal")
+                    )
+                    graph_phones = owner.pop("graph_phones")
+                    outbox_phones = owner.pop("outbox_phones")
+                    record_phones = owner.pop("record_phones")
+                    phone: str | None = None
+                    sources = (graph_phones, outbox_phones, record_phones)
+                    singleton_phones = [
+                        next(iter(candidates))
+                        for candidates in sources
+                        if len(candidates) == 1
+                    ]
+                    phone_counts = {
+                        candidate: singleton_phones.count(candidate)
+                        for candidate in singleton_phones
+                    }
+                    agreed = [
+                        candidate
+                        for candidate, count in phone_counts.items()
+                        if count >= 2
+                    ]
+                    ambiguous_source = any(len(candidates) > 1 for candidates in sources)
+                    if len(agreed) == 1:
+                        phone = agreed[0]
+                    elif len(singleton_phones) == 1 and not ambiguous_source:
+                        phone = singleton_phones[0]
+                    elif singleton_phones or ambiguous_source:
+                        # Two independent projections disagree and neither has
+                        # a majority.  Selecting either phone could route a
+                        # managed request into legacy state, so widen the
+                        # corruption fence for this project.
+                        project_wide = True
+                    if owner["live"] and phone is None:
+                        project_wide = True
+                    ownership.append({**owner, "phone": phone})
+
+                if not ownership or (
+                    (row["status"] == "active" or state.get("status") == "active")
+                    and not any(item["live"] for item in ownership)
+                ):
+                    project_wide = True
+                states.append(
+                    {
+                        "__managed_binding_corrupt__": True,
+                        "sprint_id": str(row["sprint_id"]),
+                        "project_wide": project_wide,
+                        "ownership": ownership,
+                    }
+                )
+            return tuple(states)
+
+    def retryable_import_attempts(self) -> tuple[tuple[str, str, str], ...]:
+        """List validated preactivation rows that own one running import.
+
+        This read model lets startup reconciliation close the crash window
+        after ``begin_retry_import`` without treating active assignments as
+        the only discoverable work.  Each tuple is ``(project_id, sprint_id,
+        attempt_id)`` and is safe to pass to ``resume_import_attempt``.
+        """
+
+        if not self.database_path.exists():
+            return ()
+        self._ensure_initialized()
+        migration_time = datetime.now(timezone.utc).isoformat()
+        with self._transaction() as connection:
+            project_ids = [
+                str(row["project_id"])
+                for row in connection.execute(
+                    """
+                    SELECT DISTINCT project_id FROM managed_sprints
+                    WHERE status IN ('preparing', 'failed')
+                    ORDER BY project_id
+                    """
+                ).fetchall()
+            ]
+            for project_id in project_ids:
+                control, revision = self._load_control(connection, project_id)
+                if self._reconcile_superseded_attempts(
+                    control,
+                    updated_at=migration_time,
+                    connection=connection,
+                    project_id=project_id,
+                ):
+                    self._write_control(connection, control, revision)
+            rows = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE status IN ('preparing', 'failed')
+                ORDER BY project_id, fencing_token, sprint_id
+                """
+            ).fetchall()
+            controls: dict[str, dict[str, Any]] = {}
+            result: list[tuple[str, str, str]] = []
+            for row in rows:
+                project_id = str(row["project_id"])
+                control = controls.get(project_id)
+                if control is None:
+                    control, _ = self._load_control(connection, project_id)
+                    self._validate_control_snapshot(
+                        connection, project_id, control
+                    )
+                    controls[project_id] = control
+                try:
+                    state = json.loads(row["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError(
+                        "managed sprint runtime is corrupt"
+                    ) from exc
+                issues = self._runtime_row_issues(
+                    control, row, state, require_indexed=False
+                )
+                if issues or not isinstance(state, Mapping):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                    )
+                running_ids = [
+                    str(item["attempt_id"])
+                    for item in state.get("import_attempts", [])
+                    if isinstance(item, Mapping)
+                    and item.get("status") == "running"
+                    and isinstance(item.get("attempt_id"), str)
+                ]
+                owner = next(
+                    (
+                        item
+                        for item in control.get(
+                            "start_idempotency_records", []
+                        )
+                        if isinstance(item, Mapping)
+                        and item.get("sprint_id") == row["sprint_id"]
+                        and item.get("fencing_token") == row["fencing_token"]
+                        and item.get("status")
+                        in {"VALIDATING", "PREPARING", "ACTIVATING"}
+                    ),
+                    None,
+                )
+                if owner is None:
+                    if running_ids:
+                        raise RuntimeError(
+                            "managed running import has no fenced owner"
+                        )
+                    continue
+                attempt_id = str(owner["attempt_id"])
+                if running_ids != [attempt_id]:
+                    raise RuntimeError(
+                        "managed preactivation running attempt is ambiguous"
+                    )
+                recovery = next(
+                    (
+                        item
+                        for item in state.get("recovery_records", [])
+                        if isinstance(item, Mapping)
+                        and item.get("action") == "RETRY_IMPORT"
+                        and item.get("status") == "completed"
+                        and item.get("produced_record_ids") == [attempt_id]
+                    ),
+                    None,
+                )
+                parameters = (
+                    recovery.get("parameters")
+                    if isinstance(recovery, Mapping)
+                    else None
+                )
+                if (
+                    not isinstance(owner.get("recovery_of_attempt_id"), str)
+                    or not isinstance(recovery, Mapping)
+                    or not isinstance(parameters, Mapping)
+                    or parameters.get("recovery_idempotency_key")
+                    != owner.get("idempotency_key")
+                    or parameters.get("failed_attempt_id")
+                    != owner.get("recovery_of_attempt_id")
+                ):
+                    # Ordinary initial PREPARING starts remain driven by their
+                    # exact caller.  Only an atomically completed retry effect
+                    # is safe for autonomous recovery.
+                    continue
+                result.append(
+                    (project_id, str(row["sprint_id"]), attempt_id)
+                )
+            return tuple(result)
+
+    def active_runtime_state(self, project_id: str) -> dict[str, Any] | None:
+        """Return the validated currently indexed runtime, if one exists."""
+
+        if not self.database_path.exists():
+            return None
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            active_sprint_id = control.get("active_sprint_id")
+            if not isinstance(active_sprint_id, str):
+                return None
+            row = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, active_sprint_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("indexed managed sprint runtime is missing")
+            try:
+                state = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("managed sprint runtime is corrupt") from exc
+            issues = self._runtime_row_issues(
+                control, row, state, require_indexed=True
+            )
+            if issues or not isinstance(state, dict):
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: "
+                    + ",".join(issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                )
+            return deepcopy(state)
+
+    def mutate_runtime_state(
+        self,
+        project_id: str,
+        sprint_id: str,
+        mutator: Callable[[dict[str, Any], sqlite3.Connection], Any],
+        *,
+        require_active: bool = True,
+    ) -> tuple[dict[str, Any], Any]:
+        """Apply one validated continuity mutation under ``BEGIN IMMEDIATE``.
+
+        The callback may update normalized ownership tables through the supplied
+        connection.  Runtime JSON, its indexed status, and those normalized
+        rows therefore commit or roll back together.  Every write revalidates
+        both JSON Schema and the complete relational contract before it becomes
+        visible.
+        """
+
+        with self._transaction() as connection:
+            control, _ = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            row = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, sprint_id),
+            ).fetchone()
+            if row is None:
+                raise KeyError("managed sprint runtime was not found")
+            try:
+                current = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("managed sprint runtime is corrupt") from exc
+            current_issues = self._runtime_row_issues(
+                control, row, current, require_indexed=False
+            )
+            if current_issues or not isinstance(current, dict):
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: "
+                    + ",".join(current_issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                )
+            if require_active and current.get("status") != "active":
+                raise RuntimeError("managed sprint is not active")
+
+            candidate = deepcopy(current)
+            result = mutator(candidate, connection)
+            schema_issues = _runtime_state_schema_errors(
+                candidate,
+                issue_code="RUNTIME_STATE_SCHEMA_INVALID",
+            )
+            invariant_issues = managed_activation_invariant_issues(candidate)
+            if schema_issues or invariant_issues:
+                issue_codes = [
+                    str(issue.get("code") or "RUNTIME_STATE_SCHEMA_INVALID")
+                    for issue in schema_issues
+                ] + list(invariant_issues)
+                raise RuntimeError(
+                    "managed sprint runtime mutation is invalid: "
+                    + ",".join(dict.fromkeys(issue_codes))
+                )
+            candidate_status = candidate.get("status")
+            if candidate_status not in {"active", "completed", "failed", "blocked"}:
+                raise RuntimeError("managed sprint runtime status is invalid")
+            encoded = _json_text(candidate)
+            cursor = connection.execute(
+                """
+                UPDATE managed_sprints
+                SET status = ?, state_json = ?
+                WHERE project_id = ? AND sprint_id = ?
+                  AND fencing_token = ? AND state_json = ?
+                """,
+                (
+                    candidate_status,
+                    encoded,
+                    project_id,
+                    sprint_id,
+                    row["fencing_token"],
+                    row["state_json"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("managed sprint runtime changed concurrently")
+            updated = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, sprint_id),
+            ).fetchone()
+            if updated is None:
+                raise RuntimeError("managed sprint runtime disappeared")
+            updated_issues = self._runtime_row_issues(
+                control, updated, candidate, require_indexed=False
+            )
+            if updated_issues:
+                raise RuntimeError(
+                    "managed sprint runtime index mutation is invalid: "
+                    + ",".join(updated_issues)
+                )
+            return deepcopy(candidate), deepcopy(result)
+
+    def enqueue_managed_queue_item(
+        self,
+        *,
+        dedupe_key: str,
+        event_id: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        created_at: str,
+    ) -> str:
+        """Insert a durable queue item or return its immutable prior receipt."""
+
+        if not all(
+            isinstance(value, str) and value
+            for value in (dedupe_key, event_id, event_type, created_at)
+        ):
+            raise ValueError("managed queue identity fields must be non-empty strings")
+        with self._transaction() as connection:
+            return self.enqueue_managed_queue_item_in_transaction(
+                connection,
+                dedupe_key=dedupe_key,
+                event_id=event_id,
+                event_type=event_type,
+                payload=payload,
+                created_at=created_at,
+            )
+
+    @staticmethod
+    def enqueue_managed_queue_item_in_transaction(
+        connection: sqlite3.Connection,
+        *,
+        dedupe_key: str,
+        event_id: str,
+        event_type: str,
+        payload: Mapping[str, Any],
+        created_at: str,
+    ) -> str:
+        """Insert/verify a queue fence inside an aggregate transaction."""
+
+        if not all(
+            isinstance(value, str) and value
+            for value in (dedupe_key, event_id, event_type, created_at)
+        ):
+            raise ValueError("managed queue identity fields must be non-empty strings")
+        payload_text = _json_text(dict(payload))
+        receipt_id = _safe_identifier("queue-receipt", dedupe_key)
+        row = connection.execute(
+            "SELECT * FROM managed_queue_items WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
+        if row is not None:
+            if (
+                row["event_id"] != event_id
+                or row["event_type"] != event_type
+                or row["payload_json"] != payload_text
+                or row["receipt_id"] != receipt_id
+            ):
+                raise RuntimeError("managed queue dedupe key payload conflict")
+            return str(row["receipt_id"])
+        try:
+            connection.execute(
+                """
+                INSERT INTO managed_queue_items(
+                    dedupe_key, event_id, event_type, payload_json,
+                    receipt_id, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    dedupe_key,
+                    event_id,
+                    event_type,
+                    payload_text,
+                    receipt_id,
+                    created_at,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise RuntimeError("managed queue identity conflict") from exc
+        return receipt_id
+
+    def managed_queue_item(self, dedupe_key: str) -> dict[str, Any] | None:
+        if not self.database_path.exists():
+            return None
+        self._ensure_initialized()
+        with closing(self._connect()) as connection:
+            row = connection.execute(
+                "SELECT * FROM managed_queue_items WHERE dedupe_key = ?",
+                (dedupe_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "dedupe_key": str(row["dedupe_key"]),
+            "event_id": str(row["event_id"]),
+            "event_type": str(row["event_type"]),
+            "payload": json.loads(row["payload_json"]),
+            "receipt_id": str(row["receipt_id"]),
+            "created_at": str(row["created_at"]),
+        }
+
     def active_runtime_states(self) -> tuple[dict[str, Any], ...]:
         """Return every active managed runtime for startup reconciliation."""
 
@@ -1065,7 +2080,10 @@ class ManagedImportStore:
             for project_id in project_ids:
                 control, revision = self._load_control(connection, project_id)
                 if self._reconcile_superseded_attempts(
-                    control, updated_at=migration_time
+                    control,
+                    updated_at=migration_time,
+                    connection=connection,
+                    project_id=project_id,
                 ):
                     self._write_control(connection, control, revision)
         with closing(self._connect()) as connection:
@@ -1116,6 +2134,15 @@ class ManagedImportStore:
         record = self._record(control, key)
         return deepcopy(record) if record is not None else None
 
+    def lookup_attempt(
+        self, project_id: str, attempt_id: str
+    ) -> dict[str, Any] | None:
+        """Return one immutable/control import attempt by its internal ID."""
+
+        control = self.project_control(project_id)
+        record = self._record_by_attempt(control, attempt_id)
+        return deepcopy(record) if record is not None else None
+
     @staticmethod
     def _lease_live(lease: Any, now: datetime) -> bool:
         if not isinstance(lease, Mapping):
@@ -1128,6 +2155,8 @@ class ManagedImportStore:
         control: dict[str, Any],
         *,
         updated_at: str,
+        connection: sqlite3.Connection | None = None,
+        project_id: str | None = None,
     ) -> bool:
         """Migrate/fail stale pre-fix attempts before strict invariant reads."""
 
@@ -1150,7 +2179,28 @@ class ManagedImportStore:
         winner_token = int(winner["fencing_token"]) if winner is not None else None
         changed = False
         for record in records:
-            if not isinstance(record, dict) or record.get("status") not in {
+            if not isinstance(record, dict):
+                continue
+            if record.get("status") == "FAILED":
+                evidence = record.get("evidence")
+                if (
+                    isinstance(evidence, Mapping)
+                    and evidence.get("failure_code") == "ATTEMPT_SUPERSEDED"
+                ):
+                    if connection is None or project_id is None:
+                        # A read pass cannot inspect the runtime projection;
+                        # force the uncommon writer pass, which is idempotent.
+                        changed = True
+                    elif self._terminalize_superseded_runtime(
+                        connection,
+                        project_id,
+                        control,
+                        record,
+                        updated_at=updated_at,
+                    ):
+                        changed = True
+                continue
+            if record.get("status") not in {
                 "VALIDATING",
                 "PREPARING",
                 "ACTIVATING",
@@ -1179,6 +2229,14 @@ class ManagedImportStore:
                     superseding_fencing_token=int(winner_token),
                     updated_at=updated_at,
                 )
+                if connection is not None and project_id is not None:
+                    self._terminalize_superseded_runtime(
+                        connection,
+                        project_id,
+                        control,
+                        record,
+                        updated_at=updated_at,
+                    )
                 lease = control.get("activation_lease")
                 if (
                     isinstance(lease, Mapping)
@@ -1236,6 +2294,309 @@ class ManagedImportStore:
             }
         )
 
+    def _terminalize_superseded_runtime(
+        self,
+        connection: sqlite3.Connection,
+        project_id: str,
+        control: Mapping[str, Any],
+        record: Mapping[str, Any],
+        *,
+        updated_at: str,
+    ) -> bool:
+        """Atomically mirror a superseded control child into its shell."""
+
+        sprint_id = record.get("sprint_id")
+        attempt_id = record.get("attempt_id")
+        fencing_token = record.get("fencing_token")
+        if not isinstance(sprint_id, str) or not isinstance(attempt_id, str):
+            return False
+        row = connection.execute(
+            """
+            SELECT project_id, sprint_id, status, fencing_token, state_json
+            FROM managed_sprints
+            WHERE project_id = ? AND sprint_id = ?
+            """,
+            (project_id, sprint_id),
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            state = json.loads(row["state_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("managed sprint runtime is corrupt") from exc
+        if not isinstance(state, dict):
+            raise RuntimeError("managed superseded runtime is not an object")
+        runtime_attempt = next(
+            (
+                item
+                for item in state.get("import_attempts", [])
+                if isinstance(item, dict)
+                and item.get("attempt_id") == attempt_id
+            ),
+            None,
+        )
+        if runtime_attempt is None:
+            raise RuntimeError("managed superseded runtime owner is missing")
+        runtime_status = runtime_attempt.get("status")
+        if runtime_status not in {"running", "failed"}:
+            raise RuntimeError("managed superseded import attempt is corrupt")
+
+        if state.get("workflow") is not None:
+            if runtime_status != "failed":
+                raise RuntimeError(
+                    "managed superseded runtime has live work after activation"
+                )
+            issues = self._runtime_row_issues(
+                control, row, state, require_indexed=False
+            )
+            if issues:
+                raise RuntimeError(
+                    "managed superseded runtime is inconsistent: "
+                    + ",".join(issues)
+                )
+            return False
+
+        row_status = row["status"]
+        row_fence = row["fencing_token"]
+        running_attempt_ids = [
+            item.get("attempt_id")
+            for item in state.get("import_attempts", [])
+            if isinstance(item, Mapping) and item.get("status") == "running"
+        ]
+        control_repaired = False
+        if row_fence != fencing_token:
+            records = control.get("start_idempotency_records")
+            row_fence_claimed_elsewhere = any(
+                isinstance(item, Mapping)
+                and item is not record
+                and item.get("fencing_token") == row_fence
+                for item in (records if isinstance(records, list) else [])
+            )
+            can_adopt_legacy_fence = bool(
+                isinstance(record, dict)
+                and record.get("created_fencing_token") is None
+                and (
+                    (
+                        runtime_status == "running"
+                        and running_attempt_ids == [attempt_id]
+                    )
+                    or (
+                        runtime_status == "failed"
+                        and not running_attempt_ids
+                        and row_status == "failed"
+                        and state.get("status") == "failed"
+                    )
+                )
+                and isinstance(row_fence, int)
+                and not isinstance(row_fence, bool)
+                and 0 < row_fence
+                <= int(control.get("activation_fencing_counter") or 0)
+                and not row_fence_claimed_elsewhere
+            )
+            if not can_adopt_legacy_fence:
+                raise RuntimeError("managed superseded runtime fence changed")
+            # Pre-creation-fence records could be re-fenced in control while
+            # their durable shell retained the original token.  Exact attempt
+            # ownership proves this is the older shell, so migrate control to
+            # its token rather than overwriting it with a newer token.
+            record["created_fencing_token"] = row_fence
+            record["fencing_token"] = row_fence
+            fencing_token = row_fence
+            control_repaired = True
+        if (
+            row_status not in {"preparing", "failed"}
+            or state.get("status") != row_status
+            or not isinstance(fencing_token, int)
+            or isinstance(fencing_token, bool)
+        ):
+            raise RuntimeError("managed superseded runtime fence changed")
+        if runtime_status == "running" and running_attempt_ids != [attempt_id]:
+            raise RuntimeError("managed superseded runtime owner is ambiguous")
+        if runtime_status == "failed" and running_attempt_ids:
+            raise RuntimeError("managed superseded runtime still has a live owner")
+
+        reason_code = SPRINT_RECOVERY_REQUIRED
+        context_id = _safe_identifier(
+            "context", sprint_id, attempt_id, reason_code
+        )
+        normalized_error = {
+            "code": reason_code,
+            "http_status": 409,
+            "phase": "ACTIVATE",
+            "issue_codes": ["ATTEMPT_SUPERSEDED"],
+        }
+        context = {
+            "context_id": context_id,
+            "graph_revision": int(state["graph_revision"]),
+            "failure_scope": "activate",
+            "reason_code": reason_code,
+            "import_attempt_id": attempt_id,
+            "failed_assignment_id": None,
+            "join_target": None,
+            "assigned_branch": None,
+            "source_commit": None,
+            "result_commit": None,
+            "diff_summary": {},
+            "workspace_status": {
+                "prepared_artifact_ids": deepcopy(
+                    runtime_attempt.get("prepared_artifact_ids", [])
+                )
+            },
+            "process_records": [],
+            "port_records": [],
+            "test_evidence_summary": {},
+            "normalized_error": normalized_error,
+            "reviewer_feedback": [],
+        }
+        existing_context = next(
+            (
+                item
+                for item in state.get("coordinator_contexts", [])
+                if isinstance(item, Mapping)
+                and item.get("context_id") == context_id
+            ),
+            None,
+        )
+        event_id = _safe_identifier("event", sprint_id, context_id)
+        dedupe_key = f"enqueue:coordinator:{sprint_id}:{context_id}"
+        payload = {
+            "sprint_id": sprint_id,
+            "context_id": context_id,
+            "coordinator_phone": self._coordinator_phone(state),
+            "reason_code": reason_code,
+        }
+        expected_receipt_id = _safe_identifier("queue-receipt", dedupe_key)
+        existing_event = next(
+            (
+                item
+                for item in state.get("outbox", [])
+                if isinstance(item, Mapping)
+                and item.get("event_id") == event_id
+            ),
+            None,
+        )
+        queue_row = connection.execute(
+            "SELECT * FROM managed_queue_items WHERE dedupe_key = ?",
+            (dedupe_key,),
+        ).fetchone()
+        projection_complete = bool(
+            runtime_status == "failed"
+            and row_status == "failed"
+            and isinstance(existing_context, Mapping)
+            and dict(existing_context) == context
+            and isinstance(existing_event, Mapping)
+            and existing_event.get("dedupe_key") == dedupe_key
+            and existing_event.get("event_type") == "COORDINATOR_ENQUEUE"
+            and existing_event.get("payload") == payload
+            and existing_event.get("status") == "delivered"
+            and existing_event.get("queue_receipt_id") == expected_receipt_id
+            and isinstance(existing_event.get("created_at"), str)
+            and isinstance(existing_event.get("delivered_at"), str)
+            and queue_row is not None
+            and queue_row["event_id"] == event_id
+            and queue_row["event_type"] == "COORDINATOR_ENQUEUE"
+            and queue_row["payload_json"] == _json_text(payload)
+            and queue_row["receipt_id"] == expected_receipt_id
+        )
+        if runtime_status == "failed":
+            issues = self._runtime_row_issues(
+                control, row, state, require_indexed=False
+            )
+            if projection_complete and not issues:
+                return control_repaired
+            raise RuntimeError(
+                "managed superseded runtime terminal projection is incomplete"
+            )
+
+        runtime_attempt.update(
+            {
+                "phase": "ACTIVATE",
+                "status": "failed",
+                "activation_response": None,
+                "updated_at": updated_at,
+            }
+        )
+        if existing_context is None:
+            state["coordinator_contexts"].append(context)
+        elif dict(existing_context) != context:
+            raise RuntimeError("managed supersession context identity conflict")
+
+        receipt_id = self.enqueue_managed_queue_item_in_transaction(
+            connection,
+            dedupe_key=dedupe_key,
+            event_id=event_id,
+            event_type="COORDINATOR_ENQUEUE",
+            payload=payload,
+            created_at=updated_at,
+        )
+        event = {
+            "event_id": event_id,
+            "dedupe_key": dedupe_key,
+            "event_type": "COORDINATOR_ENQUEUE",
+            "payload": payload,
+            "status": "delivered",
+            "created_at": updated_at,
+            "delivered_at": updated_at,
+            "queue_receipt_id": receipt_id,
+        }
+        if existing_event is None:
+            state["outbox"].append(event)
+        elif dict(existing_event) != event:
+            raise RuntimeError("managed supersession event identity conflict")
+
+        state["status"] = "failed"
+        schema_issues = _runtime_state_schema_errors(
+            state,
+            issue_code="IMPORT_SUPERSESSION_SCHEMA_INVALID",
+        )
+        invariant_issues = managed_activation_invariant_issues(state)
+        if schema_issues or invariant_issues:
+            issue_codes = [
+                str(item.get("code")) for item in schema_issues
+            ] + list(invariant_issues)
+            raise RuntimeError(
+                "managed superseded runtime is invalid: "
+                + ",".join(dict.fromkeys(issue_codes))
+            )
+        cursor = connection.execute(
+            """
+            UPDATE managed_sprints
+            SET status = 'failed', fencing_token = ?, state_json = ?
+            WHERE project_id = ? AND sprint_id = ?
+              AND status = ? AND fencing_token = ? AND state_json = ?
+            """,
+            (
+                fencing_token,
+                _json_text(state),
+                project_id,
+                sprint_id,
+                row_status,
+                row_fence,
+                row["state_json"],
+            ),
+        )
+        if cursor.rowcount != 1:
+            raise RuntimeError("managed superseded runtime changed concurrently")
+        updated = connection.execute(
+            """
+            SELECT project_id, sprint_id, status, fencing_token, state_json
+            FROM managed_sprints
+            WHERE project_id = ? AND sprint_id = ?
+            """,
+            (project_id, sprint_id),
+        ).fetchone()
+        if updated is None:
+            raise RuntimeError("managed superseded runtime disappeared")
+        updated_issues = self._runtime_row_issues(
+            control, updated, state, require_indexed=False
+        )
+        if updated_issues:
+            raise RuntimeError(
+                "managed superseded runtime index mutation is invalid: "
+                + ",".join(updated_issues)
+            )
+        return True
+
     def register_or_resume(
         self,
         project_id: str,
@@ -1255,7 +2616,10 @@ class ManagedImportStore:
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
             reconciled = self._reconcile_superseded_attempts(
-                control, updated_at=now_text
+                control,
+                updated_at=now_text,
+                connection=connection,
+                project_id=project_id,
             )
             existing = self._record(control, request.idempotency_key)
             if existing is not None:
@@ -1303,6 +2667,13 @@ class ManagedImportStore:
                     return deepcopy(existing), True
                 counter = int(control.get("activation_fencing_counter") or 0) + 1
                 control["activation_fencing_counter"] = counter
+                self._rebind_preactivation_row_fence(
+                    connection,
+                    project_id,
+                    existing.get("sprint_id"),
+                    old_fencing_token=existing.get("fencing_token"),
+                    new_fencing_token=counter,
+                )
                 existing["fencing_token"] = counter
                 existing["updated_at"] = now_text
                 control["activation_lease"] = {
@@ -1333,7 +2704,14 @@ class ManagedImportStore:
             sprint_id = (
                 provenance.stable_sprint_id() if provenance is not None else None
             )
-            evidence: dict[str, Any] = {"phase": "VALIDATE"}
+            evidence: dict[str, Any] = {
+                "phase": "VALIDATE",
+                "request": {
+                    "repository_id": request.repository_id,
+                    "ref": request.ref,
+                    "manifest_path": request.manifest_path,
+                },
+            }
             if repository_binding is not None:
                 evidence["repository_binding"] = deepcopy(
                     dict(repository_binding)
@@ -1512,7 +2890,10 @@ class ManagedImportStore:
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
             reconciled = self._reconcile_superseded_attempts(
-                control, updated_at=now.isoformat()
+                control,
+                updated_at=now.isoformat(),
+                connection=connection,
+                project_id=project_id,
             )
             record = self._record(control, request.idempotency_key)
             if record is None:
@@ -1550,6 +2931,13 @@ class ManagedImportStore:
                 return deepcopy(record)
             counter = int(control.get("activation_fencing_counter") or 0) + 1
             now_text = now.isoformat()
+            self._rebind_preactivation_row_fence(
+                connection,
+                project_id,
+                record.get("sprint_id"),
+                old_fencing_token=record.get("fencing_token"),
+                new_fencing_token=counter,
+            )
             record["fencing_token"] = counter
             record["updated_at"] = now_text
             control["activation_fencing_counter"] = counter
@@ -1582,6 +2970,52 @@ class ManagedImportStore:
                 str(record.get("attempt_id") or "stale-fence"),
                 phase="ACTIVATE",
             )
+
+    @staticmethod
+    def _rebind_preactivation_row_fence(
+        connection: sqlite3.Connection,
+        project_id: str,
+        sprint_id: Any,
+        *,
+        old_fencing_token: Any,
+        new_fencing_token: int,
+    ) -> None:
+        """Move a resumable shell with the renewed project-control fence."""
+
+        if not isinstance(sprint_id, str):
+            return
+        row = connection.execute(
+            """
+            SELECT status, fencing_token, state_json FROM managed_sprints
+            WHERE project_id = ? AND sprint_id = ?
+            """,
+            (project_id, sprint_id),
+        ).fetchone()
+        if row is None:
+            return
+        try:
+            state = json.loads(row["state_json"])
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError("managed sprint runtime is corrupt") from exc
+        if (
+            not isinstance(state, Mapping)
+            or state.get("workflow") is not None
+            or row["status"] not in {"preparing", "failed"}
+            or row["fencing_token"] != old_fencing_token
+        ):
+            raise RuntimeError("managed preactivation fence cannot be renewed")
+        connection.execute(
+            """
+            UPDATE managed_sprints SET fencing_token = ?
+            WHERE project_id = ? AND sprint_id = ? AND fencing_token = ?
+            """,
+            (
+                new_fencing_token,
+                project_id,
+                sprint_id,
+                old_fencing_token,
+            ),
+        )
 
     def update_attempt(
         self,
@@ -1616,7 +3050,256 @@ class ManagedImportStore:
                     evidence = {}
                     record["evidence"] = evidence
                 evidence.update(deepcopy(dict(evidence_update)))
+            updated_at = _timestamp(clock)
+            record["updated_at"] = updated_at
+            sprint_id = record.get("sprint_id")
+            if isinstance(sprint_id, str):
+                runtime_row = connection.execute(
+                    """
+                    SELECT project_id, sprint_id, status, fencing_token, state_json
+                    FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (project_id, sprint_id),
+                ).fetchone()
+                if runtime_row is not None:
+                    try:
+                        runtime_state = json.loads(runtime_row["state_json"])
+                    except (TypeError, json.JSONDecodeError) as exc:
+                        raise RuntimeError(
+                            "managed sprint runtime is corrupt"
+                        ) from exc
+                    runtime_issues = self._runtime_row_issues(
+                        control,
+                        runtime_row,
+                        runtime_state,
+                        require_indexed=False,
+                    )
+                    if runtime_issues or not isinstance(runtime_state, dict):
+                        raise RuntimeError(
+                            "managed sprint runtime invariant failed: "
+                            + ",".join(
+                                runtime_issues or ("RUNTIME_STATE_NOT_OBJECT",)
+                            )
+                        )
+                    if runtime_state.get("workflow") is None:
+                        import_attempt = next(
+                            (
+                                item
+                                for item in runtime_state.get(
+                                    "import_attempts", []
+                                )
+                                if isinstance(item, dict)
+                                and item.get("attempt_id") == attempt_id
+                            ),
+                            None,
+                        )
+                        if not isinstance(import_attempt, dict):
+                            raise RuntimeError(
+                                "preactivation runtime import attempt is missing"
+                            )
+                        if status == "ACTIVATING":
+                            prepared_workspaces = (
+                                evidence_update.get("prepared_workspaces")
+                                if isinstance(evidence_update, Mapping)
+                                else None
+                            )
+                            prepared_ids = [
+                                str(item["workspace_id"])
+                                for item in prepared_workspaces or []
+                                if isinstance(item, Mapping)
+                                and isinstance(item.get("workspace_id"), str)
+                            ]
+                            import_attempt.update(
+                                {
+                                    "phase": "ACTIVATE",
+                                    "status": "running",
+                                    "prepared_artifact_ids": prepared_ids,
+                                    "activation_response": None,
+                                    "updated_at": updated_at,
+                                }
+                            )
+                        connection.execute(
+                            """
+                            UPDATE managed_sprints
+                            SET fencing_token = ?, state_json = ?
+                            WHERE project_id = ? AND sprint_id = ?
+                            """,
+                            (
+                                fencing_token,
+                                _json_text(runtime_state),
+                                project_id,
+                                sprint_id,
+                            ),
+                        )
+            self._write_control(connection, control, revision)
+            return deepcopy(record)
+
+    def stage_preparing_runtime(
+        self,
+        project_id: str,
+        attempt_id: str,
+        runtime_state: Mapping[str, Any],
+        *,
+        evidence_update: Mapping[str, Any],
+        fencing_token: int,
+        clock: Callable[[], datetime],
+    ) -> dict[str, Any]:
+        """Publish a no-work preactivation shell with the PREPARING fence.
+
+        The shell is the durable home for import attempts and Coordinator
+        recovery before any assignment, lease, workspace, port, or process is
+        activated.  Re-entry is idempotent; a failed shell may already contain
+        the running child produced by ``begin_retry_import``.
+        """
+
+        proposed = deepcopy(dict(runtime_state))
+        if proposed.get("status") != "preparing":
+            raise ValueError("preactivation runtime must be preparing")
+        schema_issues = _runtime_state_schema_errors(
+            proposed,
+            issue_code="PREPARATION_SCHEMA_INVALID",
+        )
+        invariant_issues = managed_activation_invariant_issues(proposed)
+        if schema_issues or invariant_issues:
+            raise RuntimeError("preactivation runtime state is invalid")
+
+        with self._transaction() as connection:
+            control, revision = self._load_control(connection, project_id)
+            record = self._record_by_attempt(control, attempt_id)
+            if record is None:
+                raise RuntimeError("managed start attempt is missing")
+            if record.get("status") in {"SUCCEEDED", "FAILED"}:
+                return deepcopy(record)
+            self._assert_fence(control, record, fencing_token)
+            current_status = str(record.get("status"))
+            if current_status not in {
+                "VALIDATING",
+                "PREPARING",
+                "ACTIVATING",
+            }:
+                raise RuntimeError("managed start attempt is not preparing")
+            if record.get("sprint_id") != proposed.get("sprint_id"):
+                raise RuntimeError("preactivation sprint identity changed")
+
+            if current_status != "ACTIVATING":
+                record["status"] = "PREPARING"
+            evidence = record.get("evidence")
+            if not isinstance(evidence, dict):
+                evidence = {}
+                record["evidence"] = evidence
+            durable_update = deepcopy(dict(evidence_update))
+            if current_status == "ACTIVATING":
+                durable_update.pop("phase", None)
+            evidence.update(durable_update)
             record["updated_at"] = _timestamp(clock)
+
+            sprint_id = str(record["sprint_id"])
+            existing = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, sprint_id),
+            ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO managed_sprints(
+                        project_id, sprint_id, status, fencing_token, state_json
+                    ) VALUES (?, ?, 'preparing', ?, ?)
+                    """,
+                    (
+                        project_id,
+                        sprint_id,
+                        fencing_token,
+                        _json_text(proposed),
+                    ),
+                )
+            else:
+                try:
+                    current = json.loads(existing["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("managed sprint runtime is corrupt") from exc
+                current_issues = self._runtime_row_issues(
+                    control, existing, current, require_indexed=False
+                )
+                if current_issues or not isinstance(current, dict):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(
+                            current_issues or ("RUNTIME_STATE_NOT_OBJECT",)
+                        )
+                    )
+                current_attempt = next(
+                    (
+                        item
+                        for item in current.get("import_attempts", [])
+                        if isinstance(item, dict)
+                        and item.get("attempt_id") == attempt_id
+                        and item.get("status") == "running"
+                    ),
+                    None,
+                )
+                proposed_attempt = next(
+                    (
+                        item
+                        for item in proposed.get("import_attempts", [])
+                        if isinstance(item, Mapping)
+                        and item.get("attempt_id") == attempt_id
+                        and item.get("status") == "running"
+                    ),
+                    None,
+                )
+                if not isinstance(current_attempt, dict) or not isinstance(
+                    proposed_attempt, Mapping
+                ):
+                    raise RuntimeError(
+                        "preactivation runtime does not contain the fenced attempt"
+                    )
+                if current_status != "ACTIVATING":
+                    current_attempt.update(
+                        {
+                            "phase": "PREPARE",
+                            "status": "running",
+                            "preflight": deepcopy(
+                                dict(proposed_attempt["preflight"])
+                            ),
+                            "prepared_artifact_ids": [],
+                            "activation_response": None,
+                            "updated_at": record["updated_at"],
+                        }
+                    )
+                current_schema_issues = _runtime_state_schema_errors(
+                    current,
+                    issue_code="PREPARATION_SCHEMA_INVALID",
+                )
+                current_invariant_issues = managed_activation_invariant_issues(
+                    current
+                )
+                if current_schema_issues or current_invariant_issues:
+                    issue_codes = [
+                        str(item.get("code"))
+                        for item in current_schema_issues
+                    ] + list(current_invariant_issues)
+                    raise RuntimeError(
+                        "managed preactivation refresh is invalid: "
+                        + ",".join(dict.fromkeys(issue_codes))
+                    )
+                connection.execute(
+                    """
+                    UPDATE managed_sprints
+                    SET fencing_token = ?, state_json = ?
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (
+                        fencing_token,
+                        _json_text(current),
+                        project_id,
+                        sprint_id,
+                    ),
+                )
             self._write_control(connection, control, revision)
             return deepcopy(record)
 
@@ -1747,6 +3430,7 @@ class ManagedImportStore:
                 else {}
             )
             accumulated_evidence.update(deepcopy(dict(evidence)))
+            failed_at = _timestamp(clock)
             record.update(
                 {
                     "status": "FAILED",
@@ -1754,12 +3438,664 @@ class ManagedImportStore:
                     "http_status": error.http_status,
                     "error": deepcopy(error.envelope),
                     "evidence": accumulated_evidence or {"phase": "VALIDATE"},
-                    "updated_at": _timestamp(clock),
+                    "updated_at": failed_at,
                 }
             )
+
             control["activation_lease"] = None
+
+            sprint_id = record.get("sprint_id")
+            runtime_row = (
+                connection.execute(
+                    """
+                    SELECT project_id, sprint_id, status, fencing_token, state_json
+                    FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (project_id, sprint_id),
+                ).fetchone()
+                if isinstance(sprint_id, str)
+                else None
+            )
+            if runtime_row is not None:
+                try:
+                    runtime_state = json.loads(runtime_row["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("managed sprint runtime is corrupt") from exc
+                runtime_issues = self._runtime_row_issues(
+                    control,
+                    runtime_row,
+                    runtime_state,
+                    require_indexed=False,
+                )
+                # The control record was just terminalized in memory, so a
+                # preparing row may report only the expected owner-status
+                # mismatch until the state below becomes failed.
+                unexpected_issues = tuple(
+                    issue
+                    for issue in runtime_issues
+                    if issue != "RUNTIME_ACTIVATION_FENCE_MISMATCH"
+                )
+                if unexpected_issues or not isinstance(runtime_state, dict):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(
+                            unexpected_issues or ("RUNTIME_STATE_NOT_OBJECT",)
+                        )
+                    )
+                if runtime_state.get("workflow") is None:
+                    import_attempt = next(
+                        (
+                            item
+                            for item in runtime_state.get("import_attempts", [])
+                            if isinstance(item, dict)
+                            and item.get("attempt_id") == attempt_id
+                        ),
+                        None,
+                    )
+                    if not isinstance(import_attempt, dict):
+                        raise RuntimeError(
+                            "preactivation runtime import attempt is missing"
+                        )
+                    phase = str(
+                        error.envelope.get("detail", {}).get("phase")
+                        or accumulated_evidence.get("phase")
+                        or import_attempt.get("phase")
+                        or "PREPARE"
+                    ).upper()
+                    if phase not in {"VALIDATE", "PREPARE", "ACTIVATE"}:
+                        phase = "PREPARE"
+                    import_attempt.update(
+                        {
+                            "phase": phase,
+                            "status": "failed",
+                            "activation_response": None,
+                            "updated_at": failed_at,
+                        }
+                    )
+                    context_id = _safe_identifier(
+                        "context", str(sprint_id), attempt_id, error.code
+                    )
+                    existing_context = next(
+                        (
+                            item
+                            for item in runtime_state.get(
+                                "coordinator_contexts", []
+                            )
+                            if isinstance(item, Mapping)
+                            and item.get("context_id") == context_id
+                        ),
+                        None,
+                    )
+                    issue_codes = [
+                        str(item.get("code"))
+                        for item in error.envelope.get("detail", {}).get(
+                            "issues", []
+                        )
+                        if isinstance(item, Mapping)
+                        and isinstance(item.get("code"), str)
+                    ]
+                    normalized_error = {
+                        "code": error.code,
+                        "http_status": error.http_status,
+                        "phase": phase,
+                        "issue_codes": issue_codes,
+                    }
+                    if existing_context is None:
+                        runtime_state["coordinator_contexts"].append(
+                            {
+                                "context_id": context_id,
+                                "graph_revision": int(
+                                    runtime_state["graph_revision"]
+                                ),
+                                "failure_scope": phase.lower(),
+                                "reason_code": error.code,
+                                "import_attempt_id": attempt_id,
+                                "failed_assignment_id": None,
+                                "join_target": None,
+                                "assigned_branch": None,
+                                "source_commit": None,
+                                "result_commit": None,
+                                "diff_summary": {},
+                                "workspace_status": {
+                                    "prepared_artifact_ids": deepcopy(
+                                        import_attempt.get(
+                                            "prepared_artifact_ids", []
+                                        )
+                                    )
+                                },
+                                "process_records": [],
+                                "port_records": [],
+                                "test_evidence_summary": {},
+                                "normalized_error": normalized_error,
+                                "reviewer_feedback": [],
+                            }
+                        )
+                    event_id = _safe_identifier(
+                        "event", str(sprint_id), context_id
+                    )
+                    dedupe_key = (
+                        f"enqueue:coordinator:{sprint_id}:{context_id}"
+                    )
+                    coordinator_phone = self._coordinator_phone(runtime_state)
+                    payload = {
+                        "sprint_id": str(sprint_id),
+                        "context_id": context_id,
+                        "coordinator_phone": coordinator_phone,
+                        "reason_code": error.code,
+                    }
+                    queue_receipt_id = (
+                        self.enqueue_managed_queue_item_in_transaction(
+                            connection,
+                            dedupe_key=dedupe_key,
+                            event_id=event_id,
+                            event_type="COORDINATOR_ENQUEUE",
+                            payload=payload,
+                            created_at=failed_at,
+                        )
+                    )
+                    existing_event = next(
+                        (
+                            item
+                            for item in runtime_state.get("outbox", [])
+                            if isinstance(item, Mapping)
+                            and item.get("event_id") == event_id
+                        ),
+                        None,
+                    )
+                    delivered_event = {
+                        "event_id": event_id,
+                        "dedupe_key": dedupe_key,
+                        "event_type": "COORDINATOR_ENQUEUE",
+                        "payload": payload,
+                        "status": "delivered",
+                        "created_at": failed_at,
+                        "delivered_at": failed_at,
+                        "queue_receipt_id": queue_receipt_id,
+                    }
+                    if existing_event is None:
+                        runtime_state["outbox"].append(delivered_event)
+                    elif dict(existing_event) != delivered_event:
+                        raise RuntimeError(
+                            "managed Coordinator enqueue identity conflict"
+                        )
+                    runtime_state["status"] = "failed"
+                    schema_issues = _runtime_state_schema_errors(
+                        runtime_state,
+                        issue_code="IMPORT_FAILURE_SCHEMA_INVALID",
+                    )
+                    invariant_issues = managed_activation_invariant_issues(
+                        runtime_state
+                    )
+                    if schema_issues or invariant_issues:
+                        issue_codes = [
+                            str(item.get("code")) for item in schema_issues
+                        ] + list(invariant_issues)
+                        raise RuntimeError(
+                            "managed import failure runtime is invalid: "
+                            + ",".join(dict.fromkeys(issue_codes))
+                        )
+                    connection.execute(
+                        """
+                        UPDATE managed_sprints
+                        SET status = 'failed', fencing_token = ?, state_json = ?
+                        WHERE project_id = ? AND sprint_id = ?
+                        """,
+                        (
+                            fencing_token,
+                            _json_text(runtime_state),
+                            project_id,
+                            sprint_id,
+                        ),
+                    )
             self._write_control(connection, control, revision)
             return deepcopy(record)
+
+    @staticmethod
+    def _coordinator_phone(runtime_state: Mapping[str, Any]) -> str:
+        revision = runtime_state.get("graph_revision")
+        graph_revision = next(
+            (
+                item
+                for item in runtime_state.get("graph_revisions", [])
+                if isinstance(item, Mapping)
+                and item.get("revision") == revision
+            ),
+            None,
+        )
+        definition = (
+            graph_revision.get("definition")
+            if isinstance(graph_revision, Mapping)
+            else None
+        )
+        coordinator = (
+            definition.get("coordinator")
+            if isinstance(definition, Mapping)
+            else None
+        )
+        node_id = (
+            coordinator.get("node_id")
+            if isinstance(coordinator, Mapping)
+            else None
+        )
+        node = next(
+            (
+                item
+                for item in definition.get("nodes", [])
+                if isinstance(item, Mapping) and item.get("id") == node_id
+            ),
+            None,
+        ) if isinstance(definition, Mapping) else None
+        agent = node.get("agent") if isinstance(node, Mapping) else None
+        phone = agent.get("phone") if isinstance(agent, Mapping) else None
+        if not isinstance(phone, str) or re.fullmatch(r"[0-9]{4}", phone) is None:
+            raise RuntimeError("managed Coordinator phone is invalid")
+        return phone
+
+    def begin_retry_import(
+        self,
+        project_id: str,
+        sprint_id: str,
+        recovery_id: str,
+        *,
+        attempt_id_factory: Callable[[], str],
+        clock: Callable[[], datetime],
+    ) -> dict[str, Any]:
+        """Create exactly one immutable-generation import recovery child.
+
+        The control child, running runtime receipt, row fence, activation
+        lease, and completed Coordinator recovery are one SQLite commit.  No
+        repository registry lookup or mutable ref resolution occurs here.
+        """
+
+        with self._transaction() as connection:
+            control, revision = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            row = connection.execute(
+                """
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (project_id, sprint_id),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("managed retry runtime was not found")
+            try:
+                state = json.loads(row["state_json"])
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise RuntimeError("managed sprint runtime is corrupt") from exc
+            row_issues = self._runtime_row_issues(
+                control, row, state, require_indexed=False
+            )
+            if row_issues or not isinstance(state, dict):
+                raise RuntimeError(
+                    "managed sprint runtime invariant failed: "
+                    + ",".join(row_issues or ("RUNTIME_STATE_NOT_OBJECT",))
+                )
+            recovery = next(
+                (
+                    item
+                    for item in state.get("recovery_records", [])
+                    if isinstance(item, dict)
+                    and item.get("recovery_id") == recovery_id
+                ),
+                None,
+            )
+            if not isinstance(recovery, dict) or recovery.get("action") != "RETRY_IMPORT":
+                raise RuntimeError("managed retry recovery was not found")
+            if recovery.get("status") == "completed":
+                produced_ids = recovery.get("produced_record_ids")
+                child_id = (
+                    produced_ids[0]
+                    if isinstance(produced_ids, list) and len(produced_ids) == 1
+                    else None
+                )
+                child = (
+                    self._record_by_attempt(control, child_id)
+                    if isinstance(child_id, str)
+                    else None
+                )
+                if not isinstance(child, dict):
+                    raise RuntimeError("managed retry child is missing")
+                return deepcopy(child)
+            if recovery.get("status") != "pending":
+                raise ManagedRetryImportConflict(
+                    "managed retry recovery is not pending"
+                )
+            if state.get("status") != "failed" or state.get("workflow") is not None:
+                raise ManagedRetryImportConflict(
+                    "managed retry target is not a failed import"
+                )
+
+            parameters = recovery.get("parameters")
+            parent_attempt_id = recovery.get("import_attempt_id")
+            if (
+                not isinstance(parameters, Mapping)
+                or set(parameters) != {
+                    "failed_attempt_id",
+                    "recovery_idempotency_key",
+                }
+                or parameters.get("failed_attempt_id") != parent_attempt_id
+                or not isinstance(parent_attempt_id, str)
+            ):
+                raise RuntimeError("managed retry recovery parameters are invalid")
+            recovery_key = parameters.get("recovery_idempotency_key")
+            if not isinstance(recovery_key, str) or not 1 <= len(recovery_key) <= 200:
+                raise RuntimeError("managed retry idempotency key is invalid")
+            if self._record(control, recovery_key) is not None:
+                raise ManagedRetryImportConflict(
+                    "managed retry idempotency key already exists"
+                )
+
+            parent_control = self._record_by_attempt(control, parent_attempt_id)
+            parent_runtime = next(
+                (
+                    item
+                    for item in state.get("import_attempts", [])
+                    if isinstance(item, Mapping)
+                    and item.get("attempt_id") == parent_attempt_id
+                ),
+                None,
+            )
+            if (
+                not isinstance(parent_control, Mapping)
+                or parent_control.get("status") != "FAILED"
+                or not isinstance(parent_runtime, Mapping)
+                or parent_runtime.get("status") != "failed"
+            ):
+                raise ManagedRetryImportConflict(
+                    "managed retry parent is not failed"
+                )
+            pinned_identity = parent_control.get("pinned_identity")
+            workspace_source_commit = parent_control.get(
+                "workspace_source_commit"
+            )
+            if (
+                not isinstance(pinned_identity, Mapping)
+                or parent_control.get("sprint_id") != sprint_id
+                or not isinstance(workspace_source_commit, str)
+            ):
+                raise ManagedRetryImportConflict(
+                    "managed retry parent is not fully pinned"
+                )
+            parent_evidence = parent_control.get("evidence")
+            binding = (
+                parent_evidence.get("repository_binding")
+                if isinstance(parent_evidence, Mapping)
+                else None
+            )
+            request_record = (
+                parent_evidence.get("request")
+                if isinstance(parent_evidence, Mapping)
+                else None
+            )
+            if (
+                not isinstance(binding, Mapping)
+                or not isinstance(request_record, Mapping)
+            ):
+                raise ManagedRetryImportConflict(
+                    "managed retry provenance is incomplete"
+                )
+            try:
+                durable_request = StartSprintFromGitRequest(
+                    repository_id=str(request_record["repository_id"]),
+                    ref=str(request_record["ref"]),
+                    manifest_path=str(request_record["manifest_path"]),
+                    idempotency_key=recovery_key,
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ManagedRetryImportConflict(
+                    "managed retry request is invalid"
+                ) from exc
+            if (
+                durable_request.repository_id
+                != pinned_identity.get("repository_id")
+                or durable_request.ref != state.get("requested_ref")
+                or durable_request.manifest_path
+                != pinned_identity.get("manifest_path")
+                or durable_request.request_fingerprint(project_id)
+                != parent_control.get("request_fingerprint")
+            ):
+                raise ManagedRetryImportConflict(
+                    "managed retry request provenance changed"
+                )
+            generation = parent_control.get("recovery_generation")
+            if (
+                not isinstance(generation, int)
+                or isinstance(generation, bool)
+                or generation >= 100
+            ):
+                raise ManagedRetryImportConflict(
+                    "managed retry generation is exhausted"
+                )
+            sibling_children = [
+                item
+                for item in control.get("start_idempotency_records", [])
+                if isinstance(item, Mapping)
+                and item.get("recovery_of_attempt_id") == parent_attempt_id
+            ]
+            if sibling_children:
+                raise ManagedRetryImportConflict(
+                    "managed retry parent already has a child"
+                )
+            nonterminal = [
+                item
+                for item in control.get("start_idempotency_records", [])
+                if isinstance(item, Mapping)
+                and item.get("status")
+                in {"VALIDATING", "PREPARING", "ACTIVATING"}
+            ]
+            if nonterminal:
+                raise ManagedRetryImportConflict(
+                    "another managed import is already running"
+                )
+            now = _utc_now(clock)
+            now_text = now.isoformat()
+            counter = int(control.get("activation_fencing_counter") or 0) + 1
+            child_attempt_id = attempt_id_factory()
+            if (
+                not isinstance(child_attempt_id, str)
+                or not child_attempt_id
+                or self._record_by_attempt(control, child_attempt_id) is not None
+            ):
+                raise RuntimeError("managed retry attempt identity is invalid")
+            child_evidence = {
+                "phase": "VALIDATE",
+                "repository_binding": deepcopy(dict(binding)),
+                "request": deepcopy(dict(request_record)),
+            }
+            child = {
+                "idempotency_key": recovery_key,
+                "request_fingerprint": parent_control["request_fingerprint"],
+                "attempt_id": child_attempt_id,
+                "recovery_of_attempt_id": parent_attempt_id,
+                "recovery_generation": generation + 1,
+                "created_fencing_token": counter,
+                "fencing_token": counter,
+                "pinned_identity": deepcopy(dict(pinned_identity)),
+                "workspace_source_commit": workspace_source_commit,
+                "sprint_id": sprint_id,
+                "status": "VALIDATING",
+                "response": None,
+                "http_status": None,
+                "error": None,
+                "evidence": child_evidence,
+                "created_at": now_text,
+                "updated_at": now_text,
+            }
+            control["activation_fencing_counter"] = counter
+            control["activation_lease"] = {
+                "attempt_id": child_attempt_id,
+                "fencing_token": counter,
+                "acquired_at": now_text,
+                "expires_at": (
+                    now + timedelta(seconds=_LEASE_SECONDS)
+                ).isoformat(),
+            }
+            control["start_idempotency_records"].append(child)
+
+            state["import_attempts"].append(
+                {
+                    "attempt_id": child_attempt_id,
+                    "idempotency_key": recovery_key,
+                    "request_fingerprint": parent_control[
+                        "request_fingerprint"
+                    ],
+                    "identity": deepcopy(dict(pinned_identity)),
+                    "contract_version": 1,
+                    "manifest_schema_version": 1,
+                    "phase": "VALIDATE",
+                    "status": "running",
+                    "preflight": deepcopy(dict(parent_runtime["preflight"])),
+                    "prepared_artifact_ids": [],
+                    "activation_response": None,
+                    "created_at": now_text,
+                    "updated_at": now_text,
+                }
+            )
+            produced_ids = [child_attempt_id]
+            recovery.update(
+                {
+                    "produced_record_ids": produced_ids,
+                    "response": {
+                        "recovery_id": recovery_id,
+                        "action": "RETRY_IMPORT",
+                        "status": "RECOVERY_COMPLETED",
+                        "produced_record_ids": produced_ids,
+                        "deduplicated": False,
+                    },
+                    "normalized_error": None,
+                    "evidence": {},
+                    "status": "completed",
+                    "completed_at": now_text,
+                }
+            )
+            schema_issues = _runtime_state_schema_errors(
+                state,
+                issue_code="RETRY_IMPORT_SCHEMA_INVALID",
+            )
+            invariant_issues = managed_activation_invariant_issues(state)
+            if schema_issues or invariant_issues:
+                issue_codes = [
+                    str(item.get("code")) for item in schema_issues
+                ] + list(invariant_issues)
+                raise RuntimeError(
+                    "managed retry runtime is invalid: "
+                    + ",".join(dict.fromkeys(issue_codes))
+                )
+            connection.execute(
+                """
+                UPDATE managed_sprints
+                SET fencing_token = ?, state_json = ?
+                WHERE project_id = ? AND sprint_id = ?
+                """,
+                (counter, _json_text(state), project_id, sprint_id),
+            )
+            self._write_control(connection, control, revision)
+            return deepcopy(child)
+
+    @staticmethod
+    def _merge_preactivation_history(
+        current: Mapping[str, Any],
+        activated: Mapping[str, Any],
+        *,
+        attempt_id: str,
+    ) -> dict[str, Any]:
+        """Replace a shell with activated work without erasing recovery history."""
+
+        if current.get("workflow") is not None or current.get("status") not in {
+            "preparing",
+            "failed",
+        }:
+            raise RuntimeError("managed sprint identity already has other state")
+        if (
+            current.get("sprint_id") != activated.get("sprint_id")
+            or current.get("identity") != activated.get("identity")
+            or current.get("repository") != activated.get("repository")
+            or current.get("workspace_source_commit")
+            != activated.get("workspace_source_commit")
+            or current.get("requested_ref") != activated.get("requested_ref")
+            or [
+                (
+                    item.get("revision"),
+                    item.get("definition_sha256"),
+                    item.get("definition"),
+                    item.get("artifact_source_commit"),
+                )
+                for item in current.get("graph_revisions", [])
+                if isinstance(item, Mapping)
+            ]
+            != [
+                (
+                    item.get("revision"),
+                    item.get("definition_sha256"),
+                    item.get("definition"),
+                    item.get("artifact_source_commit"),
+                )
+                for item in activated.get("graph_revisions", [])
+                if isinstance(item, Mapping)
+            ]
+        ):
+            raise RuntimeError("managed preactivation provenance changed")
+        activated_attempt = next(
+            (
+                item
+                for item in activated.get("import_attempts", [])
+                if isinstance(item, Mapping)
+                and item.get("attempt_id") == attempt_id
+            ),
+            None,
+        )
+        current_attempt = next(
+            (
+                item
+                for item in current.get("import_attempts", [])
+                if isinstance(item, Mapping)
+                and item.get("attempt_id") == attempt_id
+            ),
+            None,
+        )
+        if (
+            not isinstance(activated_attempt, Mapping)
+            or activated_attempt.get("status") != "succeeded"
+            or not isinstance(current_attempt, Mapping)
+            or current_attempt.get("status") != "running"
+        ):
+            raise RuntimeError("managed activation attempt history is inconsistent")
+        merged = deepcopy(dict(activated))
+        merged["graph_revisions"] = deepcopy(current["graph_revisions"])
+        merged["import_attempts"] = [
+            deepcopy(dict(item))
+            for item in current.get("import_attempts", [])
+            if isinstance(item, Mapping) and item.get("attempt_id") != attempt_id
+        ] + [deepcopy(dict(activated_attempt))]
+        for collection in (
+            "coordinator_contexts",
+            "blocker_observations",
+            "recovery_records",
+        ):
+            merged[collection] = [
+                deepcopy(dict(item))
+                for item in current.get(collection, [])
+                if isinstance(item, Mapping)
+            ]
+        historical_outbox = [
+            deepcopy(dict(item))
+            for item in current.get("outbox", [])
+            if isinstance(item, Mapping)
+        ]
+        activated_outbox = [
+            deepcopy(dict(item))
+            for item in activated.get("outbox", [])
+            if isinstance(item, Mapping)
+        ]
+        if {item.get("event_id") for item in historical_outbox} & {
+            item.get("event_id") for item in activated_outbox
+        }:
+            raise RuntimeError("managed activation outbox identity conflict")
+        merged["outbox"] = historical_outbox + activated_outbox
+        return merged
 
     def activate(
         self,
@@ -1983,6 +4319,13 @@ class ManagedImportStore:
                     superseding_attempt_id=attempt_id,
                     superseding_sprint_id=sprint_id,
                     superseding_fencing_token=fencing_token,
+                    updated_at=updated_at,
+                )
+                self._terminalize_superseded_runtime(
+                    connection,
+                    project_id,
+                    control,
+                    candidate,
                     updated_at=updated_at,
                 )
             current_branch_snapshot = sorted(
@@ -2263,15 +4606,65 @@ class ManagedImportStore:
                 )
             existing = connection.execute(
                 """
-                SELECT state_json FROM managed_sprints
+                SELECT project_id, sprint_id, status, fencing_token, state_json
+                FROM managed_sprints
                 WHERE project_id = ? AND sprint_id = ?
                 """,
                 (project_id, sprint_id),
             ).fetchone()
             if existing is not None:
-                existing_state = json.loads(existing["state_json"])
-                if existing_state != state:
-                    raise RuntimeError("managed sprint identity already has other state")
+                try:
+                    existing_state = json.loads(existing["state_json"])
+                except (TypeError, json.JSONDecodeError) as exc:
+                    raise RuntimeError("managed sprint runtime is corrupt") from exc
+                existing_issues = self._runtime_row_issues(
+                    control,
+                    existing,
+                    existing_state,
+                    require_indexed=False,
+                )
+                if existing_issues or not isinstance(existing_state, dict):
+                    raise RuntimeError(
+                        "managed sprint runtime invariant failed: "
+                        + ",".join(
+                            existing_issues or ("RUNTIME_STATE_NOT_OBJECT",)
+                        )
+                    )
+                state = self._merge_preactivation_history(
+                    existing_state,
+                    state,
+                    attempt_id=attempt_id,
+                )
+                merged_schema_issues = _runtime_state_schema_errors(
+                    state,
+                    issue_code="ACTIVATION_SCHEMA_INVALID",
+                )
+                merged_invariant_issues = managed_activation_invariant_issues(
+                    state
+                )
+                if merged_schema_issues or merged_invariant_issues:
+                    issue_codes = [
+                        str(item.get("code"))
+                        for item in merged_schema_issues
+                    ] + list(merged_invariant_issues)
+                    raise RuntimeError(
+                        "managed activation history merge is invalid: "
+                        + ",".join(dict.fromkeys(issue_codes))
+                    )
+                connection.execute(
+                    """
+                    UPDATE managed_sprints
+                    SET status = ?, fencing_token = ?, state_json = ?
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (
+                        state["status"],
+                        record["fencing_token"],
+                        _json_text(state),
+                        project_id,
+                        sprint_id,
+                    ),
+                )
             else:
                 connection.execute(
                     """
@@ -2368,6 +4761,20 @@ def _managed_workspace(record: Mapping[str, Any], mirror_key: str) -> ManagedWor
             else None
         ),
     )
+
+
+def managed_workspace_record(workspace: ManagedWorkspace) -> dict[str, Any]:
+    """Serialize a verified workspace into the frozen runtime projection."""
+
+    return _workspace_record(workspace)
+
+
+def managed_workspace_from_record(
+    record: Mapping[str, Any], mirror_key: str
+) -> ManagedWorkspace:
+    """Rebuild a verified workspace value from its durable projection."""
+
+    return _managed_workspace(record, mirror_key)
 
 
 def _branch_snapshot(lease: BranchLease) -> dict[str, Any]:
@@ -3452,6 +5859,91 @@ class TransactionalSprintImporter:
             )
         return port_leases, processes, issues
 
+    def _preparing_runtime_state(
+        self,
+        project_id: str,
+        request: StartSprintFromGitRequest,
+        provenance: SprintProvenance,
+        manifest: Mapping[str, Any],
+        repository: ManagedRepository,
+        workspace_source_commit: str,
+        attempt: Mapping[str, Any],
+        preflight: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Build the frozen no-work runtime shell published after preflight."""
+
+        now = _timestamp(self.clock)
+        identity = asdict(provenance)
+        return {
+            "schema_version": 2,
+            "contract_version": 1,
+            "manifest_schema_version": 1,
+            "sprint_type": "managed_workspace_v1",
+            "sprint_id": provenance.stable_sprint_id(),
+            "identity": identity,
+            "workspace_source_commit": workspace_source_commit,
+            "requested_ref": request.ref,
+            "repository": {
+                "repository_id": request.repository_id,
+                "repository_key": repository.canonical_remote,
+                "canonical_remote": repository.canonical_remote,
+                "mirror_storage_key": repository.mirror_storage_key,
+                "mirror_path": str(repository.mirror_path),
+                "credential_reference": repository.spec.credential_reference,
+            },
+            "runtime_config": deepcopy(self.runtime_config),
+            "status": "preparing",
+            "graph_revision": 1,
+            "graph_revisions": [
+                {
+                    "revision": 1,
+                    "definition_sha256": canonical_json_sha256(manifest),
+                    "definition": deepcopy(dict(manifest)),
+                    "artifact_source_commit": workspace_source_commit,
+                    "created_at": now,
+                    "source": "activation",
+                    "repair_id": None,
+                }
+            ],
+            "workflow": None,
+            "active_assignment_ids": [],
+            "allowed_outcomes_by_assignment": {},
+            "import_attempts": [
+                {
+                    "attempt_id": attempt["attempt_id"],
+                    "idempotency_key": request.idempotency_key,
+                    "request_fingerprint": request.request_fingerprint(project_id),
+                    "identity": identity,
+                    "contract_version": 1,
+                    "manifest_schema_version": 1,
+                    "phase": "PREPARE",
+                    "status": "running",
+                    "preflight": deepcopy(dict(preflight)),
+                    "prepared_artifact_ids": [],
+                    "activation_response": None,
+                    "created_at": attempt["created_at"],
+                    "updated_at": now,
+                }
+            ],
+            "assignments": [],
+            "result_receipts": [],
+            "review_assignments": [],
+            "reviews": [],
+            "reworks": [],
+            "integrations": [],
+            "integration_workspaces": [],
+            "branch_leases": [],
+            "workspaces": [],
+            "port_leases": [],
+            "processes": [],
+            "transition_journal": [],
+            "outbox": [],
+            "repairs": [],
+            "coordinator_contexts": [],
+            "blocker_observations": [],
+            "recovery_records": [],
+        }
+
     def _runtime_state(
         self,
         project_id: str,
@@ -4002,6 +6494,13 @@ class TransactionalSprintImporter:
         )
         return self._provider_for_repository_spec(repository_spec)
 
+    def provider_for_durable_repository(
+        self, repository_record: Mapping[str, Any]
+    ) -> ManagedGitProvider:
+        """Return a provider bound only to committed repository identity."""
+
+        return self._provider_for_durable_repository(repository_record)
+
     def _provider_for_repository_spec(
         self, repository_spec: RepositorySpec
     ) -> ManagedGitProvider:
@@ -4340,6 +6839,8 @@ class TransactionalSprintImporter:
         self,
         project_id: str,
         request: StartSprintFromGitRequest,
+        *,
+        request_lock_timeout: float | None = None,
     ) -> ManagedStartResult:
         try:
             # Serialize the pre-record Git-pin window as well as the normal
@@ -4365,7 +6866,11 @@ class TransactionalSprintImporter:
             )
             request_lock = self.git_provider.request_operation_lock(
                 binding_key,
-                timeout=max(float(_LEASE_SECONDS), self.store.timeout),
+                timeout=(
+                    max(float(_LEASE_SECONDS), self.store.timeout)
+                    if request_lock_timeout is None
+                    else request_lock_timeout
+                ),
             )
             try:
                 with request_lock:
@@ -4411,6 +6916,50 @@ class TransactionalSprintImporter:
                 ],
             ) from exc
 
+    def resume_import_attempt(
+        self,
+        project_id: str,
+        attempt_id: str,
+    ) -> ManagedStartResult:
+        """Resume a fenced attempt solely from its durable request binding."""
+
+        record = self.store.lookup_attempt(project_id, attempt_id)
+        if not isinstance(record, Mapping):
+            raise RuntimeError("managed import attempt was not found")
+        evidence = record.get("evidence")
+        request_record = (
+            evidence.get("request") if isinstance(evidence, Mapping) else None
+        )
+        if not isinstance(request_record, Mapping):
+            raise RuntimeError("managed import durable request is missing")
+        try:
+            request = StartSprintFromGitRequest(
+                repository_id=str(request_record["repository_id"]),
+                ref=str(request_record["ref"]),
+                manifest_path=str(request_record["manifest_path"]),
+                idempotency_key=str(record["idempotency_key"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise RuntimeError("managed import durable request is invalid") from exc
+        pinned = record.get("pinned_identity")
+        if (
+            not isinstance(pinned, Mapping)
+            or request.repository_id != pinned.get("repository_id")
+            or request.manifest_path != pinned.get("manifest_path")
+            or request.request_fingerprint(project_id)
+            != record.get("request_fingerprint")
+        ):
+            raise RuntimeError("managed import durable request changed")
+        # Reconciliation must never wait behind an import already executing in
+        # this or another process.  A lost-owner crash leaves the file lock
+        # free even while its durable activation lease is still live, so a
+        # short nonblocking probe distinguishes those cases safely.
+        return self.start(
+            project_id,
+            request,
+            request_lock_timeout=0.01,
+        )
+
     def _start_transaction(
         self,
         project_id: str,
@@ -4434,6 +6983,19 @@ class TransactionalSprintImporter:
             ) from None
         fingerprint = request.request_fingerprint(project_id)
         existing = self.store.lookup(project_id, request.idempotency_key)
+        if existing is not None:
+            if existing.get("request_fingerprint") != fingerprint:
+                raise ManagedImportError(
+                    IDEMPOTENCY_KEY_CONFLICT,
+                    409,
+                    str(existing.get("attempt_id") or "idempotency-conflict"),
+                    phase="VALIDATE",
+                )
+            if existing.get("status") == "FAILED":
+                # FAILED is an immutable receipt.  Resource reconciliation for
+                # a newer active sprint must never replace the original
+                # caller's frozen error envelope on exact replay.
+                return self._replay(existing)
         port_fence = self.port_reservations.reconciliation_fence(
             self.store.database_path
         )
@@ -5178,10 +7740,20 @@ class TransactionalSprintImporter:
                     }
                     for plan in plans
                 ]
-                record = self.store.update_attempt(
+                preparing_state = self._preparing_runtime_state(
+                    project_id,
+                    request,
+                    provenance,
+                    manifest,
+                    repository,
+                    workspace_source_commit,
+                    record,
+                    preflight,
+                )
+                record = self.store.stage_preparing_runtime(
                     project_id,
                     attempt_id,
-                    status="PREPARING",
+                    preparing_state,
                     evidence_update={
                         "phase": "PREPARE",
                         "preflight": preflight,
@@ -5213,6 +7785,28 @@ class TransactionalSprintImporter:
                         issues=plan_issues,
                         evidence={"preflight": preflight},
                     )
+                preparing_state = self._preparing_runtime_state(
+                    project_id,
+                    request,
+                    provenance,
+                    manifest,
+                    repository,
+                    workspace_source_commit,
+                    record,
+                    preflight,
+                )
+                record = self.store.stage_preparing_runtime(
+                    project_id,
+                    attempt_id,
+                    preparing_state,
+                    evidence_update={
+                        "phase": "PREPARE",
+                        "preflight": preflight,
+                        "plans": deepcopy(stored_plans),
+                    },
+                    fencing_token=fencing_token,
+                    clock=self.clock,
+                )
             self._fault("after_validate", attempt_id=attempt_id)
             workspaces = self._prepare(
                 project_id,
@@ -5502,6 +8096,7 @@ __all__ = [
     "MANAGED_SPRINT_TYPE_REQUIRED",
     "ManagedImportError",
     "ManagedImportStore",
+    "ManagedRetryImportConflict",
     "ManagedPortReservationRegistry",
     "ManagedPortReservationToken",
     "ManagedStartResult",
@@ -5515,6 +8110,10 @@ __all__ = [
     "TransactionalSprintImporter",
     "empty_project_control",
     "normalize_managed_runtime_config",
+    "managed_schema_errors",
+    "managed_workspace_from_record",
+    "managed_workspace_record",
+    "parse_strict_json_object",
     "parse_start_request_bytes",
     "validate_start_request",
 ]

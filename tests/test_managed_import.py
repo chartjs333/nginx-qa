@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from contextlib import closing
@@ -24,6 +25,7 @@ from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedImportStore,
     ManagedPortReservationRegistry,
+    ManagedRetryImportConflict,
     ManagedStartResult,
     TransactionalSprintImporter,
     _runtime_state_schema_errors,
@@ -37,6 +39,7 @@ from nginx_qa.sprint_types import (
     managed_node_path_segment,
     managed_project_path_segment,
     managed_project_control_invariant_issues,
+    recovery_request_fingerprint,
 )
 
 
@@ -406,6 +409,9 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         importer.git_provider.ensure_mirror = lambda *args, **kwargs: self.fail(
             "failed replay fetched Git"
         )
+        importer._reconcile_local_port_claims = Mock(
+            side_effect=AssertionError("failed replay reconciled local ports")
+        )
         with self.assertRaises(ManagedImportError) as replayed:
             importer.start(self.project_id, self.request)
         self.assertEqual(replayed.exception.envelope, raised.exception.envelope)
@@ -436,6 +442,44 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         )
         assert state is not None
         self.assertEqual(managed_activation_invariant_issues(state), ())
+
+    def test_expired_preactivation_shell_renews_row_and_control_fence(self) -> None:
+        started_at = datetime(2026, 10, 3, 8, 0, tzinfo=timezone.utc)
+        crashed = False
+
+        def fault(point: str, _: dict) -> None:
+            nonlocal crashed
+            if point == "after_validate" and not crashed:
+                crashed = True
+                raise SimulatedCrash()
+
+        first = self.importer(clock=lambda: started_at, fault_injector=fault)
+        with self.assertRaises(SimulatedCrash):
+            first.start(self.project_id, self.request)
+        before = first.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert before is not None
+        shell = first.store.runtime_state(self.project_id, str(before["sprint_id"]))
+        assert shell is not None
+        self.assertEqual(shell["status"], "preparing")
+        self.assertEqual(first.store.retryable_import_attempts(), ())
+
+        restarted = self.importer(
+            clock=lambda: started_at + timedelta(minutes=10)
+        )
+        result = restarted.start(self.project_id, self.request)
+        self.assertEqual(result.http_status, 201)
+        after = restarted.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert after is not None
+        self.assertGreater(after["fencing_token"], before["fencing_token"])
+        activated = restarted.store.runtime_state(
+            self.project_id, result.response["sprint_id"]
+        )
+        assert activated is not None
+        self.assertEqual(activated["status"], "active")
 
     def test_crash_after_prepare_publishes_no_branch_lease(self) -> None:
         crashed = False
@@ -475,12 +519,460 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         record = importer.store.lookup(self.project_id, self.request.idempotency_key)
         assert record is not None
         self.assertEqual(record["status"], "FAILED")
-        self.assertIsNone(
-            importer.store.runtime_state(self.project_id, record["sprint_id"])
+        failed_state = importer.store.runtime_state(
+            self.project_id, record["sprint_id"]
         )
+        assert failed_state is not None
+        self.assertEqual(failed_state["status"], "failed")
+        self.assertEqual(failed_state["import_attempts"][0]["status"], "failed")
+        self.assertEqual(len(failed_state["coordinator_contexts"]), 1)
+        self.assertEqual(failed_state["outbox"][0]["status"], "delivered")
         self.assertIn("preflight", record["evidence"])
         self.assertIn("plans", record["evidence"])
         self.assertTrue(record["evidence"]["prepared_workspaces"])
+
+    def test_retry_import_is_fenced_and_preserves_failed_history(self) -> None:
+        def fail_after_preflight(point: str, _: dict) -> None:
+            if point == "after_validate":
+                raise RuntimeError("injected prepare failure")
+
+        failed_importer = self.importer(fault_injector=fail_after_preflight)
+        with self.assertRaises(ManagedImportError):
+            failed_importer.start(self.project_id, self.request)
+        parent = failed_importer.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert parent is not None
+        sprint_id = str(parent["sprint_id"])
+        failed_state = failed_importer.store.runtime_state(
+            self.project_id, sprint_id
+        )
+        assert failed_state is not None
+        parent_preflight_checked_at = failed_state["import_attempts"][0][
+            "preflight"
+        ]["checked_at"]
+        context = failed_state["coordinator_contexts"][0]
+        parameters = {
+            "failed_attempt_id": parent["attempt_id"],
+            "recovery_idempotency_key": "retry-import-generation-1",
+        }
+        recovery_id = "recovery-import-generation-1"
+        recovery_fingerprint = recovery_request_fingerprint(
+            context["context_id"],
+            context["graph_revision"],
+            "RETRY_IMPORT",
+            parent["attempt_id"],
+            None,
+            parameters,
+        )
+
+        def add_pending_recovery(state, _connection) -> None:
+            state["recovery_records"].append(
+                {
+                    "recovery_id": recovery_id,
+                    "coordinator_id": "coordinator",
+                    "context_id": context["context_id"],
+                    "graph_revision": context["graph_revision"],
+                    "idempotency_key": "coordinator-retry-1",
+                    "request_fingerprint": recovery_fingerprint,
+                    "action": "RETRY_IMPORT",
+                    "parameters": parameters,
+                    "import_attempt_id": parent["attempt_id"],
+                    "assignment_id": None,
+                    "join_target": None,
+                    "produced_record_ids": [],
+                    "response": None,
+                    "normalized_error": None,
+                    "evidence": {},
+                    "status": "pending",
+                    "created_at": "2026-10-03T10:00:00+00:00",
+                    "completed_at": None,
+                }
+            )
+
+        failed_importer.store.mutate_runtime_state(
+            self.project_id,
+            sprint_id,
+            add_pending_recovery,
+            require_active=False,
+        )
+        resumed = self.importer()
+        child = resumed.store.begin_retry_import(
+            self.project_id,
+            sprint_id,
+            recovery_id,
+            attempt_id_factory=lambda: "attempt-retry-generation-1",
+            clock=lambda: datetime(2026, 10, 3, 10, 1, tzinfo=timezone.utc),
+        )
+        replayed_child = resumed.store.begin_retry_import(
+            self.project_id,
+            sprint_id,
+            recovery_id,
+            attempt_id_factory=lambda: self.fail("allocated duplicate retry"),
+            clock=lambda: datetime(2026, 10, 3, 10, 2, tzinfo=timezone.utc),
+        )
+        self.assertEqual(child, replayed_child)
+        self.assertEqual(child["recovery_of_attempt_id"], parent["attempt_id"])
+        self.assertEqual(child["recovery_generation"], 1)
+        staged = resumed.store.runtime_state(self.project_id, sprint_id)
+        assert staged is not None
+        recovery = staged["recovery_records"][0]
+        self.assertEqual(recovery["status"], "completed")
+        self.assertEqual(recovery["produced_record_ids"], [child["attempt_id"]])
+        self.assertEqual(
+            [item["status"] for item in staged["import_attempts"]],
+            ["failed", "running"],
+        )
+        self.assertEqual(
+            resumed.store.retryable_import_attempts(),
+            ((self.project_id, sprint_id, child["attempt_id"]),),
+        )
+
+        retry_failure = ManagedImportError(
+            "SPRINT_PREPARE_FAILED",
+            500,
+            child["attempt_id"],
+            phase="PREPARE",
+            evidence={
+                "phase": "PREPARE",
+                "failure_code": "SPRINT_PREPARE_FAILED",
+            },
+        )
+        resumed.store.fail_attempt(
+            self.project_id,
+            child["attempt_id"],
+            retry_failure,
+            evidence=retry_failure.evidence,
+            fencing_token=child["fencing_token"],
+            clock=lambda: datetime(2026, 10, 3, 10, 3, tzinfo=timezone.utc),
+        )
+        failed_retry = resumed.store.runtime_state(self.project_id, sprint_id)
+        assert failed_retry is not None
+        self.assertEqual(
+            [item["status"] for item in failed_retry["import_attempts"]],
+            ["failed", "failed"],
+        )
+        self.assertEqual(len(failed_retry["coordinator_contexts"]), 2)
+        self.assertEqual(resumed.store.retryable_import_attempts(), ())
+
+        sibling_parameters = {
+            "failed_attempt_id": parent["attempt_id"],
+            "recovery_idempotency_key": "retry-import-sibling",
+        }
+        sibling_recovery_id = "recovery-import-sibling"
+
+        def add_sibling_recovery(state, _connection) -> None:
+            state["recovery_records"].append(
+                {
+                    "recovery_id": sibling_recovery_id,
+                    "coordinator_id": "coordinator",
+                    "context_id": context["context_id"],
+                    "graph_revision": context["graph_revision"],
+                    "idempotency_key": "coordinator-retry-sibling",
+                    "request_fingerprint": recovery_request_fingerprint(
+                        context["context_id"],
+                        context["graph_revision"],
+                        "RETRY_IMPORT",
+                        parent["attempt_id"],
+                        None,
+                        sibling_parameters,
+                    ),
+                    "action": "RETRY_IMPORT",
+                    "parameters": sibling_parameters,
+                    "import_attempt_id": parent["attempt_id"],
+                    "assignment_id": None,
+                    "join_target": None,
+                    "produced_record_ids": [],
+                    "response": None,
+                    "normalized_error": None,
+                    "evidence": {},
+                    "status": "pending",
+                    "created_at": "2026-10-03T10:03:00+00:00",
+                    "completed_at": None,
+                }
+            )
+
+        resumed.store.mutate_runtime_state(
+            self.project_id,
+            sprint_id,
+            add_sibling_recovery,
+            require_active=False,
+        )
+        with closing(resumed.store._connect()) as connection:
+            before_sibling_conflict = tuple(
+                tuple(row)
+                for row in connection.execute(
+                    """
+                    SELECT 'control', NULL, NULL, control_json
+                    FROM managed_projects WHERE project_id = ?
+                    UNION ALL
+                    SELECT 'runtime', status, fencing_token, state_json
+                    FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (self.project_id, self.project_id, sprint_id),
+                ).fetchall()
+            )
+        with self.assertRaisesRegex(
+            ManagedRetryImportConflict,
+            "managed retry parent already has a child",
+        ):
+            resumed.store.begin_retry_import(
+                self.project_id,
+                sprint_id,
+                sibling_recovery_id,
+                attempt_id_factory=lambda: self.fail(
+                    "allocated a second child for one retry parent"
+                ),
+                clock=lambda: datetime(2026, 10, 3, 10, 3, tzinfo=timezone.utc),
+            )
+        with closing(resumed.store._connect()) as connection:
+            after_sibling_conflict_bytes = tuple(
+                tuple(row)
+                for row in connection.execute(
+                    """
+                    SELECT 'control', NULL, NULL, control_json
+                    FROM managed_projects WHERE project_id = ?
+                    UNION ALL
+                    SELECT 'runtime', status, fencing_token, state_json
+                    FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (self.project_id, self.project_id, sprint_id),
+                ).fetchall()
+            )
+        self.assertEqual(after_sibling_conflict_bytes, before_sibling_conflict)
+
+        def remove_synthetic_sibling(state, _connection) -> None:
+            state["recovery_records"] = [
+                item
+                for item in state["recovery_records"]
+                if item["recovery_id"] != sibling_recovery_id
+            ]
+
+        failed_retry, _ = resumed.store.mutate_runtime_state(
+            self.project_id,
+            sprint_id,
+            remove_synthetic_sibling,
+            require_active=False,
+        )
+
+        retry_context = failed_retry["coordinator_contexts"][1]
+        second_parameters = {
+            "failed_attempt_id": child["attempt_id"],
+            "recovery_idempotency_key": "retry-import-generation-2",
+        }
+        second_recovery_id = "recovery-import-generation-2"
+
+        def add_second_recovery(state, _connection) -> None:
+            state["recovery_records"].append(
+                {
+                    "recovery_id": second_recovery_id,
+                    "coordinator_id": "coordinator",
+                    "context_id": retry_context["context_id"],
+                    "graph_revision": retry_context["graph_revision"],
+                    "idempotency_key": "coordinator-retry-2",
+                    "request_fingerprint": recovery_request_fingerprint(
+                        retry_context["context_id"],
+                        retry_context["graph_revision"],
+                        "RETRY_IMPORT",
+                        child["attempt_id"],
+                        None,
+                        second_parameters,
+                    ),
+                    "action": "RETRY_IMPORT",
+                    "parameters": second_parameters,
+                    "import_attempt_id": child["attempt_id"],
+                    "assignment_id": None,
+                    "join_target": None,
+                    "produced_record_ids": [],
+                    "response": None,
+                    "normalized_error": None,
+                    "evidence": {},
+                    "status": "pending",
+                    "created_at": "2026-10-03T10:03:00+00:00",
+                    "completed_at": None,
+                }
+            )
+
+        resumed.store.mutate_runtime_state(
+            self.project_id,
+            sprint_id,
+            add_second_recovery,
+            require_active=False,
+        )
+        second_child = resumed.store.begin_retry_import(
+            self.project_id,
+            sprint_id,
+            second_recovery_id,
+            attempt_id_factory=lambda: "attempt-retry-generation-2",
+            clock=lambda: datetime(2026, 10, 3, 10, 4, tzinfo=timezone.utc),
+        )
+        self.assertEqual(second_child["recovery_generation"], 2)
+        self.assertEqual(
+            resumed.store.retryable_import_attempts(),
+            ((self.project_id, sprint_id, second_child["attempt_id"]),),
+        )
+        binding_key = resumed._request_binding_key(
+            self.project_id, second_child["idempotency_key"]
+        )
+        with resumed.git_provider.request_operation_lock(
+            binding_key, timeout=1.0
+        ):
+            with self.assertRaises(ManagedImportError) as busy:
+                resumed.resume_import_attempt(
+                    self.project_id, second_child["attempt_id"]
+                )
+        self.assertEqual(busy.exception.code, "PROJECT_ACTIVATION_IN_PROGRESS")
+        self.assertEqual(
+            resumed.store.retryable_import_attempts(),
+            ((self.project_id, sprint_id, second_child["attempt_id"]),),
+        )
+
+        resumed.git_provider.resolve_and_pin_commit = Mock(
+            side_effect=AssertionError("retry re-resolved a mutable ref")
+        )
+        result = resumed.resume_import_attempt(
+            self.project_id, second_child["attempt_id"]
+        )
+        self.assertEqual(result.http_status, 201)
+        activated = resumed.store.runtime_state(self.project_id, sprint_id)
+        assert activated is not None
+        self.assertEqual(activated["status"], "active")
+        self.assertEqual(
+            [item["status"] for item in activated["import_attempts"]],
+            ["failed", "failed", "succeeded"],
+        )
+        self.assertNotEqual(
+            activated["import_attempts"][2]["preflight"]["checked_at"],
+            parent_preflight_checked_at,
+        )
+        self.assertEqual(len(activated["coordinator_contexts"]), 2)
+        self.assertEqual(len(activated["recovery_records"]), 2)
+        self.assertEqual(resumed.store.retryable_import_attempts(), ())
+        self.assertEqual(managed_activation_invariant_issues(activated), ())
+
+    def test_retry_import_generation_limit_is_atomic_conflict(self) -> None:
+        def fail_after_preflight(point: str, _: dict) -> None:
+            if point == "after_validate":
+                raise RuntimeError("injected prepare failure")
+
+        importer = self.importer(fault_injector=fail_after_preflight)
+        with self.assertRaises(ManagedImportError):
+            importer.start(self.project_id, self.request)
+        parent = importer.store.lookup(
+            self.project_id, self.request.idempotency_key
+        )
+        assert parent is not None
+        sprint_id = str(parent["sprint_id"])
+        state = importer.store.runtime_state(self.project_id, sprint_id)
+        assert state is not None
+        context = state["coordinator_contexts"][0]
+        parameters = {
+            "failed_attempt_id": parent["attempt_id"],
+            "recovery_idempotency_key": "retry-import-generation-101",
+        }
+        recovery_id = "recovery-import-generation-limit"
+
+        def add_pending_recovery(candidate, _connection) -> None:
+            candidate["recovery_records"].append(
+                {
+                    "recovery_id": recovery_id,
+                    "coordinator_id": "coordinator",
+                    "context_id": context["context_id"],
+                    "graph_revision": context["graph_revision"],
+                    "idempotency_key": "coordinator-retry-limit",
+                    "request_fingerprint": recovery_request_fingerprint(
+                        context["context_id"],
+                        context["graph_revision"],
+                        "RETRY_IMPORT",
+                        parent["attempt_id"],
+                        None,
+                        parameters,
+                    ),
+                    "action": "RETRY_IMPORT",
+                    "parameters": parameters,
+                    "import_attempt_id": parent["attempt_id"],
+                    "assignment_id": None,
+                    "join_target": None,
+                    "produced_record_ids": [],
+                    "response": None,
+                    "normalized_error": None,
+                    "evidence": {},
+                    "status": "pending",
+                    "created_at": "2026-10-03T10:00:00+00:00",
+                    "completed_at": None,
+                }
+            )
+
+        importer.store.mutate_runtime_state(
+            self.project_id,
+            sprint_id,
+            add_pending_recovery,
+            require_active=False,
+        )
+        # A complete 100-generation fixture would add tens of thousands of
+        # relational records.  Corrupt only this test's parent generation and
+        # bypass the pre-read audit so the explicit limit guard is exercised;
+        # the transaction must still leave both durable rows byte-identical.
+        with importer.store._transaction() as connection:
+            control, revision = importer.store._load_control(
+                connection, self.project_id
+            )
+            target = importer.store._record_by_attempt(
+                control, str(parent["attempt_id"])
+            )
+            assert target is not None
+            target["recovery_generation"] = 100
+            connection.execute(
+                """
+                UPDATE managed_projects SET control_json = ?, revision = ?
+                WHERE project_id = ?
+                """,
+                (
+                    json.dumps(control, separators=(",", ":"), sort_keys=True),
+                    revision + 1,
+                    self.project_id,
+                ),
+            )
+        with closing(importer.store._connect()) as connection:
+            before = tuple(
+                connection.execute(
+                    """
+                    SELECT control_json FROM managed_projects WHERE project_id = ?
+                    UNION ALL
+                    SELECT state_json FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (self.project_id, self.project_id, sprint_id),
+                ).fetchall()
+            )
+        with patch.object(
+            importer.store, "_validate_control_snapshot", return_value=None
+        ):
+            with self.assertRaises(ManagedRetryImportConflict):
+                importer.store.begin_retry_import(
+                    self.project_id,
+                    sprint_id,
+                    recovery_id,
+                    attempt_id_factory=lambda: "attempt-must-not-be-created",
+                    clock=lambda: datetime(
+                        2026, 10, 3, 10, 1, tzinfo=timezone.utc
+                    ),
+                )
+        with closing(importer.store._connect()) as connection:
+            after = tuple(
+                connection.execute(
+                    """
+                    SELECT control_json FROM managed_projects WHERE project_id = ?
+                    UNION ALL
+                    SELECT state_json FROM managed_sprints
+                    WHERE project_id = ? AND sprint_id = ?
+                    """,
+                    (self.project_id, self.project_id, sprint_id),
+                ).fetchall()
+            )
+        self.assertEqual([tuple(row) for row in before], [tuple(row) for row in after])
 
     def test_crash_during_atomic_publication_leaves_no_visible_lease(self) -> None:
         crashed = False
@@ -497,8 +989,13 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         record = importer.store.lookup(self.project_id, self.request.idempotency_key)
         assert record is not None
         self.assertEqual(record["status"], "ACTIVATING")
-        self.assertIsNone(
-            importer.store.runtime_state(self.project_id, record["sprint_id"])
+        preparing_state = importer.store.runtime_state(
+            self.project_id, record["sprint_id"]
+        )
+        assert preparing_state is not None
+        self.assertEqual(preparing_state["status"], "preparing")
+        self.assertEqual(
+            preparing_state["import_attempts"][0]["status"], "running"
         )
         self.assertEqual(importer.branch_leases.active_writers(), ())
         repository = importer.git_provider.ensure_mirror(
@@ -1289,9 +1786,11 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         self.assertEqual(importer.branch_leases.active_writers(), ())
         record = importer.store.lookup(self.project_id, self.request.idempotency_key)
         assert record is not None
-        self.assertIsNone(
-            importer.store.runtime_state(self.project_id, record["sprint_id"])
+        failed_state = importer.store.runtime_state(
+            self.project_id, record["sprint_id"]
         )
+        assert failed_state is not None
+        self.assertEqual(failed_state["status"], "failed")
 
     def test_unknown_start_node_is_a_durable_preflight_failure(self) -> None:
         changed = json.loads(
@@ -3226,9 +3725,11 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         record = importer.store.lookup(self.project_id, self.request.idempotency_key)
         assert record is not None
         self.assertEqual(record["status"], "FAILED")
-        self.assertIsNone(
-            importer.store.runtime_state(self.project_id, record["sprint_id"])
+        failed_state = importer.store.runtime_state(
+            self.project_id, record["sprint_id"]
         )
+        assert failed_state is not None
+        self.assertEqual(failed_state["status"], "failed")
         writers = importer.branch_leases.active_writers()
         self.assertEqual(len(writers), 1)
         self.assertEqual(writers[0].assignment_id, "competing-assignment")
@@ -3561,9 +4062,11 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
         record = importer.store.lookup(self.project_id, self.request.idempotency_key)
         assert record is not None
         self.assertEqual(record["status"], "FAILED")
-        self.assertIsNone(
-            importer.store.runtime_state(self.project_id, record["sprint_id"])
+        failed_state = importer.store.runtime_state(
+            self.project_id, record["sprint_id"]
         )
+        assert failed_state is not None
+        self.assertEqual(failed_state["status"], "failed")
 
 
 class ManagedImportStoreTests(ManagedImportFixture):
@@ -3746,6 +4249,82 @@ class ManagedRequestParserTests(unittest.TestCase):
 
 
 class ManagedAppLifespanTests(unittest.IsolatedAsyncioTestCase):
+    def test_continuity_reconciler_retries_transient_failures_until_stopped(
+        self,
+    ) -> None:
+        stop_event = threading.Event()
+        runtime = Mock()
+        calls = 0
+
+        def reconcile() -> None:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("transient reconciliation failure")
+            stop_event.set()
+
+        runtime.reconcile_all.side_effect = reconcile
+        main._reconcile_managed_continuity_background(
+            runtime, stop_event, 0.001
+        )
+        self.assertEqual(calls, 2)
+
+    async def test_lifespan_tracks_and_quiesces_continuity_reconciler(
+        self,
+    ) -> None:
+        bootstrap = Mock(spec=TransactionalSprintImporter)
+        bootstrap.store = Mock()
+        supervisor = Mock()
+        runtime = Mock()
+        reconciled = threading.Event()
+        runtime.reconcile_all.side_effect = lambda: reconciled.set() or {}
+        previous = (
+            main.managed_process_supervisor,
+            main.managed_continuity_runtime,
+            main.managed_continuity_stop_event,
+            main.managed_continuity_thread,
+        )
+        main.managed_process_supervisor = None
+        main.managed_continuity_runtime = None
+        main.managed_continuity_stop_event = None
+        main.managed_continuity_thread = None
+        try:
+            with (
+                patch.dict(
+                    os.environ,
+                    {"NGINX_QA_MANAGED_ROOT": "C:/managed-test-root"},
+                ),
+                patch.object(main, "restore_runtime_state", AsyncMock()),
+                patch.object(main, "shutdown_runtime_state", AsyncMock()),
+                patch.object(main, "load_managed_runtime_config", return_value={}),
+                patch.object(
+                    main, "TransactionalSprintImporter", return_value=bootstrap
+                ),
+                patch.object(
+                    main, "managed_process_supervisor_for", return_value=supervisor
+                ),
+                patch.object(
+                    main, "managed_continuity_runtime_factory", return_value=runtime
+                ),
+                patch.object(main.managed_port_reservation_registry, "close_all"),
+            ):
+                async with main.app_lifespan(main.app):
+                    reached = await asyncio.to_thread(reconciled.wait, 2.0)
+                    self.assertTrue(reached)
+                    self.assertIs(main.managed_continuity_runtime, runtime)
+                    self.assertTrue(main.managed_continuity_thread.is_alive())
+            self.assertIsNone(main.managed_continuity_runtime)
+            self.assertIsNone(main.managed_continuity_stop_event)
+            self.assertIsNone(main.managed_continuity_thread)
+            supervisor.close.assert_called_once_with()
+        finally:
+            (
+                main.managed_process_supervisor,
+                main.managed_continuity_runtime,
+                main.managed_continuity_stop_event,
+                main.managed_continuity_thread,
+            ) = previous
+
     async def test_managed_restore_monitor_and_cleanup_are_strictly_ordered(
         self,
     ) -> None:
