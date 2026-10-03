@@ -609,6 +609,17 @@ class StagingIsolationTests(unittest.TestCase):
                 if ($entry.OwnerPid -eq $entry.LeaderPid) {{
                     throw "test did not exercise redirector descendant ownership"
                 }}
+                $emptyRecords = @(
+                    ConvertFrom-AuthenticatedListenerJson -Json "[]"
+                )
+                if ($emptyRecords.Count -ne 0) {{
+                    throw "empty listener JSON did not stay empty"
+                }}
+                $emptyAllowed = ConvertTo-AllowedChildOwnerMap `
+                    -AuthenticatedListeners $emptyRecords
+                if ($emptyAllowed.Count -ne 0) {{
+                    throw "empty listener JSON produced an allowed owner"
+                }}
                 Assert-PortPool `
                     -HttpPort {http_port} `
                     -ChildStart {child_port} `

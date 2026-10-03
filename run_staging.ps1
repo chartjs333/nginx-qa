@@ -552,6 +552,26 @@ function Assert-LegacyStateInventory {
         -ExpectedSettings $ExpectedPromptSettings
 }
 
+function ConvertFrom-AuthenticatedListenerJson {
+    param([Parameter(Mandatory = $true)][string]$Json)
+
+    try {
+        $decoded = $Json | ConvertFrom-Json
+    }
+    catch {
+        throw "Authenticated child-listener JSON is invalid."
+    }
+    if ($null -eq $decoded) {
+        return
+    }
+    foreach ($record in @($decoded)) {
+        if ($null -eq $record) {
+            throw "Authenticated child-listener JSON contains null."
+        }
+        Write-Output $record
+    }
+}
+
 function ConvertTo-AllowedChildOwnerMap {
     param(
         [Parameter(Mandatory = $true)]
@@ -1031,7 +1051,9 @@ print(json.dumps(owned, sort_keys=True))
         if ($LASTEXITCODE -ne 0 -or $raw.Count -ne 1) {
             throw "Unable to authenticate durable staging child listeners."
         }
-        $decoded = @($raw[0] | ConvertFrom-Json)
+        $decoded = @(
+            ConvertFrom-AuthenticatedListenerJson -Json ([string]$raw[0])
+        )
         return ConvertTo-AllowedChildOwnerMap -AuthenticatedListeners $decoded
     }
     finally {
