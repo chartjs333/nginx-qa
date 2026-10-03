@@ -147,6 +147,15 @@ finalize -> passed
 делает POST. Сохранённые intent/project/start proofs проверяются до следующего
 запроса и при несовпадении не перезаписываются.
 
+Перед checkpoint `awaiting_external_restart` runner ждёт quiescence всех четырёх
+начальных `ASSIGNMENT_ENQUEUE`: каждая outbox-запись должна быть `delivered` и
+иметь exact receipt/payload parity с единственной queue-записью. После health и
+Windows Job/OS proof SQLite немедленно читается повторно; любой drift заставляет
+повторить proof, поэтому evidence не может содержать устаревший snapshot.
+Любая запись evidence также сканируется на sensitive keys до создания каталога,
+JSON-сериализации и временного файла; отклонённый payload не создаёт новый файл и
+не заменяет существующий.
+
 Сначала в отдельной host-консоли запустить staging через launcher. Все три команды
 принимают только полный SHA, который одновременно является локальным HEAD и
 remote head назначенной ветки:

@@ -973,6 +973,168 @@ def _stable_value_proof(value: Any, label: str) -> dict[str, Any]:
     return {"count": len(value), "sha256": hashlib.sha256(encoded).hexdigest()}
 
 
+def _validate_initial_assignment_delivery(
+    state: Mapping[str, Any],
+    queue_items: Sequence[Mapping[str, Any]],
+    *,
+    sprint_id: str,
+    expected_assignments: set[str],
+) -> None:
+    """Require the initial assignment outbox to be durably and exactly drained."""
+
+    outbox = state.get("outbox")
+    if not isinstance(outbox, list):
+        raise QualificationError("managed sprint outbox is missing")
+    if (
+        len(expected_assignments) != EXPECTED_CHILD_COUNT
+        or len(outbox) != EXPECTED_CHILD_COUNT
+        or len(queue_items) != EXPECTED_CHILD_COUNT
+    ):
+        raise QualificationError("initial assignment delivery is not quiescent")
+
+    assignments = _objects_by(state.get("assignments"), "assignment_id", "assignments")
+    if set(assignments) != expected_assignments:
+        raise QualificationError("initial assignment delivery set is invalid")
+
+    outbox_keys = {
+        "event_id",
+        "dedupe_key",
+        "event_type",
+        "payload",
+        "status",
+        "created_at",
+        "delivered_at",
+        "queue_receipt_id",
+    }
+    queue_keys = {
+        "dedupe_key",
+        "event_id",
+        "event_type",
+        "payload",
+        "receipt_id",
+        "created_at",
+    }
+    payload_keys = {
+        "sprint_id",
+        "graph_revision",
+        "assignment_id",
+        "node_id",
+        "agent_phone",
+    }
+    delivered_by_assignment: dict[str, Mapping[str, Any]] = {}
+    queued_by_assignment: dict[str, Mapping[str, Any]] = {}
+    outbox_event_ids: set[str] = set()
+    outbox_receipt_ids: set[str] = set()
+    queue_event_ids: set[str] = set()
+    queue_receipt_ids: set[str] = set()
+
+    for item in outbox:
+        if not isinstance(item, Mapping) or set(item) != outbox_keys:
+            raise QualificationError("initial assignment outbox row is invalid")
+        payload = item.get("payload")
+        if not isinstance(payload, Mapping) or set(payload) != payload_keys:
+            raise QualificationError("initial assignment outbox payload is invalid")
+        assignment_id = payload.get("assignment_id")
+        assignment = assignments.get(assignment_id) if isinstance(assignment_id, str) else None
+        if not isinstance(assignment, Mapping):
+            raise QualificationError("initial assignment outbox set is invalid")
+        expected_payload = {
+            "sprint_id": sprint_id,
+            "graph_revision": assignment.get("graph_revision"),
+            "assignment_id": assignment_id,
+            "node_id": assignment.get("node_id"),
+            "agent_phone": assignment.get("agent_phone"),
+        }
+        expected_dedupe_key = f"enqueue:assignment:{sprint_id}:{assignment_id}"
+        event_id = item.get("event_id")
+        receipt_id = item.get("queue_receipt_id")
+        if (
+            assignment_id not in expected_assignments
+            or assignment_id in delivered_by_assignment
+            or not _is_exact_int(assignment.get("graph_revision"), minimum=1)
+            or not isinstance(assignment.get("node_id"), str)
+            or not assignment["node_id"].strip()
+            or not isinstance(assignment.get("agent_phone"), str)
+            or not assignment["agent_phone"].strip()
+            or item.get("event_type") != "ASSIGNMENT_ENQUEUE"
+            or item.get("dedupe_key") != expected_dedupe_key
+            or not _json_exact_equal(payload, expected_payload)
+            or item.get("status") != "delivered"
+            or not isinstance(item.get("created_at"), str)
+            or not item["created_at"].strip()
+            or not isinstance(item.get("delivered_at"), str)
+            or not item["delivered_at"].strip()
+            or not isinstance(event_id, str)
+            or not event_id.strip()
+            or event_id in outbox_event_ids
+            or not isinstance(receipt_id, str)
+            or not receipt_id.strip()
+            or receipt_id in outbox_receipt_ids
+        ):
+            raise QualificationError("initial assignment outbox identity is invalid")
+        delivered_by_assignment[assignment_id] = item
+        outbox_event_ids.add(event_id)
+        outbox_receipt_ids.add(receipt_id)
+
+    for item in queue_items:
+        if not isinstance(item, Mapping) or set(item) != queue_keys:
+            raise QualificationError("initial assignment queue row is invalid")
+        payload = item.get("payload")
+        if not isinstance(payload, Mapping) or set(payload) != payload_keys:
+            raise QualificationError("initial assignment queue payload is invalid")
+        assignment_id = payload.get("assignment_id")
+        assignment = assignments.get(assignment_id) if isinstance(assignment_id, str) else None
+        if not isinstance(assignment, Mapping):
+            raise QualificationError("initial assignment queue set is invalid")
+        expected_payload = {
+            "sprint_id": sprint_id,
+            "graph_revision": assignment.get("graph_revision"),
+            "assignment_id": assignment_id,
+            "node_id": assignment.get("node_id"),
+            "agent_phone": assignment.get("agent_phone"),
+        }
+        expected_dedupe_key = f"enqueue:assignment:{sprint_id}:{assignment_id}"
+        event_id = item.get("event_id")
+        receipt_id = item.get("receipt_id")
+        if (
+            assignment_id not in expected_assignments
+            or assignment_id in queued_by_assignment
+            or item.get("event_type") != "ASSIGNMENT_ENQUEUE"
+            or item.get("dedupe_key") != expected_dedupe_key
+            or not _json_exact_equal(payload, expected_payload)
+            or not isinstance(item.get("created_at"), str)
+            or not item["created_at"].strip()
+            or not isinstance(event_id, str)
+            or not event_id.strip()
+            or event_id in queue_event_ids
+            or not isinstance(receipt_id, str)
+            or not receipt_id.strip()
+            or receipt_id in queue_receipt_ids
+        ):
+            raise QualificationError("initial assignment queue identity is invalid")
+        queued_by_assignment[assignment_id] = item
+        queue_event_ids.add(event_id)
+        queue_receipt_ids.add(receipt_id)
+
+    if (
+        set(delivered_by_assignment) != expected_assignments
+        or set(queued_by_assignment) != expected_assignments
+    ):
+        raise QualificationError("initial assignment delivery set is invalid")
+
+    for assignment_id in sorted(expected_assignments):
+        outbox_item = delivered_by_assignment[assignment_id]
+        queue_item = queued_by_assignment[assignment_id]
+        if (
+            not _json_exact_equal(outbox_item.get("payload"), queue_item.get("payload"))
+            or outbox_item.get("event_id") != queue_item.get("event_id")
+            or outbox_item.get("dedupe_key") != queue_item.get("dedupe_key")
+            or outbox_item.get("queue_receipt_id") != queue_item.get("receipt_id")
+            or outbox_item.get("created_at") != queue_item.get("created_at")
+        ):
+            raise QualificationError("initial assignment delivery parity is invalid")
+
+
 def validate_runtime_snapshot(
     bundle: Mapping[str, Any],
     *,
@@ -1296,6 +1458,12 @@ def validate_runtime_snapshot(
     queue_items = bundle.get("queue_items")
     if not isinstance(queue_items, list):
         raise QualificationError("managed sprint queue snapshot is missing")
+    _validate_initial_assignment_delivery(
+        state,
+        queue_items,
+        sprint_id=sprint_id,
+        expected_assignments=expected_assignments,
+    )
     side_effects = {
         key: _stable_value_proof(state.get(key), key)
         for key in (
@@ -2231,7 +2399,7 @@ def _scan_sensitive_keys(value: Any, path: str = "$") -> None:
                 or clean_key.endswith("_access_token")
                 or clean_key.endswith("_refresh_token")
             ):
-                raise QualificationError(f"external snapshot contains sensitive key at {path}")
+                raise QualificationError(f"qualification data contains sensitive key at {path}")
             _scan_sensitive_keys(nested, f"{path}.{key}")
     elif isinstance(value, list):
         for index, nested in enumerate(value):
@@ -2373,6 +2541,7 @@ def compare_external_live_snapshots(before: Mapping[str, Any], after: Mapping[st
 
 
 def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    _scan_sensitive_keys(payload)
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     encoded = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -2680,6 +2849,11 @@ def wait_for_healthy(
                 )
                 health = verify_child_health(summary)
                 os_ownership = verify_child_os_ownership(summary, health)
+                confirmation = reader.read(project_id, str(start_response["sprint_id"]))
+                if confirmation is None or not _json_exact_equal(confirmation, bundle):
+                    last_error = "managed state changed during health/OS ownership proof"
+                    time.sleep(0.5)
+                    continue
                 return summary, health, os_ownership
             except QualificationError as exc:
                 last_error = str(exc)

@@ -103,6 +103,8 @@ def runtime_fixture() -> tuple[dict, dict]:
     workspaces: list[dict] = []
     processes: list[dict] = []
     leases: list[dict] = []
+    outbox: list[dict] = []
+    queue_items: list[dict] = []
     for index in range(4):
         assignment_id = f"assignment-{index}"
         workspace_id = f"workspace-{index}"
@@ -117,6 +119,9 @@ def runtime_fixture() -> tuple[dict, dict]:
         assignments.append(
             {
                 "assignment_id": assignment_id,
+                "graph_revision": 1,
+                "node_id": f"child-{index}",
+                "agent_phone": f"21{index:02d}",
                 "source_commit": SHA,
                 "initial_head_commit": SHA,
             }
@@ -180,6 +185,39 @@ def runtime_fixture() -> tuple[dict, dict]:
                 "network_namespace_id": "host",
             }
         )
+        event_id = f"event-{index}"
+        dedupe_key = f"enqueue:assignment:{SPRINT_ID}:{assignment_id}"
+        receipt_id = f"receipt-{index}"
+        created_at = f"2026-10-03T10:00:0{index}+00:00"
+        payload = {
+            "sprint_id": SPRINT_ID,
+            "graph_revision": 1,
+            "assignment_id": assignment_id,
+            "node_id": f"child-{index}",
+            "agent_phone": f"21{index:02d}",
+        }
+        outbox.append(
+            {
+                "event_id": event_id,
+                "event_type": "ASSIGNMENT_ENQUEUE",
+                "dedupe_key": dedupe_key,
+                "payload": deepcopy(payload),
+                "created_at": created_at,
+                "status": "delivered",
+                "delivered_at": f"2026-10-03T10:01:0{index}+00:00",
+                "queue_receipt_id": receipt_id,
+            }
+        )
+        queue_items.append(
+            {
+                "event_id": event_id,
+                "event_type": "ASSIGNMENT_ENQUEUE",
+                "dedupe_key": dedupe_key,
+                "payload": deepcopy(payload),
+                "created_at": created_at,
+                "receipt_id": receipt_id,
+            }
+        )
     identity = {
         "project_id": PROJECT_ID,
         "repository_id": "main",
@@ -217,7 +255,7 @@ def runtime_fixture() -> tuple[dict, dict]:
         "processes": processes,
         "port_leases": leases,
         "import_attempts": [],
-        "outbox": [],
+        "outbox": outbox,
         "result_receipts": [],
         "review_assignments": [],
         "reviews": [],
@@ -238,7 +276,7 @@ def runtime_fixture() -> tuple[dict, dict]:
         "owner_leases": lease_owners,
         "live_assignment_processes": deepcopy(process_owners),
         "live_assignment_leases": deepcopy(lease_owners),
-        "queue_items": [],
+        "queue_items": queue_items,
     }
     response = {
         "sprint_id": SPRINT_ID,
@@ -541,6 +579,193 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             {18100, 18101, 18102, 18103},
         )
         self.assertIn("queue_items", summary["side_effects"])
+
+    def test_runtime_snapshot_requires_quiescent_initial_delivery(self) -> None:
+        pristine, response = runtime_fixture()
+        validate_runtime(pristine, response)
+
+        cases: list[tuple[str, dict]] = []
+
+        missing_outbox = deepcopy(pristine)
+        missing_outbox["state"]["outbox"].pop()
+        cases.append(("missing outbox", missing_outbox))
+
+        missing_queue = deepcopy(pristine)
+        missing_queue["queue_items"].pop()
+        cases.append(("missing queue", missing_queue))
+
+        pending = deepcopy(pristine)
+        pending["state"]["outbox"][0].update(
+            {
+                "status": "pending",
+                "delivered_at": None,
+                "queue_receipt_id": None,
+            }
+        )
+        cases.append(("pending", pending))
+
+        duplicate_outbox = deepcopy(pristine)
+        duplicate_outbox["state"]["outbox"][1]["payload"]["assignment_id"] = (
+            "assignment-0"
+        )
+        duplicate_outbox["state"]["outbox"][1]["dedupe_key"] = (
+            f"enqueue:assignment:{SPRINT_ID}:assignment-0"
+        )
+        cases.append(("duplicate outbox assignment", duplicate_outbox))
+
+        duplicate_queue = deepcopy(pristine)
+        duplicate_queue["queue_items"][1]["payload"]["assignment_id"] = "assignment-0"
+        duplicate_queue["queue_items"][1]["dedupe_key"] = (
+            f"enqueue:assignment:{SPRINT_ID}:assignment-0"
+        )
+        cases.append(("duplicate queue assignment", duplicate_queue))
+
+        extra_outbox = deepcopy(pristine)
+        extra_outbox["state"]["outbox"].append(
+            deepcopy(extra_outbox["state"]["outbox"][0])
+        )
+        cases.append(("extra outbox", extra_outbox))
+
+        extra_queue = deepcopy(pristine)
+        extra_queue["queue_items"].append(deepcopy(extra_queue["queue_items"][0]))
+        cases.append(("extra queue", extra_queue))
+
+        mismatched_event = deepcopy(pristine)
+        mismatched_event["queue_items"][0]["event_id"] = "different-event"
+        cases.append(("event mismatch", mismatched_event))
+
+        mismatched_receipt = deepcopy(pristine)
+        mismatched_receipt["queue_items"][0]["receipt_id"] = "different-receipt"
+        cases.append(("receipt mismatch", mismatched_receipt))
+
+        wrong_dedupe = deepcopy(pristine)
+        wrong_dedupe["state"]["outbox"][0]["dedupe_key"] = "wrong-dedupe"
+        wrong_dedupe["queue_items"][0]["dedupe_key"] = "wrong-dedupe"
+        cases.append(("unexpected dedupe", wrong_dedupe))
+
+        wrong_payload = deepcopy(pristine)
+        wrong_payload["state"]["outbox"][0]["payload"]["node_id"] = "wrong-node"
+        wrong_payload["queue_items"][0]["payload"]["node_id"] = "wrong-node"
+        cases.append(("unexpected payload", wrong_payload))
+
+        duplicate_event = deepcopy(pristine)
+        duplicate_event["state"]["outbox"][1]["event_id"] = "event-0"
+        duplicate_event["queue_items"][1]["event_id"] = "event-0"
+        cases.append(("duplicate event id", duplicate_event))
+
+        duplicate_receipt = deepcopy(pristine)
+        duplicate_receipt["state"]["outbox"][1]["queue_receipt_id"] = "receipt-0"
+        duplicate_receipt["queue_items"][1]["receipt_id"] = "receipt-0"
+        cases.append(("duplicate receipt id", duplicate_receipt))
+
+        for label, bundle in cases:
+            with self.subTest(case=label), self.assertRaisesRegex(
+                runner.QualificationError, "initial assignment"
+            ):
+                validate_runtime(bundle, response)
+
+    def test_wait_for_healthy_waits_for_initial_delivery_settlement(self) -> None:
+        settled, response = runtime_fixture()
+        pending = deepcopy(settled)
+        pending["state"]["outbox"][0].update(
+            {
+                "status": "pending",
+                "delivered_at": None,
+                "queue_receipt_id": None,
+            }
+        )
+        pending["queue_items"].pop(0)
+
+        class ScriptedReader:
+            def __init__(self) -> None:
+                self.snapshots = [pending, settled, settled]
+                self.calls = 0
+
+            def read(self, project_id: str, sprint_id: str):
+                self.calls += 1
+                self.assertions = (project_id, sprint_id)
+                return deepcopy(self.snapshots.pop(0))
+
+        reader = ScriptedReader()
+        health_proof = [{"assignment_id": f"assignment-{index}"} for index in range(4)]
+        ownership_proof = [{"job": f"job-{index}"} for index in range(4)]
+        with (
+            patch.object(
+                runner, "verify_child_health", return_value=health_proof
+            ) as health,
+            patch.object(
+                runner,
+                "verify_child_os_ownership",
+                return_value=ownership_proof,
+            ) as ownership,
+            patch.object(runner.time, "sleep") as sleep,
+        ):
+            summary, actual_health, actual_ownership = runner.wait_for_healthy(
+                reader,
+                project_id=PROJECT_ID,
+                start_response=response,
+                config=config_fixture(),
+            )
+
+        self.assertEqual(PROJECT_ID, summary["project_id"])
+        self.assertEqual(health_proof, actual_health)
+        self.assertEqual(ownership_proof, actual_ownership)
+        self.assertEqual((PROJECT_ID, SPRINT_ID), reader.assertions)
+        self.assertEqual(3, reader.calls)
+        health.assert_called_once_with(summary)
+        ownership.assert_called_once_with(summary, health_proof)
+        sleep.assert_called_once_with(0.5)
+
+    def test_wait_for_healthy_retries_when_state_changes_during_proof(self) -> None:
+        class ScriptedReader:
+            def __init__(self) -> None:
+                self.snapshots = [
+                    {"generation": 1, "state": {"processes": []}},
+                    {"generation": 2, "state": {"processes": []}},
+                    {"generation": 2, "state": {"processes": []}},
+                    {"generation": 2, "state": {"processes": []}},
+                ]
+                self.calls = 0
+
+            def read(self, project_id: str, sprint_id: str):
+                self.calls += 1
+                self.assertions = (project_id, sprint_id)
+                return deepcopy(self.snapshots.pop(0))
+
+        reader = ScriptedReader()
+        with (
+            patch.object(
+                runner,
+                "validate_runtime_snapshot",
+                side_effect=lambda bundle, **_: {"generation": bundle["generation"]},
+            ) as validate,
+            patch.object(
+                runner,
+                "verify_child_health",
+                side_effect=lambda summary: [{"generation": summary["generation"]}],
+            ) as health,
+            patch.object(
+                runner,
+                "verify_child_os_ownership",
+                side_effect=lambda summary, _: [{"generation": summary["generation"]}],
+            ) as ownership,
+            patch.object(runner.time, "sleep"),
+        ):
+            summary, health_proof, ownership_proof = runner.wait_for_healthy(
+                reader,
+                project_id=PROJECT_ID,
+                start_response={"sprint_id": SPRINT_ID},
+                config=config_fixture(),
+            )
+
+        self.assertEqual({"generation": 2}, summary)
+        self.assertEqual([{"generation": 2}], health_proof)
+        self.assertEqual([{"generation": 2}], ownership_proof)
+        self.assertEqual((PROJECT_ID, SPRINT_ID), reader.assertions)
+        self.assertEqual(4, reader.calls)
+        self.assertEqual(2, validate.call_count)
+        self.assertEqual(2, health.call_count)
+        self.assertEqual(2, ownership.call_count)
 
     def test_runtime_snapshot_rejects_wrong_roots_or_protected_roots(self) -> None:
         bundle, response = runtime_fixture()
@@ -1099,6 +1324,28 @@ class StagingQualificationRunnerTests(unittest.TestCase):
             path.write_text(json.dumps(value), encoding="utf-8")
             with self.assertRaisesRegex(runner.QualificationError, "sensitive key"):
                 runner._read_evidence(path)
+
+    def test_atomic_write_rejects_sensitive_payload_before_any_write(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            new_path = root / "new-parent" / "evidence.json"
+            with self.assertRaisesRegex(runner.QualificationError, "sensitive key"):
+                runner.atomic_write_json(
+                    new_path,
+                    {"runtime": {"api_token": "forbidden"}},
+                )
+            self.assertFalse(new_path.parent.exists())
+
+            existing_path = root / "existing.json"
+            original = b"existing evidence\n"
+            existing_path.write_bytes(original)
+            with self.assertRaisesRegex(runner.QualificationError, "sensitive key"):
+                runner.atomic_write_json(
+                    existing_path,
+                    {"runtime": {"client_secret": "forbidden"}},
+                )
+            self.assertEqual(existing_path.read_bytes(), original)
+            self.assertEqual([existing_path], list(root.iterdir()))
 
     def test_config_rejects_bidirectional_protected_root_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
