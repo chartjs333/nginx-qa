@@ -807,6 +807,92 @@ class StagingQualificationRunnerTests(unittest.TestCase):
                 cwd_fn=lambda _pid: "C:/wrong",
             )
 
+    def test_host_listener_ancestry_allows_only_proven_chain_termination(self) -> None:
+        config = config_fixture()
+        base_python = "C:/Python312/python.exe"
+        marker = {"base_python": base_python}
+        identity = SimpleNamespace(
+            pid=9000,
+            executable_path=base_python,
+            cwd=None,
+            birth_token="host-birth",
+        )
+        argv = [
+            str(CHILD_PYTHON),
+            "-E",
+            "-s",
+            "-B",
+            "-m",
+            "uvicorn",
+            "main:app",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "18025",
+        ]
+
+        def prove(chain: list[dict[str, object]]) -> dict[str, object]:
+            return runner.validate_host_listener_ownership(
+                config,
+                marker,
+                listener_pid_fn=lambda _port: 9000,
+                identity_fn=lambda _pid: identity,
+                chain_fn=lambda _pid: chain,
+                argv_fn=lambda _line: argv,
+                cwd_fn=lambda _pid: str(SERVICE_ROOT),
+            )
+
+        terminated_chain = [
+            {
+                "pid": 9000,
+                "parent_pid": 8000,
+                "executable_path": base_python,
+                "command_line": "listener",
+            },
+            {
+                "pid": 8000,
+                "parent_pid": 3924,
+                "executable_path": "C:/Program Files/PowerShell/7/pwsh.exe",
+                "command_line": "launcher",
+            },
+        ]
+        self.assertEqual(prove(terminated_chain)["pid"], 9000)
+
+        invalid_chains = {
+            "internal gap": [
+                {**terminated_chain[0]},
+                {**terminated_chain[1], "pid": 7000, "parent_pid": 0},
+            ],
+            "terminal cycle": [
+                {**terminated_chain[0]},
+                {**terminated_chain[1], "parent_pid": 9000},
+            ],
+            "depth truncation": [
+                {
+                    "pid": 9000 - index,
+                    "parent_pid": 8999 - index if index < 15 else 7000,
+                    "executable_path": base_python if index == 0 else "ancestor.exe",
+                    "command_line": "listener" if index == 0 else "ancestor",
+                }
+                for index in range(runner.MAX_PROCESS_CHAIN_DEPTH)
+            ],
+        }
+        for label, chain in invalid_chains.items():
+            with self.subTest(label=label):
+                with self.assertRaisesRegex(
+                    runner.QualificationError, "ancestry is inconsistent"
+                ):
+                    prove(chain)
+
+        for invalid_parent in (-1, True, 3924.0, "3924"):
+            with self.subTest(terminal_parent=invalid_parent):
+                chain = deepcopy(terminated_chain)
+                chain[-1]["parent_pid"] = invalid_parent
+                with self.assertRaisesRegex(
+                    runner.QualificationError, "ancestry is inconsistent"
+                ):
+                    prove(chain)
+
     @unittest.skipUnless(os.name == "nt", "Windows PEB CWD proof")
     def test_windows_process_cwd_reads_current_process(self) -> None:
         self.assertEqual(

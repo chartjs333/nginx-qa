@@ -88,6 +88,7 @@ LIVE_DURABLE_ALGORITHM = (
 )
 MAX_HTTP_BODY_BYTES = 4 * 1024 * 1024
 MAX_SNAPSHOT_AGE_SECONDS = 15 * 60
+MAX_PROCESS_CHAIN_DEPTH = 16
 SENSITIVE_KEYS = {
     "api_key",
     "api_token",
@@ -1918,7 +1919,7 @@ def _windows_process_chain(pid: int) -> list[dict[str, Any]]:
         raise QualificationError("staging ownership proof requires Windows")
     script = (
         "$ErrorActionPreference='Stop';$r=@();$id=" + str(int(pid)) + ";"
-        "for($i=0;$i -lt 16 -and $id -gt 0;$i++){"
+        "for($i=0;$i -lt " + str(MAX_PROCESS_CHAIN_DEPTH) + " -and $id -gt 0;$i++){"
         "$p=Get-CimInstance Win32_Process -Filter ('ProcessId = '+$id);"
         "if($null -eq $p){break};$r+=[pscustomobject]@{pid=[int]$p.ProcessId;"
         "parent_pid=[int]$p.ParentProcessId;executable_path=[string]$p.ExecutablePath;"
@@ -2119,17 +2120,37 @@ def validate_host_listener_ownership(
     ):
         raise QualificationError("staging listener executable/cwd ownership differs")
     chain = chain_fn(listener_pid)
-    if int(chain[0].get("pid") or 0) != listener_pid:
+    if not chain or any(not isinstance(item, dict) for item in chain):
+        raise QualificationError("staging listener ancestry is inconsistent")
+    chain_pids: list[int] = []
+    chain_parent_pids: list[int] = []
+    for item in chain:
+        chain_pid = item.get("pid")
+        parent_pid = item.get("parent_pid")
+        if (
+            type(chain_pid) is not int
+            or chain_pid <= 0
+            or type(parent_pid) is not int
+            or parent_pid < 0
+        ):
+            raise QualificationError("staging listener ancestry is inconsistent")
+        chain_pids.append(chain_pid)
+        chain_parent_pids.append(parent_pid)
+    if chain_pids[0] != listener_pid:
         raise QualificationError("staging listener ancestry begins at a different PID")
-    chain_pids = [int(item.get("pid") or 0) for item in chain]
+    terminal_parent_pid = chain_parent_pids[-1]
     if (
-        any(pid <= 0 for pid in chain_pids)
+        len(chain) > MAX_PROCESS_CHAIN_DEPTH
         or len(set(chain_pids)) != len(chain_pids)
         or any(
-            int(chain[index].get("parent_pid") or 0) != chain_pids[index + 1]
+            chain_parent_pids[index] != chain_pids[index + 1]
             for index in range(len(chain) - 1)
         )
-        or int(chain[-1].get("parent_pid") or 0) != 0
+        or terminal_parent_pid in chain_pids
+        or (
+            terminal_parent_pid > 0
+            and len(chain) == MAX_PROCESS_CHAIN_DEPTH
+        )
         or _path_key(str(chain[0].get("executable_path") or "")) != executable
     ):
         raise QualificationError("staging listener ancestry is inconsistent")
