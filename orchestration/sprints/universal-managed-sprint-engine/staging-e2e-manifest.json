@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/agent/umse-07-staging-qualification",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/umse-staging-e2e-unused",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "parallel",
+    "start_nodes": ["child-1", "child-2", "child-3", "child-4"],
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "staging-reviewer-a",
+        "name": "Staging Reviewer A",
+        "phone": "2891",
+        "git_branch": "review/umse-staging-a"
+      },
+      {
+        "id": "staging-reviewer-b",
+        "name": "Staging Reviewer B",
+        "phone": "2892",
+        "git_branch": "review/umse-staging-b"
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "child-1",
+      "agent": {"id": "child-agent-1", "name": "Child Agent 1", "phone": "2870"},
+      "tasks": [{"task_id": "CHILD-1", "queue": "worker-all", "message": "Run child 1"}],
+      "workspace": {
+        "access": "read",
+        "process": {
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "cwd": ".",
+          "environment": {},
+          "health_path": "/health",
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
+          "restart_backoff_seconds": 0,
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+        }
+      },
+      "transitions": {"DONE": "completed"}
+    },
+    {
+      "id": "child-2",
+      "agent": {"id": "child-agent-2", "name": "Child Agent 2", "phone": "2871"},
+      "tasks": [{"task_id": "CHILD-2", "queue": "worker-all", "message": "Run child 2"}],
+      "workspace": {
+        "access": "read",
+        "process": {
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "cwd": ".",
+          "environment": {},
+          "health_path": "/health",
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
+          "restart_backoff_seconds": 0,
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+        }
+      },
+      "transitions": {"DONE": "completed"}
+    },
+    {
+      "id": "child-3",
+      "agent": {"id": "child-agent-3", "name": "Child Agent 3", "phone": "2872"},
+      "tasks": [{"task_id": "CHILD-3", "queue": "worker-all", "message": "Run child 3"}],
+      "workspace": {
+        "access": "read",
+        "process": {
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "cwd": ".",
+          "environment": {},
+          "health_path": "/health",
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
+          "restart_backoff_seconds": 0,
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+        }
+      },
+      "transitions": {"DONE": "completed"}
+    },
+    {
+      "id": "child-4",
+      "agent": {"id": "child-agent-4", "name": "Child Agent 4", "phone": "2873"},
+      "tasks": [{"task_id": "CHILD-4", "queue": "worker-all", "message": "Run child 4"}],
+      "workspace": {
+        "access": "read",
+        "process": {
+          "command": ["C:/nginx-qa-staging-state/umse-007/.venv/Scripts/python.exe", "tests/fixtures/managed_child_service.py", "--mode", "serve"],
+          "cwd": ".",
+          "environment": {},
+          "health_path": "/health",
+          "restart_policy": "on_failure",
+          "max_restart_attempts": 1,
+          "restart_backoff_seconds": 0,
+          "resource_limits": {"wall_time_seconds": 3600, "memory_bytes": 268435456, "cpu_percent": 100, "process_count": 8}
+        }
+      },
+      "transitions": {"DONE": "completed"}
+    },
+    {
+      "id": "continuity",
+      "agent": {"id": "coordinator", "name": "Coordinator", "phone": "2860"},
+      "tasks": [{"task_id": "COORD-1", "queue": "consultant-all", "message": "Recover"}],
+      "workspace": {"access": "read"},
+      "activation_policy": "any_parent",
+      "transitions": {"RESUME": "child-1", "BLOCKED_EXTERNAL": "completed"}
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Completed"
+    }
+  ],
+  "coordinator": {
+    "node_id": "continuity",
+    "routes": {"STOP": "continuity", "NEED_DECISION": "continuity"}
+  },
+  "files": [
+    {
+      "path": "tests/fixtures/managed_child_service.py",
+      "sha256": "7a593b77d4f35744b85ff20e57ec44e956cad2deddf31f95351085c9215298f0"
+    }
+  ]
+}
