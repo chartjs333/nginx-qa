@@ -1,17 +1,34 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-10-03T22:16:58.3985251Z",
+  "generated_at": "2026-10-03T21:59:57.347Z",
+  "updated_at": "2026-10-03T22:37:53.611299Z",
   "repository": "https://github.com/chartjs333/nginx-qa.git",
   "release_branch": "agent/umse-09-release-qualification",
+  "release_record": {
+    "pull_request": "https://github.com/chartjs333/nginx-qa/pull/10",
+    "introduced_commit": "8ba0be7c812275ac67bcf73ccf71791b342b76cb",
+    "introduced_tree": "881326a95765b48568bb6cbece1fa0dae4482473",
+    "prior_hardening_commit": "c36cced1a4a69f66f7bb2231e4b65aa481b5b975",
+    "base_runtime_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
+    "final_commit_binding": "The accepted UMSE-009 git_commit, refs/heads/agent/umse-09-release-qualification, and refs/pull/10/head must be identical. The final object ID is external to this self-contained record to avoid circular self-reference.",
+    "allowed_paths": [
+      "docs/universal-managed-sprint-qualified-environment.txt",
+      "docs/universal-managed-sprint-release-candidate.md",
+      "docs/universal-managed-sprint-release-evidence.json"
+    ],
+    "executable_diff_from_runtime": false,
+    "schema_requirements_tests_orchestration_diff_from_runtime": false
+  },
   "qualified_runtime": {
     "commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
     "tree": "c994b07dc2d194326bd3bf7c0469578cfcc78171",
     "release_record_base_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
-    "runtime_equivalent_remote_branches": [
+    "remote_branches": [
       "agent/umse-07-staging-qualification",
-      "agent/umse-08-legacy-regression"
+      "agent/umse-08-legacy-regression",
+      "agent/umse-09-release-qualification"
     ],
-    "runtime_equivalent_remote_heads_verified": true,
+    "remote_heads_verified_equal_before_release_record": true,
     "live_source_commit": "3c42efc1701a0297d3563d7d31e66e532b072394",
     "live_source_branch": "agent/groups-cycles-graph-ui",
     "commit_count_from_live_source": 38,
@@ -24,21 +41,6 @@
       "schema_files": 16,
       "documentation_orchestration_example_files": 13
     }
-  },
-  "release_record": {
-    "from_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
-    "branch": "agent/umse-09-release-qualification",
-    "pull_request": "https://github.com/chartjs333/nginx-qa/pull/10",
-    "prior_documentation_commit": "8ba0be7c812275ac67bcf73ccf71791b342b76cb",
-    "final_git_commit_identity": "Exact remote branch and PR #10 head supplied as git_commit in the accepted UMSE-009 transition; intentionally not self-referenced inside the changing record.",
-    "required_changed_paths": [
-      "docs/universal-managed-sprint-qualified-environment.txt",
-      "docs/universal-managed-sprint-release-candidate.md",
-      "docs/universal-managed-sprint-release-evidence.json"
-    ],
-    "required_changed_file_count": 3,
-    "runtime_or_protected_diff_count": 0,
-    "documentation_only": true
   },
   "accepted_chain": [
     {
@@ -148,8 +150,19 @@
     }
   ],
   "closed_rework": {
-    "rework_cycle_count": 9,
+    "rework_cycle_count": 10,
     "implementation_rework_cycle_count": 8,
+    "release_qualification_provenance_rejection": {
+      "source_assignment_id": "cdccb6de-925f-46b9-9d00-c6cd0cb2081b",
+      "evidence_review_assignment_id": "78c1028f-5ad0-468c-95a8-041e7ea37f96",
+      "reason": "The release branch advanced to an unreviewed documentation commit after the first UMSE-009 submission; runtime qualification remained valid and the release record required exact resubmission."
+    },
+    "release_qualification_runbook_rejection": {
+      "source_assignment_id": "dfe972cd-58b2-4978-848a-faa0230bb4dd",
+      "evidence_review_assignment_id": "9d10bb43-9c32-4813-a8a3-f97f32922ad2",
+      "reviewed_commit": "c36cced1a4a69f66f7bb2231e4b65aa481b5b975",
+      "reason": "The first hardened record still conflated runtime and pytest environments, referenced no reviewed drain utility, and allowed a cold-snapshot restore after writes reopened."
+    },
     "rejected_commits": [
       "c8413607fc8fd536e5e4bf2a1e946d1a9bdf042a",
       "fcd514886e6c0f47d5f95375b4aacbf7648d7af7",
@@ -161,15 +174,8 @@
       "57cf409663ded3d71ec803facd90fab07b346aed"
     ],
     "all_implementation_findings_closed_by_later_approved_commits": true,
-    "release_qualification_rework": {
-      "stale_submitted_commit": "1504f6fe27fe1ebc117afbc3b56f349978c29556",
-      "observed_remote_release_head": "8ba0be7c812275ac67bcf73ccf71791b342b76cb",
-      "evidence_review_assignment_id": "78c1028f-5ad0-468c-95a8-041e7ea37f96",
-      "reason": "The submitted PASS and first review did not cover the newly published documentation-only release record.",
-      "resolution": "Submit the exact final PR #10 remote head, prove the three-file documentation-only diff and zero runtime/protected diff, then bind both UMSE-009 reviews to that immutable commit.",
-      "addressed_by_this_hardened_record": true,
-      "approval_pending_at_record_generation": true
-    }
+    "release_record_provenance_finding_addressed_by_current_submission": true,
+    "release_record_provenance_finding_closure_binding": "Two final graph reviews external to this self-contained record must APPROVE the exact accepted UMSE-009 git_commit."
   },
   "tests": {
     "final_serialized_suite": {
@@ -180,7 +186,7 @@
       "skipped": 0,
       "subtests": 260,
       "duration_seconds": 2020.49,
-      "source": "UMSE Evidence Reviewer assignment 313625cb-6345-4709-8289-d3352b680b4f"
+      "source": "One fresh serialized run performed during UMSE-008 legacy-regression verification on runtime SHA 1504f6fe; durably recorded in UMSE-008 evidence-review assignment 313625cb-6345-4709-8289-d3352b680b4f and later cited in UMSE-009 assignment cdccb6de-925f-46b9-9d00-c6cd0cb2081b. This is not a second UMSE-009 execution."
     },
     "complete_shard_accounting": [
       {"family": "legacy, UI, Telegram, queue and sprint-type", "passed": 201},
@@ -271,18 +277,31 @@
     "git_commit_after": "3c42efc1701a0297d3563d7d31e66e532b072394",
     "git_branch_before": "agent/groups-cycles-graph-ui",
     "git_branch_after": "agent/groups-cycles-graph-ui",
-    "current_read_only_recheck_matches": true
+    "current_read_only_recheck_matches": true,
+    "current_read_only_recheck_observed_at": "2026-10-03T22:21:19.542774Z"
   },
   "qualified_environment": {
     "operating_system": "Microsoft Windows 10 Pro 10.0.19045 x64",
     "powershell": "7.6.6",
     "git": "2.49.0.windows.1",
     "git_system_core_autocrlf": true,
-    "python": "3.12.1",
-    "pytest": "9.0.0",
-    "package_count": 36,
-    "sorted_freeze_sha256": "56865f9826e33ae3440c9a6421fbd2bee2f7a07a078d1aa36c7de59dd691f689",
-    "freeze_file": "docs/universal-managed-sprint-qualified-environment.txt"
+    "runtime_venv": {
+      "python": "3.12.1",
+      "package_count": 36,
+      "pytest_installed": false,
+      "sorted_freeze_sha256_lf_with_trailing_newline": "56865f9826e33ae3440c9a6421fbd2bee2f7a07a078d1aa36c7de59dd691f689",
+      "freeze_file": "docs/universal-managed-sprint-qualified-environment.txt"
+    },
+    "test_runner": {
+      "interpreter": "C:/Python312/python.exe",
+      "python": "3.12.1",
+      "pytest": "9.0.0",
+      "package_count_from_pip_freeze_all": 325,
+      "sorted_freeze_sha256_lf_with_trailing_newline": "120c2d7f291861675e926e4b8a2e960036599650bc255286417dab9c870c4a26",
+      "read_only_observed_at": "2026-10-03T22:28:37.245926Z",
+      "reproducibility_note": "This is a current observation hash, not a committed dependency lock. Promotion requires a separate approved hash-locked test harness."
+    },
+    "relationship": "The 36-package runtime venv and the 325-package pytest runner were separate environments. The release inventory describes the runtime venv; the serialized 587-test run used the test runner."
   },
   "security_review": {
     "candidate_diff_high_confidence_secret_shapes": 5,
@@ -294,31 +313,28 @@
     "staging_telegram_disabled": true,
     "staging_tunnel_disabled": true,
     "credentials_persisted_in_release_record": false,
-    "formal_secret_scanners": {
-      "gitleaks": "unavailable",
-      "trufflehog": "unavailable"
-    },
-    "software_composition_analysis": "unavailable: pip-audit",
-    "formal_sast_sca_claim": false,
-    "targeted_scan_is_formal_security_report": false,
-    "mutating_managed_api_in_app_authentication": false,
-    "authenticated_gateway_required_before_exposure": true,
-    "formal_reports_or_named_risk_acceptance_required_before_promotion": true
+    "scan_scope": "Documented high-confidence credential-pattern scan only",
+    "formal_sast_sca_secret_scanners": "not run; gitleaks, trufflehog, and pip-audit were unavailable",
+    "managed_mutating_api_application_auth": false,
+    "public_managed_activation_without_gateway_auth": "NO-GO"
   },
   "spec_manifest_note": {
     "path": "orchestration/sprints/universal-managed-sprint-engine/FILE-MANIFEST.json",
-    "sha256": "4743a88b999bde9aaaae070719ef5e420b136482d41241d3c3bfc9596381843b",
+    "worktree_sha256_crlf": "4743a88b999bde9aaaae070719ef5e420b136482d41241d3c3bfc9596381843b",
+    "git_blob_sha1": "d63d277675b9f5219b368687fe19f95e4f4f4cb0",
+    "git_blob_sha256_lf": "defa70106e1b8f46c51c25a84d9fd74f33dd2cdf0da63dde7781d1b70158e18d",
+    "verification_target": "canonical Git blob; the worktree hash differs only because core.autocrlf materializes CRLF",
     "scope": "original specification snapshot",
     "is_release_candidate_manifest": false,
     "reason": "The protected specification manifest intentionally was not rewritten by downstream implementation nodes; staging-isolation.md evolved after that snapshot. Release identity is the exact Git tree plus the source-bound staging manifest and evidence hashes above."
   },
   "known_non_blocking_caveats": [
-    "Runtime requirements are ranges rather than a complete lock; the exact qualified Windows package freeze is recorded separately.",
+    "Runtime requirements are ranges; the 36-package qualified Windows inventory is not a per-wheel hash lock and must be converted to a fully hashed wheelhouse and requalified before promotion.",
     "The deliberately uncollected _test_legacy_sequential_whoami_moves_to_next_role_without_parallel_work is pre-baseline test debt and fails identically on baseline and candidate; its active replacement passes.",
-    "Pull requests 3 through 10 remain stacked and unmerged; merge and live promotion are explicit operator actions after the terminal graph gate.",
-    "This release-record commit is documentation-only on top of the qualified runtime commit; reviewers must confirm no executable diff from the qualified runtime SHA.",
-    "gitleaks, trufflehog and pip-audit were unavailable; targeted credential-shape checks are not a formal secret-scanner, SAST or SCA result.",
-    "The release-record commits are unsigned (git signature status N); acceptance records exact SHA, tree, remote/PR head and evidence hashes instead."
+    "Pull requests 3 through 10 remain stacked/unmerged or release-record-only as applicable; merge and live promotion are explicit operator actions after the terminal graph gate.",
+    "This release record is documentation-only on top of the qualified runtime commit; reviewers must bind the accepted UMSE-009 git_commit to both the release branch and PR #10 and confirm no executable diff from the runtime SHA.",
+    "Formal SAST/SCA and automated secret scanners were unavailable; the production evidence package needs their result or named risk acceptance.",
+    "The production service definition, authenticated gateway policy, and operator runbook need explicit named approval."
   ],
   "promotion_gate": {
     "software_qualification": "PASS",
@@ -326,16 +342,19 @@
     "live_restart_performed": false,
     "operator_approval_required": true,
     "cold_backup_and_restore_validation_required": true,
-    "fresh_blue_green_checkout_required": true,
-    "in_place_live_checkout_mutation_allowed": false,
-    "current_run_bat_side_by_side_allowed": false,
-    "authenticated_gateway_required": true,
-    "stable_route_control_required": true,
-    "hash_verified_or_requalified_wheelhouse_required": true,
-    "production_service_runbook_approval_required": true,
-    "managed_drain_rehearsal_required": true,
-    "authenticated_managed_drain_required_before_post_activation_rollback": true,
-    "formal_security_reports_or_named_risk_acceptance_required": true,
+    "fresh_blue_green_checkout_and_venv_required": true,
+    "isolated_loopback_non_live_port_required": true,
+    "controlled_gateway_route_cutover_required": true,
+    "authenticated_gateway_required_for_public_managed_apis": true,
+    "unauthenticated_managed_mutation_negative_test_required": true,
+    "fully_hashed_requalified_wheelhouse_required": true,
+    "separate_hash_locked_runtime_and_test_harness_required": true,
+    "production_service_and_runbook_approval_required": true,
+    "named_service_identity_and_exact_control_commands_required": true,
+    "isolated_green_smoke_with_zero_residual_state_required": true,
+    "authenticated_managed_process_and_lease_drain_rehearsal_required": true,
+    "managed_activation_without_reviewed_executable_drain_utility": "NO-GO",
+    "cold_snapshot_restore_after_first_post_cutover_write": "NO-GO without a separately reviewed lossless state-reconciliation plan",
     "final_graph_reviews_required": 2,
     "promotion_status": "NOT_AUTHORIZED"
   }

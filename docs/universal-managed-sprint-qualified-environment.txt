@@ -4,8 +4,13 @@
 # Sorted package lines SHA-256:
 # 56865f9826e33ae3440c9a6421fbd2bee2f7a07a078d1aa36c7de59dd691f689
 #
-# This is qualification evidence, not authorization to mutate the live venv.
-# An operator may use it as a constraints input only after the final graph gate.
+# This is the 36-package staging runtime-venv inventory, not the separate
+# C:/Python312 pytest-runner environment and not a per-wheel hash lock.
+# It is qualification evidence, not authorization to mutate the live venv.
+# Before promotion, install every listed package (not merely requirements.txt
+# constrained by this file) from an approved SHA-256-locked offline wheelhouse.
+# Keep that runtime venv pristine; use a separately hash-locked pytest/test
+# harness for the full suite and launch this venv for black-box/schema probes.
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anyio==4.15.1
