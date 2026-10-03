@@ -316,6 +316,12 @@ class CleanupCheckpointReproofTests(unittest.TestCase):
             supervisor_module.ManagedProcessSupervisor = supervisor_class
             supervisor_module.ManagedProcessSupervisorError = RuntimeError
 
+            def verify_os_after_service_import(
+                _summary: dict, _health: list[dict]
+            ) -> list[dict]:
+                self.assertIn(str(config.repo_root), sys.path)
+                return deepcopy(expected_os)
+
             def record_evidence_write(_path: Path, payload: dict) -> None:
                 if payload.get("status") == "verified_awaiting_cleanup":
                     self.assertIn("pre_cleanup", payload)
@@ -344,7 +350,7 @@ class CleanupCheckpointReproofTests(unittest.TestCase):
                 patch.object(
                     runner,
                     "verify_child_os_ownership",
-                    return_value=deepcopy(expected_os),
+                    side_effect=verify_os_after_service_import,
                 ),
                 patch.object(
                     runner,

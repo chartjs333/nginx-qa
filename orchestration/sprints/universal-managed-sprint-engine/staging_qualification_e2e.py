@@ -3567,6 +3567,8 @@ def cleanup(evidence_path: Path) -> dict[str, Any]:
     config = _config_from_evidence(evidence, 120.0)
     if config.evidence_path != evidence_path:
         raise QualificationError("evidence self-path does not match invocation")
+    if str(config.repo_root) not in sys.path:
+        sys.path.insert(0, str(config.repo_root))
     if evidence.get("git") != validate_git_source(config):
         raise QualificationError("Git source proof changed before cleanup")
     if evidence.get("ownership_marker") != validate_ownership_marker(config):
@@ -3597,8 +3599,6 @@ def cleanup(evidence_path: Path) -> dict[str, Any]:
     _record_pre_cleanup_checkpoint(evidence_path, evidence, pre_cleanup_proof)
     exact_runtime_config = pre_cleanup_proof["runtime_config"]
 
-    if str(config.repo_root) not in sys.path:
-        sys.path.insert(0, str(config.repo_root))
     from nginx_qa.managed_import import (  # pylint: disable=import-outside-toplevel
         ManagedImportStore,
         ManagedPortReservationRegistry,
