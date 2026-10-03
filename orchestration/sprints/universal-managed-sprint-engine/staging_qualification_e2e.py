@@ -973,6 +973,20 @@ def _stable_value_proof(value: Any, label: str) -> dict[str, Any]:
     return {"count": len(value), "sha256": hashlib.sha256(encoded).hexdigest()}
 
 
+def _parse_delivery_timestamp(value: Any) -> datetime:
+    if not isinstance(value, str) or not value or value.strip() != value:
+        raise QualificationError("initial assignment delivery timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise QualificationError(
+            "initial assignment delivery timestamp is invalid"
+        ) from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise QualificationError("initial assignment delivery timestamp is invalid")
+    return parsed.astimezone(timezone.utc)
+
+
 def _validate_initial_assignment_delivery(
     state: Mapping[str, Any],
     queue_items: Sequence[Mapping[str, Any]],
@@ -1048,6 +1062,8 @@ def _validate_initial_assignment_delivery(
         expected_dedupe_key = f"enqueue:assignment:{sprint_id}:{assignment_id}"
         event_id = item.get("event_id")
         receipt_id = item.get("queue_receipt_id")
+        created_at = _parse_delivery_timestamp(item.get("created_at"))
+        delivered_at = _parse_delivery_timestamp(item.get("delivered_at"))
         if (
             assignment_id not in expected_assignments
             or assignment_id in delivered_by_assignment
@@ -1060,10 +1076,7 @@ def _validate_initial_assignment_delivery(
             or item.get("dedupe_key") != expected_dedupe_key
             or not _json_exact_equal(payload, expected_payload)
             or item.get("status") != "delivered"
-            or not isinstance(item.get("created_at"), str)
-            or not item["created_at"].strip()
-            or not isinstance(item.get("delivered_at"), str)
-            or not item["delivered_at"].strip()
+            or delivered_at < created_at
             or not isinstance(event_id, str)
             or not event_id.strip()
             or event_id in outbox_event_ids
@@ -1096,6 +1109,7 @@ def _validate_initial_assignment_delivery(
         expected_dedupe_key = f"enqueue:assignment:{sprint_id}:{assignment_id}"
         event_id = item.get("event_id")
         receipt_id = item.get("receipt_id")
+        _parse_delivery_timestamp(item.get("created_at"))
         if (
             assignment_id not in expected_assignments
             or assignment_id in queued_by_assignment

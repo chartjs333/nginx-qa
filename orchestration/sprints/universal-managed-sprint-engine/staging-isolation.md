@@ -152,6 +152,10 @@ finalize -> passed
 иметь exact receipt/payload parity с единственной queue-записью. После health и
 Windows Job/OS proof SQLite немедленно читается повторно; любой drift заставляет
 повторить proof, поэтому evidence не может содержать устаревший snapshot.
+Это намеренно clean-start gate: любое дополнительное recovery/coordinator event
+дисквалифицирует прогон, даже если transport позднее восстановился. Времена
+создания и доставки должны быть timezone-aware, совпадать между outbox/queue и
+не идти в обратном порядке.
 Любая запись evidence также сканируется на sensitive keys до создания каталога,
 JSON-сериализации и временного файла; отклонённый payload не создаёт новый файл и
 не заменяет существующий.

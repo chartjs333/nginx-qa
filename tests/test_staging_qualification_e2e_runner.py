@@ -658,6 +658,20 @@ class StagingQualificationRunnerTests(unittest.TestCase):
         duplicate_receipt["queue_items"][1]["receipt_id"] = "receipt-0"
         cases.append(("duplicate receipt id", duplicate_receipt))
 
+        malformed_timestamp = deepcopy(pristine)
+        malformed_timestamp["state"]["outbox"][0]["delivered_at"] = "not-a-time"
+        cases.append(("malformed timestamp", malformed_timestamp))
+
+        naive_timestamp = deepcopy(pristine)
+        naive_timestamp["queue_items"][0]["created_at"] = "2026-10-03T10:00:00"
+        cases.append(("naive timestamp", naive_timestamp))
+
+        backward_delivery = deepcopy(pristine)
+        backward_delivery["state"]["outbox"][0]["delivered_at"] = (
+            "2026-10-03T09:59:59+00:00"
+        )
+        cases.append(("backward delivery timestamp", backward_delivery))
+
         for label, bundle in cases:
             with self.subTest(case=label), self.assertRaisesRegex(
                 runner.QualificationError, "initial assignment"
