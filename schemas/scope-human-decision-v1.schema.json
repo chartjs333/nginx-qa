@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "scope-human-decision-v1.schema.json",
+  "title": "Content-bound operator decision after exact scope diff validation",
+  "type": "object", "additionalProperties": false,
+  "required": ["action", "expected_execution_revision", "expected_scope_revision", "idempotency_key"],
+  "properties": {
+    "action": {"enum": ["approve", "reject", "edit", "record_existing_authorization"]},
+    "validation_id": {"type": "string", "minLength": 1},
+    "expected_execution_revision": {"type": "integer", "minimum": 0},
+    "expected_scope_revision": {"type": "integer", "minimum": 0},
+    "idempotency_key": {"type": "string", "minLength": 1, "maxLength": 200},
+    "reason": {"type": "string", "maxLength": 65536}
+  },
+  "if": {"properties": {"action": {"not": {"const": "reject"}}}},
+  "then": {"required": ["validation_id"]}
+}

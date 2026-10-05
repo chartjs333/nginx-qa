@@ -41,6 +41,8 @@ from .managed_import import (
     parse_strict_json_object,
 )
 from .port_leases import ManagedPortReservationError
+from .legacy_scope_control import LegacyScopeControlError, assignment_binding, verify_role_token
+from .scope_runtime_adapters import effective_scope_snapshot, require_scope_submission
 from .sprint_types import (
     apply_managed_repair_patch,
     canonical_json_bytes,
@@ -385,6 +387,30 @@ class ManagedContinuityRuntime:
                     pass
                 raise
 
+    def scope_snapshot(self, project_id: str, sprint_id: str) -> dict[str, Any]:
+        """Read exact persisted state; no publication, recovery, or claim."""
+        state = self.store.runtime_state(project_id, sprint_id)
+        if state is None:
+            raise KeyError("managed sprint runtime was not found")
+        return state
+
+    def scope_mutate(self, project_id: str, sprint_id: str, mutator: Callable) -> tuple[dict[str, Any], Any]:
+        """Commit scope/audit under the same exclusion as ordinary execution."""
+        def mutate(state: dict[str, Any], _connection: sqlite3.Connection) -> Any:
+            changed, response = mutator(deepcopy(state))
+            state.clear()
+            state.update(changed)
+            return response
+        with self._sprint_lock(sprint_id):
+            return self.store.mutate_runtime_state(project_id, sprint_id, mutate)
+
+    @staticmethod
+    def _require_scope(state: Mapping[str, Any], assignment_id: str, payload: Mapping[str, Any], supplied_role_token: str, correlation_id: str) -> None:
+        try:
+            require_scope_submission(state, assignment_id, payload.get("scope_context"), supplied_role_token)
+        except LegacyScopeControlError as exc:
+            raise ManagedContinuityError(exc.code, exc.status_code, correlation_id) from exc
+
     @contextmanager
     def _sprint_lock(
         self,
@@ -708,6 +734,7 @@ class ManagedContinuityRuntime:
         agent_phone: str,
         payload: Mapping[str, Any],
         correlation_id: str,
+        supplied_role_token: str = "",
     ) -> _AssignmentBinding | None:
         clean_phone = agent_phone.strip()
         assignment_id = payload.get("assignment_id")
@@ -777,6 +804,7 @@ class ManagedContinuityRuntime:
             raise ManagedContinuityError(
                 MANAGED_IDENTITY_MISMATCH, 403, correlation_id
             )
+        self._require_scope(binding.state, assignment_id, payload, supplied_role_token, correlation_id)
         historical_recovery = False
         if binding.kind == "coordinator":
             idempotency_key = payload.get("idempotency_key")
@@ -818,12 +846,13 @@ class ManagedContinuityRuntime:
         agent_phone: str,
         body: bytes,
         correlation_id: str | None = None,
+        supplied_role_token: str = "",
     ) -> ManagedContinuityResult | None:
         """Claim a request only when its durable assignment is managed."""
 
         correlation = correlation_id or f"continuity-{uuid4().hex}"
         if not body:
-            current = self.current_identity(project_id, agent_phone)
+            current = self.current_identity(project_id, agent_phone, supplied_role_token)
             return ManagedContinuityResult(current) if current is not None else None
         try:
             payload = self.parse_body(body, correlation)
@@ -831,7 +860,7 @@ class ManagedContinuityRuntime:
             # Malformed JSON belongs to this service only when the phone owns a
             # live managed assignment.  Otherwise the legacy endpoint retains
             # its historical parser/error behavior.
-            if self.current_identity(project_id, agent_phone) is not None:
+            if self.current_identity(project_id, agent_phone, supplied_role_token) is not None:
                 raise
             return None
         if set(payload).issubset({"message"}):
@@ -840,21 +869,21 @@ class ManagedContinuityRuntime:
             # lookup semantics.  These bodies carry no result fields and must
             # expose the durable managed identity rather than being mistaken
             # for a result submission that omitted assignment_id.
-            current = self.current_identity(project_id, agent_phone)
+            current = self.current_identity(project_id, agent_phone, supplied_role_token)
             return ManagedContinuityResult(current) if current is not None else None
         binding = self._binding_for_request(
-            project_id, agent_phone, payload, correlation
+            project_id, agent_phone, payload, correlation, supplied_role_token
         )
         if binding is None:
             return None
         if binding.kind == "assignment":
-            return self._submit_result(binding, payload, correlation)
+            return self._submit_result(binding, payload, correlation, supplied_role_token)
         if binding.kind == "review":
-            return self._submit_review(binding, payload, correlation)
-        return self._submit_recovery(binding, payload, correlation)
+            return self._submit_review(binding, payload, correlation, supplied_role_token)
+        return self._submit_recovery(binding, payload, correlation, supplied_role_token)
 
     def current_identity(
-        self, project_id: str, agent_phone: str
+        self, project_id: str, agent_phone: str, supplied_role_token: str = ""
     ) -> dict[str, Any] | None:
         clean_phone = agent_phone.strip()
         for _attempt in range(3):
@@ -899,7 +928,14 @@ class ManagedContinuityRuntime:
                         binding.sprint_id,
                     )
                 )
-            binding = self._publish_binding(candidates[0])
+            candidate = candidates[0]
+            governed = assignment_binding(candidate.state, candidate.record.get("assignment_id"))
+            if governed is not None:
+                try:
+                    verify_role_token(clean_phone, supplied_role_token)
+                except LegacyScopeControlError as exc:
+                    raise ManagedContinuityError(exc.code, exc.status_code, "managed-identity") from exc
+            binding = self._publish_binding(candidate)
             binding_phone = str(
                 binding.record.get("agent_phone")
                 or binding.record.get("reviewer_phone")
@@ -912,13 +948,17 @@ class ManagedContinuityRuntime:
                 # accidentally fall through to the legacy identity handler.
                 continue
             record = deepcopy(binding.record)
-            return {
+            response = {
                 "managed": True,
                 "project_id": project_id,
                 "sprint_id": binding.sprint_id,
                 "assignment_kind": binding.kind,
                 "assignment": record,
             }
+            if governed is not None:
+                response["effective_scope"] = effective_scope_snapshot(binding.state, str(record["assignment_id"]))
+                response["instruction_precedence"] = "effective_scope_supersedes_conflicting_issued_scope"
+            return response
         raise RuntimeError("managed identity changed during publication")
 
     @staticmethod
@@ -1121,6 +1161,7 @@ class ManagedContinuityRuntime:
         binding: _AssignmentBinding,
         payload: Mapping[str, Any],
         correlation_id: str,
+        supplied_role_token: str = "",
     ) -> ManagedContinuityResult:
         with self._sprint_lock(binding.sprint_id):
             latest = self.store.runtime_state(binding.project_id, binding.sprint_id)
@@ -1138,6 +1179,7 @@ class ManagedContinuityRuntime:
                 binding.kind,
                 current,
             )
+            self._require_scope(latest, str(current["assignment_id"]), payload, supplied_role_token, correlation_id)
             return self._submit_result_locked(
                 refreshed, payload, correlation_id
             )
@@ -2714,6 +2756,7 @@ class ManagedContinuityRuntime:
         binding: _AssignmentBinding,
         payload: Mapping[str, Any],
         correlation_id: str,
+        supplied_role_token: str = "",
     ) -> ManagedContinuityResult:
         with self._sprint_lock(binding.sprint_id):
             latest = self.store.runtime_state(binding.project_id, binding.sprint_id)
@@ -2724,6 +2767,7 @@ class ManagedContinuityRuntime:
             ).get(str(binding.record.get("context_id")))
             if not isinstance(context, dict):
                 raise RuntimeError("managed Coordinator context disappeared")
+            self._require_scope(latest, str(binding.record["assignment_id"]), payload, supplied_role_token, correlation_id)
             return self._submit_recovery_locked(
                 binding.project_id,
                 binding.sprint_id,
@@ -2748,7 +2792,7 @@ class ManagedContinuityRuntime:
             raise ManagedContinuityError(
                 RECOVERY_CONFLICT, 409, correlation_id
             )
-        if set(payload) != {
+        if set(payload) - {"scope_context"} != {
             "assignment_id",
             "idempotency_key",
             "action",
@@ -4234,6 +4278,7 @@ class ManagedContinuityRuntime:
         binding: _AssignmentBinding,
         payload: Mapping[str, Any],
         correlation_id: str,
+        supplied_role_token: str = "",
     ) -> ManagedContinuityResult:
         with self._sprint_lock(binding.sprint_id):
             latest = self.store.runtime_state(binding.project_id, binding.sprint_id)
@@ -4251,6 +4296,7 @@ class ManagedContinuityRuntime:
                 binding.kind,
                 current,
             )
+            self._require_scope(latest, str(current["assignment_id"]), payload, supplied_role_token, correlation_id)
             return self._submit_review_locked(refreshed, payload, correlation_id)
 
     def _submit_review_locked(

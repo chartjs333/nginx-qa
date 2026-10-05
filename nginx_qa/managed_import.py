@@ -950,6 +950,15 @@ class ManagedImportStore:
             issues.append("RUNTIME_STATE_SCHEMA_INVALID")
         if managed_activation_invariant_issues(state):
             issues.append("RUNTIME_STATE_INVARIANT_INVALID")
+        if state.get("scope_control") is not None:
+            from .legacy_scope_control import LegacyScopeControlError, validate_versioned_scope_history
+            try:
+                if not isinstance(state["scope_control"], Mapping) or state["scope_control"].get("schema_version") != 2:
+                    issues.append("SCOPE_CONTROL_VERSION_UNSUPPORTED")
+                else:
+                    validate_versioned_scope_history(state["scope_control"])
+            except (LegacyScopeControlError, TypeError, ValueError):
+                issues.append("SCOPE_HISTORY_INVALID")
 
         records = control.get("start_idempotency_records")
         all_records = (
@@ -1905,6 +1914,22 @@ class ManagedImportStore:
 
             candidate = deepcopy(current)
             result = mutator(candidate, connection)
+            if candidate != current:
+                from .scope_runtime_adapters import bind_new_assignments, link_new_execution_records
+                from .execution_observability import append_execution_checkpoint
+                from .scope_workflow import request_list
+                bind_new_assignments(candidate)
+                link_new_execution_records(candidate, current)
+                # This is an execution/audit cursor, never a graph-definition
+                # revision. Scope callbacks may already have advanced it.
+                before_execution = {k: v for k, v in current.items() if k not in {"scope_workflow", "execution_audit"}}
+                after_execution = {k: v for k, v in candidate.items() if k not in {"scope_workflow", "execution_audit"}}
+                if before_execution != after_execution:
+                    candidate["execution_revision"] = max(int(current.get("execution_revision") or 0) + 1, int(candidate.get("execution_revision") or 0))
+                append_execution_checkpoint(candidate.setdefault("execution_audit", {}),
+                    {"project_id": project_id, "sprint_id": sprint_id, "execution": candidate},
+                    recorded_at=str(candidate.get("updated_at") or datetime.now(timezone.utc).isoformat()),
+                    scope_requests=request_list(candidate)["requests"])
             schema_issues = _runtime_state_schema_errors(
                 candidate,
                 issue_code="RUNTIME_STATE_SCHEMA_INVALID",

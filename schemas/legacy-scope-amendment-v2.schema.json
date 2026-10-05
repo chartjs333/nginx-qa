@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/legacy-scope-amendment-v2.schema.json",
+  "title": "Versioned assignment-preserving scope amendment v2",
+  "type": "object",
+  "required": ["schema_version", "amendment_id", "expected_scope_revision", "expected_execution_revision", "expected_assignment_id", "expected_node_id", "expected_phase", "expected_issued_task_sha256", "expected_issued_message_sha256", "idempotency_key", "source", "targets"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "amendment_id": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/id"},
+    "expected_scope_revision": {"type": "integer", "minimum": 0},
+    "expected_execution_revision": {"type": "integer", "minimum": 1},
+    "expected_assignment_id": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/id"},
+    "expected_node_id": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/id"},
+    "expected_phase": {"const": "node"},
+    "expected_issued_task_sha256": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/sha256"},
+    "expected_issued_message_sha256": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/sha256"},
+    "idempotency_key": {"type": "string", "minLength": 8, "maxLength": 200},
+    "source": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/source"},
+    "targets": {"$ref": "legacy-scope-amendment-v1.schema.json#/$defs/targets"}
+  },
+  "additionalProperties": false
+}

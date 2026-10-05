@@ -69,6 +69,7 @@ WORKSPACE_1_ROOT = (
 EXPECTED_SCHEMA_FILES = {
     "legacy-scope-ack-v1.schema.json",
     "legacy-scope-amendment-v1.schema.json",
+    "legacy-scope-amendment-v2.schema.json",
     "managed-api-error-v1.schema.json",
     "managed-assignment-result-response-v1.schema.json",
     "managed-assignment-result-v1.schema.json",
@@ -81,6 +82,8 @@ EXPECTED_SCHEMA_FILES = {
     "managed-workspace-sprint-v1.schema.json",
     "repair-sprint-response-v1.schema.json",
     "repair-sprint-v1.schema.json",
+    "scope-change-request-v1.schema.json",
+    "scope-human-decision-v1.schema.json",
     "sprint-dispatch-v1.schema.json",
     "sprint-preflight-report-v1.schema.json",
     "start-sprint-from-git-response-v1.schema.json",
@@ -2376,6 +2379,32 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "deduplicated": False,
             },
             "sprint-dispatch-v1.schema.json": {"sprint_type": "legacy_v1", "legacy": True},
+            "scope-change-request-v1.schema.json": {
+                "assignment_id": "assignment-1",
+                "expected_execution_revision": 74,
+                "expected_scope_revision": 1,
+                "idempotency_key": "scope-request-example",
+                "reason": "Bounded recovery proof requested",
+                "proposal": {
+                    "instructions": "Verify only the approved recovery proof.",
+                    "retained_restrictions": ["Do not declare Formal GO."],
+                    "node_ids": ["continuity-coordinator", "formal-linkage"],
+                    "reviewer_ids": ["reviewer-one", "reviewer-two"],
+                },
+                "source": {
+                    "repository_key": "github.com/chartjs333/delta",
+                    "commit": COMMIT,
+                    "path": "orchestration/scope/amendment.json",
+                    "sha256": MANIFEST_SHA,
+                },
+            },
+            "scope-human-decision-v1.schema.json": {
+                "action": "approve",
+                "validation_id": "scope-validation-example",
+                "expected_execution_revision": 74,
+                "expected_scope_revision": 1,
+                "idempotency_key": "scope-decision-example",
+            },
             "sprint-preflight-report-v1.schema.json": preflight_fixture(),
             "start-sprint-from-git-v1.schema.json": {
                 "repository_id": "main",
@@ -2384,6 +2413,11 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "idempotency_key": "key",
             },
             "start-sprint-from-git-response-v1.schema.json": start_response_fixture(),
+        }
+        cases["legacy-scope-amendment-v2.schema.json"] = {
+            **copy.deepcopy(cases["legacy-scope-amendment-v1.schema.json"]),
+            "schema_version": 2,
+            "expected_scope_revision": 1,
         }
         self.assertEqual(set(cases), EXPECTED_SCHEMA_FILES)
         for filename, instance in cases.items():
@@ -2410,7 +2444,7 @@ class SprintSchemaContractTests(unittest.TestCase):
         sequential["initial_assignment_ids"].append("assignment-2")
         self.assert_invalid("start-sprint-from-git-response-v1.schema.json", sequential)
 
-    def test_object_ids_and_date_times_are_strict(self) -> None:
+    def test_object_ids_are_strict(self) -> None:
         for length in (39, 41, 63, 65):
             response = start_response_fixture()
             response["identity"]["commit"] = "a" * length
@@ -2420,6 +2454,13 @@ class SprintSchemaContractTests(unittest.TestCase):
             response["identity"]["commit"] = "a" * length
             response["workspace_source_commit"] = "a" * length
             self.validator("start-sprint-from-git-response-v1.schema.json").validate(response)
+
+    def test_date_times_are_strict(self) -> None:
+        if "date-time" not in FormatChecker().checkers:
+            self.skipTest(
+                "Missing declared jsonschema[format] dev extra: date-time "
+                "format checker is not registered in this test environment"
+            )
         preflight = preflight_fixture()
         preflight["checked_at"] = "not-a-timestamp"
         self.assert_invalid("sprint-preflight-report-v1.schema.json", preflight)

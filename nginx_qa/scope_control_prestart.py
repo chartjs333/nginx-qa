@@ -18,10 +18,13 @@ from nginx_qa.legacy_scope_control import (
     LegacyScopeControlError,
     SCOPE_CONTROL_CAPABILITY,
     SCOPE_CONTROL_SCHEMA_VERSION,
+    SCOPE_CONTROL_V2_CAPABILITY,
+    SUPPORTED_SCOPE_CONTROL_VERSIONS,
     assignment_binding,
     canonical_json_bytes,
     canonical_json_sha256,
     effective_scope_core,
+    validate_versioned_scope_history,
 )
 
 
@@ -91,20 +94,27 @@ def validate_scope_control_compatibility(
             schema_version = int(scope_control.get("schema_version") or 0)
         except (TypeError, ValueError) as exc:
             raise CompatibilityError("scope_control schema_version is invalid") from exc
-        if schema_version != SCOPE_CONTROL_SCHEMA_VERSION:
+        if schema_version not in SUPPORTED_SCOPE_CONTROL_VERSIONS:
             raise CompatibilityError("unsupported scope_control schema_version")
-        if scope_control.get("minimum_runtime_capability") != SCOPE_CONTROL_CAPABILITY:
+        expected_capability = SCOPE_CONTROL_V2_CAPABILITY if schema_version == 2 else SCOPE_CONTROL_CAPABILITY
+        if scope_control.get("minimum_runtime_capability") != expected_capability:
             raise CompatibilityError("unsupported minimum_runtime_capability")
         amendments = scope_control.get("amendments")
         if (
             not isinstance(amendments, list)
-            or len(amendments) != 1
+            or not amendments
+            or (schema_version == 1 and len(amendments) != 1)
             or not isinstance(amendments[0], dict)
         ):
             raise CompatibilityError("v1 requires exactly one applied amendment")
         active_id = str(scope_control.get("active_amendment_id") or "")
-        if active_id != str(amendments[0].get("amendment_id") or ""):
+        if active_id != str(amendments[-1].get("amendment_id") or ""):
             raise CompatibilityError("active amendment does not match the v1 record")
+        if schema_version == 2:
+            try:
+                validate_versioned_scope_history(scope_control)
+            except (LegacyScopeControlError, TypeError, ValueError) as exc:
+                raise CompatibilityError("versioned scope history is invalid") from exc
         bindings = scope_control.get("assignment_bindings")
         acknowledgements = scope_control.get("acknowledgements")
         if not isinstance(bindings, dict) or not isinstance(acknowledgements, dict):
@@ -145,7 +155,7 @@ def validate_scope_control_compatibility(
             ):
                 raise CompatibilityError("assignment scope_context hash is invalid")
             acknowledgement = acknowledgements.get(str(assignment_id))
-            if acknowledgement is not None:
+            if acknowledgement is not None and schema_version == 1:
                 if not isinstance(acknowledgement, dict) or canonical_json_bytes(
                     acknowledgement.get("scope_context")
                 ) != canonical_json_bytes(context):
@@ -162,8 +172,9 @@ def validate_scope_control_compatibility(
         raise CompatibilityError("scope_control is present but must be absent")
     return {
         "compatible": True,
-        "supported_capability": SCOPE_CONTROL_CAPABILITY,
-        "supported_schema_version": SCOPE_CONTROL_SCHEMA_VERSION,
+        "supported_capability": SCOPE_CONTROL_V2_CAPABILITY,
+        "supported_schema_version": 2,
+        "supported_schema_versions": list(SUPPORTED_SCOPE_CONTROL_VERSIONS),
         "project_count": len(projects),
         "controlled_project_count": controlled_projects,
         "assignment_binding_count": binding_count,

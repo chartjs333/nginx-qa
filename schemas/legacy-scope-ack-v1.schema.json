@@ -50,7 +50,8 @@
         "effective_scope_sha256": {"$ref": "#/$defs/sha256"},
         "precedence": {"const": "effective_scope_supersedes_conflicting_issued_scope"},
         "ack_required": {"const": true},
-        "source_assignment_id": {"$ref": "#/$defs/id"}
+        "source_assignment_id": {"$ref": "#/$defs/id"},
+        "reviewed_source_scope_context_sha256": {"$ref": "#/$defs/sha256"}
       },
       "additionalProperties": false
     }

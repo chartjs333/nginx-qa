@@ -51,11 +51,14 @@ from nginx_qa.legacy_scope_control import (
     SCOPE_CONTEXT_PRECEDENCE,
     SCOPE_CONTROL_CAPABILITY,
     SCOPE_CONTROL_SCHEMA_VERSION,
+    SCOPE_CONTROL_V2_CAPABILITY,
+    SUPPORTED_SCOPE_CONTROL_VERSIONS,
     acknowledgement_for_binding,
     acknowledgement_id,
     active_amendment,
     amendment_by_id,
     assignment_binding,
+    attach_reviewed_source_context,
     canonical_json_bytes as scope_canonical_json_bytes,
     canonical_json_sha256 as scope_canonical_json_sha256,
     effective_agent_for_binding,
@@ -65,9 +68,13 @@ from nginx_qa.legacy_scope_control import (
     manifest_scope_delta,
     project_authored_active_task,
     project_effective_task,
+    rebind_active_assignment,
     require_exact_scope_context,
     require_role_tokens_configured,
     scope_banner,
+    store_assignment_binding,
+    store_acknowledgement,
+    validate_versioned_scope_history,
     sha256_bytes as scope_sha256_bytes,
     text_sha256 as scope_text_sha256,
     verify_admin_token,
@@ -626,6 +633,22 @@ def write_json_file_atomic(target_path: Path, data: Any) -> None:
 
 
 def write_git_config_file(data: dict[str, Any]) -> None:
+    # Audit checkpoints are written WITH execution mutations, never by GET.
+    # Old snapshots are not reconstructed from a newer graph pointer.
+    from nginx_qa.execution_observability import append_execution_checkpoint
+    from nginx_qa.scope_workflow import request_list
+    prior = read_git_config_file() if git_config_path.exists() else {}
+    archives = read_sprint_history_file().get("projects", {})
+    for key, entry in data.get(PROJECTS_KEY, {}).items():
+        state = entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        old = prior.get(PROJECTS_KEY, {}).get(key, {}).get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        if not isinstance(state, dict) or state == old:
+            continue
+        snapshot = {"project_id": str(entry.get("project_phone") or ""),
+                    "sprint_id": archives.get(key, {}).get("current_sprint_id"),
+                    "execution": state}
+        append_execution_checkpoint(state.setdefault("execution_audit", {}), snapshot,
+            recorded_at=utc_now(), scope_requests=request_list(state)["requests"])
     write_json_file_atomic(git_config_path, data)
 
 
@@ -7737,11 +7760,211 @@ async def enqueue_group_connection_task_from_data(
     }
 
 
+def parallel_scope_claim_transaction(project_id: str, agent_id: str, queue_name: str, item: Any, supplied_role_token: str, delivered_at: str, record_delivery: bool = True) -> dict[str, Any]:
+    """Record only a real ordinary delivery, using its existing queue identity."""
+    from nginx_qa.scope_runtime_adapters import bind_new_assignments, effective_scope_snapshot
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            raw_key, context_key, project, _ = project_for_group_api(config, project_id)
+            state = deepcopy(project.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+            if state.get("mode", "parallel") != "parallel":
+                return {}
+            agents = full_agents_for_project(read_agents_file(), context_key, phone_git_contexts_from_config(config))
+            agent = next((a for a in agents if a.get("id") == agent_id), None)
+            if agent is None:
+                return {}
+            amendment = active_amendment(state.get("scope_control") or {})
+            if amendment and agent_id in (amendment.get("node_overrides") or {}):
+                verify_role_token(agent.get("phone"), supplied_role_token)
+            if not record_delivery:
+                return {}
+            assignment_id = str(queue_item_id(item) or "")
+            metadata = deepcopy(queue_item_metadata(item))
+            if not assignment_id or not metadata.get("task_id"):
+                return {}
+            existing = next((a for a in state.get("assignments", []) if a.get("assignment_id") == assignment_id), None)
+            if existing is None:
+                issued = sequential_runtime_task_snapshot(queue_name, item)
+                issued["metadata"]["assignment_id"] = assignment_id
+                state.setdefault("assignments", []).append({
+                    "assignment_id": assignment_id, "queue_item_id": assignment_id,
+                    "task_id": metadata.get("task_id"), "cycle_id": metadata.get("cycle_id"),
+                    "task_node_id": metadata.get("task_node_id"), "group_id": metadata.get("group_id"),
+                    "agent_id": agent_id, "agent_phone": agent.get("phone"), "node_id": agent_id,
+                    "phase": "node", "occurrence": 1 + sum(a.get("agent_id") == agent_id for a in state.get("assignments", [])),
+                    "status": "active", "delivery_status": "delivered", "delivered_at": delivered_at,
+                    "started_at": delivered_at, "completed_at": None, "issued_task": issued,
+                })
+                state.update(mode="parallel", strategy="parallel", revision=int(state.get("revision") or 0) + 1, updated_at=delivered_at)
+                bind_new_assignments(state, agents=agents)
+                project[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+                config[PROJECTS_KEY][raw_key] = project
+                write_git_config_file(config)
+            binding = assignment_binding(state, assignment_id)
+            return {"assignment_id": assignment_id, "effective_scope": effective_scope_snapshot(state, assignment_id) if binding else None}
+
+
+def parallel_scope_raw_channel_guard(project_id: str, phone: str, allow_queue_handoff: bool = False) -> None:
+    """Scope-governed parallel work uses its identity-bound group API."""
+    with git_config_file_lock():
+        config = read_git_config_file()
+        try:
+            _, _, project, _ = project_for_group_api(config, project_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return
+            raise
+        state = project.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {}
+        if state.get("strategy") == "queue_graph" and state.get("scope_control") and not allow_queue_handoff:
+            raise HTTPException(409, detail={"error": "SCOPE_GOVERNED_WHOAMI_REQUIRED", "message": "Use the scope-aware sequential identity endpoint."})
+        if state.get("mode") != "parallel":
+            return
+        amendment = active_amendment(state.get("scope_control") or {})
+        if amendment and any(str(rule.get("agent_phone") or "") == phone for rule in (amendment.get("node_overrides") or {}).values()):
+            raise HTTPException(409, detail={"error": "SCOPE_GOVERNED_GROUP_API_REQUIRED", "message": "Use the identity-bound group task claim/handoff endpoint with the role token and exact scope context."})
+
+
+def parallel_scope_handoff_check(project: dict[str, Any], payload: dict[str, Any], from_agent_id: str, supplied_role_token: str) -> dict[str, Any] | None:
+    from nginx_qa.scope_runtime_adapters import require_scope_submission
+    state = project.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {}
+    if state.get("mode") != "parallel" or not state.get("scope_control"):
+        return None
+    matches = [a for a in state.get("assignments", []) if a.get("agent_id") == from_agent_id and (
+        a.get("assignment_id") == payload.get("assignment_id") or
+        (payload.get("parent_task_node_id") and a.get("task_node_id") == payload.get("parent_task_node_id")) or
+        (payload.get("parent_task_id") and a.get("task_id") == payload.get("parent_task_id") and a.get("cycle_id") == payload.get("cycle_id")))]
+    if len(matches) != 1:
+        raise HTTPException(409, detail={"error": "SCOPE_ASSIGNMENT_ID_REQUIRED"})
+    record = matches[0]
+    try:
+        require_scope_submission(state, record["assignment_id"], payload.get("scope_context"), supplied_role_token)
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    return record
+
+
+def parallel_scope_begin_handoff_transaction(project_id: str, payload: dict[str, Any], from_agent_id: str, supplied_role_token: str) -> dict[str, Any] | None:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, _, project, _ = project_for_group_api(config, project_id)
+        record = parallel_scope_handoff_check(project, payload, from_agent_id, supplied_role_token)
+        if record is None:
+            return None
+        digest = scope_canonical_json_sha256(payload)
+        intent = record.get("scope_handoff_intent")
+        if intent:
+            if intent.get("request_sha256") != digest:
+                raise HTTPException(409, detail={"error": "SCOPE_HANDOFF_CONFLICT"})
+            return deepcopy(record)
+        record["scope_handoff_intent"] = {"request_sha256": digest, "status": "publishing", "created_at": utc_now()}
+        state = project[PROJECT_AGENT_ASSIGNMENT_KEY]
+        state["revision"] = int(state.get("revision") or 0) + 1
+        config[PROJECTS_KEY][raw_key] = project
+        write_git_config_file(config)
+        return deepcopy(record)
+
+
+def parallel_scope_complete_transaction(project_id: str, assignment_id: str, response: dict[str, Any], completed_at: str) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, _, project, _ = project_for_group_api(config, project_id)
+        state = deepcopy(project.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+        item = next((a for a in state.get("assignments", []) if a.get("assignment_id") == assignment_id), None)
+        if item is None or item.get("status") != "active":
+            return {}
+        item.update(status="completed", completed_at=completed_at, handoff_queue_item_id=response.get("queue_item_id"))
+        if item.get("scope_handoff_intent"):
+            item["scope_handoff_intent"]["status"] = "completed"
+            item["scope_handoff_intent"]["response"] = deepcopy(response)
+        binding = assignment_binding(state, assignment_id)
+        if binding:
+            item["scope_context"] = deepcopy(binding["scope_context"])
+            item["scope_ack_id"] = acknowledgement_id(binding)
+        state["revision"] = int(state.get("revision") or 0) + 1
+        state["updated_at"] = completed_at
+        project[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+        config[PROJECTS_KEY][raw_key] = project
+        write_git_config_file(config)
+        return {}
+
+
+def queue_graph_scope_handoff_transaction(project_id: str, metadata: dict[str, Any], supplied_role_token: str, receipt: dict[str, Any] | None = None) -> dict[str, Any]:
+    from nginx_qa.scope_runtime_adapters import require_scope_submission
+    with git_config_file_lock():
+        config = read_git_config_file()
+        try:
+            raw_key, _, project, _ = project_for_group_api(config, project_id)
+        except HTTPException as exc:
+            if exc.status_code == 404:
+                return {}
+            raise
+        state = deepcopy(project.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+        if state.get("strategy") != "queue_graph" or not state.get("scope_control"):
+            return {}
+        assignment_id = str((metadata.get("scope_context") or {}).get("assignment_id") or state.get("current_assignment_id") or "")
+        binding = assignment_binding(state, assignment_id)
+        if binding is None:
+            return {}
+        if str(metadata.get("from_phone") or "") != str(binding["agent_phone"]):
+            raise HTTPException(409, detail={"error": "SCOPE_ASSIGNMENT_ACTOR_MISMATCH"})
+        try:
+            require_scope_submission(state, assignment_id, metadata.get("scope_context"), supplied_role_token)
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
+        assignment = legacy_scope_assignment_record(state, assignment_id)
+        fingerprint = metadata.get("scope_handoff_fingerprint")
+        intent = assignment.get("scope_handoff_intent") if assignment else None
+        if intent and intent.get("request_sha256") != fingerprint:
+            raise HTTPException(409, detail={"error": "SCOPE_HANDOFF_CONFLICT"})
+        if assignment and assignment.get("handoff_receipt"):
+            return deepcopy(assignment["handoff_receipt"])
+        if assignment_id != state.get("current_assignment_id"):
+            raise HTTPException(409, detail={"error": "SCOPE_ASSIGNMENT_NOT_CURRENT"})
+        if assignment and not intent and receipt is None:
+            assignment["scope_handoff_intent"] = {"request_sha256": fingerprint, "status": "publishing", "created_at": utc_now()}
+            state["revision"] = int(state.get("revision") or 0) + 1
+            project[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+            config[PROJECTS_KEY][raw_key] = project
+            write_git_config_file(config)
+        if receipt is not None and assignment:
+            assignment["handoff_receipt"] = deepcopy(receipt)
+            assignment["handoff_accepted_at"] = utc_now()
+            assignment["scope_context"] = deepcopy(binding["scope_context"])
+            assignment["scope_ack_id"] = acknowledgement_id(binding)
+            assignment["scope_handoff_intent"]["status"] = "completed"
+            state["revision"] = int(state.get("revision") or 0) + 1
+            state["updated_at"] = assignment["handoff_accepted_at"]
+            project[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+            config[PROJECTS_KEY][raw_key] = project
+            write_git_config_file(config)
+        return {}
+
+
+async def enqueue_scope_aware_phone_channel(queue_name: str, conversation_phone: str, message: Any, metadata: dict[str, Any], port: int | None, git_context: dict[str, Any] | None, supplied_role_token: str) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        await asyncio.to_thread(parallel_scope_raw_channel_guard, conversation_phone, str(metadata.get("from_phone") or ""), True)
+        metadata = deepcopy(metadata)
+        metadata["scope_handoff_fingerprint"] = scope_canonical_json_sha256({"queue": queue_name, "message": message, "metadata": metadata})
+        existing = await run_group_write_transaction(queue_graph_scope_handoff_transaction, conversation_phone, metadata, supplied_role_token)
+        if existing:
+            return {**existing, "deduplicated": True}
+        context = metadata.get("scope_context")
+        if isinstance(context, dict) and context.get("assignment_id"):
+            metadata.update(request_id="scope-handoff-" + str(context["assignment_id"]), task_request_scope="scope-queue-graph:" + conversation_phone, task_request_fingerprint=metadata["scope_handoff_fingerprint"])
+            queued = await enqueue_idempotent_group_task(queue_name, conversation_phone, message, metadata, port, git_context or {}, submission_lock_held=True)
+        else:
+            queued = await enqueue_phone_channel(queue_name, conversation_phone, message, metadata, port, git_context)
+        await run_group_write_transaction(queue_graph_scope_handoff_transaction, conversation_phone, metadata, supplied_role_token, queued)
+        return queued
+
+
 async def enqueue_group_connection_task(
     group_id: str,
     connection_id: str,
     payload: dict[str, Any],
     port: int | None,
+    supplied_role_token: str = "",
 ) -> dict[str, Any]:
     async with group_task_submission_lock:
         # Keep the project mutation lock until the queue item is committed.
@@ -7763,22 +7986,37 @@ async def enqueue_group_connection_task(
                         target_group_id,
                     )
                 )
-            return await enqueue_group_connection_task_from_data(
+            scoped_source = await asyncio.to_thread(parallel_scope_begin_handoff_transaction, str(group_data["group"]["project_phone"]), payload, str(connection.get("from_agent_id") or ""), supplied_role_token)
+            if scoped_source:
+                prior_intent = scoped_source.get("scope_handoff_intent") or {}
+                if prior_intent.get("status") == "completed" and isinstance(prior_intent.get("response"), dict):
+                    return {**deepcopy(prior_intent["response"]), "deduplicated": True}
+                payload = deepcopy(payload)
+                if not payload.get("request_id"):
+                    payload["request_id"] = "scope-handoff-" + str(scoped_source["assignment_id"])
+            result = await enqueue_group_connection_task_from_data(
                 group_data,
                 target_group_data,
                 connection_id,
                 payload,
                 port,
             )
+            if scoped_source:
+                await asyncio.to_thread(parallel_scope_complete_transaction, str(group_data["group"]["project_phone"]), scoped_source["assignment_id"], result, utc_now())
+            return result
 
 
 async def dequeue_group_agent_task(
     group_id: str,
     agent_id: str,
     port: int | None,
+    supplied_role_token: str = "",
 ) -> dict[str, Any]:
     group_data = await read_group_with_agents(group_id)
     group = group_data["group"]
+    group_assignment = group_data["project_entry"].get(PROJECT_AGENT_ASSIGNMENT_KEY) or {}
+    if group_assignment.get("mode") == "sequential" and group_assignment.get("scope_control"):
+        raise HTTPException(409, detail={"error": "SCOPE_GOVERNED_WHOAMI_REQUIRED"})
     ensure_group_accepts_tasks(group)
     bindings = [
         binding
@@ -7832,6 +8070,11 @@ async def dequeue_group_agent_task(
                     candidates,
                     key=lambda candidate: (candidate[0], candidate[1]),
                 )
+                try:
+                    claimed_scope = await run_group_write_transaction(parallel_scope_claim_transaction,
+                        str(group["project_phone"]), agent_id, delivered_queue, deepcopy(delivered_item), supplied_role_token, utc_now(), False)
+                except LegacyScopeControlError as exc:
+                    raise_legacy_scope_control_error(exc)
                 removed = False
                 kept_items: deque[Any] = deque()
                 while queues[delivered_queue]:
@@ -7857,6 +8100,14 @@ async def dequeue_group_agent_task(
         metadata = deepcopy(queue_item_metadata(delivered_item))
         item_id = queue_item_id(delivered_item)
         message = deepcopy(queue_item_message(delivered_item))
+        try:
+            claimed_scope = await run_group_write_transaction(parallel_scope_claim_transaction,
+                str(group["project_phone"]), agent_id, delivered_queue, deepcopy(delivered_item), supplied_role_token, utc_now())
+        except Exception:
+            async with locks[delivered_queue]:
+                queues[delivered_queue].appendleft(delivered_item)
+                await persist_queue_state_locked(delivered_queue)
+            raise
         await append_history(
             QUEUE_DEFINITIONS[delivered_queue]["get_event"],
             delivered_queue,
@@ -7866,6 +8117,7 @@ async def dequeue_group_agent_task(
             group_git_context_for_queue(group_data),
         )
         return {
+            **claimed_scope,
             "message": message,
             "id": item_id,
             "queue": delivered_queue,
@@ -14306,6 +14558,7 @@ def render_index_v2() -> str:
       <button class="page-tab" data-view="launch-prompt" type="button">Промпт запуска</button>
       <button class="help-button" data-help-topic="page:launch-prompt" type="button" title="Что это?" aria-label="Подсказка: Промпт запуска">?</button>
       <button class="page-tab" data-view="pending-sprints" type="button">Ожидающие спринты</button>
+      <a class="page-tab" href="/execution">Выполнение спринта</a>
       <button class="help-button" data-help-topic="page:pending-sprints" type="button" title="Что это?" aria-label="Подсказка: Ожидающие спринты">?</button>
       <button class="page-tab" data-view="cycles" type="button">Граф группы и циклы</button>
       <button class="help-button" data-help-topic="page:cycles" type="button" title="Что это?" aria-label="Подсказка: Граф группы и циклы">?</button>
@@ -22783,6 +23036,7 @@ async def _dequeue_phone_channel_unlocked(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="conversation_phone and to_phone are required",
         )
+    await asyncio.to_thread(parallel_scope_raw_channel_guard, conversation_phone, to_phone)
 
     queue_meta = queue_definition(queue_name)
     target_context_key = (
@@ -25916,7 +26170,7 @@ def legacy_scope_require_assignment_delivery(
     if (
         not isinstance(assignment, dict)
         or assignment.get("status") != "active"
-        or not assignment.get("delivered_at")
+        or not (assignment.get("delivered_at") or (state.get("strategy") == "queue_graph" and assignment.get("started_at")))
         or not assignment.get("queue_item_id")
         or not isinstance(metadata, dict)
         or str(metadata.get("assignment_id") or "") != assignment_id
@@ -25971,7 +26225,8 @@ def legacy_scope_runtime_overrides(
         for node_id, value in (state.get("visit_counts") or {}).items()
     }
     current_node_id = str(state.get("current_node_id") or "")
-    node_overrides: dict[str, dict[str, Any]] = {}
+    previous_amendment = active_amendment(state.get("scope_control") or {}) or {}
+    node_overrides: dict[str, dict[str, Any]] = deepcopy(previous_amendment.get("node_overrides") or {})
     role_phones: list[str] = []
     for node_id, source_override in verified_source["delta"][
         "node_overrides"
@@ -25990,7 +26245,9 @@ def legacy_scope_runtime_overrides(
                 "SCOPE_RUNTIME_ACTOR_MISMATCH",
                 "A targeted live graph agent is missing",
             )
-        effective_agent = effective_agent_from_override(issued_agent, source_override)
+        previous_rule = node_overrides.get(node_id)
+        previous_effective = legacy_scope_effective_agent_from_stored_override(issued_agent, previous_rule) if isinstance(previous_rule, dict) else issued_agent
+        effective_agent = effective_agent_from_override(previous_effective, source_override)
         minimum_visit = visit_counts.get(node_id, 0) + 1
         if node_id == current_node_id:
             minimum_visit = visit_counts.get(node_id, 0)
@@ -26010,7 +26267,7 @@ def legacy_scope_runtime_overrides(
         }
         role_phones.append(str(issued_agent.get("phone") or ""))
     active_override = node_overrides.get(current_node_id)
-    if active_override is None or str(active_override.get("agent_id") or "") != str(
+    if current_node_id not in verified_source["delta"]["node_overrides"] or active_override is None or str(active_override.get("agent_id") or "") != str(
         state.get("current_agent_id") or ""
     ):
         raise LegacyScopeControlError(
@@ -26019,7 +26276,7 @@ def legacy_scope_runtime_overrides(
             status_code=400,
         )
 
-    reviewer_overrides: dict[str, dict[str, Any]] = {}
+    reviewer_overrides: dict[str, dict[str, Any]] = deepcopy(previous_amendment.get("reviewer_overrides") or {})
     for reviewer_id, source_override in verified_source["delta"][
         "reviewer_overrides"
     ].items():
@@ -26029,7 +26286,9 @@ def legacy_scope_runtime_overrides(
                 "SCOPE_RUNTIME_ACTOR_MISMATCH",
                 "A targeted live reviewer is missing",
             )
-        effective_agent = effective_agent_from_override(issued_agent, source_override)
+        previous_rule = reviewer_overrides.get(reviewer_id)
+        previous_effective = legacy_scope_effective_agent_from_stored_override(issued_agent, previous_rule) if isinstance(previous_rule, dict) else issued_agent
+        effective_agent = effective_agent_from_override(previous_effective, source_override)
         reviewer_profile = str(effective_agent.get("profile") or "")
         for terminal_override in verified_source["delta"].get(
             "terminal_overrides", {}
@@ -26065,7 +26324,8 @@ def legacy_scope_runtime_overrides(
         "node_overrides": node_overrides,
         "reviewer_overrides": reviewer_overrides,
         "terminal_overrides": deepcopy(
-            verified_source["delta"].get("terminal_overrides") or {}
+            {**(previous_amendment.get("terminal_overrides") or {}),
+             **(verified_source["delta"].get("terminal_overrides") or {})}
         ),
     }, role_phones
 
@@ -26118,7 +26378,7 @@ def legacy_scope_bind_new_assignment(
     scope_control = state.get("scope_control")
     if not isinstance(scope_control, dict):
         return deepcopy(issued_agent)
-    if int(scope_control.get("schema_version") or 0) != SCOPE_CONTROL_SCHEMA_VERSION:
+    if int(scope_control.get("schema_version") or 0) not in SUPPORTED_SCOPE_CONTROL_VERSIONS:
         raise LegacyScopeControlError(
             "SCOPE_CONTROL_VERSION_UNSUPPORTED",
             "The persisted scope-control version is not supported",
@@ -26132,9 +26392,9 @@ def legacy_scope_bind_new_assignment(
         source_context = (
             pending.get("scope_context") if isinstance(pending, dict) else None
         )
-        if not isinstance(source_context, dict):
+        if not isinstance(source_context, dict) and int(scope_control.get("schema_version") or 0) != 2:
             return deepcopy(issued_agent)
-        amendment = amendment_by_id(scope_control, source_context.get("amendment_id"))
+        amendment = active_amendment(scope_control) if int(scope_control.get("schema_version") or 0) == 2 else amendment_by_id(scope_control, source_context.get("amendment_id"))
         source_assignment_id = str(
             pending.get("source_assignment_id") if isinstance(pending, dict) else ""
         )
@@ -26173,9 +26433,9 @@ def legacy_scope_bind_new_assignment(
         source_assignment_id=source_assignment_id,
         bound_at=bound_at,
     )
-    bindings = dict(scope_control.get("assignment_bindings") or {})
-    bindings[str(assignment.get("assignment_id") or "")] = binding
-    scope_control["assignment_bindings"] = bindings
+    if phase == "review" and int(scope_control.get("schema_version") or 0) == 2:
+        attach_reviewed_source_context(binding, source_context)
+    store_assignment_binding(scope_control, binding)
     state["scope_control"] = scope_control
     return effective_agent
 
@@ -26260,7 +26520,7 @@ def legacy_scope_apply_transaction(
             raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
             state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
             scope_control = deepcopy(state.get("scope_control") or {})
-            if scope_control and int(scope_control.get("schema_version") or 0) != 1:
+            if scope_control and int(scope_control.get("schema_version") or 0) not in SUPPORTED_SCOPE_CONTROL_VERSIONS:
                 raise HTTPException(
                     status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                     detail={"error": "SCOPE_CONTROL_VERSION_UNSUPPORTED"},
@@ -26284,7 +26544,9 @@ def legacy_scope_apply_transaction(
                 receipt = deepcopy(existing.get("receipt") or {})
                 receipt["deduplicated"] = True
                 return receipt
-            if any(
+            if request_payload.get("schema_version") == 2 or scope_control.get("schema_version") == 2:
+                raise HTTPException(status_code=409, detail={"error": "SCOPE_HUMAN_DECISION_REQUIRED"})
+            if int(scope_control.get("schema_version") or 1) == 1 and any(
                 isinstance(existing, dict)
                 for existing in scope_control.get("amendments", [])
             ):
@@ -26292,6 +26554,16 @@ def legacy_scope_apply_transaction(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={"error": "SCOPE_ADDITIONAL_AMENDMENT_UNSUPPORTED"},
                 )
+            if int(scope_control.get("schema_version") or request_payload.get("schema_version") or 1) == 2:
+                if request_payload.get("schema_version") != 2:
+                    raise HTTPException(status_code=409, detail={"error": "SCOPE_V2_REQUEST_REQUIRED"})
+                if int(request_payload.get("expected_scope_revision", -1)) != int(scope_control.get("effective_revision") or 0):
+                    raise HTTPException(status_code=409, detail={"error": "SCOPE_REVISION_CONFLICT"})
+                if scope_control:
+                    try:
+                        validate_versioned_scope_history(scope_control)
+                    except LegacyScopeControlError as exc:
+                        raise_legacy_scope_control_error(exc)
 
             if (
                 str(state.get("mode") or "") != "sequential"
@@ -26426,13 +26698,8 @@ def legacy_scope_apply_transaction(
                     issued_agent,
                     active_override,
                 )
-                effective_active_task = legacy_scope_effective_active_task(
-                    active_task,
-                    issued_agent,
-                    effective_agent,
-                )
-                binding = make_assignment_binding(
-                    amendment=amendment,
+                binding = rebind_active_assignment(
+                    state, amendment=amendment,
                     assignment=active_assignment,
                     issued_agent=issued_agent,
                     effective_agent=effective_agent,
@@ -26444,14 +26711,13 @@ def legacy_scope_apply_transaction(
                             0,
                         )
                     ),
-                    issued_active_task=active_task,
-                    effective_active_task=effective_active_task,
+                    active_task=active_task,
                     bound_at=applied_at,
                 )
             except LegacyScopeControlError as exc:
                 raise_legacy_scope_control_error(exc)
             receipt = {
-                "schema_version": 1,
+                "schema_version": int(request_payload.get("schema_version") or 1),
                 "project_id": normalize_project_phone(project_entry.get("project_phone")),
                 "sprint_id": sprint_id,
                 "amendment_id": amendment["amendment_id"],
@@ -26481,21 +26747,22 @@ def legacy_scope_apply_transaction(
                 if isinstance(item, dict)
             ]
             amendments.append(amendment)
-            bindings = dict(scope_control.get("assignment_bindings") or {})
-            bindings[expected_assignment_id] = binding
+            schema_version = int(scope_control.get("schema_version") or request_payload.get("schema_version") or 1)
             scope_control.update(
                 {
-                    "schema_version": SCOPE_CONTROL_SCHEMA_VERSION,
-                    "minimum_runtime_capability": SCOPE_CONTROL_CAPABILITY,
+                    "schema_version": schema_version,
+                    "minimum_runtime_capability": SCOPE_CONTROL_V2_CAPABILITY if schema_version == 2 else SCOPE_CONTROL_CAPABILITY,
                     "effective_revision": effective_revision,
                     "active_amendment_id": amendment["amendment_id"],
                     "amendments": amendments,
-                    "assignment_bindings": bindings,
                     "acknowledgements": dict(
                         scope_control.get("acknowledgements") or {}
                     ),
                 }
             )
+            if schema_version == 2:
+                scope_control.setdefault("acknowledgement_history", {})
+            store_assignment_binding(scope_control, binding)
             state["scope_control"] = scope_control
             state["revision"] = next_execution_revision
             state["updated_at"] = applied_at
@@ -26520,7 +26787,7 @@ def legacy_scope_replay_transaction(
         scope_control = state.get("scope_control") if isinstance(state, dict) else None
         if not isinstance(scope_control, dict):
             return None
-        if int(scope_control.get("schema_version") or 0) != 1:
+        if int(scope_control.get("schema_version") or 0) not in SUPPORTED_SCOPE_CONTROL_VERSIONS:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"error": "SCOPE_CONTROL_VERSION_UNSUPPORTED"},
@@ -26544,7 +26811,7 @@ def legacy_scope_replay_transaction(
             receipt = deepcopy(existing.get("receipt") or {})
             receipt["deduplicated"] = True
             return receipt
-        if any(
+        if int(scope_control.get("schema_version") or 1) == 1 and any(
             isinstance(existing, dict)
             for existing in scope_control.get("amendments", [])
         ):
@@ -26684,9 +26951,7 @@ def legacy_scope_ack_transaction(
             "scope_context": deepcopy(binding.get("scope_context")),
             "acknowledged_at": acknowledged_at,
         }
-        acknowledgements = dict(scope_control.get("acknowledgements") or {})
-        acknowledgements[assignment_id] = acknowledgement
-        scope_control["acknowledgements"] = acknowledgements
+        store_acknowledgement(scope_control, acknowledgement)
         state["scope_control"] = scope_control
         state["revision"] = int(state.get("revision") or 0) + 1
         state["updated_at"] = acknowledged_at
@@ -27466,6 +27731,11 @@ def sequential_agent_assignment_transaction(
             completed_assignment: dict[str, Any] | None = None
 
             if complete_current:
+                try:
+                    from nginx_qa.scope_runtime_adapters import require_scope_submission
+                    require_scope_submission(state, str(state.get("current_assignment_id") or ""), submitted_scope_context, supplied_role_token)
+                except LegacyScopeControlError as exc:
+                    raise_legacy_scope_control_error(exc)
                 if current_agent is None:
                     raise HTTPException(
                         status_code=status.HTTP_409_CONFLICT,
@@ -28805,23 +29075,24 @@ def record_sequential_runtime_identity_transaction(
         previous_assignment_id = str(
             state.get("current_assignment_id") or ""
         ).strip()
+        assignment_id = str(metadata.get("assignment_id") or uuid4()).strip()
         for assignment in assignments:
             if (
                 str(assignment.get("assignment_id") or "")
                 == previous_assignment_id
+                and previous_assignment_id != assignment_id
                 and assignment.get("status") == "active"
             ):
                 assignment["status"] = "advanced"
                 assignment["completed_at"] = seen_at
                 break
 
-        assignment_id = str(metadata.get("assignment_id") or uuid4()).strip()
         agent_id = str(agent.get("id") or "").strip()
         agent_phone = str(agent.get("phone") or "").strip()
         active_task = sequential_runtime_task_snapshot(queue_name, queue_item)
         active_task["metadata"]["assignment_id"] = assignment_id
-        assignments.append(
-            {
+        current_record = next((item for item in assignments if item.get("assignment_id") == assignment_id and item.get("status") == "active"), None)
+        delivered_record = {
                 "assignment_id": assignment_id,
                 "agent_id": agent_id,
                 "agent_name": agent.get("name"),
@@ -28831,17 +29102,24 @@ def record_sequential_runtime_identity_transaction(
                 "queue": queue_name,
                 "queue_item_id": queue_item_id(queue_item),
                 "task_id": metadata.get("task_id"),
+                "node_id": agent_id,
+                "phase": "node",
+                "delivered_at": seen_at,
                 "status": "active",
-                "started_at": seen_at,
+                "started_at": (current_record or {}).get("started_at") or seen_at,
                 "completed_at": None,
             }
-        )
+        if current_record is None:
+            assignments.append(delivered_record)
+        else:
+            current_record.update(delivered_record)
         state.update(
             {
                 "mode": "sequential",
                 "strategy": "queue_graph",
                 "status": "active",
                 "current_agent_id": agent_id,
+                "current_node_id": agent_id,
                 "current_assignment_id": assignment_id,
                 "current_started_at": seen_at,
                 "active_task": active_task,
@@ -28850,6 +29128,10 @@ def record_sequential_runtime_identity_transaction(
                 "revision": int(state.get("revision") or 0) + 1,
             }
         )
+        from nginx_qa.scope_runtime_adapters import bind_new_assignments
+        with agents_file_lock():
+            scope_agents = full_agents_for_project(read_agents_file(), context_key, phone_git_contexts_from_config(config))
+        bind_new_assignments(state, agents=scope_agents)
         project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
         project_entry["updated_at"] = seen_at
         raw_projects = config.get(PROJECTS_KEY)
@@ -28876,6 +29158,14 @@ async def dequeue_sequential_runtime_task(
             project_id,
         )
         assignment = snapshot["assignment"]
+        if assignment.get("strategy") == "queue_graph":
+            current_scope = assignment_binding(assignment, assignment.get("current_assignment_id"))
+            current_record = legacy_scope_assignment_record(assignment, str(assignment.get("current_assignment_id") or ""))
+            if current_scope and current_record and not current_record.get("handoff_accepted_at"):
+                recovered = await recover_sequential_runtime_identity(snapshot)
+                if recovered is not None:
+                    return legacy_scope_project_runtime(recovered, supplied_role_token)
+                raise HTTPException(409, detail={"error": "SCOPE_CURRENT_HANDOFF_REQUIRED"})
         if str(assignment.get("mode") or "parallel") != "sequential":
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -28969,6 +29259,10 @@ async def dequeue_sequential_runtime_task(
                         assignment,
                         selected_metadata.get("assignment_id"),
                     )
+                    if queued_binding is None and assignment.get("strategy") == "queue_graph":
+                        queued_amendment = active_amendment(assignment.get("scope_control") or {})
+                        if queued_amendment and str(target_agent.get("id")) in (queued_amendment.get("node_overrides") or {}):
+                            verify_role_token(target_agent.get("phone"), supplied_role_token)
                     if queued_binding is not None:
                         verify_role_token(
                             queued_binding.get("agent_phone"),
@@ -29968,11 +30262,16 @@ def managed_continuity_runtime_for_requests() -> ManagedContinuityRuntime | None
 
 
 def managed_process_secret_resolver(reference: str) -> str:
-    """Resolve an ephemeral ``env:NAME`` child secret without persisting it."""
+    """Resolve child secrets without exporting scope-control authority."""
 
     provider, separator, locator = reference.partition(":")
     if separator != ":" or provider != "env" or not locator:
         raise LookupError("managed process secret provider is not configured")
+    # Environment names are case-insensitive on Windows.  Reject the entire
+    # control namespace before lookup, even when a child requests an innocuous
+    # destination alias.  Role requests use the dedicated credential wrapper.
+    if locator.casefold().startswith("nginx_qa_scope_control_"):
+        raise LookupError("managed process secret reference is protected")
     value = os.environ.get(locator)
     if value is None:
         raise LookupError("managed process secret reference is unavailable")
@@ -30321,12 +30620,17 @@ async def preflight_legacy_scope_amendment(
                 assignment.get("scope_control"),
                 dict,
             ),
-            "amendment_mode": "one_shot_v1",
-            "accepts_new_amendment": not any(
+            "amendment_mode": "versioned_v2" if (assignment.get("scope_control") or {}).get("schema_version") == 2 else "one_shot_v1",
+            "effective_scope_revision": int((assignment.get("scope_control") or {}).get("effective_revision") or 0),
+            "offline_migration_required": (assignment.get("scope_control") or {}).get("schema_version") == 1,
+            "accepts_new_amendment": (assignment.get("scope_control") or {}).get("schema_version") == 2 or not any(
                 isinstance(item, dict) for item in existing_amendments
             ),
             "source_repository": source_repository,
-            "minimum_runtime_capability": SCOPE_CONTROL_CAPABILITY,
+            "minimum_runtime_capability": SCOPE_CONTROL_V2_CAPABILITY if (assignment.get("scope_control") or {}).get("schema_version") == 2 else SCOPE_CONTROL_CAPABILITY,
+            "supported_capabilities": [SCOPE_CONTROL_CAPABILITY, SCOPE_CONTROL_V2_CAPABILITY],
+            "versioned_apply_mechanism": "human_scope_workflow",
+            "scope_request_endpoint": f"/api/v1/projects/{project_phone}/sprints/{current_sprint_id}/scope-requests",
             "mutated": False,
         }
 
@@ -30358,7 +30662,7 @@ async def apply_legacy_scope_amendment(
         ) from exc
     payload = validate_legacy_scope_schema(
         raw_payload,
-        "legacy-scope-amendment-v1.schema.json",
+        "legacy-scope-amendment-v2.schema.json" if raw_payload.get("schema_version") == 2 else "legacy-scope-amendment-v1.schema.json",
     )
     (
         project_phone,
@@ -30395,6 +30699,8 @@ async def apply_legacy_scope_amendment(
         replay["audit_history_recorded"] = True
         replay["audit_history_created"] = audit_created
         return replay
+    if payload.get("schema_version") == 2 or (initial_snapshot["assignment"].get("scope_control") or {}).get("schema_version") == 2:
+        raise HTTPException(status_code=409, detail={"error": "SCOPE_HUMAN_DECISION_REQUIRED"})
     try:
         verified_source = await asyncio.to_thread(
             verify_legacy_scope_source,
@@ -30506,6 +30812,9 @@ async def get_legacy_assignment_effective_scope(
     assignment_id: str,
     request: Request,
 ) -> dict[str, Any]:
+    managed_scope = await scope_api_managed_effective(project_id, assignment_id, request)
+    if managed_scope is not None:
+        return managed_scope
     async with group_task_submission_lock:
         snapshot = await run_group_write_transaction(
             legacy_scope_binding_snapshot_transaction,
@@ -30599,6 +30908,9 @@ async def acknowledge_legacy_assignment_effective_scope(
     assignment_id: str,
     request: Request,
 ) -> dict[str, Any]:
+    managed_scope = await scope_api_managed_effective(project_id, assignment_id, request, acknowledge=True)
+    if managed_scope is not None:
+        return managed_scope
     raw_body = await request.body()
     if len(raw_body) > 256 * 1024:
         raise HTTPException(
@@ -31171,6 +31483,7 @@ async def identify_project_agent(
                     agent_phone,
                     raw_body,
                     correlation_id,
+                    supplied_role_token=request.headers.get(ROLE_TOKEN_HEADER, ""),
                 )
                 if managed_result is not None:
                     return JSONResponse(
@@ -31801,6 +32114,7 @@ async def post_group_connection_task(
         normalized_group_id(connection_id),
         payload,
         request_port(request),
+        supplied_role_token=request.headers.get(ROLE_TOKEN_HEADER, ""),
     )
 
 
@@ -31814,6 +32128,7 @@ async def get_group_agent_task(
         normalized_group_id(group_id),
         str(agent_id or "").strip(),
         request_port(request),
+        supplied_role_token=request.headers.get(ROLE_TOKEN_HEADER, ""),
     )
 
 
@@ -32948,6 +33263,8 @@ async def read_phone_channel_payload(request: Request) -> tuple[Any, dict[str, A
     )
     metadata = {
         "submitted_via": payload.get("submitted_via") or "phone_channel",
+        "scope_context": deepcopy(payload.get("scope_context")),
+        "assignment_id": payload.get("assignment_id"),
         "sender": payload.get("sender"),
         "receiver": payload.get("receiver"),
         "from_phone": payload.get("from_phone"),
@@ -32966,14 +33283,16 @@ async def post_worker_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    await asyncio.to_thread(parallel_scope_raw_channel_guard, conversation_phone, str(metadata.get("from_phone") or ""), True)
     git_context = await git_context_for_phone_if_mapped(conversation_phone)
-    return await enqueue_phone_channel(
+    return await enqueue_scope_aware_phone_channel(
         "worker-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
         git_context,
+        request.headers.get(ROLE_TOKEN_HEADER, ""),
     )
 
 
@@ -32999,14 +33318,16 @@ async def post_tester_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    await asyncio.to_thread(parallel_scope_raw_channel_guard, conversation_phone, str(metadata.get("from_phone") or ""), True)
     git_context = await git_context_for_phone_if_mapped(conversation_phone)
-    return await enqueue_phone_channel(
+    return await enqueue_scope_aware_phone_channel(
         "tester-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
         git_context,
+        request.headers.get(ROLE_TOKEN_HEADER, ""),
     )
 
 
@@ -33032,14 +33353,16 @@ async def post_consultant_all(
     request: Request,
 ) -> dict[str, Any]:
     message, metadata = await read_phone_channel_payload(request)
+    await asyncio.to_thread(parallel_scope_raw_channel_guard, conversation_phone, str(metadata.get("from_phone") or ""), True)
     git_context = await git_context_for_phone_if_mapped(conversation_phone)
-    return await enqueue_phone_channel(
+    return await enqueue_scope_aware_phone_channel(
         "consultant-all",
         conversation_phone,
         message,
         metadata,
         request_port(request),
         git_context,
+        request.headers.get(ROLE_TOKEN_HEADER, ""),
     )
 
 
@@ -33180,6 +33503,11 @@ async def post_test_design_legacy() -> None:
 @app.get("/test-design", status_code=status.HTTP_400_BAD_REQUEST)
 async def get_test_design_legacy() -> None:
     legacy_queue_route_error("/test-design")
+
+
+from nginx_qa.scope_api import register_scope_api
+import sys as _scope_api_sys
+register_scope_api(_scope_api_sys.modules[__name__])
 
 
 if __name__ == "__main__":

@@ -11,7 +11,8 @@
       "description": "The reviewer's current queue assignment"
     },
     "status": {"enum": ["APPROVE", "REJECT"]},
-    "feedback": {"type": "string"}
+    "feedback": {"type": "string"},
+    "scope_context": {"type": "object", "description": "Exact reviewer-assignment scope context; an ACK on the source task is not a reviewer ACK."}
   },
   "allOf": [
     {

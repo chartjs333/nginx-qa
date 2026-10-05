@@ -18,6 +18,9 @@ from typing import Any, Mapping
 
 SCOPE_CONTROL_SCHEMA_VERSION = 1
 SCOPE_CONTROL_CAPABILITY = "legacy_scope_control_v1"
+SCOPE_CONTROL_V2_SCHEMA_VERSION = 2
+SCOPE_CONTROL_V2_CAPABILITY = "versioned_scope_control_v2"
+SUPPORTED_SCOPE_CONTROL_VERSIONS = (1, 2)
 SCOPE_CONTEXT_PRECEDENCE = "effective_scope_supersedes_conflicting_issued_scope"
 ADMIN_TOKEN_ENV = "NGINX_QA_SCOPE_CONTROL_ADMIN_TOKEN"
 ADMIN_TOKEN_HEADER = "X-Nginx-QA-Scope-Control-Token"
@@ -516,15 +519,27 @@ def project_authored_active_task(
         replacements.append(
             (str(issued.get("message") or ""), str(effective.get("message") or ""))
         )
+    applied_replacements: dict[str, str] = {}
     for old, new in replacements:
         if old == new:
             continue
-        if not old or old not in message:
+        if old in applied_replacements:
+            if applied_replacements[old] != new:
+                raise LegacyScopeControlError("SCOPE_ISSUED_TASK_MISMATCH", "Ambiguous authored text projection")
+            continue
+        if not old:
+            # Managed roles may have no authored profile/task text at all.
+            # There is no historical instruction to replace in that case.
+            message = (new + "\n\n" + message).rstrip()
+            applied_replacements[old] = new
+            continue
+        if old not in message:
             raise LegacyScopeControlError(
                 "SCOPE_ISSUED_TASK_MISMATCH",
                 "The issued active task cannot be projected from the authored snapshots",
             )
         message = message.replace(old, new)
+        applied_replacements[old] = new
     effective_task["message"] = message
     return effective_task
 
@@ -535,12 +550,14 @@ def assignment_binding(
     scope_control = state.get("scope_control")
     if not isinstance(scope_control, dict):
         return None
-    if int(scope_control.get("schema_version") or 0) != SCOPE_CONTROL_SCHEMA_VERSION:
+    if int(scope_control.get("schema_version") or 0) not in SUPPORTED_SCOPE_CONTROL_VERSIONS:
         raise LegacyScopeControlError(
             "SCOPE_CONTROL_VERSION_UNSUPPORTED",
             "The persisted scope-control version is not supported",
             status_code=503,
         )
+    if int(scope_control.get("schema_version") or 0) == 2:
+        validate_versioned_scope_history(scope_control)
     bindings = scope_control.get("assignment_bindings")
     binding = (
         bindings.get(str(assignment_id or "").strip())
@@ -577,6 +594,12 @@ def assignment_binding(
         stored_contract = binding.get("effective_scope_hash_contract")
         issued_active_task = issued.get("active_task")
         stored_active_task = effective.get("active_task")
+        delivery_projection = binding.get("delivery_projection")
+        if issued_active_task is None and isinstance(delivery_projection, dict):
+            issued_active_task = delivery_projection.get("task")
+            projection_agent = delivery_projection.get("base_core")
+        else:
+            projection_agent = issued
         if issued_active_task is None and stored_active_task is None:
             active_task_projection_valid = True
         elif isinstance(issued_active_task, dict) and isinstance(
@@ -584,7 +607,7 @@ def assignment_binding(
         ):
             expected_active_task = project_authored_active_task(
                 issued_active_task,
-                issued,
+                projection_agent,
                 effective,
             )
             active_task_projection_valid = canonical_json_bytes(
@@ -611,6 +634,104 @@ def assignment_binding(
             status_code=503,
         )
     return deepcopy(binding)
+
+
+def store_assignment_binding(scope_control: dict[str, Any], binding: Mapping[str, Any]) -> None:
+    """Append a revision snapshot; replace only the explicitly-current cache.
+
+    Callers hold the runtime's write lock and persist the enclosing document
+    atomically. The old snapshots are never amended in place, including during
+    re-ACK or another amendment of the same still-active assignment.
+    """
+    assignment_id = str(binding.get("assignment_id") or "")
+    if int(scope_control.get("schema_version") or 0) == 2:
+        history = scope_control.setdefault("binding_history", {})
+        records = history.setdefault(assignment_id, [])
+        for existing in records:
+            if existing.get("scope_context_sha256") == binding.get("scope_context_sha256"):
+                if canonical_json_bytes(existing) != canonical_json_bytes(binding):
+                    raise LegacyScopeControlError("SCOPE_HISTORY_CONFLICT", "A saved scope binding is immutable")
+                return
+        if records and canonical_json_bytes(records[0].get("issued")) != canonical_json_bytes(binding.get("issued")):
+            raise LegacyScopeControlError("SCOPE_ISSUED_HISTORY_CONFLICT", "An assignment's originally issued instruction is immutable")
+        records.append(deepcopy(dict(binding)))
+    scope_control.setdefault("assignment_bindings", {})[assignment_id] = deepcopy(dict(binding))
+
+
+def store_acknowledgement(scope_control: dict[str, Any], acknowledgement: Mapping[str, Any]) -> None:
+    """Append exact-context ACK history without touching execution state."""
+    if int(scope_control.get("schema_version") or 0) == 2:
+        history = scope_control.setdefault("acknowledgement_history", {})
+        ack_id = str(acknowledgement.get("ack_id") or "")
+        existing = history.get(ack_id)
+        if existing is not None and canonical_json_bytes(existing) != canonical_json_bytes(acknowledgement):
+            raise LegacyScopeControlError("SCOPE_ACK_HISTORY_CONFLICT", "A saved acknowledgement is immutable")
+        history[ack_id] = deepcopy(dict(acknowledgement))
+    scope_control.setdefault("acknowledgements", {})[str(acknowledgement.get("assignment_id") or "")] = deepcopy(dict(acknowledgement))
+
+
+def validate_versioned_scope_history(scope_control: Mapping[str, Any]) -> None:
+    """Fail closed on missing lineage, edited snapshots, or invalid ACK links."""
+    if int(scope_control.get("schema_version") or 0) != 2:
+        return
+    amendments = scope_control.get("amendments")
+    if not isinstance(amendments, list) or not amendments:
+        raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Versioned scope requires an amendment history", status_code=503)
+    revision_map = {}
+    for index, amendment in enumerate(amendments, 1):
+        if not isinstance(amendment, dict) or amendment.get("effective_revision") != index:
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Scope revision lineage is incomplete", status_code=503)
+        amendment_id = amendment.get("amendment_id")
+        if not amendment_id or amendment_id in revision_map:
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Amendment identities must be unique", status_code=503)
+        revision_map[amendment_id] = index
+    if scope_control.get("effective_revision") != len(amendments) or scope_control.get("active_amendment_id") != amendments[-1].get("amendment_id"):
+        raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "The active scope pointer is inconsistent", status_code=503)
+    history = scope_control.get("binding_history")
+    current = scope_control.get("assignment_bindings")
+    ack_history = scope_control.get("acknowledgement_history")
+    acks = scope_control.get("acknowledgements")
+    if not all(isinstance(value, dict) for value in (history, current, ack_history, acks)) or set(history) != set(current):
+        raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Versioned binding and ACK ledgers are incomplete", status_code=503)
+    contexts = {}
+    reviewed_sources = []
+    for assignment_id, records in history.items():
+        if not isinstance(records, list) or not records or canonical_json_bytes(records[-1]) != canonical_json_bytes(current[assignment_id]):
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Current binding does not match its history", status_code=503)
+        previous_revision = 0
+        for binding in records:
+            validated = assignment_binding({"scope_control": {"schema_version": 1, "assignment_bindings": {assignment_id: binding}}}, assignment_id)
+            revision = int(validated.get("effective_revision") or 0)
+            if revision <= previous_revision or revision_map.get(validated.get("amendment_id")) != revision:
+                raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Assignment revision lineage is inconsistent", status_code=503)
+            context = binding["scope_context"]
+            amendment = amendments[revision - 1]
+            source = amendment.get("source") or {}
+            if any(context.get(field) != binding.get(field) for field in ("assignment_id", "agent_id", "amendment_id", "effective_revision", "node_id", "phase", "occurrence")) or (context.get("source_assignment_id") or None) != (binding.get("source_assignment_id") or None) or context.get("source_commit") != source.get("target_commit") or context.get("source_path") != (source.get("amendment") or {}).get("path") or context.get("source_sha256") != (source.get("amendment") or {}).get("sha256"):
+                raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Binding context is not linked to its exact revision source", status_code=503)
+            if canonical_json_bytes(binding.get("issued")) != canonical_json_bytes(records[0].get("issued")):
+                raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Originally issued snapshots differ", status_code=503)
+            contexts[binding["scope_context_sha256"]] = binding
+            reviewed = binding.get("reviewed_source_scope_context")
+            if isinstance(reviewed, dict):
+                reviewed_hash = canonical_json_sha256(reviewed)
+                if context.get("reviewed_source_scope_context_sha256") != reviewed_hash or reviewed.get("assignment_id") != binding.get("source_assignment_id"):
+                    raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Reviewed source scope linkage is inconsistent", status_code=503)
+                reviewed_sources.append(reviewed_hash)
+            elif context.get("reviewed_source_scope_context_sha256"):
+                raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Reviewed source scope snapshot is missing", status_code=503)
+            previous_revision = revision
+    if any(key not in contexts for key in reviewed_sources):
+        raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Reviewed source scope history is missing", status_code=503)
+    for ack_id, ack in ack_history.items():
+        if not isinstance(ack, dict):
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "ACK history contains an invalid entry", status_code=503)
+        binding = contexts.get(canonical_json_sha256(ack.get("scope_context")))
+        if binding is None or acknowledgement_id(binding) != ack_id or ack.get("ack_id") != ack_id or any(ack.get(field) != binding.get(field) for field in ("assignment_id", "agent_id", "agent_phone", "amendment_id", "effective_revision")):
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "An ACK does not reference its exact historical binding", status_code=503)
+    for assignment_id, ack in acks.items():
+        if not isinstance(ack, dict) or ack.get("assignment_id") != assignment_id or canonical_json_bytes(ack_history.get(ack.get("ack_id"))) != canonical_json_bytes(ack):
+            raise LegacyScopeControlError("SCOPE_HISTORY_INVALID", "Current ACK cache is not backed by immutable history", status_code=503)
 
 
 def effective_agent_for_binding(
@@ -673,6 +794,9 @@ def project_effective_task(
     if isinstance(stored, dict):
         issued = binding.get("issued")
         historical_task = issued.get("active_task") if isinstance(issued, dict) else None
+        if historical_task is None and isinstance(binding.get("delivery_projection"), dict):
+            historical_task = binding["delivery_projection"].get("task")
+            issued = binding["delivery_projection"].get("base_core")
         if not isinstance(historical_task, dict):
             raise LegacyScopeControlError(
                 "SCOPE_BINDING_INVALID",
@@ -682,6 +806,10 @@ def project_effective_task(
         task = project_authored_active_task(historical_task, issued, effective)
     elif isinstance(issued_task, Mapping):
         task = deepcopy(dict(issued_task))
+        if binding.get("instruction_snapshot_only") is True:
+            authored_messages = [str(effective.get("profile") or "")]
+            authored_messages.extend(str(item.get("message") or "") for item in effective.get("tasks", []) if isinstance(item, dict))
+            task["message"] = "\n\n".join(dict.fromkeys(text for text in authored_messages if text))
     else:
         return None
     metadata = dict(task.get("metadata") or {})
@@ -702,8 +830,24 @@ def project_effective_task(
     task["metadata"] = metadata
     banner = scope_banner(binding)
     message = str(task.get("message") or "")
-    if not message.startswith("=== SCOPE CONTROL:"):
-        task["message"] = f"{banner}\n\n{message}".rstrip()
+    # Generated submission examples are operational instruction, not audit
+    # evidence. Rebind their exact context too: a new banner above an old JSON
+    # example would otherwise tell an executor to submit a guaranteed-stale ACK.
+    projected_lines = []
+    for line in message.splitlines():
+        try:
+            example = json.loads(line)
+        except (ValueError, TypeError):
+            projected_lines.append(line)
+            continue
+        if isinstance(example, dict) and example.get("assignment_id") == binding.get("assignment_id") and isinstance(example.get("scope_context"), dict):
+            example["scope_context"] = deepcopy(binding.get("scope_context"))
+            line = json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+        projected_lines.append(line)
+    message = "\n".join(projected_lines)
+    if message.startswith("=== SCOPE CONTROL:") and "=== END SCOPE CONTROL ===" in message:
+        message = message.split("=== END SCOPE CONTROL ===", 1)[1].lstrip("\n")
+    task["message"] = f"{banner}\n\n{message}".rstrip()
     return task
 
 
@@ -717,7 +861,7 @@ def scope_banner(binding: Mapping[str, Any]) -> str:
                 "conflicting scope text in the historical issued task."
             ),
             (
-                "Graph node ids, transitions, two-review policy, historical "
+                "Graph node ids, transitions, required review policy, historical "
                 "results and approvals are unchanged."
             ),
             "scope_context="
@@ -851,6 +995,43 @@ def make_assignment_binding(
     }
 
 
+def rebind_active_assignment(
+    state: Mapping[str, Any], *, amendment: Mapping[str, Any], assignment: Mapping[str, Any],
+    issued_agent: Mapping[str, Any], effective_agent: Mapping[str, Any], node_id: str,
+    phase: str, occurrence: int, active_task: Mapping[str, Any], bound_at: str,
+    source_assignment_id: str = "",
+) -> dict[str, Any]:
+    """Bind a new revision even when the task was first issued under scope vN.
+
+    Queue-time bindings legitimately have no active-task snapshot. Do not fill
+    that historical null on a later delivery or amendment; retain a separate
+    exact delivery projection instead.
+    """
+    previous = assignment_binding(state, assignment.get("assignment_id"))
+    original_task = previous["issued"].get("active_task") if previous else active_task
+    if original_task is not None:
+        projection_task = original_task
+        projection_agent = issued_agent
+    elif previous and isinstance(previous.get("delivery_projection"), dict):
+        projection_task = previous["delivery_projection"]["task"]
+        projection_agent = previous["delivery_projection"]["base_core"]
+    else:
+        projection_task = active_task
+        projection_agent = previous["effective"] if previous else issued_agent
+    effective_task = project_authored_active_task(projection_task, projection_agent, effective_agent)
+    binding = make_assignment_binding(amendment=amendment, assignment=assignment,
+        issued_agent=issued_agent, effective_agent=effective_agent, node_id=node_id,
+        phase=phase, occurrence=occurrence, issued_active_task=original_task,
+        effective_active_task=effective_task, source_assignment_id=source_assignment_id,
+        bound_at=bound_at)
+    if previous:
+        binding["issued"] = deepcopy(previous["issued"])
+    if original_task is None:
+        binding["delivery_projection"] = {"task": deepcopy(dict(projection_task)),
+            "base_core": effective_scope_core(projection_agent)}
+    return binding
+
+
 def acknowledgement_id(binding: Mapping[str, Any]) -> str:
     return "scope-ack-" + canonical_json_sha256(
         {
@@ -859,6 +1040,16 @@ def acknowledgement_id(binding: Mapping[str, Any]) -> str:
             "scope_context": binding.get("scope_context"),
         }
     )[:32]
+
+
+def attach_reviewed_source_context(binding: dict[str, Any], source_context: Any) -> None:
+    """Keep the reviewed result's scope separate from this reviewer's scope."""
+    binding["reviewed_source_scope_context"] = deepcopy(source_context) if isinstance(source_context, dict) else None
+    if isinstance(source_context, dict):
+        if source_context.get("assignment_id") != binding.get("source_assignment_id"):
+            raise LegacyScopeControlError("SCOPE_REVIEW_SOURCE_MISMATCH", "Reviewer scope must retain its exact reviewed assignment")
+        binding["scope_context"]["reviewed_source_scope_context_sha256"] = canonical_json_sha256(source_context)
+        binding["scope_context_sha256"] = canonical_json_sha256(binding["scope_context"])
 
 
 def acknowledgement_for_binding(
@@ -897,6 +1088,135 @@ def require_exact_scope_context(
         )
 
 
+def apply_semantic_scope_revision(
+    state: Mapping[str, Any],
+    agents: list[dict[str, Any]],
+    *,
+    amendment_id: str,
+    proposal: Mapping[str, Any],
+    source: Mapping[str, Any],
+    authorization: Mapping[str, Any],
+    expected_scope_revision: int,
+    applied_at: str,
+    instruction_snapshot_only: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prepare one atomic semantic revision without performing IO/execution.
+
+    The human-decision adapter verifies authorization, source and decision CAS
+    and persists this result and its decision together under its runtime lock.
+    Adapters may normalize their immutable assignment/agent identities into
+    this shape; only ``scope_control`` is changed here.
+    """
+    result = deepcopy(dict(state))
+    control = deepcopy(result.get("scope_control") or {})
+    if control and int(control.get("schema_version") or 0) != 2:
+        raise LegacyScopeControlError("SCOPE_OFFLINE_MIGRATION_REQUIRED", "Existing v1 scope requires explicit offline migration before another revision")
+    if int(control.get("effective_revision") or 0) != expected_scope_revision:
+        raise LegacyScopeControlError("SCOPE_REVISION_CONFLICT", "The effective scope revision changed; validate the decision again")
+    if control:
+        validate_versioned_scope_history(control)
+    if not amendment_id or amendment_by_id(control, amendment_id) is not None:
+        raise LegacyScopeControlError("SCOPE_AMENDMENT_ID_CONFLICT", "The amendment identity must be new")
+    if str(state.get("status") or "") != "active":
+        raise LegacyScopeControlError("SCOPE_RUNTIME_NOT_APPLICABLE", "Scope revisions require active execution")
+    assignment_id = str(state.get("current_assignment_id") or "")
+    current_agent_id = str(state.get("current_agent_id") or "")
+    node_id = str(state.get("current_node_id") or current_agent_id)
+    phase = str(state.get("phase") or "node")
+    assignment = next((item for item in state.get("assignments", []) if isinstance(item, dict) and item.get("assignment_id") == assignment_id), None)
+    if not assignment or assignment.get("status") != "active":
+        raise LegacyScopeControlError("SCOPE_ASSIGNMENT_NOT_ACTIVE", "There must be an active assignment to bind")
+    active_task = state.get("active_task")
+    if not instruction_snapshot_only and (not isinstance(active_task, dict) or str((active_task.get("metadata") or {}).get("assignment_id") or "") != assignment_id):
+        raise LegacyScopeControlError("SCOPE_ASSIGNMENT_NOT_DELIVERED", "The active task must already be delivered")
+    instructions = proposal.get("instructions")
+    restrictions = proposal.get("retained_restrictions")
+    if not isinstance(instructions, str) or not instructions.strip() or not isinstance(restrictions, list) or not all(isinstance(item, str) and item.strip() for item in restrictions):
+        raise LegacyScopeControlError("SCOPE_PROPOSAL_INVALID", "Instructions and explicit retained restrictions are required", status_code=400)
+    authored = instructions.strip() + "\n\nRetained restrictions:\n" + ("\n".join("- " + item.strip() for item in restrictions) or "None explicitly declared.")
+    authored += "\n\nExisting execution, review and qualification gates remain unchanged. This effective instruction supersedes conflicting historical scope text."
+    workflow = state.get("workflow") or {}
+    node_agents = {str(node.get("id")): str(node.get("agent_id")) for node in workflow.get("nodes", []) if isinstance(node, dict)}
+    if not node_agents:
+        node_agents = {str(agent.get("id")): str(agent.get("id")) for agent in agents}
+    requested_nodes = proposal.get("node_ids")
+    requested_reviewers = proposal.get("reviewer_ids")
+    if not isinstance(requested_nodes, list) or not isinstance(requested_reviewers, list) or len(set(requested_nodes)) != len(requested_nodes) or len(set(requested_reviewers)) != len(requested_reviewers) or not set(requested_nodes).issubset(node_agents):
+        raise LegacyScopeControlError("SCOPE_TARGET_NOT_FOUND", "Scope targets must be unique existing identities", status_code=400)
+    if set(requested_reviewers) != set(workflow.get("reviewer_agent_ids") or []):
+        raise LegacyScopeControlError("SCOPE_REVIEW_POLICY_MISMATCH", "All existing reviewers must receive the same amendment")
+    if (phase == "review" and current_agent_id not in requested_reviewers) or (phase != "review" and node_id not in requested_nodes):
+        raise LegacyScopeControlError("SCOPE_ACTIVE_TARGET_MISSING", "The active assignment must be included in the approved scope")
+    agents_by_id = {str(agent.get("id")): agent for agent in agents}
+    previous = active_amendment(control) or {}
+    node_overrides = deepcopy(previous.get("node_overrides") or {})
+    reviewer_overrides = deepcopy(previous.get("reviewer_overrides") or {})
+    for target_id, agent_id, is_review in [(target, node_agents[target], False) for target in requested_nodes] + [(target, target, True) for target in requested_reviewers]:
+        agent = agents_by_id.get(agent_id)
+        if not agent:
+            raise LegacyScopeControlError("SCOPE_RUNTIME_ACTOR_MISMATCH", "A targeted actor is absent")
+        tasks = deepcopy(agent.get("tasks") or [])
+        for task in tasks:
+            if isinstance(task, dict):
+                task["message"] = authored
+            else:
+                raise LegacyScopeControlError("SCOPE_PROPOSAL_INVALID", "Normalized authored tasks must be objects", status_code=400)
+        rule = {
+            "agent_id": agent_id, "agent_phone": str(agent.get("phone") or ""),
+            "issued": {"profile": deepcopy(agent.get("profile")), "tasks": deepcopy(agent.get("tasks") or [])},
+            "effective": {"profile": authored, "tasks": tasks},
+        }
+        if is_review:
+            reviewer_overrides[target_id] = rule
+        else:
+            rule.update(node_id=target_id, minimum_visit=int((state.get("visit_counts") or {}).get(target_id) or 0) + (0 if target_id == node_id else 1))
+            node_overrides[target_id] = rule
+    current_agent = agents_by_id.get(current_agent_id)
+    if not current_agent:
+        raise LegacyScopeControlError("SCOPE_RUNTIME_ACTOR_MISMATCH", "The active actor is absent")
+    normalized_source = deepcopy(dict(source))
+    normalized_source.setdefault("target_commit", source.get("commit"))
+    normalized_source.setdefault("amendment", {"path": source.get("path"), "sha256": source.get("sha256")})
+    revision = expected_scope_revision + 1
+    amendment = {
+        "amendment_id": amendment_id, "effective_revision": revision,
+        "applied_at": applied_at, "source": normalized_source,
+        "authorization": deepcopy(dict(authorization)), "proposal": deepcopy(dict(proposal)),
+        "node_overrides": node_overrides, "reviewer_overrides": reviewer_overrides,
+        "terminal_overrides": deepcopy(previous.get("terminal_overrides") or {}),
+    }
+    rule = reviewer_overrides[current_agent_id] if phase == "review" else node_overrides[node_id]
+    effective_agent = {**deepcopy(current_agent), **deepcopy(rule["effective"])}
+    pending = state.get("pending_transition") or {}
+    source_assignment_id = str(assignment.get("source_assignment_id") or (pending.get("source_assignment_id") if phase == "review" else "") or "")
+    binding_arguments = dict(amendment=amendment, assignment=assignment,
+        issued_agent=current_agent, effective_agent=effective_agent, node_id=node_id,
+        phase=phase, occurrence=int(assignment.get("occurrence") or (state.get("visit_counts") or {}).get(node_id) or 0),
+        source_assignment_id=source_assignment_id, bound_at=applied_at)
+    if instruction_snapshot_only:
+        binding = make_assignment_binding(**binding_arguments)
+        binding["instruction_snapshot_only"] = True
+    else:
+        binding = rebind_active_assignment(state, active_task=active_task, **binding_arguments)
+    if phase == "review":
+        source_binding = assignment_binding(state, source_assignment_id) if source_assignment_id else None
+        attach_reviewed_source_context(binding, pending.get("scope_context") or (source_binding or {}).get("scope_context"))
+    receipt = {"schema_version": 2, "amendment_id": amendment_id, "effective_revision": revision,
+        "assignment_id": assignment_id, "scope_context": deepcopy(binding["scope_context"]),
+        "effective_scope_sha256": binding["effective_scope_sha256"], "assignment_preserved": True,
+        "graph_advanced": False, "queue_changed": False, "deduplicated": False}
+    amendment["receipt"] = deepcopy(receipt)
+    control.update(schema_version=2, minimum_runtime_capability=SCOPE_CONTROL_V2_CAPABILITY,
+        effective_revision=revision, active_amendment_id=amendment_id)
+    control.setdefault("amendments", []).append(amendment)
+    control.setdefault("acknowledgements", {})
+    control.setdefault("acknowledgement_history", {})
+    store_assignment_binding(control, binding)
+    validate_versioned_scope_history(control)
+    result["scope_control"] = control
+    return result, receipt
+
+
 __all__ = [
     "ADMIN_TOKEN_ENV",
     "ADMIN_TOKEN_HEADER",
@@ -909,11 +1229,16 @@ __all__ = [
     "SCOPE_CONTEXT_PRECEDENCE",
     "SCOPE_CONTROL_CAPABILITY",
     "SCOPE_CONTROL_SCHEMA_VERSION",
+    "SCOPE_CONTROL_V2_SCHEMA_VERSION",
+    "SCOPE_CONTROL_V2_CAPABILITY",
+    "SUPPORTED_SCOPE_CONTROL_VERSIONS",
     "acknowledgement_for_binding",
     "acknowledgement_id",
     "active_amendment",
     "amendment_by_id",
     "assignment_binding",
+    "attach_reviewed_source_context",
+    "apply_semantic_scope_revision",
     "canonical_json_bytes",
     "canonical_json_sha256",
     "effective_agent_for_binding",
@@ -924,9 +1249,13 @@ __all__ = [
     "project_effective_task",
     "project_authored_active_task",
     "require_exact_scope_context",
+    "rebind_active_assignment",
     "require_role_tokens_configured",
     "role_token_environment_name",
     "scope_banner",
+    "store_assignment_binding",
+    "store_acknowledgement",
+    "validate_versioned_scope_history",
     "sha256_bytes",
     "text_sha256",
     "verify_admin_token",

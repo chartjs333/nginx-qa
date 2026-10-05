@@ -1,0 +1,31 @@
+{
+  "agents_source_sha256": "6332cadf64bcad0e63436d09487f06a1727571820c213fd53cfb379504915065",
+  "assignment_count": 28,
+  "checks": {
+    "assignments_reviews_topology_pointer_unchanged": true,
+    "input_files_unchanged": true,
+    "original_acks_unchanged": true,
+    "original_amendments_unchanged": true,
+    "original_bindings_unchanged": true,
+    "revision_2_ack_no_execution_side_effects": true,
+    "revision_2_stale_context_rejected": true,
+    "revision_3_ack_no_execution_side_effects": true,
+    "revision_3_stale_context_rejected": true
+  },
+  "http_requests": 0,
+  "kind": "isolated_copy_compatibility_evidence",
+  "live_mutated": false,
+  "migration_project_count": 1,
+  "note": "Observation is compatibility input, not a coherent backup or current-state guarantee; synthetic revisions were applied only in memory.",
+  "passed": true,
+  "preserved_assignments_sha256": "37854e85490dc115b87631cadfd35d6e901d4c1cbf2aa2a54cb6a430b27cd04d",
+  "preserved_original_scope_sha256": "9d6922a4c947a24e7bd18af91e5a4e1cb8d86715687b79d7a6c6a3506d63813b",
+  "project_id": "9000",
+  "review_assignment_count": 18,
+  "schema_version": 1,
+  "simulated_scope_revisions": [2, 3],
+  "source_assignment_id": "89e70d7d-7b35-43ff-b5c2-cfe96f8526c6",
+  "source_execution_revision": 74,
+  "source_scope_revision": 1,
+  "state_source_sha256": "df7cc011c4f021a9b180feb0578be82362b8cf4fe5537bad75f5cd7fb150bb0e"
+}

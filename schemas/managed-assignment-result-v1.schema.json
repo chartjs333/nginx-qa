@@ -10,7 +10,8 @@
     "result": {"type": "string", "minLength": 1},
     "from_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
     "git_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
-    "git_branch": {"type": ["string", "null"], "minLength": 1, "maxLength": 240}
+    "git_branch": {"type": ["string", "null"], "minLength": 1, "maxLength": 240},
+    "scope_context": {"type": "object", "description": "Exact effective scope context, required by governed assignments and checked against the durable ACK."}
   },
   "additionalProperties": false
 }

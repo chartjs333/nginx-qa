@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>nginx-qa · Выполнение спринта</title><link rel="stylesheet" href="/execution/assets/execution.css">
+<script defer src="/execution/assets/execution.js"></script></head>
+<body>
+<header><a href="/">← QA Queue Control</a><h1>Выполнение спринта</h1><p>Граф, решения о scope и неизменяемый аудит выполнения</p></header>
+<main>
+<section aria-label="Выбор спринта" class="selectors">
+<label>Проект<select id="project" aria-label="Проект"></select></label>
+<label>Спринт<select id="sprint" aria-label="Спринт"></select></label>
+<label>Момент выполнения<select id="checkpoint" aria-label="Момент выполнения"><option value="">Live — текущее выполнение</option></select></label>
+<div id="sync" role="status" aria-live="polite">Подключение…</div>
+</section>
+<p id="auth" class="notice">Проверка операторской сессии…</p>
+<p id="error" role="alert" hidden></p>
+<section class="overview" aria-label="Состояние"><div><h2>Graph execution</h2><div id="execution"></div></div><div><h2>Operator attention</h2><div id="attention"></div></div></section>
+<div class="dashboard">
+<section class="graph-panel"><h2>Graph</h2><p class="hint">Топология не заменяет историю visits. Непосещённая ветка не означает skipped.</p><div id="graph"></div><h3>Посещения</h3><div id="visits"></div></section>
+<section><h2>Текущие задания</h2><div id="current"></div><h3>Pending decisions</h3><div id="decisions"></div></section>
+<section><h2>Review gates</h2><div id="reviews"></div><h3>Очередь / assignments</h3><div id="queue"></div></section>
+<section><h2>Execution timeline</h2><p class="hint">Только сохранённые события; неизвестные timestamps / revisions не восстанавливаются догадками.</p><div id="timeline"></div></section>
+</div>
+</main>
+<dialog id="detail"><form method="dialog"><button class="close" aria-label="Закрыть">Закрыть</button></form><h2 id="detail-title"></h2><div id="detail-content"></div></dialog>
+<dialog id="decision-dialog"><h2>Решение об изменении scope</h2><div id="decision-summary"></div><form id="decision-form">
+<label>Разрешённая инструкция<textarea id="instructions" rows="8" required></textarea></label>
+<label>Сохраняемые ограничения (одно на строку)<textarea id="restrictions" rows="4" required></textarea></label>
+<label>Причина решения<textarea id="decision-reason" rows="2"></textarea></label>
+<p class="hint">Назначения и reviewers сохраняются из запроса. Изменение границ требует новой проверки точного diff; старая проверка не применяется к изменённому тексту.</p>
+<div class="actions"><button type="button" id="validate">Проверить и показать diff</button><button type="submit" id="confirm" disabled>Подтвердить проверенное решение</button><button type="button" id="cancel">Отмена</button></div>
+<div id="validation" aria-live="polite"></div></form></dialog>
+</body></html>
