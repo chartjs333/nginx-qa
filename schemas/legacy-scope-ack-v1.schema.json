@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/legacy-scope-ack-v1.schema.json",
+  "title": "Legacy assignment effective-scope acknowledgement v1",
+  "type": "object",
+  "required": ["schema_version", "scope_context"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "scope_context": {"$ref": "#/$defs/scopeContext"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "scopeContext": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "amendment_id",
+        "effective_revision",
+        "assignment_id",
+        "node_id",
+        "phase",
+        "agent_id",
+        "occurrence",
+        "source_commit",
+        "source_path",
+        "source_sha256",
+        "effective_scope_sha256",
+        "precedence",
+        "ack_required"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "amendment_id": {"$ref": "#/$defs/id"},
+        "effective_revision": {"type": "integer", "minimum": 1},
+        "assignment_id": {"$ref": "#/$defs/id"},
+        "node_id": {"$ref": "#/$defs/id"},
+        "phase": {"enum": ["node", "review"]},
+        "agent_id": {"$ref": "#/$defs/id"},
+        "occurrence": {"type": "integer", "minimum": 0},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_path": {"type": "string", "minLength": 1, "maxLength": 500},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "effective_scope_sha256": {"$ref": "#/$defs/sha256"},
+        "precedence": {"const": "effective_scope_supersedes_conflicting_issued_scope"},
+        "ack_required": {"const": true},
+        "source_assignment_id": {"$ref": "#/$defs/id"}
+      },
+      "additionalProperties": false
+    }
+  }
+}

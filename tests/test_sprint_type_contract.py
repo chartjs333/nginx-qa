@@ -67,6 +67,8 @@ WORKSPACE_1_ROOT = (
     f"{SPRINT_PATH_SEGMENT}/nodes/build/assignment-1"
 )
 EXPECTED_SCHEMA_FILES = {
+    "legacy-scope-ack-v1.schema.json",
+    "legacy-scope-amendment-v1.schema.json",
     "managed-api-error-v1.schema.json",
     "managed-assignment-result-response-v1.schema.json",
     "managed-assignment-result-v1.schema.json",
@@ -2301,6 +2303,65 @@ class SprintSchemaContractTests(unittest.TestCase):
             "managed-runtime-state-v1.schema.json": active_runtime_fixture(),
             "managed-runtime-state-v2.schema.json": runtime_v2,
             "managed-workspace-sprint-v1.schema.json": managed_manifest_fixture(),
+            "legacy-scope-amendment-v1.schema.json": {
+                "schema_version": 1,
+                "amendment_id": "ISC-S16-D01",
+                "expected_execution_revision": 52,
+                "expected_assignment_id": "assignment-1",
+                "expected_node_id": "continuity-coordinator",
+                "expected_phase": "node",
+                "expected_issued_task_sha256": MANIFEST_SHA,
+                "expected_issued_message_sha256": MANIFEST_SHA,
+                "idempotency_key": "delta:isc-s16:d01:65074657",
+                "source": {
+                    "repository_key": "github.com/chartjs333/delta",
+                    "base_commit": COMMIT,
+                    "target_commit": "c" * 40,
+                    "target_ref": "refs/heads/agent/isc-s16-continuous-sprint",
+                    "manifest": {
+                        "path": "orchestration/sprints/continuous/sequential-sprint.json",
+                        "base_sha256": MANIFEST_SHA,
+                        "target_sha256": "d" * 64,
+                    },
+                    "amendment": {
+                        "path": "orchestration/sprints/continuous/scope/amendment.json",
+                        "sha256": "e" * 64,
+                    },
+                    "supporting_documents": [
+                        {
+                            "path": "orchestration/sprints/continuous/handoffs/sync.json",
+                            "sha256": "f" * 64,
+                        }
+                    ],
+                },
+                "targets": {
+                    "active_assignment": True,
+                    "future_node_ids": [
+                        "continuity-coordinator",
+                        "formal-linkage",
+                    ],
+                    "reviewer_agent_ids": ["reviewer-one", "reviewer-two"],
+                },
+            },
+            "legacy-scope-ack-v1.schema.json": {
+                "schema_version": 1,
+                "scope_context": {
+                    "schema_version": 1,
+                    "amendment_id": "ISC-S16-D01",
+                    "effective_revision": 1,
+                    "assignment_id": "assignment-1",
+                    "node_id": "continuity-coordinator",
+                    "phase": "node",
+                    "agent_id": "coordinator",
+                    "occurrence": 3,
+                    "source_commit": COMMIT,
+                    "source_path": "orchestration/scope/amendment.json",
+                    "source_sha256": MANIFEST_SHA,
+                    "effective_scope_sha256": "c" * 64,
+                    "precedence": "effective_scope_supersedes_conflicting_issued_scope",
+                    "ack_required": True,
+                },
+            },
             "repair-sprint-v1.schema.json": {
                 "expected_revision": 1,
                 "repair_source_commit": COMMIT,

@@ -37,8 +37,41 @@ from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedPortReservationRegistry,
     TransactionalSprintImporter,
+    managed_schema_errors,
     normalize_managed_runtime_config,
+    parse_strict_json_object,
     parse_start_request_bytes,
+)
+from nginx_qa.legacy_scope_control import (
+    ADMIN_TOKEN_HEADER,
+    EFFECTIVE_SCOPE_HASH_CONTRACT,
+    LegacyScopeControlError,
+    REPOSITORY_MAP_ENV,
+    ROLE_TOKEN_HEADER,
+    SCOPE_CONTEXT_PRECEDENCE,
+    SCOPE_CONTROL_CAPABILITY,
+    SCOPE_CONTROL_SCHEMA_VERSION,
+    acknowledgement_for_binding,
+    acknowledgement_id,
+    active_amendment,
+    amendment_by_id,
+    assignment_binding,
+    canonical_json_bytes as scope_canonical_json_bytes,
+    canonical_json_sha256 as scope_canonical_json_sha256,
+    effective_agent_for_binding,
+    effective_agent_from_override,
+    effective_scope_core,
+    make_assignment_binding,
+    manifest_scope_delta,
+    project_authored_active_task,
+    project_effective_task,
+    require_exact_scope_context,
+    require_role_tokens_configured,
+    scope_banner,
+    sha256_bytes as scope_sha256_bytes,
+    text_sha256 as scope_text_sha256,
+    verify_admin_token,
+    verify_role_token,
 )
 from nginx_qa.managed_continuity import (
     INVALID_MANAGED_SPRINT_REQUEST,
@@ -22760,6 +22793,33 @@ async def _dequeue_phone_channel_unlocked(
     delivered_item: Any | None = None
     async with locks[queue_name]:
         original_queues = {queue_name: deque(queues[queue_name])}
+        governed_candidate = next(
+            (
+                item
+                for item in queues[queue_name]
+                if phone_channel_item_matches(item, conversation_phone, to_phone)
+                and (
+                    not target_context_key
+                    or queue_item_matches_git_context(item, target_context_key)
+                )
+                and queue_item_metadata(item).get("scope_controlled") is True
+            ),
+            None,
+        )
+        if governed_candidate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "SCOPE_CONTROLLED_IDENTITY_REQUIRES_WHOAMI",
+                    "message": (
+                        "Claim this governed assignment through /api/v1/agents/"
+                        "whoami with its role token"
+                    ),
+                    "assignment_id": queue_item_metadata(
+                        governed_candidate
+                    ).get("assignment_id"),
+                },
+            )
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
@@ -22844,6 +22904,33 @@ async def _delete_queued_item_unlocked(
     deleted_item: Any | None = None
     async with locks[queue_name]:
         original_queues = {queue_name: deque(queues[queue_name])}
+        governed_candidate = next(
+            (
+                item
+                for item in queues[queue_name]
+                if queue_item_id(item) == item_id
+                and (
+                    not target_context_key
+                    or queue_item_matches_git_context(item, target_context_key)
+                )
+                and queue_item_metadata(item).get("scope_controlled") is True
+            ),
+            None,
+        )
+        if governed_candidate is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "SCOPE_CONTROLLED_QUEUE_MUTATION_FORBIDDEN",
+                    "message": (
+                        "A governed identity item can only be consumed by the "
+                        "scope-aware whoami flow"
+                    ),
+                    "assignment_id": queue_item_metadata(
+                        governed_candidate
+                    ).get("assignment_id"),
+                },
+            )
         kept_items: deque[Any] = deque()
         while queues[queue_name]:
             item = queues[queue_name].popleft()
@@ -23024,6 +23111,15 @@ async def enqueue_sequential_agent_node(
         node_index = len(assignment.get("completed_agent_ids", [])) + 1
     node_count = len(role_agent_ids)
     assignment_id = str(assignment.get("current_assignment_id") or "").strip()
+    try:
+        scope_binding = assignment_binding(assignment, assignment_id)
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    scope_context = (
+        deepcopy(scope_binding.get("scope_context"))
+        if isinstance(scope_binding, dict)
+        else None
+    )
     tasks = deepcopy(agent.get("tasks") or [])
     task_lines = [
         f"{index}. [{str(task.get('queue') or 'worker-all')}] "
@@ -23198,6 +23294,11 @@ async def enqueue_sequential_agent_node(
                 "assignment_id": assignment_id,
                 "status": "APPROVE",
                 "feedback": "Переход проверен",
+                **(
+                    {"scope_context": scope_context}
+                    if scope_context is not None
+                    else {}
+                ),
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -23290,6 +23391,11 @@ async def enqueue_sequential_agent_node(
                 ),
                 "git_commit": "<commit с выполненной работой>",
                 "git_branch": git_branch or "<ветка с выполненной работой>",
+                **(
+                    {"scope_context": scope_context}
+                    if scope_context is not None
+                    else {}
+                ),
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -23329,6 +23435,8 @@ async def enqueue_sequential_agent_node(
                 ),
             ]
         )
+    if isinstance(scope_binding, dict):
+        message = f"{scope_banner(scope_binding)}\n\n{message}"
     queued = await enqueue_phone_channel(
         "worker-all",
         project_phone,
@@ -23403,9 +23511,25 @@ async def enqueue_sequential_agent_node(
                 f"{logical_agent_phone}/whoami"
             ),
             "sequential_poll_endpoint": (
-                f"/worker/all/{project_phone}?to_phone={project_phone}"
+                "/api/v1/agents/whoami"
+                if isinstance(scope_binding, dict)
+                else f"/worker/all/{project_phone}?to_phone={project_phone}"
             ),
             "status": "QUEUED",
+            "scope_controlled": isinstance(scope_binding, dict),
+            "scope_context": scope_context,
+            "effective_scope_endpoint": (
+                f"/api/v1/projects/{project_phone}/assignments/"
+                f"{assignment_id}/effective-scope"
+                if isinstance(scope_binding, dict)
+                else None
+            ),
+            "scope_ack_endpoint": (
+                f"/api/v1/projects/{project_phone}/assignments/"
+                f"{assignment_id}/effective-scope/ack"
+                if isinstance(scope_binding, dict)
+                else None
+            ),
         },
         port,
         queue_context,
@@ -23451,7 +23575,11 @@ async def enqueue_sequential_agent_node(
         ],
         "queue": queued["queue"],
         "queue_item_id": queued["id"],
-        "poll_endpoint": f"/worker/all/{project_phone}?to_phone={project_phone}",
+        "poll_endpoint": (
+            "/api/v1/agents/whoami"
+            if isinstance(scope_binding, dict)
+            else f"/worker/all/{project_phone}?to_phone={project_phone}"
+        ),
     }
 
 
@@ -25418,6 +25546,1167 @@ async def restore_history_record_to_queue(
     )
 
 
+def raise_legacy_scope_control_error(exc: LegacyScopeControlError) -> None:
+    raise HTTPException(status_code=exc.status_code, detail=exc.detail()) from exc
+
+
+def validate_legacy_scope_schema(payload: Any, filename: str) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "SCOPE_REQUEST_SCHEMA_INVALID",
+                "issues": [
+                    {
+                        "code": "SCOPE_REQUEST_SCHEMA_INVALID",
+                        "path": "",
+                        "message": "Expected a JSON object",
+                    }
+                ],
+            },
+        )
+    issues = managed_schema_errors(
+        payload,
+        filename,
+        issue_code="SCOPE_REQUEST_SCHEMA_INVALID",
+    )
+    if issues:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "SCOPE_REQUEST_SCHEMA_INVALID", "issues": issues},
+        )
+    return deepcopy(payload)
+
+
+def legacy_scope_git_command(repo_path: Path, *arguments: str) -> bytes:
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_path), *arguments],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_UNAVAILABLE",
+            "The local Git source could not be read",
+            status_code=503,
+        ) from exc
+    if result.returncode != 0:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_INVALID",
+            "The requested Git object or reference was not found locally",
+            status_code=409,
+        )
+    return result.stdout
+
+
+def legacy_scope_resolve_commit(repo_path: Path, revision: str) -> str:
+    output = legacy_scope_git_command(
+        repo_path,
+        "rev-parse",
+        "--verify",
+        f"{revision}^{{commit}}",
+    )
+    resolved = output.decode("ascii", errors="strict").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{40}", resolved):
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_INVALID",
+            "Git did not resolve the requested object to a full commit",
+        )
+    return resolved
+
+
+def legacy_scope_read_blob(
+    repo_path: Path,
+    commit: str,
+    descriptor: dict[str, Any],
+) -> tuple[bytes, dict[str, Any]]:
+    path = str(descriptor.get("path") or "")
+    blob = legacy_scope_git_command(repo_path, "show", f"{commit}:{path}")
+    if len(blob) > 4 * 1024 * 1024:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_TOO_LARGE",
+            "A scope-control Git blob exceeds the 4 MiB limit",
+            status_code=413,
+        )
+    actual_sha256 = scope_sha256_bytes(blob)
+    if not hmac.compare_digest(actual_sha256, str(descriptor.get("sha256") or "")):
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_HASH_MISMATCH",
+            "A scope-control Git blob does not match its declared SHA-256",
+        )
+    try:
+        parsed = parse_strict_json_object(blob)
+    except ValueError as exc:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_JSON_INVALID",
+            "A scope-control Git blob is not a strict JSON object",
+            status_code=400,
+        ) from exc
+    return blob, parsed
+
+
+def legacy_scope_source_repository(
+    project_git_address: str,
+    repository_key: str,
+) -> tuple[Path, str]:
+    """Resolve an operator-trusted local checkout for immutable Git reads.
+
+    A remote project URL is not a filesystem location.  Scope control therefore
+    accepts an explicit JSON environment map from canonical repository keys to
+    absolute checkout paths.  Existing local discovery remains a compatibility
+    fallback, but the selected checkout is always verified against its Git
+    remotes before any blob is read.
+    """
+
+    normalized_key = str(repository_key or "").strip().casefold()
+    if not normalized_key:
+        raise LegacyScopeControlError(
+            "SCOPE_REPOSITORY_MISMATCH",
+            "The scope source repository key is empty",
+        )
+
+    local_project_path = Path(project_git_address)
+    if local_project_path.is_absolute() and (local_project_path / ".git").exists():
+        try:
+            candidate = local_project_path.resolve(strict=True)
+        except OSError as exc:
+            raise LegacyScopeControlError(
+                "SCOPE_SOURCE_UNAVAILABLE",
+                "The configured project checkout cannot be resolved",
+                status_code=503,
+            ) from exc
+        resolution = "project_git_address"
+    else:
+        encoded_map = os.environ.get(REPOSITORY_MAP_ENV, "").strip()
+        candidate = None
+        resolution = ""
+        if encoded_map:
+            if len(encoded_map.encode("utf-8")) > 64 * 1024:
+                raise LegacyScopeControlError(
+                    "SCOPE_REPOSITORY_MAP_INVALID",
+                    "The scope-control repository map exceeds 64 KiB",
+                    status_code=503,
+                )
+            try:
+                repository_map = parse_strict_json_object(encoded_map.encode("utf-8"))
+            except ValueError as exc:
+                raise LegacyScopeControlError(
+                    "SCOPE_REPOSITORY_MAP_INVALID",
+                    "The scope-control repository map is not a strict JSON object",
+                    status_code=503,
+                ) from exc
+            normalized_map: dict[str, str] = {}
+            for raw_key, raw_path in repository_map.items():
+                canonical_key = canonical_remote_from_address(str(raw_key or ""))
+                if canonical_key is None or not isinstance(raw_path, str):
+                    raise LegacyScopeControlError(
+                        "SCOPE_REPOSITORY_MAP_INVALID",
+                        "Every repository-map entry must bind a canonical key to a path",
+                        status_code=503,
+                    )
+                canonical_key = canonical_key.casefold()
+                if canonical_key in normalized_map:
+                    raise LegacyScopeControlError(
+                        "SCOPE_REPOSITORY_MAP_INVALID",
+                        "The scope-control repository map contains duplicate canonical keys",
+                        status_code=503,
+                    )
+                normalized_map[canonical_key] = raw_path.strip()
+            configured_path = normalized_map.get(normalized_key)
+            if configured_path:
+                configured_candidate = Path(configured_path)
+                if not configured_candidate.is_absolute():
+                    raise LegacyScopeControlError(
+                        "SCOPE_REPOSITORY_MAP_INVALID",
+                        "A scope-control repository path must be absolute",
+                        status_code=503,
+                    )
+                try:
+                    candidate = configured_candidate.resolve(strict=True)
+                except OSError as exc:
+                    raise LegacyScopeControlError(
+                        "SCOPE_SOURCE_UNAVAILABLE",
+                        "The mapped scope-control checkout cannot be resolved",
+                        status_code=503,
+                    ) from exc
+                resolution = "operator_repository_map"
+        if candidate is None:
+            candidate = local_repo_for_remote(project_git_address)
+            resolution = "legacy_local_discovery"
+
+    if candidate is None or not (candidate / ".git").exists():
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_UNAVAILABLE",
+            (
+                "No trusted local checkout matches the project repository; "
+                f"configure {REPOSITORY_MAP_ENV}"
+            ),
+            status_code=503,
+        )
+    local_repository_keys = {
+        key.casefold()
+        for remote in local_repo_remote_urls(candidate)
+        if (key := canonical_remote_from_address(remote)) is not None
+    }
+    if normalized_key not in local_repository_keys:
+        raise LegacyScopeControlError(
+            "SCOPE_REPOSITORY_MISMATCH",
+            "The selected local checkout remote does not match the declared repository",
+        )
+    return candidate, resolution
+
+
+def verify_legacy_scope_source(
+    project_git_address: str,
+    request_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Read and verify immutable source blobs without holding graph locks."""
+
+    source = deepcopy(request_payload["source"])
+    repository_key = str(source.get("repository_key") or "").strip().casefold()
+    project_repository_key = canonical_remote_from_address(project_git_address)
+    if project_repository_key is None or project_repository_key.casefold() != repository_key:
+        raise LegacyScopeControlError(
+            "SCOPE_REPOSITORY_MISMATCH",
+            "The source repository does not match the project repository",
+        )
+
+    repo_path, repository_resolution = legacy_scope_source_repository(
+        project_git_address,
+        repository_key,
+    )
+
+    base_commit = legacy_scope_resolve_commit(repo_path, source["base_commit"])
+    target_commit = legacy_scope_resolve_commit(repo_path, source["target_commit"])
+    target_ref_commit = legacy_scope_resolve_commit(repo_path, source["target_ref"])
+    if base_commit != source["base_commit"] or target_commit != source["target_commit"]:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_COMMIT_MISMATCH",
+            "Scope-control commits must be exact full immutable SHAs",
+        )
+    if target_ref_commit != target_commit:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_REF_MISMATCH",
+            "The declared canonical branch does not point at the target commit",
+        )
+    merge_base = legacy_scope_git_command(
+        repo_path,
+        "merge-base",
+        base_commit,
+        target_commit,
+    ).decode("ascii", errors="strict").strip().lower()
+    if merge_base != base_commit:
+        raise LegacyScopeControlError(
+            "SCOPE_SOURCE_ANCESTRY_MISMATCH",
+            "The target commit does not descend from the declared base commit",
+        )
+
+    manifest_descriptor = source["manifest"]
+    manifest_path = str(manifest_descriptor["path"])
+    _, base_manifest = legacy_scope_read_blob(
+        repo_path,
+        base_commit,
+        {
+            "path": manifest_path,
+            "sha256": manifest_descriptor["base_sha256"],
+        },
+    )
+    _, target_manifest = legacy_scope_read_blob(
+        repo_path,
+        target_commit,
+        {
+            "path": manifest_path,
+            "sha256": manifest_descriptor["target_sha256"],
+        },
+    )
+    _, amendment_document = legacy_scope_read_blob(
+        repo_path,
+        target_commit,
+        source["amendment"],
+    )
+    supporting_documents: list[dict[str, Any]] = []
+    for descriptor in source.get("supporting_documents") or []:
+        _, document = legacy_scope_read_blob(repo_path, target_commit, descriptor)
+        supporting_documents.append(document)
+
+    if str(amendment_document.get("task_id") or "") != str(
+        request_payload.get("amendment_id") or ""
+    ):
+        raise LegacyScopeControlError(
+            "SCOPE_AMENDMENT_ID_MISMATCH",
+            "The source amendment task_id does not match amendment_id",
+        )
+    authorization = amendment_document.get("authorization")
+    if (
+        amendment_document.get("kind") != "USER_AUTHORIZED_SCOPE_AMENDMENT"
+        or not isinstance(authorization, dict)
+        or authorization.get("scope_authorized") is not True
+    ):
+        raise LegacyScopeControlError(
+            "SCOPE_AUTHORITY_INVALID",
+            "The Git amendment does not record an authorized scope amendment",
+        )
+    if str(amendment_document.get("preserved_assignment_id") or "") != str(
+        request_payload.get("expected_assignment_id") or ""
+    ):
+        raise LegacyScopeControlError(
+            "SCOPE_PRESERVED_ASSIGNMENT_MISMATCH",
+            "The Git amendment does not name the active assignment being preserved",
+        )
+    if str(amendment_document.get("from_commit") or "") != base_commit:
+        raise LegacyScopeControlError(
+            "SCOPE_BASE_COMMIT_MISMATCH",
+            "The Git amendment from_commit does not match the declared base commit",
+        )
+
+    sequential_graph_import_definition(base_manifest)
+    sequential_graph_import_definition(target_manifest)
+    delta = manifest_scope_delta(
+        base_manifest,
+        target_manifest,
+        request_payload["targets"],
+    )
+    return {
+        "repo_path": str(repo_path.resolve()),
+        "repository_resolution": repository_resolution,
+        "source": source,
+        "base_manifest": base_manifest,
+        "target_manifest": target_manifest,
+        "amendment_document": amendment_document,
+        "supporting_documents": supporting_documents,
+        "delta": delta,
+    }
+
+
+def legacy_scope_effective_active_task(
+    issued_task: dict[str, Any],
+    issued_agent: dict[str, Any],
+    effective_agent: dict[str, Any],
+) -> dict[str, Any]:
+    return project_authored_active_task(
+        issued_task,
+        issued_agent,
+        effective_agent,
+    )
+
+
+def legacy_scope_assignment_record(
+    state: dict[str, Any], assignment_id: str
+) -> dict[str, Any] | None:
+    return next(
+        (
+            assignment
+            for assignment in state.get("assignments", [])
+            if isinstance(assignment, dict)
+            and str(assignment.get("assignment_id") or "") == assignment_id
+        ),
+        None,
+    )
+
+
+def legacy_scope_require_assignment_delivery(
+    state: dict[str, Any],
+    assignment_id: str,
+) -> dict[str, Any]:
+    assignment = legacy_scope_assignment_record(state, assignment_id)
+    active_task = state.get("active_task")
+    metadata = active_task.get("metadata") if isinstance(active_task, dict) else None
+    if (
+        not isinstance(assignment, dict)
+        or assignment.get("status") != "active"
+        or not assignment.get("delivered_at")
+        or not assignment.get("queue_item_id")
+        or not isinstance(metadata, dict)
+        or str(metadata.get("assignment_id") or "") != assignment_id
+    ):
+        raise LegacyScopeControlError(
+            "SCOPE_ASSIGNMENT_NOT_DELIVERED",
+            "The governed assignment must be claimed before scope ACK or submission",
+        )
+    return assignment
+
+
+def legacy_scope_runtime_overrides(
+    state: dict[str, Any],
+    project_agents: list[dict[str, Any]],
+    verified_source: dict[str, Any],
+    request_payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    workflow = state.get("workflow")
+    if not isinstance(workflow, dict) or not workflow.get("enabled"):
+        raise LegacyScopeControlError(
+            "SCOPE_RUNTIME_NOT_APPLICABLE",
+            "Scope control requires an active conditional graph",
+        )
+    if int(workflow.get("required_approvals") or 0) != 2:
+        raise LegacyScopeControlError(
+            "SCOPE_REVIEW_POLICY_MISMATCH",
+            "The live graph must retain exactly two required approvals",
+        )
+    requested_reviewers = [
+        str(value) for value in request_payload["targets"]["reviewer_agent_ids"]
+    ]
+    live_reviewers = [
+        str(value) for value in workflow.get("reviewer_agent_ids", [])
+    ]
+    if requested_reviewers != live_reviewers:
+        raise LegacyScopeControlError(
+            "SCOPE_REVIEW_POLICY_MISMATCH",
+            "Scope-control reviewers must exactly match the live reviewer order",
+        )
+    agents_by_id = {
+        str(agent.get("id") or ""): agent
+        for agent in project_agents
+        if str(agent.get("id") or "")
+    }
+    workflow_nodes = {
+        str(node.get("id") or ""): node
+        for node in workflow.get("nodes", [])
+        if isinstance(node, dict) and str(node.get("id") or "")
+    }
+    visit_counts = {
+        str(node_id): max(0, int(value or 0))
+        for node_id, value in (state.get("visit_counts") or {}).items()
+    }
+    current_node_id = str(state.get("current_node_id") or "")
+    node_overrides: dict[str, dict[str, Any]] = {}
+    role_phones: list[str] = []
+    for node_id, source_override in verified_source["delta"][
+        "node_overrides"
+    ].items():
+        workflow_node = workflow_nodes.get(node_id)
+        if not isinstance(workflow_node, dict) or str(
+            workflow_node.get("agent_id") or ""
+        ) != str(source_override.get("agent_id") or ""):
+            raise LegacyScopeControlError(
+                "SCOPE_RUNTIME_GRAPH_MISMATCH",
+                "The live node/agent mapping does not match the Git manifest",
+            )
+        issued_agent = agents_by_id.get(str(source_override.get("agent_id") or ""))
+        if not isinstance(issued_agent, dict):
+            raise LegacyScopeControlError(
+                "SCOPE_RUNTIME_ACTOR_MISMATCH",
+                "A targeted live graph agent is missing",
+            )
+        effective_agent = effective_agent_from_override(issued_agent, source_override)
+        minimum_visit = visit_counts.get(node_id, 0) + 1
+        if node_id == current_node_id:
+            minimum_visit = visit_counts.get(node_id, 0)
+        node_overrides[node_id] = {
+            "node_id": node_id,
+            "agent_id": source_override["agent_id"],
+            "agent_phone": str(issued_agent.get("phone") or ""),
+            "minimum_visit": minimum_visit,
+            "issued": {
+                "profile": deepcopy(issued_agent.get("profile")),
+                "tasks": deepcopy(issued_agent.get("tasks") or []),
+            },
+            "effective": {
+                "profile": deepcopy(effective_agent.get("profile")),
+                "tasks": deepcopy(effective_agent.get("tasks") or []),
+            },
+        }
+        role_phones.append(str(issued_agent.get("phone") or ""))
+    active_override = node_overrides.get(current_node_id)
+    if active_override is None or str(active_override.get("agent_id") or "") != str(
+        state.get("current_agent_id") or ""
+    ):
+        raise LegacyScopeControlError(
+            "SCOPE_ACTIVE_TARGET_MISSING",
+            "The current graph node must be included in future_node_ids",
+            status_code=400,
+        )
+
+    reviewer_overrides: dict[str, dict[str, Any]] = {}
+    for reviewer_id, source_override in verified_source["delta"][
+        "reviewer_overrides"
+    ].items():
+        issued_agent = agents_by_id.get(reviewer_id)
+        if not isinstance(issued_agent, dict):
+            raise LegacyScopeControlError(
+                "SCOPE_RUNTIME_ACTOR_MISMATCH",
+                "A targeted live reviewer is missing",
+            )
+        effective_agent = effective_agent_from_override(issued_agent, source_override)
+        reviewer_profile = str(effective_agent.get("profile") or "")
+        for terminal_override in verified_source["delta"].get(
+            "terminal_overrides", {}
+        ).values():
+            old_terminal_message = str(
+                terminal_override.get("base_message") or ""
+            )
+            new_terminal_message = str(terminal_override.get("message") or "")
+            if (
+                old_terminal_message
+                and old_terminal_message != new_terminal_message
+                and old_terminal_message in reviewer_profile
+            ):
+                reviewer_profile = reviewer_profile.replace(
+                    old_terminal_message,
+                    new_terminal_message,
+                )
+        effective_agent["profile"] = reviewer_profile
+        reviewer_overrides[reviewer_id] = {
+            "agent_id": reviewer_id,
+            "agent_phone": str(issued_agent.get("phone") or ""),
+            "issued": {
+                "profile": deepcopy(issued_agent.get("profile")),
+                "tasks": deepcopy(issued_agent.get("tasks") or []),
+            },
+            "effective": {
+                "profile": deepcopy(effective_agent.get("profile")),
+                "tasks": deepcopy(effective_agent.get("tasks") or []),
+            },
+        }
+        role_phones.append(str(issued_agent.get("phone") or ""))
+    return {
+        "node_overrides": node_overrides,
+        "reviewer_overrides": reviewer_overrides,
+        "terminal_overrides": deepcopy(
+            verified_source["delta"].get("terminal_overrides") or {}
+        ),
+    }, role_phones
+
+
+def legacy_scope_effective_agent_from_stored_override(
+    issued_agent: dict[str, Any],
+    override: dict[str, Any],
+) -> dict[str, Any]:
+    if str(issued_agent.get("id") or "") != str(override.get("agent_id") or ""):
+        raise LegacyScopeControlError(
+            "SCOPE_RUNTIME_ACTOR_MISMATCH",
+            "The governed assignment agent no longer matches its scope rule",
+            status_code=503,
+        )
+    issued = override.get("issued")
+    effective = override.get("effective")
+    if not isinstance(issued, dict) or not isinstance(effective, dict):
+        raise LegacyScopeControlError(
+            "SCOPE_RULE_INVALID",
+            "The persisted scope rule is incomplete",
+            status_code=503,
+        )
+    if scope_canonical_json_bytes(
+        {
+            "profile": issued_agent.get("profile"),
+            "tasks": issued_agent.get("tasks") or [],
+        }
+    ) != scope_canonical_json_bytes(issued):
+        raise LegacyScopeControlError(
+            "SCOPE_RUNTIME_BASE_MISMATCH",
+            "The live issued actor changed after the amendment was bound",
+            status_code=503,
+        )
+    result = deepcopy(issued_agent)
+    result["profile"] = deepcopy(effective.get("profile"))
+    result["tasks"] = deepcopy(effective.get("tasks") or [])
+    return result
+
+
+def legacy_scope_bind_new_assignment(
+    state: dict[str, Any],
+    assignment: dict[str, Any],
+    issued_agent: dict[str, Any],
+    *,
+    phase: str,
+    node_id: str,
+    occurrence: int,
+    bound_at: str,
+) -> dict[str, Any]:
+    scope_control = state.get("scope_control")
+    if not isinstance(scope_control, dict):
+        return deepcopy(issued_agent)
+    if int(scope_control.get("schema_version") or 0) != SCOPE_CONTROL_SCHEMA_VERSION:
+        raise LegacyScopeControlError(
+            "SCOPE_CONTROL_VERSION_UNSUPPORTED",
+            "The persisted scope-control version is not supported",
+            status_code=503,
+        )
+    source_assignment_id = ""
+    amendment: dict[str, Any] | None = None
+    override: dict[str, Any] | None = None
+    if phase == "review":
+        pending = state.get("pending_transition")
+        source_context = (
+            pending.get("scope_context") if isinstance(pending, dict) else None
+        )
+        if not isinstance(source_context, dict):
+            return deepcopy(issued_agent)
+        amendment = amendment_by_id(scope_control, source_context.get("amendment_id"))
+        source_assignment_id = str(
+            pending.get("source_assignment_id") if isinstance(pending, dict) else ""
+        )
+        reviewer_rules = (
+            amendment.get("reviewer_overrides")
+            if isinstance(amendment, dict)
+            else None
+        )
+        override = (
+            reviewer_rules.get(str(assignment.get("agent_id") or ""))
+            if isinstance(reviewer_rules, dict)
+            else None
+        )
+    else:
+        amendment = active_amendment(scope_control)
+        node_rules = amendment.get("node_overrides") if isinstance(amendment, dict) else None
+        candidate = node_rules.get(node_id) if isinstance(node_rules, dict) else None
+        if isinstance(candidate, dict) and occurrence >= int(
+            candidate.get("minimum_visit") or 0
+        ):
+            override = candidate
+    if not isinstance(amendment, dict) or not isinstance(override, dict):
+        return deepcopy(issued_agent)
+    effective_agent = legacy_scope_effective_agent_from_stored_override(
+        issued_agent,
+        override,
+    )
+    binding = make_assignment_binding(
+        amendment=amendment,
+        assignment=assignment,
+        issued_agent=issued_agent,
+        effective_agent=effective_agent,
+        node_id=node_id,
+        phase=phase,
+        occurrence=occurrence,
+        source_assignment_id=source_assignment_id,
+        bound_at=bound_at,
+    )
+    bindings = dict(scope_control.get("assignment_bindings") or {})
+    bindings[str(assignment.get("assignment_id") or "")] = binding
+    scope_control["assignment_bindings"] = bindings
+    state["scope_control"] = scope_control
+    return effective_agent
+
+
+def legacy_scope_authorize_assignment(
+    state: dict[str, Any],
+    assignment_id: str,
+    supplied_role_token: str,
+    supplied_scope_context: Any,
+    *,
+    require_ack: bool,
+) -> dict[str, Any] | None:
+    try:
+        binding = assignment_binding(state, assignment_id)
+        if binding is None:
+            return None
+        verify_role_token(binding.get("agent_phone"), supplied_role_token)
+        legacy_scope_require_assignment_delivery(state, assignment_id)
+        if require_ack:
+            require_exact_scope_context(supplied_scope_context, binding)
+            scope_control = state.get("scope_control")
+            acknowledgement = (
+                acknowledgement_for_binding(scope_control, binding)
+                if isinstance(scope_control, dict)
+                else None
+            )
+            if acknowledgement is None:
+                raise LegacyScopeControlError(
+                    "SCOPE_ACK_REQUIRED",
+                    "The effective scope must be acknowledged before submission",
+                    status_code=428,
+                )
+        return binding
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    return None
+
+
+def legacy_scope_apply_transaction(
+    project_id: str,
+    sprint_id: str,
+    request_payload: dict[str, Any],
+    verified_source: dict[str, Any],
+    applied_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            raw_key, context_key, project_entry, _ = project_for_group_api(
+                config,
+                project_id,
+            )
+            live_repository_key = canonical_remote_from_address(
+                str(project_entry.get("git_address") or "")
+            )
+            expected_repository_key = str(
+                verified_source["source"].get("repository_key") or ""
+            ).casefold()
+            if (
+                live_repository_key is None
+                or live_repository_key.casefold() != expected_repository_key
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_REPOSITORY_MISMATCH"},
+                )
+            repo_path = Path(str(verified_source.get("repo_path") or ""))
+            try:
+                observed_target_ref = legacy_scope_resolve_commit(
+                    repo_path,
+                    str(verified_source["source"].get("target_ref") or ""),
+                )
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            if observed_target_ref != str(
+                verified_source["source"].get("target_commit") or ""
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_SOURCE_REF_MISMATCH"},
+                )
+            raw_state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+            state = deepcopy(raw_state) if isinstance(raw_state, dict) else {}
+            scope_control = deepcopy(state.get("scope_control") or {})
+            if scope_control and int(scope_control.get("schema_version") or 0) != 1:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"error": "SCOPE_CONTROL_VERSION_UNSUPPORTED"},
+                )
+            request_sha256 = scope_canonical_json_sha256(request_payload)
+            idempotency_key = str(request_payload["idempotency_key"])
+            for existing in scope_control.get("amendments", []):
+                if not isinstance(existing, dict):
+                    continue
+                same_key = str(existing.get("idempotency_key") or "") == idempotency_key
+                same_id = str(existing.get("amendment_id") or "") == str(
+                    request_payload["amendment_id"]
+                )
+                if not (same_key or same_id):
+                    continue
+                if str(existing.get("request_sha256") or "") != request_sha256:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={"error": "SCOPE_IDEMPOTENCY_CONFLICT"},
+                    )
+                receipt = deepcopy(existing.get("receipt") or {})
+                receipt["deduplicated"] = True
+                return receipt
+            if any(
+                isinstance(existing, dict)
+                for existing in scope_control.get("amendments", [])
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ADDITIONAL_AMENDMENT_UNSUPPORTED"},
+                )
+
+            if (
+                str(state.get("mode") or "") != "sequential"
+                or str(state.get("strategy") or "") != "conditional_graph"
+                or str(state.get("status") or "") != "active"
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_RUNTIME_NOT_APPLICABLE"},
+                )
+            expected_revision = int(request_payload["expected_execution_revision"])
+            current_revision = int(state.get("revision") or 0)
+            if current_revision != expected_revision:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "error": "SCOPE_EXECUTION_REVISION_CONFLICT",
+                        "expected_revision": current_revision,
+                    },
+                )
+            expected_assignment_id = str(request_payload["expected_assignment_id"])
+            if str(state.get("current_assignment_id") or "") != expected_assignment_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ASSIGNMENT_CONFLICT"},
+                )
+            if (
+                str(state.get("current_node_id") or "")
+                != str(request_payload["expected_node_id"])
+                or str(state.get("phase") or "node")
+                != str(request_payload["expected_phase"])
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_GRAPH_POSITION_CONFLICT"},
+                )
+            active_assignment = legacy_scope_assignment_record(
+                state,
+                expected_assignment_id,
+            )
+            if not isinstance(active_assignment, dict) or active_assignment.get(
+                "status"
+            ) != "active":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ASSIGNMENT_NOT_ACTIVE"},
+                )
+            try:
+                legacy_scope_require_assignment_delivery(
+                    state,
+                    expected_assignment_id,
+                )
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            active_task = state.get("active_task")
+            if not isinstance(active_task, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ACTIVE_TASK_NOT_DELIVERED"},
+                )
+            active_metadata = active_task.get("metadata")
+            if not isinstance(active_metadata, dict) or str(
+                active_metadata.get("assignment_id") or ""
+            ) != expected_assignment_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ACTIVE_TASK_CONFLICT"},
+                )
+            if scope_canonical_json_sha256(active_task) != str(
+                request_payload["expected_issued_task_sha256"]
+            ) or scope_text_sha256(active_task.get("message")) != str(
+                request_payload["expected_issued_message_sha256"]
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ISSUED_TASK_CONFLICT"},
+                )
+
+            previous_agents = read_agents_file()
+            project_agents = full_agents_for_project(
+                previous_agents,
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            try:
+                overrides, role_phones = legacy_scope_runtime_overrides(
+                    state,
+                    project_agents,
+                    verified_source,
+                    request_payload,
+                )
+                require_role_tokens_configured(role_phones)
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            effective_revision = int(scope_control.get("effective_revision") or 0) + 1
+            next_execution_revision = current_revision + 1
+            amendment = {
+                "amendment_id": str(request_payload["amendment_id"]),
+                "effective_revision": effective_revision,
+                "idempotency_key": idempotency_key,
+                "request_sha256": request_sha256,
+                "applied_at": applied_at,
+                "from_execution_revision": current_revision,
+                "to_execution_revision": next_execution_revision,
+                "sprint_id": sprint_id,
+                "source": deepcopy(verified_source["source"]),
+                "authorization": {
+                    "kind": verified_source["amendment_document"].get("kind"),
+                    "scope_authorized": True,
+                },
+                **overrides,
+            }
+            current_agent_id = str(state.get("current_agent_id") or "")
+            issued_agent = next(
+                (
+                    agent
+                    for agent in project_agents
+                    if str(agent.get("id") or "") == current_agent_id
+                ),
+                None,
+            )
+            if not isinstance(issued_agent, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_RUNTIME_ACTOR_MISMATCH"},
+                )
+            active_override = amendment["node_overrides"][
+                str(state.get("current_node_id") or "")
+            ]
+            try:
+                effective_agent = legacy_scope_effective_agent_from_stored_override(
+                    issued_agent,
+                    active_override,
+                )
+                effective_active_task = legacy_scope_effective_active_task(
+                    active_task,
+                    issued_agent,
+                    effective_agent,
+                )
+                binding = make_assignment_binding(
+                    amendment=amendment,
+                    assignment=active_assignment,
+                    issued_agent=issued_agent,
+                    effective_agent=effective_agent,
+                    node_id=str(state.get("current_node_id") or ""),
+                    phase=str(state.get("phase") or "node"),
+                    occurrence=int(
+                        (state.get("visit_counts") or {}).get(
+                            str(state.get("current_node_id") or ""),
+                            0,
+                        )
+                    ),
+                    issued_active_task=active_task,
+                    effective_active_task=effective_active_task,
+                    bound_at=applied_at,
+                )
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            receipt = {
+                "schema_version": 1,
+                "project_id": normalize_project_phone(project_entry.get("project_phone")),
+                "sprint_id": sprint_id,
+                "amendment_id": amendment["amendment_id"],
+                "from_execution_revision": current_revision,
+                "execution_revision": next_execution_revision,
+                "effective_revision": effective_revision,
+                "assignment_id": expected_assignment_id,
+                "assignment_preserved": True,
+                "graph_advanced": False,
+                "queue_changed": False,
+                "effective_scope_sha256": binding["effective_scope_sha256"],
+                "effective_scope_hash_contract": deepcopy(
+                    binding["effective_scope_hash_contract"]
+                ),
+                "source_ref_observation": {
+                    "ref": verified_source["source"].get("target_ref"),
+                    "commit": observed_target_ref,
+                    "verified_at": applied_at,
+                },
+                "scope_context": deepcopy(binding["scope_context"]),
+                "deduplicated": False,
+            }
+            amendment["receipt"] = deepcopy(receipt)
+            amendments = [
+                deepcopy(item)
+                for item in scope_control.get("amendments", [])
+                if isinstance(item, dict)
+            ]
+            amendments.append(amendment)
+            bindings = dict(scope_control.get("assignment_bindings") or {})
+            bindings[expected_assignment_id] = binding
+            scope_control.update(
+                {
+                    "schema_version": SCOPE_CONTROL_SCHEMA_VERSION,
+                    "minimum_runtime_capability": SCOPE_CONTROL_CAPABILITY,
+                    "effective_revision": effective_revision,
+                    "active_amendment_id": amendment["amendment_id"],
+                    "amendments": amendments,
+                    "assignment_bindings": bindings,
+                    "acknowledgements": dict(
+                        scope_control.get("acknowledgements") or {}
+                    ),
+                }
+            )
+            state["scope_control"] = scope_control
+            state["revision"] = next_execution_revision
+            state["updated_at"] = applied_at
+            project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+            project_entry["updated_at"] = applied_at
+            raw_projects = config.get(PROJECTS_KEY)
+            projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+            projects[raw_key] = project_entry
+            config[PROJECTS_KEY] = projects
+            write_git_config_file(config)
+            return receipt
+
+
+def legacy_scope_replay_transaction(
+    project_id: str,
+    request_payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        _, _, project_entry, _ = project_for_group_api(config, project_id)
+        state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        scope_control = state.get("scope_control") if isinstance(state, dict) else None
+        if not isinstance(scope_control, dict):
+            return None
+        if int(scope_control.get("schema_version") or 0) != 1:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "SCOPE_CONTROL_VERSION_UNSUPPORTED"},
+            )
+        request_sha256 = scope_canonical_json_sha256(request_payload)
+        idempotency_key = str(request_payload["idempotency_key"])
+        amendment_id = str(request_payload["amendment_id"])
+        for existing in scope_control.get("amendments", []):
+            if not isinstance(existing, dict):
+                continue
+            if (
+                str(existing.get("idempotency_key") or "") != idempotency_key
+                and str(existing.get("amendment_id") or "") != amendment_id
+            ):
+                continue
+            if str(existing.get("request_sha256") or "") != request_sha256:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_IDEMPOTENCY_CONFLICT"},
+                )
+            receipt = deepcopy(existing.get("receipt") or {})
+            receipt["deduplicated"] = True
+            return receipt
+        if any(
+            isinstance(existing, dict)
+            for existing in scope_control.get("amendments", [])
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "SCOPE_ADDITIONAL_AMENDMENT_UNSUPPORTED"},
+            )
+        return None
+
+
+def legacy_scope_binding_snapshot_transaction(
+    project_id: str,
+    assignment_id: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        with agents_file_lock():
+            config = read_git_config_file()
+            _, context_key, project_entry, context = project_for_group_api(
+                config,
+                project_id,
+            )
+            state = deepcopy(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+            if str(state.get("current_assignment_id") or "") != assignment_id:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ASSIGNMENT_NOT_CURRENT"},
+                )
+            try:
+                binding = assignment_binding(state, assignment_id)
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            if binding is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail={"error": "SCOPE_BINDING_NOT_FOUND"},
+                )
+            assignment = legacy_scope_assignment_record(state, assignment_id)
+            if not isinstance(assignment, dict) or assignment.get("status") != "active":
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={"error": "SCOPE_ASSIGNMENT_NOT_ACTIVE"},
+                )
+            agents = full_agents_for_project(
+                read_agents_file(),
+                context_key,
+                phone_git_contexts_from_config(config),
+            )
+            issued_agent = next(
+                (
+                    agent
+                    for agent in agents
+                    if str(agent.get("id") or "") == str(binding.get("agent_id") or "")
+                ),
+                None,
+            )
+            if not isinstance(issued_agent, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail={"error": "SCOPE_RUNTIME_ACTOR_MISMATCH"},
+                )
+            try:
+                effective_agent = effective_agent_for_binding(issued_agent, binding)
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
+            scope_control = state.get("scope_control")
+            acknowledgement = (
+                acknowledgement_for_binding(scope_control, binding)
+                if isinstance(scope_control, dict)
+                else None
+            )
+            return {
+                "project_id": normalize_project_phone(project_entry.get("project_phone")),
+                "project": public_project_context(context),
+                "state": state,
+                "assignment": deepcopy(assignment),
+                "binding": binding,
+                "issued_agent": deepcopy(issued_agent),
+                "effective_agent": effective_agent,
+                "acknowledgement": acknowledgement,
+            }
+
+
+def legacy_scope_ack_transaction(
+    project_id: str,
+    assignment_id: str,
+    supplied_scope_context: dict[str, Any],
+    acknowledged_at: str,
+) -> dict[str, Any]:
+    with git_config_file_lock():
+        config = read_git_config_file()
+        raw_key, _, project_entry, _ = project_for_group_api(config, project_id)
+        state = deepcopy(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+        if str(state.get("current_assignment_id") or "") != assignment_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "SCOPE_ASSIGNMENT_NOT_CURRENT"},
+            )
+        current_assignment = legacy_scope_assignment_record(state, assignment_id)
+        if (
+            not isinstance(current_assignment, dict)
+            or current_assignment.get("status") != "active"
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": "SCOPE_ASSIGNMENT_NOT_ACTIVE"},
+            )
+        try:
+            binding = assignment_binding(state, assignment_id)
+            if binding is None:
+                raise LegacyScopeControlError(
+                    "SCOPE_BINDING_NOT_FOUND",
+                    "The assignment has no effective scope binding",
+                    status_code=404,
+                )
+            legacy_scope_require_assignment_delivery(state, assignment_id)
+            require_exact_scope_context(supplied_scope_context, binding)
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
+        scope_control = deepcopy(state.get("scope_control") or {})
+        existing = acknowledgement_for_binding(scope_control, binding)
+        if existing is not None:
+            return {
+                "schema_version": 1,
+                "project_id": normalize_project_phone(project_entry.get("project_phone")),
+                "assignment_id": assignment_id,
+                "acknowledgement": existing,
+                "deduplicated": True,
+                "execution_revision": int(state.get("revision") or 0),
+            }
+        acknowledgement = {
+            "ack_id": acknowledgement_id(binding),
+            "assignment_id": assignment_id,
+            "agent_id": binding.get("agent_id"),
+            "agent_phone": binding.get("agent_phone"),
+            "amendment_id": binding.get("amendment_id"),
+            "effective_revision": binding.get("effective_revision"),
+            "scope_context": deepcopy(binding.get("scope_context")),
+            "acknowledged_at": acknowledged_at,
+        }
+        acknowledgements = dict(scope_control.get("acknowledgements") or {})
+        acknowledgements[assignment_id] = acknowledgement
+        scope_control["acknowledgements"] = acknowledgements
+        state["scope_control"] = scope_control
+        state["revision"] = int(state.get("revision") or 0) + 1
+        state["updated_at"] = acknowledged_at
+        project_entry[PROJECT_AGENT_ASSIGNMENT_KEY] = state
+        project_entry["updated_at"] = acknowledged_at
+        raw_projects = config.get(PROJECTS_KEY)
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        projects[raw_key] = project_entry
+        config[PROJECTS_KEY] = projects
+        write_git_config_file(config)
+        return {
+            "schema_version": 1,
+            "project_id": normalize_project_phone(project_entry.get("project_phone")),
+            "assignment_id": assignment_id,
+            "acknowledgement": acknowledgement,
+            "deduplicated": False,
+            "execution_revision": state["revision"],
+        }
+
+
 def project_agent_identity_snapshot_transaction(
     project_id: str,
     agent_phone: str,
@@ -25500,6 +26789,8 @@ def conditional_graph_assignment_transaction_locked(
     submitted_feedback: str,
     submitted_result: str,
     expected_assignment_id: str,
+    submitted_scope_context: Any,
+    supplied_role_token: str,
 ) -> dict[str, Any]:
     workflow = state.get("workflow")
     if not isinstance(workflow, dict) or not workflow.get("enabled"):
@@ -25629,6 +26920,18 @@ def conditional_graph_assignment_transaction_locked(
         state["status"] = "active"
         if phase == "node":
             visit_counts[node_id] = visit_counts.get(node_id, 0) + 1
+        try:
+            legacy_scope_bind_new_assignment(
+                state,
+                assignment,
+                agent,
+                phase=phase,
+                node_id=node_id,
+                occurrence=visit_counts.get(node_id, 0),
+                bound_at=seen_at,
+            )
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
         update_agent_parameters(
             agent_id,
             created_at=agent.get("parameters", {}).get("created_at") or seen_at,
@@ -25697,6 +27000,19 @@ def conditional_graph_assignment_transaction_locked(
                     "expected_assignment_id": state.get("current_assignment_id"),
                 },
             )
+        current_assignment_id = str(state.get("current_assignment_id") or "")
+        binding = legacy_scope_authorize_assignment(
+            state,
+            current_assignment_id,
+            supplied_role_token,
+            submitted_scope_context,
+            require_ack=complete_current,
+        )
+        if binding is not None:
+            try:
+                selected_agent = effective_agent_for_binding(selected_agent, binding)
+            except LegacyScopeControlError as exc:
+                raise_legacy_scope_control_error(exc)
 
     if complete_current and selected_agent is not None:
         phase = str(state.get("phase") or "node")
@@ -25750,6 +27066,16 @@ def conditional_graph_assignment_transaction_locked(
                 "reviews": [],
                 "status": "reviewing",
             }
+            if binding is not None:
+                pending_transition.update(
+                    {
+                        "scope_context": deepcopy(binding.get("scope_context")),
+                        "source_amendment_id": binding.get("amendment_id"),
+                        "source_effective_revision": binding.get(
+                            "effective_revision"
+                        ),
+                    }
+                )
             state["pending_transition"] = pending_transition
             update_agent_parameters(
                 current_agent_id,
@@ -25804,6 +27130,17 @@ def conditional_graph_assignment_transaction_locked(
                 "reviewed_at": seen_at,
                 "assignment_id": state.get("current_assignment_id"),
             }
+            if binding is not None:
+                review.update(
+                    {
+                        "amendment_id": binding.get("amendment_id"),
+                        "effective_revision": binding.get("effective_revision"),
+                        "scope_context_sha256": binding.get(
+                            "scope_context_sha256"
+                        ),
+                        "scope_ack_id": acknowledgement_id(binding),
+                    }
+                )
             reviews.append(review)
             pending_transition["reviews"] = reviews
             if decision == "REJECT":
@@ -25883,6 +27220,27 @@ def conditional_graph_assignment_transaction_locked(
                     current_agent_id = ""
                 elif applied_target_id in terminal_nodes:
                     terminal = terminal_nodes[applied_target_id]
+                    scope_control = state.get("scope_control")
+                    current_amendment = (
+                        active_amendment(scope_control)
+                        if isinstance(scope_control, dict)
+                        else None
+                    )
+                    terminal_overrides = (
+                        current_amendment.get("terminal_overrides")
+                        if isinstance(current_amendment, dict)
+                        else None
+                    )
+                    terminal_override = (
+                        terminal_overrides.get(applied_target_id)
+                        if isinstance(terminal_overrides, dict)
+                        else None
+                    )
+                    if isinstance(terminal_override, dict):
+                        terminal = {
+                            **deepcopy(terminal),
+                            "message": terminal_override.get("message"),
+                        }
                     state["status"] = "completed"
                     state["completed_at"] = seen_at
                     state["terminal_node"] = deepcopy(terminal)
@@ -25964,6 +27322,18 @@ def conditional_graph_assignment_transaction_locked(
         str(agent.get("id") or "").strip(): agent for agent in updated_project_agents
     }
     selected_agent = updated_by_id.get(current_agent_id)
+    if selected_agent is not None:
+        try:
+            current_binding = assignment_binding(
+                state,
+                state.get("current_assignment_id"),
+            )
+            selected_agent = effective_agent_for_binding(
+                selected_agent,
+                current_binding,
+            )
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
     project_phone = normalize_project_phone(project_entry.get("project_phone"))
     return {
         "sequential": True,
@@ -26001,6 +27371,8 @@ def sequential_agent_assignment_transaction(
     submitted_feedback: str = "",
     submitted_result: str = "",
     expected_assignment_id: str = "",
+    submitted_scope_context: Any = None,
+    supplied_role_token: str = "",
 ) -> dict[str, Any]:
     with git_config_file_lock():
         with agents_file_lock():
@@ -26041,6 +27413,8 @@ def sequential_agent_assignment_transaction(
                     submitted_feedback,
                     submitted_result,
                     expected_assignment_id,
+                    submitted_scope_context,
+                    supplied_role_token,
                 )
             clean_requested_phone = requested_phone.strip()
             if not any(
@@ -26472,6 +27846,7 @@ async def identify_sequential_project_agent(
     submitted_from_commit = ""
     submitted_git_commit = ""
     submitted_git_branch = ""
+    submitted_scope_context: Any = None
     if isinstance(identity_payload, dict):
         submitted_outcome = str(
             identity_payload.get("outcome")
@@ -26506,6 +27881,7 @@ async def identify_sequential_project_agent(
             or identity_payload.get("branch"),
             "git_branch",
         )
+        submitted_scope_context = identity_payload.get("scope_context")
     submitted_outcome = submitted_outcome.strip().upper()
     submitted_feedback = submitted_feedback.strip()
     submitted_result = submitted_result.strip()
@@ -26532,6 +27908,8 @@ async def identify_sequential_project_agent(
             submitted_feedback,
             submitted_result,
             expected_assignment_id,
+            submitted_scope_context,
+            str(request.headers.get(ROLE_TOKEN_HEADER) or ""),
         )
         completed_agent = result.get("completed_agent")
         completed_assignment = result.get("completed_assignment") or {}
@@ -26542,6 +27920,30 @@ async def identify_sequential_project_agent(
         assignment_result_accepted = bool(
             isinstance(completed_assignment, dict)
             and completed_assignment.get("assignment_id")
+        )
+        try:
+            completed_scope_binding = assignment_binding(
+                result.get("assignment") or {},
+                completed_assignment.get("assignment_id"),
+            )
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
+        scope_history_metadata = (
+            {
+                "amendment_id": completed_scope_binding.get("amendment_id"),
+                "effective_revision": completed_scope_binding.get(
+                    "effective_revision"
+                ),
+                "scope_context_sha256": completed_scope_binding.get(
+                    "scope_context_sha256"
+                ),
+                "scope_ack_id": acknowledgement_id(completed_scope_binding),
+                "scope_context": deepcopy(
+                    completed_scope_binding.get("scope_context")
+                ),
+            }
+            if isinstance(completed_scope_binding, dict)
+            else {}
         )
         completion_git_context = deepcopy(result["queue_context"])
         if submitted_git_commit:
@@ -26601,6 +28003,7 @@ async def identify_sequential_project_agent(
                         "to_agent_id": completed_id,
                         "project_phone": result["project_phone"],
                         "assignment_id": completed_assignment.get("assignment_id"),
+                        **scope_history_metadata,
                     },
                     request_port(request),
                     {
@@ -26629,6 +28032,7 @@ async def identify_sequential_project_agent(
                     "outcome": submitted_outcome,
                     "result": submitted_result,
                     "status": "COMPLETED",
+                    **scope_history_metadata,
                 },
                 request_port(request),
                 completion_git_context,
@@ -26830,6 +28234,23 @@ async def identify_sequential_project_agent(
             "общий /api/v1/agents/whoami и затем отправьте git_address в новый "
             "reply_url; не переключайтесь на следующую роль напрямую."
         )
+    try:
+        response_scope_binding = assignment_binding(assignment, assignment_id)
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    response_scope_control = assignment.get("scope_control")
+    response_scope_ack = (
+        acknowledgement_for_binding(response_scope_control, response_scope_binding)
+        if isinstance(response_scope_control, dict)
+        and isinstance(response_scope_binding, dict)
+        else None
+    )
+    if isinstance(response_scope_binding, dict):
+        answer += (
+            " Это scope-controlled assignment: effective profile/tasks имеют "
+            "приоритет; до отправки результата получите effective scope и "
+            "подтвердите точный scope_context."
+        )
     return {
         "answer": answer,
         "identity_request": request_message or "Кто я?",
@@ -26846,6 +28267,36 @@ async def identify_sequential_project_agent(
         "git_branch": git_branch,
         "presence": agent.get("presence") or agent_presence_snapshot(agent),
         "assigned_tasks": assigned_tasks,
+        "execution_authorized": (
+            response_scope_ack is not None
+            if isinstance(response_scope_binding, dict)
+            else True
+        ),
+        "requires_additional_confirmation": (
+            response_scope_ack is None
+            if isinstance(response_scope_binding, dict)
+            else False
+        ),
+        "scope_control": (
+            {
+                "governed": True,
+                "precedence": SCOPE_CONTEXT_PRECEDENCE,
+                "scope_context": deepcopy(
+                    response_scope_binding.get("scope_context")
+                ),
+                "acknowledged": response_scope_ack is not None,
+                "effective_scope_endpoint": (
+                    f"/api/v1/projects/{result['project_phone']}/assignments/"
+                    f"{assignment_id}/effective-scope"
+                ),
+                "ack_endpoint": (
+                    f"/api/v1/projects/{result['project_phone']}/assignments/"
+                    f"{assignment_id}/effective-scope/ack"
+                ),
+            }
+            if isinstance(response_scope_binding, dict)
+            else None
+        ),
         "work_summary": work_summary,
         "work_history_since": created_at,
         "work_history": work_history,
@@ -26861,8 +28312,12 @@ async def identify_sequential_project_agent(
             f"/api/v1/projects/{result['project_phone']}/agents/{agent_phone}/whoami"
         ),
         "sequential_poll_endpoint": (
-            f"/worker/all/{result['project_phone']}"
-            f"?to_phone={result['project_phone']}"
+            "/api/v1/agents/whoami"
+            if isinstance(response_scope_binding, dict)
+            else (
+                f"/worker/all/{result['project_phone']}"
+                f"?to_phone={result['project_phone']}"
+            )
         ),
         "queued_tasks": queued_tasks,
         "removed_pending_tasks": removed_tasks,
@@ -26959,13 +28414,53 @@ async def project_state_json(
         for queue_lock in reversed(acquired):
             queue_lock.release()
     assignment = snapshot["assignment"]
+    execution = deepcopy(assignment)
+    try:
+        current_binding = assignment_binding(
+            assignment,
+            assignment.get("current_assignment_id"),
+        )
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    if isinstance(current_binding, dict):
+        issued_active_task = deepcopy(assignment.get("active_task"))
+        execution["issued_active_task"] = issued_active_task
+        execution["active_task"] = project_effective_task(
+            issued_active_task,
+            current_binding,
+        )
+        execution["active_task_semantics"] = "effective"
+        execution["scope_context"] = deepcopy(
+            current_binding.get("scope_context")
+        )
+        execution["instruction_precedence"] = {
+            "authoritative": "execution.active_task",
+            "historical": "execution.issued_active_task",
+            "rule": SCOPE_CONTEXT_PRECEDENCE,
+        }
+        scope_control_state = assignment.get("scope_control")
+        current_ack = (
+            acknowledgement_for_binding(scope_control_state, current_binding)
+            if isinstance(scope_control_state, dict)
+            else None
+        )
+        execution["execution_authorized"] = current_ack is not None
+        execution["requires_scope_ack"] = current_ack is None
+        execution["effective_scope_endpoint"] = (
+            f"/api/v1/projects/{snapshot['project_phone']}/assignments/"
+            f"{current_binding.get('assignment_id')}/effective-scope"
+        )
+        execution["scope_ack_endpoint"] = (
+            f"/api/v1/projects/{snapshot['project_phone']}/assignments/"
+            f"{current_binding.get('assignment_id')}/effective-scope/ack"
+        )
     return {
         "schema_version": 1,
         "generated_at": utc_now(),
         "project_id": snapshot["project_id"],
         "project_phone": snapshot["project_phone"],
         "project": snapshot["project"],
-        "execution": assignment,
+        "execution": execution,
         "workflow": deepcopy(assignment.get("workflow")),
         "agents": snapshot["agents"],
         "pending_work": pending_work,
@@ -27139,6 +28634,42 @@ async def recover_sequential_runtime_identity(
         if recovered is not None:
             return recovered
     return None
+
+
+def legacy_scope_project_runtime(
+    runtime: dict[str, Any],
+    supplied_role_token: str,
+) -> dict[str, Any]:
+    assignment = runtime.get("assignment")
+    task = runtime.get("task")
+    if not isinstance(assignment, dict) or not isinstance(task, dict):
+        return runtime
+    metadata = task.get("metadata")
+    assignment_id = str(
+        (
+            metadata.get("assignment_id")
+            if isinstance(metadata, dict)
+            else None
+        )
+        or assignment.get("current_assignment_id")
+        or ""
+    ).strip()
+    try:
+        binding = assignment_binding(assignment, assignment_id)
+        if binding is None:
+            return runtime
+        verify_role_token(binding.get("agent_phone"), supplied_role_token)
+        projected = deepcopy(runtime)
+        projected["agent"] = effective_agent_for_binding(
+            runtime["agent"],
+            binding,
+        )
+        projected["task"] = project_effective_task(task, binding)
+        projected["scope_binding"] = binding
+        return projected
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    return runtime
 
 
 def record_conditional_graph_identity_delivery_transaction(
@@ -27337,6 +28868,7 @@ def record_sequential_runtime_identity_transaction(
 async def dequeue_sequential_runtime_task(
     project_id: str,
     port: int | None,
+    supplied_role_token: str = "",
 ) -> dict[str, Any]:
     async with group_task_submission_lock:
         snapshot = await run_group_write_transaction(
@@ -27432,6 +28964,25 @@ async def dequeue_sequential_runtime_task(
                             or selected_metadata.get("to_phone"),
                         },
                     )
+                try:
+                    queued_binding = assignment_binding(
+                        assignment,
+                        selected_metadata.get("assignment_id"),
+                    )
+                    if queued_binding is not None:
+                        verify_role_token(
+                            queued_binding.get("agent_phone"),
+                            supplied_role_token,
+                        )
+                        # Validate the immutable actor snapshot before removing
+                        # the queue item or recording a delivery.  A drifted
+                        # agents.json must fail without consuming work.
+                        effective_agent_for_binding(
+                            target_agent,
+                            queued_binding,
+                        )
+                except LegacyScopeControlError as exc:
+                    raise_legacy_scope_control_error(exc)
 
                 kept: deque[Any] = deque()
                 removed = False
@@ -27453,7 +29004,10 @@ async def dequeue_sequential_runtime_task(
         if selected_item is None:
             recovered = await recover_sequential_runtime_identity(snapshot)
             if recovered is not None:
-                return recovered
+                return legacy_scope_project_runtime(
+                    recovered,
+                    supplied_role_token,
+                )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={
@@ -27513,7 +29067,7 @@ async def dequeue_sequential_runtime_task(
             port,
             snapshot["queue_context"],
         )
-        return {
+        runtime = {
             **snapshot,
             "agent": deepcopy(target_agent),
             "task": sequential_runtime_task_snapshot(
@@ -27523,6 +29077,7 @@ async def dequeue_sequential_runtime_task(
             "identity_reused": False,
             "active_task_recovered_from_history": False,
         }
+        return legacy_scope_project_runtime(runtime, supplied_role_token)
 
 
 def sequential_runtime_team_directory(
@@ -27638,6 +29193,14 @@ def sequential_runtime_response(
     identity_kind = str(metadata.get("identity_kind") or "graph_node")
     reviewer_bootstrap = identity_kind == "reviewer_bootstrap"
     assignment = runtime.get("assignment") or {}
+    scope_binding = runtime.get("scope_binding")
+    scope_control = assignment.get("scope_control")
+    scope_acknowledgement = (
+        acknowledgement_for_binding(scope_control, scope_binding)
+        if isinstance(scope_control, dict) and isinstance(scope_binding, dict)
+        else None
+    )
+    scope_controlled = isinstance(scope_binding, dict)
     assignment_strategy = str(assignment.get("strategy") or "queue_graph")
     team = sequential_runtime_team_directory(runtime["agents"])
     send_payload = {
@@ -27649,6 +29212,10 @@ def sequential_runtime_response(
         "git_commit": "<хеш коммита с результатом>",
         "git_branch": git_branch,
     }
+    if scope_controlled:
+        send_payload["scope_context"] = deepcopy(
+            scope_binding.get("scope_context")
+        )
     return {
         "answer": (
             (
@@ -27670,8 +29237,12 @@ def sequential_runtime_response(
         ),
         "identity_kind": identity_kind,
         "identity_persistent": reviewer_bootstrap,
-        "execution_authorized": True,
-        "requires_additional_confirmation": False,
+        "execution_authorized": (
+            scope_acknowledgement is not None if scope_controlled else True
+        ),
+        "requires_additional_confirmation": (
+            scope_acknowledgement is None if scope_controlled else False
+        ),
         "reviewer_index": metadata.get("reviewer_index"),
         "phase": metadata.get("phase") or assignment.get("phase") or "node",
         "project_id": project_phone,
@@ -27681,6 +29252,32 @@ def sequential_runtime_response(
         "profile": agent.get("profile"),
         "git_branch": git_branch,
         "active_task": runtime["task"],
+        "scope_control": (
+            {
+                "governed": True,
+                "precedence": SCOPE_CONTEXT_PRECEDENCE,
+                "scope_context": deepcopy(scope_binding.get("scope_context")),
+                "effective_scope_sha256": scope_binding.get(
+                    "effective_scope_sha256"
+                ),
+                "acknowledged": scope_acknowledgement is not None,
+                "acknowledgement": deepcopy(scope_acknowledgement),
+                "effective_scope_endpoint": (
+                    f"{base_url}/api/v1/projects/{project_phone}/assignments/"
+                    f"{scope_binding.get('assignment_id')}/effective-scope"
+                ),
+                "ack_endpoint": (
+                    f"{base_url}/api/v1/projects/{project_phone}/assignments/"
+                    f"{scope_binding.get('assignment_id')}/effective-scope/ack"
+                ),
+                "instruction": (
+                    "The effective profile and active_task are authoritative. "
+                    "ACK the exact scope_context before submitting work."
+                ),
+            }
+            if scope_controlled
+            else None
+        ),
         "graph_position": {
             "queue": runtime["task"]["queue"],
             "queue_item_id": runtime["task"]["id"],
@@ -27705,6 +29302,15 @@ def sequential_runtime_response(
                 agent,
             ),
             "instructions": (
+                (
+                    "Получите effective scope и подтвердите точный scope_context "
+                    "через ack_endpoint. Передайте этот scope_context в обычный "
+                    "whoami handoff/review; effective profile/task имеют приоритет "
+                    "над конфликтующим историческим issued-текстом. Используйте "
+                    f"{ROLE_TOKEN_HEADER} при claim, GET, ACK и submission."
+                )
+                if scope_controlled
+                else
                 (
                     "Вы постоянный ревьювер. Читайте полный project_state и новые "
                     "запросы по своему logical phone; решение отправляйте в "
@@ -27743,8 +29349,12 @@ async def begin_sequential_agent_identity(request: Request) -> dict[str, Any]:
         "question": "Из какого Git-репозитория вы пришли?",
         "instructions": (
             "Отправьте git_address на reply_url один раз и сохраните ответ. "
-            "Если ответ содержит agent и active_task, покажите требуемую сводку "
-            "и сразу приступайте к работе без дополнительного подтверждения."
+            "Если ответ содержит agent и active_task, сначала проверьте "
+            "execution_authorized. При false выполните указанные effective-scope "
+            "GET и ACK; при true приступайте к работе без дополнительного "
+            "подтверждения. Для scope-controlled assignment передавайте "
+            f"заголовок {ROLE_TOKEN_HEADER} в repository reply, GET, ACK и "
+            "обычный result/review submission."
         ),
         "reply": {
             "method": "POST",
@@ -27781,6 +29391,7 @@ async def identify_sequential_agent_from_repository(
     runtime = await dequeue_sequential_runtime_task(
         project_phone,
         port=request_port(request),
+        supplied_role_token=str(request.headers.get(ROLE_TOKEN_HEADER) or ""),
     )
     response = sequential_runtime_response(runtime, request)
     communication_reminder = await sequential_runtime_agent_message_reminder(
@@ -28586,6 +30197,452 @@ async def start_managed_project_sprint_from_git(
     return JSONResponse(status_code=result.http_status, content=result.response)
 
 
+async def legacy_scope_current_sprint(
+    project_id: str,
+) -> tuple[str, str, str, dict[str, Any], dict[str, Any] | None]:
+    snapshot = await run_group_write_transaction(
+        sequential_runtime_project_snapshot_transaction,
+        project_id,
+    )
+    context_key = str(snapshot["context_key"])
+    async with sprint_history_lock:
+        project_history = await asyncio.to_thread(
+            project_sprint_history_file_snapshot,
+            context_key,
+        )
+    current_sprint_id = str(
+        project_history.get("current_sprint_id")
+        if isinstance(project_history, dict)
+        else ""
+    ).strip()
+    return (
+        str(snapshot["project_phone"]),
+        context_key,
+        current_sprint_id,
+        snapshot,
+        project_history,
+    )
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/sprints/{sprint_id}/scope-amendments/preflight"
+)
+async def preflight_legacy_scope_amendment(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    try:
+        verify_admin_token(request.headers.get(ADMIN_TOKEN_HEADER))
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    async with group_task_submission_lock:
+        (
+            project_phone,
+            _,
+            current_sprint_id,
+            snapshot,
+            _,
+        ) = await legacy_scope_current_sprint(project_id)
+        if not current_sprint_id or current_sprint_id != sprint_id.strip():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "SCOPE_SPRINT_CONFLICT",
+                    "current_sprint_id": current_sprint_id or None,
+                },
+            )
+        assignment = snapshot["assignment"]
+        existing_amendments = (
+            assignment.get("scope_control", {}).get("amendments", [])
+            if isinstance(assignment.get("scope_control"), dict)
+            else []
+        )
+        active_task = assignment.get("active_task")
+        applicable = bool(
+            str(assignment.get("mode") or "") == "sequential"
+            and str(assignment.get("strategy") or "") == "conditional_graph"
+            and str(assignment.get("status") or "") == "active"
+            and isinstance(active_task, dict)
+        )
+        project_git_address = str(
+            snapshot["project"].get("git_address") or ""
+        )
+        project_repository_key = canonical_remote_from_address(project_git_address)
+        source_repository: dict[str, Any]
+        if project_repository_key is None:
+            source_repository = {
+                "available": False,
+                "repository_key": None,
+                "error": "SCOPE_REPOSITORY_MISMATCH",
+            }
+        else:
+            try:
+                source_path, source_resolution = await asyncio.to_thread(
+                    legacy_scope_source_repository,
+                    project_git_address,
+                    project_repository_key,
+                )
+                source_repository = {
+                    "available": True,
+                    "repository_key": project_repository_key,
+                    "resolution": source_resolution,
+                    "path": str(source_path),
+                }
+            except LegacyScopeControlError as exc:
+                source_repository = {
+                    "available": False,
+                    "repository_key": project_repository_key,
+                    "error": exc.code,
+                    "configuration": REPOSITORY_MAP_ENV,
+                }
+        return {
+            "schema_version": 1,
+            "runtime_type": "legacy_sequential_conditional_graph",
+            "applicable": applicable,
+            "project_id": project_phone,
+            "sprint_id": current_sprint_id,
+            "execution_revision": int(assignment.get("revision") or 0),
+            "assignment_id": assignment.get("current_assignment_id"),
+            "node_id": assignment.get("current_node_id"),
+            "phase": assignment.get("phase") or "node",
+            "agent_id": assignment.get("current_agent_id"),
+            "issued_task_sha256": (
+                scope_canonical_json_sha256(active_task)
+                if isinstance(active_task, dict)
+                else None
+            ),
+            "issued_message_sha256": (
+                scope_text_sha256(active_task.get("message"))
+                if isinstance(active_task, dict)
+                else None
+            ),
+            "scope_control_present": isinstance(
+                assignment.get("scope_control"),
+                dict,
+            ),
+            "amendment_mode": "one_shot_v1",
+            "accepts_new_amendment": not any(
+                isinstance(item, dict) for item in existing_amendments
+            ),
+            "source_repository": source_repository,
+            "minimum_runtime_capability": SCOPE_CONTROL_CAPABILITY,
+            "mutated": False,
+        }
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/sprints/{sprint_id}/scope-amendments"
+)
+async def apply_legacy_scope_amendment(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    try:
+        verify_admin_token(request.headers.get(ADMIN_TOKEN_HEADER))
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    raw_body = await request.body()
+    if len(raw_body) > 4 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"error": "SCOPE_REQUEST_TOO_LARGE"},
+        )
+    try:
+        raw_payload = parse_strict_json_object(raw_body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "SCOPE_REQUEST_JSON_INVALID"},
+        ) from exc
+    payload = validate_legacy_scope_schema(
+        raw_payload,
+        "legacy-scope-amendment-v1.schema.json",
+    )
+    (
+        project_phone,
+        _,
+        current_sprint_id,
+        initial_snapshot,
+        _,
+    ) = await legacy_scope_current_sprint(project_id)
+    if not current_sprint_id or current_sprint_id != sprint_id.strip():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "SCOPE_SPRINT_CONFLICT",
+                "current_sprint_id": current_sprint_id or None,
+            },
+        )
+    async with group_task_submission_lock:
+        replay = await run_group_write_transaction(
+            legacy_scope_replay_transaction,
+            project_phone,
+            payload,
+        )
+        if replay is not None:
+            audit_created = await ensure_legacy_scope_amendment_history(
+                project_phone=project_phone,
+                sprint_id=sprint_id.strip(),
+                result=replay,
+                payload=payload,
+                context_key=str(initial_snapshot["context_key"]),
+                queue_context=initial_snapshot["queue_context"],
+                port=request_port(request),
+            )
+    if replay is not None:
+        replay["audit_history_recorded"] = True
+        replay["audit_history_created"] = audit_created
+        return replay
+    try:
+        verified_source = await asyncio.to_thread(
+            verify_legacy_scope_source,
+            str(initial_snapshot["project"].get("git_address") or ""),
+            payload,
+        )
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+
+    async with group_task_submission_lock:
+        (
+            _,
+            _,
+            locked_sprint_id,
+            _,
+            _,
+        ) = await legacy_scope_current_sprint(project_phone)
+        if locked_sprint_id != sprint_id.strip():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "SCOPE_SPRINT_CONFLICT",
+                    "current_sprint_id": locked_sprint_id or None,
+                },
+            )
+        result = await run_group_write_transaction(
+            legacy_scope_apply_transaction,
+            project_phone,
+            sprint_id.strip(),
+            payload,
+            verified_source,
+            utc_now(),
+        )
+        audit_created = await ensure_legacy_scope_amendment_history(
+            project_phone=project_phone,
+            sprint_id=sprint_id.strip(),
+            result=result,
+            payload=payload,
+            context_key=str(initial_snapshot["context_key"]),
+            queue_context=initial_snapshot["queue_context"],
+            port=request_port(request),
+        )
+    result["audit_history_recorded"] = True
+    result["audit_history_created"] = audit_created
+    return result
+
+
+async def ensure_legacy_scope_amendment_history(
+    *,
+    project_phone: str,
+    sprint_id: str,
+    result: dict[str, Any],
+    payload: dict[str, Any],
+    context_key: str,
+    queue_context: dict[str, Any],
+    port: int | None,
+) -> bool:
+    # This is an operator audit receipt, not a UI history query.  Search the
+    # complete project history so an old, successfully written receipt cannot
+    # fall outside the public endpoint's 10,000-record window and be duplicated
+    # by a later idempotent retry.
+    async with history_lock:
+        records = await asyncio.to_thread(
+            read_history_file,
+            2_147_483_647,
+            "1970-01-01",
+            None,
+            context_key,
+        )
+    amendment_id = str(result.get("amendment_id") or "")
+    already_recorded = any(
+        record.get("event") == "legacy_scope_amendment_applied"
+        and isinstance(record.get("metadata"), dict)
+        and str(record["metadata"].get("project_phone") or "") == project_phone
+        and str(record["metadata"].get("sprint_id") or "") == sprint_id
+        and str(record["metadata"].get("amendment_id") or "") == amendment_id
+        for record in records
+        if isinstance(record, dict)
+    )
+    if not already_recorded:
+        await append_history(
+            "legacy_scope_amendment_applied",
+            "worker-all",
+            f"Applied Git-bound scope amendment {amendment_id}",
+            {
+                "submitted_via": "scope_control_api",
+                "action": "legacy_scope_amendment_applied",
+                "project_phone": project_phone,
+                "sprint_id": sprint_id.strip(),
+                "assignment_id": result.get("assignment_id"),
+                "amendment_id": result.get("amendment_id"),
+                "effective_revision": result.get("effective_revision"),
+                "source_commit": payload["source"]["target_commit"],
+                "source_path": payload["source"]["amendment"]["path"],
+                "source_sha256": payload["source"]["amendment"]["sha256"],
+            },
+            port,
+            queue_context,
+        )
+        return True
+    return False
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/assignments/{assignment_id}/effective-scope"
+)
+async def get_legacy_assignment_effective_scope(
+    project_id: str,
+    assignment_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    async with group_task_submission_lock:
+        snapshot = await run_group_write_transaction(
+            legacy_scope_binding_snapshot_transaction,
+            project_id,
+            assignment_id,
+        )
+        try:
+            verify_role_token(
+                snapshot["binding"].get("agent_phone"),
+                request.headers.get(ROLE_TOKEN_HEADER),
+            )
+            legacy_scope_require_assignment_delivery(
+                snapshot["state"],
+                assignment_id,
+            )
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
+    binding = snapshot["binding"]
+    issued_active_task = binding.get("issued", {}).get("active_task")
+    runtime_active_task = snapshot.get("state", {}).get("active_task")
+    effective_active_task = project_effective_task(
+        runtime_active_task
+        if isinstance(runtime_active_task, dict)
+        else issued_active_task,
+        binding,
+    )
+    effective_core = (
+        deepcopy(binding.get("effective_core"))
+        if isinstance(binding.get("effective_core"), dict)
+        else effective_scope_core(binding.get("effective") or {})
+    )
+    hash_contract = (
+        deepcopy(binding.get("effective_scope_hash_contract"))
+        if isinstance(binding.get("effective_scope_hash_contract"), dict)
+        else deepcopy(EFFECTIVE_SCOPE_HASH_CONTRACT)
+    )
+    return {
+        "schema_version": 1,
+        "project_id": snapshot["project_id"],
+        "assignment_id": assignment_id,
+        "amendment_id": binding.get("amendment_id"),
+        "effective_revision": binding.get("effective_revision"),
+        "precedence": {
+            "authoritative": "effective",
+            "historical": "issued",
+            "rule": SCOPE_CONTEXT_PRECEDENCE,
+            "explanation": (
+                "Effective profile/tasks supersede conflicting issued scope text; "
+                "the graph, gates, assignment identity and history remain unchanged."
+            ),
+        },
+        "issued": {
+            "semantics": "historical_immutable_snapshot",
+            "profile": deepcopy(binding.get("issued", {}).get("profile")),
+            "tasks": deepcopy(binding.get("issued", {}).get("tasks") or []),
+            "active_task": deepcopy(issued_active_task),
+        },
+        "effective": {
+            "semantics": "authoritative_profile_and_tasks_with_transport_projection",
+            "profile": deepcopy(binding.get("effective", {}).get("profile")),
+            "tasks": deepcopy(binding.get("effective", {}).get("tasks") or []),
+            "active_task": effective_active_task,
+            "active_task_semantics": (
+                "derived_transport_projection_not_effective_core_hash_input"
+            ),
+            "effective_scope_sha256": binding.get("effective_scope_sha256"),
+        },
+        "effective_core": effective_core,
+        "effective_scope_integrity": {
+            **hash_contract,
+            "sha256": binding.get("effective_scope_sha256"),
+            "hash_bound_authority": ["profile", "tasks"],
+            "projected_active_task_in_hash": False,
+        },
+        "scope_context": deepcopy(binding.get("scope_context")),
+        "acknowledged": snapshot.get("acknowledgement") is not None,
+        "acknowledgement": deepcopy(snapshot.get("acknowledgement")),
+        "ack_endpoint": (
+            f"/api/v1/projects/{snapshot['project_id']}/assignments/"
+            f"{assignment_id}/effective-scope/ack"
+        ),
+        "mutated": False,
+    }
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/assignments/{assignment_id}/effective-scope/ack"
+)
+async def acknowledge_legacy_assignment_effective_scope(
+    project_id: str,
+    assignment_id: str,
+    request: Request,
+) -> dict[str, Any]:
+    raw_body = await request.body()
+    if len(raw_body) > 256 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail={"error": "SCOPE_ACK_TOO_LARGE"},
+        )
+    try:
+        raw_payload = parse_strict_json_object(raw_body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "SCOPE_REQUEST_JSON_INVALID"},
+        ) from exc
+    payload = validate_legacy_scope_schema(
+        raw_payload,
+        "legacy-scope-ack-v1.schema.json",
+    )
+    async with group_task_submission_lock:
+        snapshot = await run_group_write_transaction(
+            legacy_scope_binding_snapshot_transaction,
+            project_id,
+            assignment_id,
+        )
+        try:
+            verify_role_token(
+                snapshot["binding"].get("agent_phone"),
+                request.headers.get(ROLE_TOKEN_HEADER),
+            )
+            legacy_scope_require_assignment_delivery(
+                snapshot["state"],
+                assignment_id,
+            )
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
+        result = await run_group_write_transaction(
+            legacy_scope_ack_transaction,
+            project_id,
+            assignment_id,
+            payload["scope_context"],
+            utc_now(),
+        )
+    return result
+
+
 @app.post("/api/v1/sprints/{sprint_id}/repair")
 async def repair_managed_sprint(
     sprint_id: str,
@@ -29030,6 +31087,28 @@ async def get_project_agent(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Agent phone was not found in this project",
         )
+    assignment = (
+        project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY)
+        if isinstance(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY), dict)
+        else {}
+    )
+    try:
+        card_binding = assignment_binding(
+            assignment,
+            assignment.get("current_assignment_id"),
+        )
+    except LegacyScopeControlError as exc:
+        raise_legacy_scope_control_error(exc)
+    issued_target_agent = deepcopy(target_agent)
+    if (
+        isinstance(card_binding, dict)
+        and str(card_binding.get("agent_id") or "")
+        == str(target_agent.get("id") or "")
+    ):
+        try:
+            target_agent = effective_agent_for_binding(target_agent, card_binding)
+        except LegacyScopeControlError as exc:
+            raise_legacy_scope_control_error(exc)
     return {
         "project_id": normalize_project_phone(project_entry.get("project_phone")),
         "project_phone": normalize_project_phone(project_entry.get("project_phone")),
@@ -29040,6 +31119,19 @@ async def get_project_agent(
         or target_agent.get("parameters", {}).get("git_branch"),
         "presence": target_agent.get("presence")
         or agent_presence_snapshot(target_agent),
+        "scope_control": (
+            {
+                "governed": True,
+                "precedence": SCOPE_CONTEXT_PRECEDENCE,
+                "scope_context": deepcopy(card_binding.get("scope_context")),
+                "issued_profile": issued_target_agent.get("profile"),
+                "effective_profile": target_agent.get("profile"),
+            }
+            if isinstance(card_binding, dict)
+            and str(card_binding.get("agent_id") or "")
+            == str(target_agent.get("id") or "")
+            else None
+        ),
     }
 
 
