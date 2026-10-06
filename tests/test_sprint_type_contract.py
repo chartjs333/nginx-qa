@@ -67,6 +67,7 @@ WORKSPACE_1_ROOT = (
     f"{SPRINT_PATH_SEGMENT}/nodes/build/assignment-1"
 )
 EXPECTED_SCHEMA_FILES = {
+    "decision-notification-config-v1.schema.json",
     "legacy-scope-ack-v1.schema.json",
     "legacy-scope-amendment-v1.schema.json",
     "legacy-scope-amendment-v2.schema.json",
@@ -2404,6 +2405,10 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "expected_execution_revision": 74,
                 "expected_scope_revision": 1,
                 "idempotency_key": "scope-decision-example",
+            },
+            "decision-notification-config-v1.schema.json": {
+                "schema_version": 1,
+                "notifications": {"email": {"enabled": False}},
             },
             "sprint-preflight-report-v1.schema.json": preflight_fixture(),
             "start-sprint-from-git-v1.schema.json": {

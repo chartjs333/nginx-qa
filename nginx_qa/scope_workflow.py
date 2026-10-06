@@ -199,7 +199,8 @@ def validate_request(state: dict, request_id: str, payload: dict, identity: dict
 
 
 def decide_request(state: dict, request_id: str, payload: dict, identity: dict,
-                   now: str, apply: Callable, *, actor: str = "operator") -> tuple[dict, dict]:
+                   now: str, apply: Callable, *, actor: str = "operator",
+                   precondition: Callable[[], None] | None = None) -> tuple[dict, dict]:
     changed = deepcopy(state)
     ledger = _ledger(changed)
     request = _find_request(ledger, request_id)
@@ -220,6 +221,10 @@ def decide_request(state: dict, request_id: str, payload: dict, identity: dict,
         _event(ledger, "scope_decision_conflict", now, request_id=request_id, reason=error.code, execution_revision=execution_revision(state))
         return changed, response
     try:
+        # Entry-point-specific guards run after exact receipt replay, but share
+        # the same immutable conflict audit as the authoritative CAS checks.
+        if precondition is not None:
+            precondition()
         _cas(state, payload)
         _still_bound(state, request, identity)
         if _decision(ledger, request_id):

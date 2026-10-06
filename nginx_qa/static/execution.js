@@ -1,7 +1,7 @@
 /* The browser never calls whoami/work/ACK. Reads are idempotent snapshots. */
 (function (global) {
   "use strict";
-  const state = { catalog: [], view: null, csrf: null, authenticated: false, selectedCheckpoint: "", cursor: null, generation: 0, busy: false, validation: null, decision: null };
+  const state = { catalog: [], view: null, csrf: null, authenticated: false, selectedCheckpoint: "", cursor: null, generation: 0, busy: false, validation: null, decision: null, notificationId: null, notificationEntry: null, notificationError: null, retryKeys: new Map() };
   const unknown = value => value === null || value === undefined || value === "" ? "неизвестно / не сохранено" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
   const uniqueEvents = events => Array.from(new Map((events || []).map(event => [event.event_id, event])).values());
   const proposalText = proposal => JSON.stringify(proposal || {});
@@ -9,6 +9,11 @@
   const editable = request => ["pending", "pending_decision", "requested", "approved_pending_application"].includes(request.status);
   const existingAuthorization = request => !!(request.authorization_provenance && request.authorization_provenance.kind === "existing_human_authorization");
   const decisionChoices = request => existingAuthorization(request) ? [["record_existing_authorization", "Применить ранее выданное разрешение"], ["reject", "Отклонить применение"], ["edit", "Изменить границы (новое решение)"]] : [["approve", "Разрешить"], ["reject", "Отклонить"], ["edit", "Изменить границы"]];
+  const emailDecisionChoices = request => existingAuthorization(request) ? [] : decisionChoices(request).filter(choice => ["approve", "reject"].includes(choice[0]));
+  const notificationPath = id => "/api/v1/decision-notifications/" + encodeURIComponent(id);
+  const safeEvidenceUrl = value => { if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return null; try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : null; } catch (_) { return null; } };
+  const notificationSummary = view => JSON.stringify((view && view.pending_decisions || []).map(request => request.notification || null));
+  const notificationDate = value => { const date = new Date(typeof value === "number" ? value * 1000 : value); return value !== null && value !== undefined && value !== "" && Number.isFinite(date.getTime()) ? date.toISOString() : unknown(value); };
   const hasDocument = typeof document !== "undefined";
   const el = id => document.getElementById(id);
   function make(tag, text, className) { const node = document.createElement(tag); if (text !== undefined) node.textContent = unknown(text); if (className) node.className = className; return node; }
@@ -16,6 +21,8 @@
   function valueNode(value) {
     if (Array.isArray(value)) { if (!value.length) return make("span", "Нет сохранённых записей"); const list = make("ul"); value.forEach(item => { const li = make("li"); li.append(valueNode(item)); list.append(li); }); return list; }
     if (value && typeof value === "object") { const details = make("details"); details.append(make("summary", "Связанные данные (" + Object.keys(value).length + ")"), fields(value)); return details; }
+    const url = safeEvidenceUrl(value);
+    if (url) { const link = make("a", value); link.href = url; link.rel = "noopener noreferrer"; return link; }
     return make("span", value);
   }
   function fields(value, keys) { const list = make("dl"); for (const key of keys || Object.keys(value || {})) { const item = make("dd"); item.append(valueNode(value && value[key])); list.append(make("dt", key), item); } return list; }
@@ -39,6 +46,59 @@
   function empty(message) { return make("p", message, "empty"); }
   function error(message) { el("error").hidden = !message; el("error").textContent = message || ""; }
   function base() { return "/api/v1/projects/" + encodeURIComponent(el("project").value) + "/sprints/" + encodeURIComponent(el("sprint").value); }
+  function boundRequest(request) { return !!(state.notificationEntry && state.notificationEntry.request && state.notificationEntry.request.request_id === request.request_id); }
+  function decisionAllowed(request) { return state.authenticated && !state.selectedCheckpoint && (!state.notificationId || (state.notificationEntry && state.notificationEntry.current === true && boundRequest(request) && !existingAuthorization(request))); }
+  function decisionPath(decision) { return decision.notification_id ? notificationPath(decision.notification_id) : decision.base + "/scope-requests/" + encodeURIComponent(decision.request.request_id); }
+  function decisionRevisions() {
+    if (state.notificationId) {
+      const binding = (state.notificationEntry && state.notificationEntry.notification || {}).binding || {};
+      if (!Number.isInteger(binding.execution_revision) || !Number.isInteger(binding.base_scope_revision)) throw new Error("Уведомление не содержит точную привязку revisions. Откройте обычный /execution.");
+      return { expected_execution_revision: binding.execution_revision, expected_scope_revision: binding.base_scope_revision };
+    }
+    return { expected_execution_revision: state.view.execution.revision, expected_scope_revision: scopeRevision(state.view) };
+  }
+  function ordinaryExecutionLink() { const link = make("a", "Открыть актуальные Pending decisions в обычном /execution"); link.href = "/execution"; return link; }
+  function renderNotification() {
+    const panel = el("email-decision"); panel.hidden = !state.notificationId;
+    if (!state.notificationId) return;
+    const entry = state.notificationEntry, notification = entry && entry.notification || {};
+    panel.replaceChildren(make("h2", "Решение из email"), make("p", "Ссылка не даёт полномочий оператора. Открытие и обновление страницы не принимают решение. Для действий нужна штатная привязанная операторская сессия.", "hint"));
+    if (!entry || !entry.current) panel.append(make("p", "Решение устарело или ссылка недоступна. Текущее состояние изменилось либо истёк срок ссылки. Откройте актуальное Pending decision.", "stale-notification"), make("p", state.notificationError || entry && entry.stale_reason || "Ссылка не найдена"));
+    panel.append(ordinaryExecutionLink());
+    if (!entry) return;
+    panel.append(fields({ ...notification, expires_at: notificationDate(notification.expires_at) }, ["project_id", "sprint_id", "request_id", "expires_at"]), make("p", "Текущая scope revision: " + unknown(entry.scope_revision) + " · execution revision: " + unknown(entry.execution_revision)));
+    if (entry.request) {
+      panel.append(make("p", "Ниже — исходный запрос, с которым отправлено письмо. Он не заменяется более новым запросом.", "hint"), fields(entry.request.identity || {}, ["node_id", "agent_id", "agent_phone"]), decisionCard({ ...entry.request, notification }));
+    }
+  }
+  async function refreshNotification() {
+    if (!state.notificationId) return;
+    try { state.notificationEntry = await api(notificationPath(state.notificationId)); state.notificationError = null; }
+    catch (err) { state.notificationEntry = state.notificationEntry ? { ...state.notificationEntry, current: false } : null; state.notificationError = err.message; }
+    if (!state.notificationEntry || !state.notificationEntry.current) invalidateValidation("Решение устарело или недоступно. Эта ссылка не может применить решение к новому состоянию.");
+  }
+  function notificationStatus(request) {
+    const notification = request.notification;
+    if (!notification) return null;
+    const section = make("div", undefined, "notification-status");
+    section.append(make("p", "Email notification: " + unknown(notification.status)));
+    if (notification.status === "delivered") section.append(make("p", "Почтовый сервер принял письмо; это не подтверждение прочтения.", "hint"));
+    const errorCode = notification.error_code || notification.last_error_code;
+    if (errorCode) section.append(make("p", "Ошибка доставки: " + errorCode));
+    if (notification.status === "failed") {
+      const button = make("button", "Повторить уведомление"); button.type = "button";
+      button.disabled = !decisionAllowed(request) || !editable(request);
+      button.addEventListener("click", async () => {
+        if (!decisionAllowed(request) || !editable(request)) return;
+        const id = notification.notification_id;
+        if (!state.retryKeys.has(id)) state.retryKeys.set(id, global.crypto.randomUUID());
+        button.disabled = true;
+        try { await api(notificationPath(id) + "/retry", { method: "POST", body: JSON.stringify({ idempotency_key: state.retryKeys.get(id) }) }); state.retryKeys.delete(id); state.cursor = null; await refresh(); }
+        catch (err) { error(err.message); button.disabled = !decisionAllowed(request); }
+      }); section.append(button);
+    }
+    return section;
+  }
   async function api(path, options = {}) {
     const response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options, headers: { ...(options.body ? { "Content-Type": "application/json", "X-Nginx-QA-CSRF": state.csrf || "" } : {}), ...(options.headers || {}) } });
     let data; try { data = await response.json(); } catch (_) { throw new Error("Сервер вернул не JSON (HTTP " + response.status + ")"); }
@@ -85,19 +145,25 @@
     return card;
   }
   function decisionCard(request) {
-    const card = make("article", undefined, "card"); card.dataset.requestId = request.request_id;
+    const card = make("article", undefined, "card" + (state.notificationId && boundRequest(request) ? " email-bound" : "")); card.dataset.requestId = request.request_id;
     card.append(detailButton("Scope request " + request.request_id, request), badge(request.status));
     card.append(make("p", request.reason), make("p", (request.proposal || {}).instructions, "scope-text"));
     card.append(make("strong", "Сохраняемые ограничения")); const ul = make("ul"); for (const restriction of (request.proposal || {}).retained_restrictions || []) ul.append(make("li", restriction)); card.append(ul);
-    card.append(fields(request, ["assignment_id", "base_scope_revision", "dependencies"]));
+    card.append(fields(request, ["assignment_id", "base_scope_revision", "dependencies", "source"]));
+    const notification = notificationStatus(request); if (notification) card.append(notification);
     if (existingAuthorization(request)) {
       card.append(make("p", request.status === "approved_pending_application" ? "Решение уже принято — ожидает инфраструктурного применения. Новое согласие на эти границы не требуется." : "Сохранено ранее выданное разрешение; его provenance не разрешает другие границы."), fields(request, ["authorization_provenance"]));
     }
     if (request.decision) card.append(detailButton("Решение и provenance", request.decision));
     if (editable(request)) {
       const actions = make("div", undefined, "actions");
-      for (const [action, label] of decisionChoices(request)) {
-        const button = make("button", label); button.disabled = !state.authenticated || !!state.selectedCheckpoint;
+      const choices = state.notificationId ? boundRequest(request) ? emailDecisionChoices(request) : [] : decisionChoices(request);
+      if (state.notificationId && boundRequest(request)) {
+        const preview = make("button", "Просмотреть точный diff"); preview.type = "button"; preview.disabled = !decisionAllowed(request);
+        preview.addEventListener("click", () => { if (decisionAllowed(request)) { openDecision(request, "approve"); validateDecision(); } }); actions.append(preview);
+      }
+      for (const [action, label] of choices) {
+        const button = make("button", label); button.disabled = !decisionAllowed(request);
         button.addEventListener("click", () => openDecision(request, action)); actions.append(button);
       }
       card.append(actions);
@@ -105,6 +171,7 @@
     return card;
   }
   function render(view) {
+    renderNotification();
     replace("execution", [fields(view.execution)]);
     replace("attention", [badge(view.attention.state), fields(view.attention, ["pending_request_ids", "pending_application_ids", "pending_ack_assignment_ids", "other_gates"]), make("p", "ACK снимает только scope-блокировку. Он не означает transition, completion, dequeue или resume.", "hint")]);
     replace("graph", [graph(view)]);
@@ -115,6 +182,12 @@
     const queue = [view.queue.known ? detailButton("Снимок очередей (чтение без извлечения)", view.queue) : empty("Очередь неизвестна для этого снимка")];
     queue.push(...view.assignments.filter(item => !item.is_current).map(assignmentCard)); replace("queue", queue);
     replace("timeline", uniqueEvents(view.timeline).reverse().map(event => { const row = make("article", undefined, "timeline-event"); row.append(detailButton(event.kind, event), make("small", unknown(event.timestamp) + " · execution revision: " + unknown(event.execution_revision) + (event.observed_at_execution_revision !== undefined ? " · впервые сохранено при revision " + unknown(event.observed_at_execution_revision) : "")), make("span", event.assignment_id || event.node_id || event.event_id)); return row; }));
+    if ((view.notification_events || []).length) {
+      el("timeline").append(make("h3", "Notification audit — не переходы графа"));
+      for (const event of [...view.notification_events].sort((a, b) => Number(b.timestamp) - Number(a.timestamp) || Number(b.sequence) - Number(a.sequence))) {
+        const row = make("article", undefined, "timeline-event notification-event"); row.append(detailButton(event.kind, event), make("small", notificationDate(event.timestamp)), fields(event, ["notification_id", "sequence", "error_code"])); el("timeline").append(row);
+      }
+    }
     const selected = state.selectedCheckpoint; const options = [new Option("Live — текущее выполнение", "")];
     for (const point of view.history.available || []) options.push(new Option("Revision " + unknown(point.execution_revision) + " · " + unknown(point.recorded_at), point.checkpoint_id));
     el("checkpoint").replaceChildren(...options); el("checkpoint").value = selected;
@@ -125,13 +198,14 @@
     if (state.busy || !el("project").value || !el("sprint").value) return;
     const generation = state.generation; state.busy = true;
     try {
-      const previousAuth = state.authenticated;
+      const previousAuth = state.authenticated, previousNotification = JSON.stringify(state.notificationEntry);
       await refreshSession();
+      await refreshNotification(); renderNotification();
       const params = new URLSearchParams(); if (state.selectedCheckpoint) params.set("at_checkpoint", state.selectedCheckpoint); if (state.cursor) params.set("cursor", state.cursor);
       const view = await api(base() + "/observability?" + params.toString());
       if (generation !== state.generation) return;
       if (state.validation && (view.execution.revision !== state.validation.execution_revision || scopeRevision(view) !== state.validation.scope_revision)) invalidateValidation("Состояние изменилось. Требуются новая validation и exact diff.");
-      const rerender = !view.unchanged || !state.view || previousAuth !== state.authenticated;
+      const rerender = !view.unchanged || !state.view || previousAuth !== state.authenticated || previousNotification !== JSON.stringify(state.notificationEntry) || notificationSummary(state.view) !== notificationSummary(view);
       state.view = view; state.cursor = view.cursor; error(null);
       if (rerender) render(view);
       else el("sync").textContent = (state.selectedCheckpoint ? "Исторический снимок" : "Синхронизировано") + " · revision " + unknown(view.execution.revision) + " · " + new Date().toLocaleTimeString();
@@ -140,10 +214,12 @@
   }
   function scopeRevision(view) { return view.scope_revision !== undefined ? view.scope_revision : Math.max(0, ...view.assignments.map(item => Number((item.scope || {}).effective_revision) || 0)); }
   function invalidateValidation(reason) { state.validation = null; el("confirm").disabled = true; if (reason) el("validation").textContent = reason; }
-  function selectedProposal() { return { ...state.decision.request.proposal, instructions: el("instructions").value, retained_restrictions: lines(el("restrictions").value) }; }
+  function selectedProposal() { return state.decision.notification_id ? state.decision.request.proposal : { ...state.decision.request.proposal, instructions: el("instructions").value, retained_restrictions: lines(el("restrictions").value) }; }
   function openDecision(request, action) {
+    if (!decisionAllowed(request)) return;
+    if (state.notificationId) { if (!["approve", "reject"].includes(action)) return; request = state.notificationEntry.request; }
     if (el("detail").open) el("detail").close();
-    state.decision = { request, action, idempotency_key: global.crypto.randomUUID(), base: base() }; invalidateValidation();
+    state.decision = { request, action, idempotency_key: global.crypto.randomUUID(), base: base(), notification_id: state.notificationId }; invalidateValidation();
     el("instructions").value = request.proposal.instructions; el("restrictions").value = (request.proposal.retained_restrictions || []).join("\n"); el("decision-reason").value = "";
     el("instructions").readOnly = action !== "edit"; el("restrictions").readOnly = action !== "edit";
     el("decision-summary").replaceChildren(fields(request, ["request_id", "assignment_id", "reason", "dependencies", "source", "authorization_provenance"]));
@@ -153,26 +229,31 @@
     el("decision-dialog").showModal();
   }
   async function validateDecision() {
+    if (!state.decision || !decisionAllowed(state.decision.request)) return;
+    const decision = state.decision;
     invalidateValidation(); el("validate").disabled = true;
     try {
-      const proposal = selectedProposal(), request = state.decision.request;
-      const validated = await api(state.decision.base + "/scope-requests/" + encodeURIComponent(request.request_id) + "/validate", { method: "POST", body: JSON.stringify({ proposal, expected_execution_revision: state.view.execution.revision, expected_scope_revision: scopeRevision(state.view) }) });
+      const proposal = selectedProposal();
+      const validated = await api(decisionPath(decision) + "/validate", { method: "POST", body: JSON.stringify({ proposal, ...decisionRevisions() }) });
+      if (decision !== state.decision || !decisionAllowed(decision.request)) return;
       state.validation = { ...validated, proposal_fingerprint: proposalText(proposal) };
       const section = make("div"); section.append(make("h3", "Exact resulting scope diff"), fields(validated, ["execution_revision", "scope_revision"]));
       const diff = make("div", undefined, "diff"); const raw = validated.diff || {};
       for (const [label, content] of [["До (current effective)", validated.before_effective || raw.before || raw.current || raw.previous], ["После (validated result)", validated.after_effective || raw.after || raw.proposed || validated.proposal]]) { const pane = make("div"); pane.append(make("h4", label), valueNode(content)); diff.append(pane); }
       section.append(diff, make("pre", validated.diff)); el("validation").replaceChildren(section); el("confirm").disabled = false;
-    } catch (err) { invalidateValidation(err.message); }
+    } catch (err) { if (decision === state.decision) { invalidateValidation(err.message); if (state.notificationId && [409, 410].includes(err.status)) await refresh(); } }
     finally { el("validate").disabled = false; }
   }
   async function submitDecision(event) {
-    event.preventDefault(); const decision = state.decision; if (!decision || !state.authenticated || state.selectedCheckpoint) return;
+    event.preventDefault(); const decision = state.decision; if (!decision || !decisionAllowed(decision.request)) return;
     if (decision.action !== "reject" && (!state.validation || state.validation.proposal_fingerprint !== proposalText(selectedProposal()))) { invalidateValidation("Изменённое содержание требует новой проверки."); return; }
     el("confirm").disabled = true;
-    const body = { action: decision.action, reason: el("decision-reason").value, idempotency_key: decision.idempotency_key, expected_execution_revision: state.validation ? state.validation.execution_revision : state.view.execution.revision, expected_scope_revision: state.validation ? state.validation.scope_revision : scopeRevision(state.view) };
-    if (state.validation) body.validation_id = state.validation.validation_id;
-    try { await api(decision.base + "/scope-requests/" + encodeURIComponent(decision.request.request_id) + "/decisions", { method: "POST", body: JSON.stringify(body) }); el("decision-dialog").close(); invalidateValidation(); await refresh(); }
-    catch (err) { if (err.status === 409) { invalidateValidation("Конфликт/stale: другое решение или новая revision. Ничего не применено этой попыткой. " + err.message); await refresh(); } else { el("validation").textContent = err.message + " Повтор использует тот же idempotency key."; el("confirm").disabled = false; } }
+    try {
+      const body = { action: decision.action, reason: el("decision-reason").value, idempotency_key: decision.idempotency_key, ...(state.validation ? { expected_execution_revision: state.validation.execution_revision, expected_scope_revision: state.validation.scope_revision } : decisionRevisions()) };
+      if (state.validation) body.validation_id = state.validation.validation_id;
+      await api(decisionPath(decision) + "/decisions", { method: "POST", body: JSON.stringify(body) }); el("decision-dialog").close(); invalidateValidation(); await refresh();
+    }
+    catch (err) { if ([409, 410].includes(err.status)) { invalidateValidation("Конфликт/stale: другое решение, новая revision или истёк срок ссылки. Ничего не применено этой попыткой. " + err.message); await refresh(); } else { el("validation").textContent = err.message + " Повтор использует тот же idempotency key."; el("confirm").disabled = false; } }
   }
   async function chooseProject(initialSprint) {
     state.generation++; state.cursor = null; state.selectedCheckpoint = "";
@@ -188,7 +269,7 @@
     } catch (_) { state.authenticated = false; state.csrf = null; el("auth").textContent = "Операторская сессия недоступна. Чтение остаётся доступным; решения запрещены."; }
   }
   async function start() {
-    el("project").addEventListener("change", () => chooseProject());
+    el("project").addEventListener("change", () => { if (!state.notificationId) chooseProject(); });
     el("sprint").addEventListener("change", () => { state.generation++; state.cursor = null; state.selectedCheckpoint = ""; el("sync").textContent = "Загрузка выбранного спринта…"; invalidateValidation(); refresh(); });
     el("checkpoint").addEventListener("change", () => { state.generation++; state.selectedCheckpoint = el("checkpoint").value; state.cursor = null; el("sync").textContent = "Загрузка выбранного момента…"; invalidateValidation(); refresh(); });
     el("validate").addEventListener("click", validateDecision); el("decision-form").addEventListener("submit", submitDecision);
@@ -196,6 +277,16 @@
     el("cancel").addEventListener("click", () => el("decision-dialog").close());
     await refreshSession();
     const query = new URLSearchParams(global.location.search);
+    state.notificationId = query.get("notification");
+    if (state.notificationId) {
+      el("project").disabled = true; el("sprint").disabled = true;
+      await refreshNotification(); renderNotification();
+      if (!state.notificationEntry || !state.notificationEntry.notification) return;
+      const notification = state.notificationEntry.notification;
+      state.catalog = [{ project_id: String(notification.project_id), name: String(notification.project_id), sprints: [{ sprint_id: notification.sprint_id }] }];
+      el("project").replaceChildren(new Option(notification.project_id, notification.project_id));
+      await chooseProject(notification.sprint_id); global.setInterval(refresh, 2500); return;
+    }
     try { const catalog = await api("/api/v1/execution-catalog"); state.catalog = catalog.projects || []; }
     catch (err) {
       if (!query.get("project_id") || !query.get("sprint_id")) { error(err.message); return; }
@@ -206,6 +297,6 @@
     await chooseProject(query.get("sprint_id")); global.setInterval(refresh, 2500);
   }
   // Pure helpers are exported for isolated browser-contract tests (no DOM/API).
-  if (typeof module !== "undefined" && module.exports) module.exports = { uniqueEvents, proposalText, lines, editable, decisionChoices, unknown };
+  if (typeof module !== "undefined" && module.exports) module.exports = { uniqueEvents, proposalText, lines, editable, decisionChoices, emailDecisionChoices, notificationPath, notificationDate, safeEvidenceUrl, unknown };
   if (hasDocument) start();
 })(typeof window !== "undefined" ? window : globalThis);

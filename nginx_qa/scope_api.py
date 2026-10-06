@@ -5,7 +5,6 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import hmac
-import os
 from pathlib import Path
 import secrets
 import time
@@ -16,6 +15,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import scope_workflow as flow
 from . import scope_runtime_adapters as adapters
 from .execution_observability import project_execution
+from .decision_notifications import EmailConfig, NotificationError, binding_matches, is_expired, known_secret_values
+from .decision_notification_runtime import DecisionNotificationService, notification_snapshot
 from .legacy_scope_control import (
     ADMIN_TOKEN_HEADER, ROLE_TOKEN_HEADER, LegacyScopeControlError,
     assignment_binding, require_role_tokens_configured, verify_admin_token,
@@ -29,7 +30,7 @@ def register_scope_api(host):
     cookie_name = "nginx_qa_operator"
 
     def error(exc):
-        if isinstance(exc, (flow.ScopeDecisionError, LegacyScopeControlError)):
+        if isinstance(exc, (flow.ScopeDecisionError, LegacyScopeControlError, NotificationError)):
             raise HTTPException(exc.status_code, {"error": exc.code}) from exc
         raise exc
 
@@ -64,8 +65,13 @@ def register_scope_api(host):
         if len(data) > 256 * 1024:
             raise HTTPException(413, {"error": "SCOPE_REQUEST_TOO_LARGE"})
         # Reject known credentials BEFORE any durable event or exception detail.
-        for name, value in os.environ.items():
-            if name.startswith("NGINX_QA_SCOPE_CONTROL_") and "TOKEN" in name and len(value) >= 32 and value.encode() in data:
+        service = getattr(app.state, "decision_notifications", None)
+        notification_credentials = tuple(value for value in
+            (getattr(getattr(service, "config", None), "smtp_username", ""),
+             getattr(getattr(service, "config", None), "smtp_password", "")) if value)
+        credential_values = (*known_secret_values(), *notification_credentials)
+        for value in credential_values:
+            if value.encode() in data:
                 raise HTTPException(400, {"error": "CREDENTIAL_IN_REQUEST_FORBIDDEN"})
         try:
             parsed = host.parse_strict_json_object(data)
@@ -82,8 +88,8 @@ def register_scope_api(host):
                 for item in value:
                     yield from strings(item)
         decoded_strings = list(strings(parsed))
-        for name, value in os.environ.items():
-            if name.startswith("NGINX_QA_SCOPE_CONTROL_") and "TOKEN" in name and len(value) >= 32 and any(value in item for item in decoded_strings):
+        for value in credential_values:
+            if any(value in item for item in decoded_strings):
                 raise HTTPException(400, {"error": "CREDENTIAL_IN_REQUEST_FORBIDDEN"})
         return parsed
 
@@ -191,7 +197,7 @@ def register_scope_api(host):
             "occurrence_id", "source_assignment_id",
         )}
 
-    def operation(state, agents, entry, action, payload, request_id, now, role_token, actor):
+    def operation(state, agents, entry, action, payload, request_id, now, role_token, actor, notification=None):
         if action == "create":
             assignment_id = str(payload.get("assignment_id") or "")
         else:
@@ -205,6 +211,26 @@ def register_scope_api(host):
             # ledger still rejects reuse of a key for different request bytes.
             return flow.decide_request(state, request_id, payload, record["identity"], now,
                 lambda *_: (_ for _ in ()).throw(RuntimeError("Replay cannot apply")), actor=actor)
+        if notification is not None:
+            # Email and ordinary UI use exactly this same authoritative lock,
+            # ledger and CAS. No email-only approval state is written.
+            current_request = next((r for r in flow.request_list(state)["requests"] if r["request_id"] == request_id), None)
+            current_binding = notification_snapshot(notification["project_id"], notification["sprint_id"], state, current_request) if current_request else None
+            binding_error = None
+            if is_expired(notification):
+                binding_error = flow.ScopeDecisionError("NOTIFICATION_LINK_EXPIRED", status_code=410)
+            elif current_binding is None or not binding_matches(notification, current_binding):
+                binding_error = flow.ScopeDecisionError("NOTIFICATION_STALE")
+            if binding_error is not None:
+                if action == "decide":
+                    def fail_binding():
+                        raise binding_error
+                    return flow.decide_request(state, request_id, payload, record["identity"], now,
+                        lambda *_: (_ for _ in ()).throw(RuntimeError("Failed binding cannot apply")),
+                        actor=actor, precondition=fail_binding)
+                raise binding_error
+            if action == "validate" and "proposal" in payload and payload["proposal"] != record["proposal"]:
+                raise flow.ScopeDecisionError("NOTIFICATION_EDIT_FORBIDDEN", status_code=400)
         if action == "create":
             prior = next((item for item in ledger.get("requests", []) if item.get("idempotency_key") == payload.get("idempotency_key")), None)
             if prior:
@@ -269,7 +295,7 @@ def register_scope_api(host):
             return flow.validate_request(state, request_id, payload, identity, now, preview)
         return flow.decide_request(state, request_id, payload, identity, now, apply, actor=actor)
 
-    def legacy_mutation(project_id, sprint_id, action, payload, request_id, role_token, actor):
+    def legacy_mutation(project_id, sprint_id, action, payload, request_id, role_token, actor, notification=None):
         with host.git_config_file_lock():
             with host.agents_file_lock():
                 config = host.read_git_config_file()
@@ -279,17 +305,19 @@ def register_scope_api(host):
                     raise flow.ScopeDecisionError("SCOPE_SPRINT_CONFLICT")
                 state = deepcopy(entry.get(host.PROJECT_AGENT_ASSIGNMENT_KEY) or {})
                 agents = host.full_agents_for_project(host.read_agents_file(), context, host.phone_git_contexts_from_config(config))
-                changed, response = operation(state, agents, entry, action, payload, request_id, host.utc_now(), role_token, actor)
+                changed, response = operation(state, agents, entry, action, payload, request_id, host.utc_now(), role_token, actor, notification)
                 if changed != state:
                     entry[host.PROJECT_AGENT_ASSIGNMENT_KEY] = changed
                     config[host.PROJECTS_KEY][key] = entry
                     host.write_git_config_file(config)
                 return response
 
-    async def mutate(project_id, sprint_id, action, request, request_id=""):
+    async def mutate(project_id, sprint_id, action, request, request_id="", notification=None):
         try:
             actor = operator(request) if action != "create" else "executor"
             payload = await body(request)
+            if notification is not None and action == "decide" and payload.get("action") not in {"approve", "reject"}:
+                raise flow.ScopeDecisionError("NOTIFICATION_ACTION_FORBIDDEN", status_code=400)
             if action in {"create", "decide"}:
                 payload = host.validate_legacy_scope_schema(payload, "scope-change-request-v1.schema.json" if action == "create" else "scope-human-decision-v1.schema.json")
             token = request.headers.get(ROLE_TOKEN_HEADER, "")
@@ -298,10 +326,13 @@ def register_scope_api(host):
                 if runtime:
                     entry, _ = await asyncio.to_thread(project_entry, project_id)
                     def update(state):
-                        return operation(state, [], entry, action, payload, request_id, host.utc_now(), token, actor)
+                        return operation(state, [], entry, action, payload, request_id, host.utc_now(), token, actor, notification)
                     _, response = await asyncio.to_thread(runtime.scope_mutate, project_id, sprint_id, update)
                 else:
-                    response = await asyncio.to_thread(legacy_mutation, project_id, sprint_id, action, payload, request_id, token, actor)
+                    response = await asyncio.to_thread(legacy_mutation, project_id, sprint_id, action, payload, request_id, token, actor, notification)
+            # Reconciliation is performed by the separate notification worker.
+            # A delivery/store failure must never turn a committed decision into
+            # a reported execution failure; restart recovers the durable request.
             if response.get("error"):
                 return JSONResponse(status_code=response["status_code"], content={"detail": response})
             return response
@@ -424,19 +455,185 @@ def register_scope_api(host):
         snapshot.update(project_id=project_id, sprint_id=sprint_id)
         return snapshot, snapshot.get("execution", snapshot)
 
+    def scan_notification_snapshots():
+        """Read authoritative stores; notification worker is the only caller."""
+        result = []
+        with host.git_config_file_lock():
+            config = host.read_git_config_file()
+            histories = host.read_sprint_history_file().get("projects", {})
+            for key, entry in config.get(host.PROJECTS_KEY, {}).items():
+                project_id = str(entry.get("project_phone") or "")
+                sprint_id = str(histories.get(key, {}).get("current_sprint_id") or "")
+                state = entry.get(host.PROJECT_AGENT_ASSIGNMENT_KEY) or {}
+                if project_id and sprint_id:
+                    for record in flow.request_list(state)["requests"]:
+                        snapshot = notification_snapshot(project_id, sprint_id, state, record,
+                            project_name=entry.get("project_name") or project_id)
+                        if snapshot:
+                            result.append(snapshot)
+        runtime = host.managed_continuity_runtime
+        if runtime is not None:
+            # active_runtime_states() is a startup reconciliation command, NOT
+            # a read. Use the already initialized store's project snapshot API.
+            projects = {str(entry.get("project_phone")) for entry in config.get(host.PROJECTS_KEY, {}).values() if entry.get("project_phone")}
+            for project_id in projects:
+                for state in runtime.store.runtime_states_for_project(project_id):
+                    if state.get("status") != "active":
+                        continue
+                    sprint_id = str(state.get("sprint_id") or "")
+                    if not sprint_id:
+                        continue
+                    for record in flow.request_list(state)["requests"]:
+                        snapshot = notification_snapshot(project_id, sprint_id, state, record)
+                        if snapshot:
+                            result.append(snapshot)
+        return result
+
+    async def scan_notifications():
+        return await asyncio.to_thread(scan_notification_snapshots)
+
+    def notification_current(record):
+        # Only a delivery eligibility hint; the POST binding is checked again
+        # atomically inside operation(), never trusted from this earlier read.
+        return any(binding_matches(record, snapshot) for snapshot in scan_notification_snapshots())
+
+    def configure_notifications(config=None, provider=None):
+        configuration_error = None
+        if config is None:
+            try:
+                config = EmailConfig.from_environment()
+            except (NotificationError, OSError, ValueError, TypeError):
+                # Optional delivery configuration cannot take execution offline.
+                # Fail closed for mail, and expose a static operator health code.
+                config = EmailConfig()
+                configuration_error = "EMAIL_CONFIG_INVALID"
+        service = DecisionNotificationService(config,
+            scan_notifications, notification_current, provider=provider)
+        service.last_error_code = configuration_error
+        app.state.decision_notifications = service
+        return service
+
+    app.state.configure_decision_notifications = configure_notifications
+    app.state.decision_notifications = None
+
+    def notification_service():
+        service = app.state.decision_notifications
+        if service is None or service.store is None:
+            raise HTTPException(503, {"error": "NOTIFICATIONS_UNAVAILABLE"})
+        return service
+
+    async def notification_record(notification_id):
+        try:
+            record = await asyncio.to_thread(notification_service().store.get, notification_id)
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(503, {"error": "NOTIFICATION_STORE_UNAVAILABLE"}) from None
+        if record is None:
+            raise HTTPException(404, {"error": "NOTIFICATION_NOT_FOUND"})
+        return record
+
+    async def bound_notification_view(record):
+        try:
+            _, state = await read_snapshot(record["project_id"], record["sprint_id"])
+        except (HTTPException, KeyError):
+            return {"notification": record, "current": False, "stale_reason": "NOTIFICATION_STALE",
+                "request": None, "execution_revision": None, "scope_revision": None}
+        view = flow.request_list(state)
+        original = next((item for item in view["requests"] if item["request_id"] == record["request_id"]), None)
+        snapshot = notification_snapshot(record["project_id"], record["sprint_id"], state, original) if original else None
+        current = snapshot is not None and binding_matches(record, snapshot)
+        reason = "NOTIFICATION_LINK_EXPIRED" if is_expired(record) else None if current else "NOTIFICATION_STALE"
+        if original:
+            immutable = {key: value for key, value in original.items() if key not in {"status", "decision", "notification"}}
+            if canonical_json_sha256(immutable) != record["binding"]["content_sha256"]:
+                original = None  # Never present modified bytes as the emailed proposal.
+        return {"notification": record, "current": reason is None, "stale_reason": reason,
+            "request": original, "execution_revision": view["execution_revision"], "scope_revision": view["scope_revision"]}
+
+    notification_base = "/api/v1/decision-notifications/{notification_id}"
+
+    @app.get(notification_base)
+    async def get_decision_notification(notification_id: str):
+        # No claim, initialization, access event, retry, validation or decision.
+        record = await notification_record(notification_id)
+        return JSONResponse(await bound_notification_view(record), headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
+
+    @app.post(notification_base + "/validate")
+    async def validate_decision_notification(notification_id: str, request: Request):
+        record = await notification_record(notification_id)
+        return await mutate(record["project_id"], record["sprint_id"], "validate", request, record["request_id"], notification=record)
+
+    @app.post(notification_base + "/decisions")
+    async def decide_notification(notification_id: str, request: Request):
+        record = await notification_record(notification_id)
+        return await mutate(record["project_id"], record["sprint_id"], "decide", request, record["request_id"], notification=record)
+
+    @app.post(notification_base + "/retry")
+    async def retry_notification(notification_id: str, request: Request):
+        try:
+            operator(request)
+            payload = await body(request)
+            if set(payload) != {"idempotency_key"}:
+                raise NotificationError("NOTIFICATION_RETRY_INVALID")
+            record = await notification_record(notification_id)
+            view = await bound_notification_view(record)
+            if not view["current"]:
+                raise NotificationError(view["stale_reason"], 409)
+            return await asyncio.to_thread(notification_service().store.retry, notification_id,
+                idempotency_key=payload["idempotency_key"])
+        except (NotificationError, LegacyScopeControlError) as exc:
+            error(exc)
+
+    async def notification_metadata(project_id, sprint_id, state):
+        service = app.state.decision_notifications
+        def unavailable(code):
+            return {item["request_id"]: {"status": "unavailable", "error_code": code}
+                for item in flow.request_list(state)["requests"] if item["status"] == "pending"}, []
+        if service is None:
+            return {}, []
+        if service.store is None:
+            return unavailable(service.last_error_code) if service.last_error_code else ({}, [])
+        try:
+            records = await asyncio.to_thread(service.store.list_for, adapters.runtime_kind(state), project_id, sprint_id)
+            events = []
+            for record in records:
+                events.extend(await asyncio.to_thread(service.store.events, record["notification_id"]))
+            return {record["request_id"]: record for record in records}, events
+        except Exception:
+            # Delivery metadata is not execution health or a reviewer verdict.
+            return unavailable("NOTIFICATION_STORE_UNAVAILABLE")
+
     @app.get(base + "/scope-requests")
     async def scope_requests(project_id: str, sprint_id: str):
         _, state = await read_snapshot(project_id, sprint_id)
-        return flow.request_list(state)
+        result = flow.request_list(state)
+        metadata, _ = await notification_metadata(project_id, sprint_id, state)
+        for record in result["requests"]:
+            if record["request_id"] in metadata:
+                record["notification"] = metadata[record["request_id"]]
+        return result
 
     @app.get(base + "/observability")
     async def observability(project_id: str, sprint_id: str, cursor: str | None = None,
                             at_revision: int | None = None, at_checkpoint: str | None = None):
         snapshot, state = await read_snapshot(project_id, sprint_id)
         try:
-            return project_execution(snapshot, scope_requests=flow.request_list(state)["requests"],
+            view = project_execution(snapshot, scope_requests=flow.request_list(state)["requests"],
                 checkpoints=(state.get("execution_audit") or {}).get("checkpoints", []),
                 cursor=cursor, at_revision=at_revision, at_checkpoint=at_checkpoint)
+            if at_revision is None and at_checkpoint is None:
+                metadata, events = await notification_metadata(project_id, sprint_id, state)
+                for record in [*view["scope_requests"], *view["pending_decisions"]]:
+                    if record["request_id"] in metadata:
+                        record["notification"] = metadata[record["request_id"]]
+                if metadata:
+                    view["notification_events"] = events
+                    # Notification metadata never enters immutable checkpoints.
+                    # Its own cursor makes delivery-only changes visible to UI.
+                    view["cursor"] = canonical_json_sha256({"execution": view["cursor"], "notifications": metadata, "events": events})
+                    view["unchanged"] = cursor == view["cursor"]
+            return view
         except ValueError as exc:
             raise HTTPException(409, {"error": "HISTORICAL_SNAPSHOT_UNAVAILABLE"}) from exc
 

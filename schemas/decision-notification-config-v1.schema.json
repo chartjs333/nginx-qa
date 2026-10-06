@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nginx-qa.local/schemas/decision-notification-config-v1.schema.json",
+  "title": "Optional external human-decision email notification configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "notifications"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "notifications": {
+      "type": "object", "additionalProperties": false, "required": ["email"],
+      "properties": {
+        "email": {
+          "type": "object", "additionalProperties": false, "required": ["enabled"],
+          "properties": {
+            "enabled": {"type": "boolean"},
+            "pending_decisions": {"type": "boolean", "default": true},
+            "destination": {"type": "string", "format": "email", "maxLength": 254},
+            "sender": {"type": "string", "format": "email", "maxLength": 254},
+            "public_base_url": {"type": "string", "format": "uri", "description": "HTTPS origin only. Loopback HTTP is allowed only with the explicit isolated-test switch."},
+            "allow_loopback_http": {"type": "boolean", "default": false},
+            "database_path": {"type": "string", "minLength": 1, "description": "Absolute SQLite path outside the checkout and execution state; restrict ACLs before launch."},
+            "link_ttl_seconds": {"type": "integer", "minimum": 60, "maximum": 86400, "default": 3600},
+            "poll_interval_seconds": {"type": "integer", "minimum": 1, "maximum": 3600, "default": 30},
+            "lease_seconds": {"type": "integer", "minimum": 60, "maximum": 3600, "default": 120},
+            "max_attempts": {"type": "integer", "minimum": 1, "maximum": 100, "default": 5},
+            "smtp": {
+              "type": "object", "additionalProperties": false, "required": ["host", "port", "security"],
+              "properties": {
+                "host": {"type": "string", "minLength": 1, "maxLength": 253},
+                "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+                "security": {"enum": ["starttls", "ssl"]}
+              }
+            }
+          },
+          "allOf": [{"if": {"properties": {"enabled": {"const": true}}}, "then": {"required": ["destination", "sender", "public_base_url", "database_path", "smtp"]}}]
+        }
+      }
+    }
+  }
+}

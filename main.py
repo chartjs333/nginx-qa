@@ -126,6 +126,7 @@ async def app_lifespan(_: FastAPI):
     global managed_continuity_runtime, managed_process_supervisor
     global managed_continuity_stop_event, managed_continuity_thread
     await restore_runtime_state()
+    notifications = None
     try:
         if os.environ.get("NGINX_QA_MANAGED_ROOT"):
             managed_runtime_config = load_managed_runtime_config()
@@ -167,8 +168,12 @@ async def app_lifespan(_: FastAPI):
             # start_background() wakes the monitor immediately, while each
             # assignment remains independently fail-closed in durable state.
             managed_process_supervisor.start_background()
+        notifications = app.state.configure_decision_notifications()
+        await notifications.start()
         yield
     finally:
+        if notifications is not None:
+            await notifications.stop()
         supervisor_quiescent = True
         close_error: Exception | None = None
         continuity_stop = managed_continuity_stop_event
