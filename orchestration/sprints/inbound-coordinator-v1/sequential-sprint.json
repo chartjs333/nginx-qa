@@ -206,7 +206,35 @@
         {
           "task_id": "INBOUND-006",
           "queue": "worker-all",
-          "message": "Реализуй nginx_qa/sprint_synthesizer.py. Из new_sprint classification формируй schema_version=1, sprint_type=managed_workspace_v1, execution mode/start nodes, ровно двух reviewers, specialist agents, tasks, transitions, explicit terminal nodes, Coordinator routing для STOP/NEED_DECISION, workspace/git policy и checksum files. Никаких обходов schema/preflight. Добавь positive/negative schema tests."
+          "message": "Реализуй nginx_qa/sprint_synthesizer.py. Из new_sprint classification формируй schema_version=1, sprint_type=managed_workspace_v1, execution mode/start nodes, ровно двух reviewers, specialist agents, tasks, transitions, explicit terminal nodes, Coordinator routing для STOP/NEED_DECISION, workspace/git policy и checksum files. Результат — candidate manifest для proposal flow, а НЕ автоматический запуск. Никаких обходов schema/preflight. Добавь positive/negative schema tests."
+        }
+      ],
+      "transitions": {
+        "DONE": "proposal-branch",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-06-sprint-synthesizer",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "proposal-branch",
+      "agent": {
+        "id": "inbound-proposal-engineer",
+        "name": "Inbound Proposal Branch Engineer",
+        "phone": "2944",
+        "profile": "Владелец proposal branch lifecycle, non-activating preflight and idempotent proposal persistence."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-006A",
+          "queue": "worker-all",
+          "message": "Реализуй proposal service: для classification=new_sprint создай отдельную Git proposal branch, сохрани candidate managed_workspace_v1 manifest и human-readable summary, выполни validation/preflight без activation, зарегистрируй proposal metadata для UI discovery. Duplicate inbound delivery не должна создавать duplicate proposal. Proposal, preview, reject и regenerate не мутируют active sprint. Edit/Regenerate создаёт новую revision/commit с operator feedback. Добавь tests на branch creation, idempotency, preflight-only, reject, regenerate и no active-state mutation."
         }
       ],
       "transitions": {
@@ -217,7 +245,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/inbound-06-sprint-synthesizer",
+          "assigned_branch": "agent/inbound-06a-proposal-branch",
           "existing_branch_policy": "create"
         }
       }
@@ -234,7 +262,7 @@
         {
           "task_id": "INBOUND-007",
           "queue": "worker-all",
-          "message": "Реализуй nginx_qa/inbound_coordinator.py: polling lifecycle, event consumption, dedupe, classification routing, clarification/correspondence handling, existing sprint binding, new sprint candidate generation и передачу в существующий preflight/import mechanism с source-message idempotency key. Worker agents не держать постоянно запущенными. Ошибка inbound subsystem не должна ломать execution API."
+          "message": "Реализуй nginx_qa/inbound_coordinator.py: polling lifecycle, event consumption, dedupe, classification routing, clarification/correspondence handling и existing sprint binding. Для new_sprint coordinator должен создавать proposal только через proposal service и не активировать sprint сам. Worker agents не держать постоянно запущенными. Ошибка inbound subsystem не должна ломать execution API."
         }
       ],
       "transitions": {
@@ -262,7 +290,7 @@
         {
           "task_id": "INBOUND-008",
           "queue": "worker-all",
-          "message": "Реализуй outbound coordinator reporting для accepted/clarification/sprint-candidate/sprint-started/decision-required/status/completed/blocked/failed. Ответ должен идти в исходный conversation/thread где возможно. Внутренние agent events не отправлять наружу напрямую. Переиспользуй существующую email delivery инфраструктуру только через чистую boundary, не ломая human-decision flow."
+          "message": "Реализуй outbound coordinator reporting для accepted/clarification/proposal-created/proposal-rejected/proposal-regenerated/sprint-started/decision-required/status/completed/blocked/failed. Ответ должен идти в исходный conversation/thread где возможно. Внутренние agent events не отправлять наружу напрямую. Переиспользуй существующую email delivery инфраструктуру только через чистую boundary, не ломая human-decision flow."
         }
       ],
       "transitions": {
@@ -282,15 +310,15 @@
       "id": "start-from-git-ui",
       "agent": {
         "id": "start-from-git-ui-engineer",
-        "name": "Start From Git UI Engineer",
+        "name": "Proposal Review and Start From Git UI Engineer",
         "phone": "2943",
-        "profile": "Владелец пользовательского UI для запуска managed sprint из Git через существующий start-from-git backend contract."
+        "profile": "Владелец proposal review UI и пользовательского Play/Reject/Edit-Regenerate flow поверх существующего start-from-git backend contract."
       },
       "tasks": [
         {
           "task_id": "INBOUND-008A",
           "queue": "worker-all",
-          "message": "Добавь в существующий execution UI полноценный Start from Git flow поверх уже реализованного backend contract. UI должен позволять выбрать/ввести project_id, repository_id, Git ref, manifest_path и idempotency_key; отправлять запрос в существующий start-from-git API; показывать VALIDATE/PREPARE/ACTIVATE/preflight результат, correlation/error code и успешный sprint identity; не обходить backend validation и не выполнять прямых state mutations. Добавь client/server integration tests, keyboard/accessibility states, duplicate-submit protection и regression существующего execution UI. Для нашего спринта проверь запуск manifest orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json из refs/heads/codex/inbound-coordinator-sprint-spec. Не deploy и не restart live."
+          "message": "Добавь в execution UI список proposal-sprints и карточку proposal. Карточка должна показывать source channel/sender/thread, цель, summary, agents/nodes, Git ref, manifest_path, diff/commit, validation/preflight result и status. Действия: Play, Reject, Edit/Regenerate. Play — единственное действие, которое вызывает существующий start-from-git API; Reject не мутирует active sprint state; Edit/Regenerate передаёт operator feedback координатору и создаёт новую proposal revision/commit. Добавь duplicate-submit protection, keyboard/accessibility states и integration tests. Для нашего спринта проверь refs/heads/codex/inbound-coordinator-sprint-spec + orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json. Не deploy и не restart live."
         }
       ],
       "transitions": {
@@ -318,7 +346,7 @@
         {
           "task_id": "INBOUND-009",
           "queue": "tester-all",
-          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate sprint, все 5 classification routes, correspondence-only no sprint, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, Start from Git UI успешно формирует и отправляет существующий backend request, показывает preflight/validation ошибки, защищён от duplicate submit и способен выбрать refs/heads/codex/inbound-coordinator-sprint-spec + orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json, existing email decision tests, Telegram tests, execution UI regressions, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
+          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate proposal/sprint, все 5 classification routes, correspondence-only no proposal, new_sprint создаёт proposal branch + candidate manifest, non-activating preflight не мутирует active state, UI показывает proposal context/diff/preflight, Reject не активирует sprint, Edit/Regenerate создаёт новую revision/commit, Play единственный вызывает start-from-git, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, existing email decision tests, Telegram tests, execution UI regressions, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
         }
       ],
       "transitions": {
@@ -347,7 +375,7 @@
         {
           "task_id": "INBOUND-COORD",
           "queue": "consultant-all",
-          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_RUNTIME, RESUME_REPORTING, RESUME_START_UI, RESUME_QA или BLOCKED_EXTERNAL."
+          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_PROPOSAL, RESUME_RUNTIME, RESUME_REPORTING, RESUME_START_UI, RESUME_QA или BLOCKED_EXTERNAL."
         }
       ],
       "transitions": {
@@ -361,7 +389,8 @@
         "RESUME_REPORTING": "reporting",
         "RESUME_QA": "qualification",
         "BLOCKED_EXTERNAL": "blocked-external",
-        "RESUME_START_UI": "start-from-git-ui"
+        "RESUME_START_UI": "start-from-git-ui",
+        "RESUME_PROPOSAL": "proposal-branch"
       },
       "workspace": {
         "access": "write",
