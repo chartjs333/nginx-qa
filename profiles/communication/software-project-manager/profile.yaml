@@ -1,0 +1,16 @@
+profile_id: software-project-manager
+version: 1
+language: ru
+mode: DRAFT_ONLY
+role_file: role.md
+communication_file: communication.md
+authority_file: authority.md
+domain_file: domain.md
+allowed_channels:
+  - email
+escalation_triggers:
+  - contract
+  - payment
+  - production_deployment
+  - credentials
+max_autonomous_replies: 0
