@@ -262,7 +262,35 @@
         {
           "task_id": "INBOUND-007",
           "queue": "worker-all",
-          "message": "Реализуй nginx_qa/inbound_coordinator.py: polling lifecycle, event consumption, dedupe, classification routing, clarification/correspondence handling и existing sprint binding. Для new_sprint coordinator должен создавать proposal только через proposal service и не активировать sprint сам. Worker agents не держать постоянно запущенными. Ошибка inbound subsystem не должна ломать execution API."
+          "message": "Реализуй nginx_qa/inbound_coordinator.py: polling lifecycle, event consumption, dedupe, classification routing, clarification/correspondence handling и existing sprint binding. Для new_sprint coordinator должен создавать proposal только через proposal service и не активировать sprint сам. Worker agents не держать постоянно запущенными. Ошибка inbound subsystem не должна ломать execution API. Для correspondence route используй contact policy service; MANUAL/DRAFT_ONLY/AUTO_REPLY должны быть отделены от sprint activation authority."
+        }
+      ],
+      "transitions": {
+        "DONE": "contact-policy",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-07-coordinator-runtime",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "contact-policy",
+      "agent": {
+        "id": "contact-policy-engineer",
+        "name": "Contact Policy and Delegated Correspondence Engineer",
+        "phone": "2945",
+        "profile": "Владелец per-contact trust policy, delegated correspondence, escalation boundaries и immutable audit."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-007A",
+          "queue": "worker-all",
+          "message": "Реализуй contact policy model и delegated correspondence. Режимы: MANUAL, DRAFT_ONLY, AUTO_REPLY. Policy должна поддерживать exact sender/domain, allowed/forbidden topics, budget/commitment limits, attachment permission, proposal permission, auto-clarification permission, max autonomous reply depth/count, escalation triggers и expiry. При ambiguity/expiry/out-of-scope fail closed в DRAFT_ONLY или MANUAL. AUTO_REPLY никогда не означает право Play/start sprint. Все autonomous sends должны иметь audit evidence с policy version и thread/message identity. Добавь unit/integration tests."
         }
       ],
       "transitions": {
@@ -273,7 +301,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/inbound-07-coordinator-runtime",
+          "assigned_branch": "agent/inbound-07a-contact-policy",
           "existing_branch_policy": "create"
         }
       }
@@ -290,7 +318,7 @@
         {
           "task_id": "INBOUND-008",
           "queue": "worker-all",
-          "message": "Реализуй outbound coordinator reporting для accepted/clarification/proposal-created/proposal-rejected/proposal-regenerated/sprint-started/decision-required/status/completed/blocked/failed. Ответ должен идти в исходный conversation/thread где возможно. Внутренние agent events не отправлять наружу напрямую. Переиспользуй существующую email delivery инфраструктуру только через чистую boundary, не ломая human-decision flow."
+          "message": "Реализуй outward-facing coordinator reporting и correspondence sender. Поддержи accepted/clarification/proposal-created/proposal-rejected/proposal-regenerated/sprint-started/decision-required/status/completed/blocked/failed, а также DRAFT_ONLY и AUTO_REPLY по contact policy. Ответ должен идти в исходный conversation/thread. Перед каждым autonomous send проверяй актуальную policy; сохраняй policy version/decision evidence/message identity в audit. Внутренние agent events не отправлять напрямую. AUTO_REPLY не даёт право Play/start sprint."
         }
       ],
       "transitions": {
@@ -318,7 +346,7 @@
         {
           "task_id": "INBOUND-008A",
           "queue": "worker-all",
-          "message": "Добавь в execution UI список proposal-sprints и карточку proposal. Карточка должна показывать source channel/sender/thread, цель, summary, agents/nodes, Git ref, manifest_path, diff/commit, validation/preflight result и status. Действия: Play, Reject, Edit/Regenerate. Play — единственное действие, которое вызывает существующий start-from-git API; Reject не мутирует active sprint state; Edit/Regenerate передаёт operator feedback координатору и создаёт новую proposal revision/commit. Добавь duplicate-submit protection, keyboard/accessibility states и integration tests. Для нашего спринта проверь refs/heads/codex/inbound-coordinator-sprint-spec + orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json. Не deploy и не restart live."
+          "message": "Добавь в execution UI список proposal-sprints и карточку proposal. Карточка должна показывать source channel/sender/thread, цель, summary, agents/nodes, Git ref, manifest_path, diff/commit, validation/preflight result и status. Действия: Play, Reject, Edit/Regenerate. Play — единственное действие, которое вызывает существующий start-from-git API; Reject не мутирует active sprint state; Edit/Regenerate передаёт operator feedback координатору и создаёт новую proposal revision/commit. Добавь duplicate-submit protection, keyboard/accessibility states и integration tests. Для нашего спринта проверь refs/heads/codex/inbound-coordinator-sprint-spec + orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json. Не deploy и не restart live. В том же UI добавь Contact Policies: список контактов/доменов, режим MANUAL/DRAFT_ONLY/AUTO_REPLY, allowed/forbidden topics, лимиты бюджета/обязательств, разрешения attachments/proposal/clarification, expiry, escalation rules и глобальный Kill Switch для autonomous correspondence. Текущий режим и активная policy должны быть явно видимы."
         }
       ],
       "transitions": {
@@ -346,7 +374,7 @@
         {
           "task_id": "INBOUND-009",
           "queue": "tester-all",
-          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate proposal/sprint, все 5 classification routes, correspondence-only no proposal, new_sprint создаёт proposal branch + candidate manifest, non-activating preflight не мутирует active state, UI показывает proposal context/diff/preflight, Reject не активирует sprint, Edit/Regenerate создаёт новую revision/commit, Play единственный вызывает start-from-git, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, existing email decision tests, Telegram tests, execution UI regressions, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
+          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate proposal/sprint, все 5 classification routes, correspondence-only no proposal, contact policies MANUAL/DRAFT_ONLY/AUTO_REPLY, expired/ambiguous/out-of-scope AUTO_REPLY fail closed, global autonomous-correspondence kill switch, autonomous reply audit with policy version/thread identity, AUTO_REPLY never grants Play, new_sprint creates proposal branch + candidate manifest, non-activating preflight no active-state mutation, UI proposal review + Contact Policies, Reject no activation, Edit/Regenerate new revision/commit, Play only action that calls start-from-git, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, existing email decision tests, Telegram tests, execution UI regressions, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
         }
       ],
       "transitions": {
@@ -375,7 +403,7 @@
         {
           "task_id": "INBOUND-COORD",
           "queue": "consultant-all",
-          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_PROPOSAL, RESUME_RUNTIME, RESUME_REPORTING, RESUME_START_UI, RESUME_QA или BLOCKED_EXTERNAL."
+          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_PROPOSAL, RESUME_RUNTIME, RESUME_CONTACT_POLICY, RESUME_REPORTING, RESUME_START_UI, RESUME_QA или BLOCKED_EXTERNAL."
         }
       ],
       "transitions": {
@@ -390,7 +418,8 @@
         "RESUME_QA": "qualification",
         "BLOCKED_EXTERNAL": "blocked-external",
         "RESUME_START_UI": "start-from-git-ui",
-        "RESUME_PROPOSAL": "proposal-branch"
+        "RESUME_PROPOSAL": "proposal-branch",
+        "RESUME_CONTACT_POLICY": "contact-policy"
       },
       "workspace": {
         "access": "write",
