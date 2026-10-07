@@ -97,6 +97,7 @@
           "message": "Расширь существующий pending-sprints backend стабильным versioned API для внешнего producer: idempotent create, read, reject/comment metadata и source provenance. Переиспользуй существующее pending storage; duplicate idempotency key не создаёт второй proposal. Не активируй sprint на create/read/reject/comment."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "DONE": "managed-git-bridge",
         "NEED_DECISION": "continuity-coordinator",
@@ -125,6 +126,7 @@
           "message": "Добавь поддержку pending proposal, содержащего repository_id/ref/manifest_path/idempotency key. Preview/validation не активирует; Play вызывает существующий managed start-from-git contract ровно один раз. Ошибки preflight показываются без active-state mutation."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "DONE": "pending-ui",
         "NEED_DECISION": "continuity-coordinator",
@@ -153,6 +155,7 @@
           "message": "Расширь существующую Pending Sprints view: source type/summary, proposal status, JSON or Git manifest reference, validation/preflight, operator comment, Preview, Play/Start, Reject и Regenerate-request marker. Play — единственный activation action. Сохрани существующие Telegram deep links и pending UI behavior."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "DONE": "telegram-observability",
         "NEED_DECISION": "continuity-coordinator",
@@ -181,6 +184,7 @@
           "message": "Сохрани существующий Telegram JSON->pending sprint flow без регрессий. Добавь нейтральный status/read contract, пригодный внешнему Hub для Telegram уведомлений о proposal created/ready/started/rejected/failed. Telegram не делай обязательным transport между сервисами."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "DONE": "qualification",
         "NEED_DECISION": "continuity-coordinator",
@@ -209,6 +213,7 @@
           "message": "Проведи isolated qualification: external API idempotent create; duplicate no duplicate proposal; existing Telegram pending flow preserved; proposal appears in existing Pending Sprints UI; preview/reject/comment no active mutation; source metadata visible and secrets absent; managed Git Play invokes start-from-git once; invalid/preflight failure no mutation; direct legacy pending/UI tests and managed/legacy regressions pass. Верни PASS, FAIL, NEED_DECISION или STOP."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "PASS": "completed",
         "FAIL": "continuity-coordinator",
@@ -238,6 +243,7 @@
           "message": "Проанализируй blocker и верни RESUME_CONTRACT, RESUME_API, RESUME_GIT_BRIDGE, RESUME_UI, RESUME_TELEGRAM, RESUME_QA или BLOCKED_EXTERNAL. Не добавляй source adapters/autonomous correspondence в nginx-qa."
         }
       ],
+      "activation_policy": "any_parent",
       "transitions": {
         "RESUME_CONTRACT": "contract",
         "RESUME_API": "proposal-api",
@@ -266,12 +272,6 @@
       "type": "terminal",
       "status": "BLOCKED_EXTERNAL",
       "message": "External decision/dependency required. Live nginx-qa remains unchanged."
-    },
-    {
-      "id": "failed",
-      "type": "terminal",
-      "status": "FAILED",
-      "message": "Inbound integration failed qualification and requires repair/rework."
     }
   ]
 }
