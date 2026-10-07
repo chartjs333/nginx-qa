@@ -1081,6 +1081,18 @@ Managed assignments keep the existing current-assignment endpoint shape:
 POST /api/v1/projects/{project_id}/agents/{agent_phone}/whoami
 ```
 
+For an identity lookup (an empty body, `{}`, or a body containing only
+`message`), a live managed assignment response conforms to
+`schemas/managed-current-identity-response-v1.schema.json`. Its `workspace`
+projection contains only `workspace_id`, the authoritative
+`actual_git_toplevel`, `expected_root`, `assigned_branch`, `source_commit`, and
+`initial_head_commit`. The service resolves it through the assignment's durable
+`workspace_id` and verifies the assignment, project, sprint, node, and commit
+provenance before returning it. Review and Coordinator identities do not acquire
+an assignment workspace implicitly. An assignment without Scope Control remains
+a valid identity response and simply omits the effective-scope fields. The
+legacy response branch of this endpoint is unchanged.
+
 The result request is frozen by
 `schemas/managed-assignment-result-v1.schema.json`. `status` is the graph
 outcome, `from_commit` must equal the assignment's recorded

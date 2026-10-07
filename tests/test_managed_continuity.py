@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import main
+from jsonschema import Draft202012Validator
 
 from nginx_qa.branch_leases import BranchLeaseRequest, BranchLeaseStore
 from nginx_qa.managed_continuity import (
@@ -20,6 +21,7 @@ from nginx_qa.managed_continuity import (
     RESULT_CONFLICT,
     REVIEW_CONFLICT,
     _PreparedAssignment,
+    _managed_identity_workspace,
     _recovery_settles_context,
     _stable_id,
 )
@@ -37,6 +39,7 @@ from tests.test_sprint_type_contract import (
     COMMIT,
     SPRINT_ID,
     TIMESTAMP,
+    WORKSPACE_1_ROOT,
     active_runtime_fixture,
     completed_runtime_fixture,
     prepared_integration_runtime_fixture,
@@ -810,6 +813,107 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertLess(order.index("publish"), order.index("enqueue"))
         self.assertLess(order.index("enqueue"), order.index("expose"))
 
+    def test_current_identity_projects_workspace_without_scope_control(
+        self,
+    ) -> None:
+        self.assertNotIn("scope_control", self.initial_state)
+        with patch.dict(
+            os.environ,
+            {"NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_2861": ""},
+            clear=False,
+        ):
+            identity = self.runtime.current_identity("project-id", "2861")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        workspace = self.initial_state["workspaces"][0]
+        self.assertEqual(
+            identity["workspace"],
+            {
+                "workspace_id": workspace["workspace_id"],
+                "actual_git_toplevel": workspace["actual_git_toplevel"],
+                "expected_root": workspace["expected_root"],
+                "assigned_branch": workspace["assigned_branch"],
+                "source_commit": workspace["source_commit"],
+                "initial_head_commit": workspace["initial_head_commit"],
+            },
+        )
+        self.assertEqual(identity["workspace"]["actual_git_toplevel"], WORKSPACE_1_ROOT)
+        self.assertEqual(
+            identity["workspace"]["workspace_id"],
+            identity["assignment"]["workspace_id"],
+        )
+        self.assertNotIn("actual_git_dir", identity["workspace"])
+        self.assertNotIn("repository_remote", identity["workspace"])
+        self.assertNotIn("effective_scope", identity)
+        self.assertNotIn("instruction_precedence", identity)
+
+    def test_current_identity_selects_workspace_by_assignment_reference(
+        self,
+    ) -> None:
+        self.configure_parallel_active_sibling()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        expected = next(
+            workspace
+            for workspace in state["workspaces"]
+            if workspace["workspace_id"] == "workspace-parallel"
+        )
+
+        identity = self.runtime.current_identity("project-id", "2862")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity["assignment"]["workspace_id"], "workspace-parallel")
+        self.assertEqual(identity["workspace"]["workspace_id"], "workspace-parallel")
+        self.assertEqual(
+            identity["workspace"]["actual_git_toplevel"],
+            expected["actual_git_toplevel"],
+        )
+        self.assertIsNone(identity["workspace"]["assigned_branch"])
+
+    def test_review_identity_does_not_inherit_source_workspace(self) -> None:
+        self.submit_result()
+
+        identity = self.runtime.current_identity("project-id", "2891")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity["assignment_kind"], "review")
+        self.assertNotIn("workspace", identity)
+        Draft202012Validator(
+            main._MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA
+        ).validate(identity)
+
+    def test_workspace_projection_rejects_mismatched_ownership(self) -> None:
+        bindings, corrupt, project_wide = self.runtime._project_binding_discovery(
+            "project-id"
+        )
+        self.assertEqual(corrupt, ())
+        self.assertFalse(project_wide)
+        binding = next(
+            item
+            for item in bindings
+            if item.record.get("assignment_id") == "assignment-1"
+        )
+        for field, value in (
+            ("assignment_id", "assignment-other"),
+            ("project_id", "project-other"),
+            ("sprint_id", "msv1-" + "f" * 64),
+            ("node_id", "node-other"),
+        ):
+            with self.subTest(field=field):
+                state = deepcopy(binding.state)
+                state["workspaces"][0][field] = value
+                corrupt_binding = type(binding)(
+                    binding.project_id,
+                    binding.sprint_id,
+                    state,
+                    binding.kind,
+                    binding.record,
+                )
+                with self.assertRaisesRegex(RuntimeError, "ownership is corrupt"):
+                    _managed_identity_workspace(corrupt_binding, binding.record)
+
     def test_legacy_identity_message_body_returns_managed_assignment(self) -> None:
         for payload in ({"message": "Кто я?"}, {}):
             with self.subTest(payload=payload):
@@ -827,6 +931,10 @@ class ManagedContinuityTests(unittest.TestCase):
                 self.assertEqual(
                     result.response["assignment"]["assignment_id"],
                     "assignment-1",
+                )
+                self.assertEqual(
+                    result.response["workspace"]["actual_git_toplevel"],
+                    WORKSPACE_1_ROOT,
                 )
 
     def test_any_parent_parallel_occurrences_share_phone_identity_deterministically(
@@ -1023,12 +1131,24 @@ class ManagedContinuityTests(unittest.TestCase):
             {
                 "assignment_id": "assignment-2",
                 "created_at": "2999-01-01T00:00:00+00:00",
+                "workspace_id": "workspace-2",
             }
         )
+        second_state = deepcopy(first.state)
+        second_workspace = deepcopy(second_state["workspaces"][0])
+        second_workspace.update(
+            {
+                "workspace_id": "workspace-2",
+                "assignment_id": "assignment-2",
+                "expected_root": second_workspace["expected_root"] + "-2",
+                "actual_git_toplevel": second_workspace["actual_git_toplevel"] + "-2",
+            }
+        )
+        second_state["workspaces"].append(second_workspace)
         second = type(first)(
             first.project_id,
             first.sprint_id,
-            deepcopy(first.state),
+            second_state,
             first.kind,
             second_record,
         )
@@ -1062,6 +1182,7 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertIsNotNone(identity)
         assert identity is not None
         self.assertEqual(identity["assignment"]["assignment_id"], "assignment-2")
+        self.assertEqual(identity["workspace"]["workspace_id"], "workspace-2")
         self.assertEqual(publish.call_count, 2)
 
     def test_unmatched_legacy_identity_does_not_drain_managed_outbox(self) -> None:
@@ -4840,6 +4961,93 @@ async def asgi_request(
 
 
 class ManagedContinuityRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_whoami_returns_durable_workspace_without_scope(
+        self,
+    ) -> None:
+        harness = ManagedContinuityTests()
+        harness.setUp()
+        self.addCleanup(harness.tearDown)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "NGINX_QA_MANAGED_ROOT": "C:/managed-test-root",
+                    "NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_2861": "",
+                },
+                clear=False,
+            ),
+            patch.object(main, "read_git_config", AsyncMock(return_value={})),
+            patch.object(
+                main,
+                "managed_continuity_runtime_for_requests",
+                return_value=harness.runtime,
+            ),
+            patch.object(
+                main,
+                "run_group_write_transaction",
+                side_effect=AssertionError("legacy state must not be touched"),
+            ),
+        ):
+            status_code, payload, _ = await asgi_request(
+                "/api/v1/projects/project-id/agents/2861/whoami",
+                b'{"message":"who am I?"}',
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertTrue(payload["managed"])
+        self.assertEqual(payload["assignment_kind"], "assignment")
+        self.assertEqual(payload["workspace"]["actual_git_toplevel"], WORKSPACE_1_ROOT)
+        self.assertEqual(
+            set(payload["workspace"]),
+            {
+                "workspace_id",
+                "actual_git_toplevel",
+                "expected_root",
+                "assigned_branch",
+                "source_commit",
+                "initial_head_commit",
+            },
+        )
+        self.assertNotIn("effective_scope", payload)
+        Draft202012Validator(
+            main._MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA
+        ).validate(payload)
+
+    def test_managed_whoami_openapi_contract_includes_workspace(self) -> None:
+        response_schema = main.app.openapi()["paths"][
+            "/api/v1/projects/{project_id}/agents/{agent_phone}/whoami"
+        ]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+        managed_schema = next(
+            option
+            for option in response_schema["oneOf"]
+            if option.get("$id", "").endswith(
+                "/managed-current-identity-response-v1.schema.json"
+            )
+        )
+        workspace_schema = managed_schema["properties"]["workspace"]
+        self.assertEqual(
+            set(workspace_schema["required"]),
+            {
+                "workspace_id",
+                "actual_git_toplevel",
+                "expected_root",
+                "assigned_branch",
+                "source_commit",
+                "initial_head_commit",
+            },
+        )
+        self.assertFalse(workspace_schema["additionalProperties"])
+        Draft202012Validator(response_schema).validate(
+            {
+                "assignment_id": "assignment-1",
+                "outcome": "DONE",
+                "result_commit": "a" * 40,
+                "result_key": "result-" + "b" * 64,
+                "status": "REVIEWS_PENDING",
+                "deduplicated": False,
+            }
+        )
+
     async def test_managed_whoami_bypasses_legacy_snapshot(self) -> None:
         runtime = Mock()
         runtime.submit_if_managed.return_value = Mock(
