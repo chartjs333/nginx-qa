@@ -190,3 +190,29 @@ PASS when all are true:
 ## 14. Delivery rule
 
 This specification branch is a simulation artifact. Implementation should occur through a dedicated implementation sprint/branch and pass existing managed preflight, review and qualification gates before any promotion.
+
+
+## 15. Proposal branch + Play workflow
+
+New-sprint email/Telegram requests MUST NOT auto-activate by default.
+
+Required flow:
+
+1. classify inbound message;
+2. synthesize candidate `managed_workspace_v1` manifest;
+3. create a dedicated proposal Git branch;
+4. commit the manifest and human-readable proposal summary to that branch;
+5. run non-activating validation/preflight against the proposal;
+6. register proposal metadata for UI discovery;
+7. show proposal in UI with source message context, goal, agents/nodes, Git ref, manifest path, validation/preflight result and diff summary;
+8. expose actions: Play, Reject, Edit/Regenerate;
+9. Play calls the existing `start-from-git` path and is the only default activation path;
+10. Reject marks the proposal rejected without activating it;
+11. Edit/Regenerate records operator feedback and creates a new proposal revision/branch commit rather than silently rewriting accepted history.
+
+The coordinator may create proposal branches automatically only after classification selects `new_sprint`. Ordinary correspondence, clarification, ignore and existing-sprint updates must not create new proposal branches.
+
+Proposal creation and UI discovery must be idempotent for duplicate delivery of the same inbound message.
+
+No branch proposal, validation read, UI preview, Reject, or Edit/Regenerate action may mutate active sprint state.
+
