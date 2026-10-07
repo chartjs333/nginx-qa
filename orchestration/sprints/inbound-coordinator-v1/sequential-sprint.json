@@ -266,7 +266,7 @@
         }
       ],
       "transitions": {
-        "DONE": "qualification",
+        "DONE": "start-from-git-ui",
         "NEED_DECISION": "continuity-coordinator",
         "STOP": "continuity-coordinator"
       },
@@ -274,6 +274,34 @@
         "access": "write",
         "git": {
           "assigned_branch": "agent/inbound-08-reporting",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "start-from-git-ui",
+      "agent": {
+        "id": "start-from-git-ui-engineer",
+        "name": "Start From Git UI Engineer",
+        "phone": "2943",
+        "profile": "Владелец пользовательского UI для запуска managed sprint из Git через существующий start-from-git backend contract."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-008A",
+          "queue": "worker-all",
+          "message": "Добавь в существующий execution UI полноценный Start from Git flow поверх уже реализованного backend contract. UI должен позволять выбрать/ввести project_id, repository_id, Git ref, manifest_path и idempotency_key; отправлять запрос в существующий start-from-git API; показывать VALIDATE/PREPARE/ACTIVATE/preflight результат, correlation/error code и успешный sprint identity; не обходить backend validation и не выполнять прямых state mutations. Добавь client/server integration tests, keyboard/accessibility states, duplicate-submit protection и regression существующего execution UI. Для нашего спринта проверь запуск manifest orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json из refs/heads/codex/inbound-coordinator-sprint-spec. Не deploy и не restart live."
+        }
+      ],
+      "transitions": {
+        "DONE": "qualification",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-08a-start-from-git-ui",
           "existing_branch_policy": "create"
         }
       }
@@ -290,7 +318,7 @@
         {
           "task_id": "INBOUND-009",
           "queue": "tester-all",
-          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate sprint, все 5 classification routes, correspondence-only no sprint, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, existing email decision tests, Telegram tests, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
+          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate sprint, все 5 classification routes, correspondence-only no sprint, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, Start from Git UI успешно формирует и отправляет существующий backend request, показывает preflight/validation ошибки, защищён от duplicate submit и способен выбрать refs/heads/codex/inbound-coordinator-sprint-spec + orchestration/sprints/inbound-coordinator-v1/sequential-sprint.json, existing email decision tests, Telegram tests, execution UI regressions, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
         }
       ],
       "transitions": {
@@ -319,7 +347,7 @@
         {
           "task_id": "INBOUND-COORD",
           "queue": "consultant-all",
-          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_RUNTIME, RESUME_REPORTING, RESUME_QA или BLOCKED_EXTERNAL."
+          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_RUNTIME, RESUME_REPORTING, RESUME_START_UI, RESUME_QA или BLOCKED_EXTERNAL."
         }
       ],
       "transitions": {
@@ -332,7 +360,8 @@
         "RESUME_RUNTIME": "coordinator-runtime",
         "RESUME_REPORTING": "reporting",
         "RESUME_QA": "qualification",
-        "BLOCKED_EXTERNAL": "blocked-external"
+        "BLOCKED_EXTERNAL": "blocked-external",
+        "RESUME_START_UI": "start-from-git-ui"
       },
       "workspace": {
         "access": "write",
