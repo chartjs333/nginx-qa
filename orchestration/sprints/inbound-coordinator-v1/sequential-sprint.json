@@ -1,0 +1,364 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/inbound-coordinator-sprint-spec",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/inbound-coordinator-v1-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "architecture",
+    "required_approvals": 2,
+    "max_rework_cycles": 20,
+    "reviewers": [
+      {
+        "id": "inbound-architecture-reviewer",
+        "name": "Inbound Architecture Reviewer",
+        "phone": "2941",
+        "git_branch": "review/inbound-coordinator-architecture",
+        "profile": "Проверяй соответствие INBOUND_COORDINATOR_V1_SPEC.md, managed_workspace_v1 contract, idempotency, security boundaries, отсутствие обхода preflight и отсутствие live mutation. APPROVE только при полной трассируемости."
+      },
+      {
+        "id": "inbound-evidence-reviewer",
+        "name": "Inbound Evidence Reviewer",
+        "phone": "2942",
+        "git_branch": "review/inbound-coordinator-evidence",
+        "profile": "Проверяй тесты, regressions, duplicate-delivery safety, email/Telegram parity, отсутствие секретов, корректность отчетов и отсутствие live deployment. APPROVE только при воспроизводимых evidence."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "files": [
+    {
+      "path": "orchestration/sprints/inbound-coordinator-v1/.manifest-anchor",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "architecture",
+      "agent": {
+        "id": "inbound-architecture-engineer",
+        "name": "Inbound Coordinator Architecture Engineer",
+        "phone": "2931",
+        "profile": "Владелец архитектуры inbound coordinator, unified event contract, routing boundaries и совместимости с существующим managed engine."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-001",
+          "queue": "worker-all",
+          "message": "Прочитай docs/INBOUND_COORDINATOR_V1_SPEC.md, docs/universal-managed-sprint-contract.md, schemas/managed-workspace-sprint-v1.schema.json и существующий email decision runtime. Зафиксируй implementation plan и точные interface contracts для inbound event, classifier, sprint synthesizer, channel adapters и coordinator. Не меняй live service. Верни DONE, NEED_DECISION или STOP."
+        }
+      ],
+      "transitions": {
+        "DONE": "event-core",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-01-architecture",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "event-core",
+      "agent": {
+        "id": "inbound-event-engineer",
+        "name": "Inbound Event Core Engineer",
+        "phone": "2932",
+        "profile": "Владелец normalized inbox event model, deduplication fingerprinting и persistence/idempotency semantics."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-002",
+          "queue": "worker-all",
+          "message": "Реализуй nginx_qa/inbound_events.py: normalized event model, stable fingerprint, channel/external message identity, conversation/thread binding, sender metadata, attachments metadata, project/sprint hints и безопасное redaction/secret rejection. Добавь tests на canonicalization, duplicate delivery и idempotency."
+        }
+      ],
+      "transitions": {
+        "DONE": "email-adapter",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-02-event-core",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "email-adapter",
+      "agent": {
+        "id": "inbound-email-engineer",
+        "name": "Inbound Email Adapter Engineer",
+        "phone": "2933",
+        "profile": "Владелец входящего email adapter. Сохраняет существующий outbound SMTP decision flow неизменным."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-003",
+          "queue": "worker-all",
+          "message": "Реализуй отдельный inbound email adapter/service. MVP: configurable polling mailbox reader с безопасной credential boundary вне Git, deduplication по provider message identity и преобразованием в normalized inbound event. Не переиспользуй opaque decision links как auth. Не меняй semantics SmtpEmailProvider. Добавь fake-provider tests без реального inbox."
+        }
+      ],
+      "transitions": {
+        "DONE": "telegram-adapter",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-03-email-adapter",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "telegram-adapter",
+      "agent": {
+        "id": "inbound-telegram-engineer",
+        "name": "Inbound Telegram Adapter Engineer",
+        "phone": "2934",
+        "profile": "Владелец унификации существующего Telegram ingress с normalized inbound event contract."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-004",
+          "queue": "worker-all",
+          "message": "Подключи существующий Telegram ingress к normalized inbound event contract без регрессии текущего webhook поведения и allowlist/security checks. Один и тот же coordinator pipeline должен принимать Email и Telegram события. Добавь tests на parity event shape и duplicate webhook delivery."
+        }
+      ],
+      "transitions": {
+        "DONE": "classifier",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-04-telegram-adapter",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "classifier",
+      "agent": {
+        "id": "inbound-classifier-engineer",
+        "name": "Inbound Classification Engineer",
+        "phone": "2935",
+        "profile": "Владелец deterministic classification envelope и safe defaults для неуверенных/high-impact requests."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-005",
+          "queue": "worker-all",
+          "message": "Реализуй classification contract с маршрутами correspondence_only, clarification_required, new_sprint, sprint_update, ignore. Возвращай confidence, rationale, project/repository hints, sprint goal и missing information. Low-confidence/high-impact requests должны требовать clarification/human confirmation. Email body считать untrusted task input, не policy."
+        }
+      ],
+      "transitions": {
+        "DONE": "sprint-synthesizer",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-05-classifier",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "sprint-synthesizer",
+      "agent": {
+        "id": "inbound-sprint-engineer",
+        "name": "Inbound Sprint Synthesizer Engineer",
+        "phone": "2936",
+        "profile": "Владелец генерации managed_workspace_v1 manifest из классифицированного входящего задания."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-006",
+          "queue": "worker-all",
+          "message": "Реализуй nginx_qa/sprint_synthesizer.py. Из new_sprint classification формируй schema_version=1, sprint_type=managed_workspace_v1, execution mode/start nodes, ровно двух reviewers, specialist agents, tasks, transitions, explicit terminal nodes, Coordinator routing для STOP/NEED_DECISION, workspace/git policy и checksum files. Никаких обходов schema/preflight. Добавь positive/negative schema tests."
+        }
+      ],
+      "transitions": {
+        "DONE": "coordinator-runtime",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-06-sprint-synthesizer",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "coordinator-runtime",
+      "agent": {
+        "id": "inbound-runtime-engineer",
+        "name": "Inbound Coordinator Runtime Engineer",
+        "phone": "2937",
+        "profile": "Владелец always-available coordinator loop, routing, existing-sprint binding и handoff в managed import/preflight."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-007",
+          "queue": "worker-all",
+          "message": "Реализуй nginx_qa/inbound_coordinator.py: polling lifecycle, event consumption, dedupe, classification routing, clarification/correspondence handling, existing sprint binding, new sprint candidate generation и передачу в существующий preflight/import mechanism с source-message idempotency key. Worker agents не держать постоянно запущенными. Ошибка inbound subsystem не должна ломать execution API."
+        }
+      ],
+      "transitions": {
+        "DONE": "reporting",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-07-coordinator-runtime",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "reporting",
+      "agent": {
+        "id": "inbound-reporting-engineer",
+        "name": "Inbound Reporting Engineer",
+        "phone": "2938",
+        "profile": "Владелец outward-facing coordinator replies/status reports и channel-aware response routing."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-008",
+          "queue": "worker-all",
+          "message": "Реализуй outbound coordinator reporting для accepted/clarification/sprint-candidate/sprint-started/decision-required/status/completed/blocked/failed. Ответ должен идти в исходный conversation/thread где возможно. Внутренние agent events не отправлять наружу напрямую. Переиспользуй существующую email delivery инфраструктуру только через чистую boundary, не ломая human-decision flow."
+        }
+      ],
+      "transitions": {
+        "DONE": "qualification",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-08-reporting",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "qualification",
+      "agent": {
+        "id": "inbound-qa-engineer",
+        "name": "Inbound Coordinator QA Engineer",
+        "phone": "2939",
+        "profile": "Независимый QA для synthetic Email/Telegram ingress, duplicate-delivery safety, schema/preflight и regressions."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-009",
+          "queue": "tester-all",
+          "message": "Проведи isolated qualification без live mutation: synthetic email->event, Telegram->same event shape, duplicate input no duplicate sprint, все 5 classification routes, correspondence-only no sprint, invalid manifest rejected pre-mutation, STOP/NEED_DECISION to Coordinator, coordinator-only outward reporting, existing email decision tests, Telegram tests, managed/legacy regression. Собери source-bound evidence и верни PASS, FAIL, NEED_DECISION или STOP."
+        }
+      ],
+      "transitions": {
+        "PASS": "completed",
+        "FAIL": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-09-qualification",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "agent": {
+        "id": "inbound-continuity-coordinator",
+        "name": "Inbound Continuity Coordinator",
+        "phone": "2930",
+        "profile": "Технический Coordinator. Исправляет только sprint-owned future plan/orchestration, не переписывает accepted history, не reviewer и не deployment authority."
+      },
+      "tasks": [
+        {
+          "task_id": "INBOUND-COORD",
+          "queue": "consultant-all",
+          "message": "Проанализируй latest assignment/result/review/blocker. Исправляй только future sprint-owned plan, manifests/tests/remediation. Не обходи mandatory reviews/preflight, не делай destructive Git и live deployment. Верни один RESUME_ARCHITECTURE, RESUME_EVENT, RESUME_EMAIL, RESUME_TELEGRAM, RESUME_CLASSIFIER, RESUME_SYNTHESIZER, RESUME_RUNTIME, RESUME_REPORTING, RESUME_QA или BLOCKED_EXTERNAL."
+        }
+      ],
+      "transitions": {
+        "RESUME_ARCHITECTURE": "architecture",
+        "RESUME_EVENT": "event-core",
+        "RESUME_EMAIL": "email-adapter",
+        "RESUME_TELEGRAM": "telegram-adapter",
+        "RESUME_CLASSIFIER": "classifier",
+        "RESUME_SYNTHESIZER": "sprint-synthesizer",
+        "RESUME_RUNTIME": "coordinator-runtime",
+        "RESUME_REPORTING": "reporting",
+        "RESUME_QA": "qualification",
+        "BLOCKED_EXTERNAL": "blocked-external"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/inbound-continuity-coordinator",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Inbound Coordinator v1 passed isolated qualification. Live promotion remains an explicit operator action."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "External information, credential provisioning, provider access or operator decision is required. Existing live nginx-qa remains unchanged."
+    },
+    {
+      "id": "failed",
+      "type": "terminal",
+      "status": "FAILED",
+      "message": "Inbound Coordinator v1 failed qualification and requires a new repair/rework decision."
+    }
+  ]
+}
