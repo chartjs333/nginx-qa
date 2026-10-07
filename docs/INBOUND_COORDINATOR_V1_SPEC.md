@@ -216,3 +216,44 @@ Proposal creation and UI discovery must be idempotent for duplicate delivery of 
 
 No branch proposal, validation read, UI preview, Reject, or Edit/Regenerate action may mutate active sprint state.
 
+
+
+## 16. Contact trust and delegated correspondence
+
+The coordinator may communicate on behalf of the operator only under an explicit per-contact or per-domain policy.
+
+Supported trust modes:
+- MANUAL: no autonomous outbound reply; show message to operator.
+- DRAFT_ONLY: coordinator prepares a reply draft but requires operator approval before sending.
+- AUTO_REPLY: coordinator may send replies autonomously only within the configured policy.
+
+Each contact policy may define:
+- exact sender addresses and/or allowed domains;
+- allowed topics/intents;
+- forbidden topics/intents;
+- whether price/budget discussion is allowed;
+- whether commitments, deadlines or scheduling changes are allowed;
+- whether attachments may be sent;
+- whether proposal creation is allowed;
+- whether clarification questions may be sent automatically;
+- maximum autonomous reply depth/count per conversation;
+- escalation triggers;
+- expiry / temporary delegation window.
+
+AUTO_REPLY must fail closed to DRAFT_ONLY or MANUAL when policy is missing, ambiguous, expired, or a message crosses a forbidden boundary.
+
+Mandatory escalation examples include legal commitments, payments/budget changes beyond configured limits, credentials/secrets, destructive actions, public statements, deployment/promotion authority, and any request outside the configured scope.
+
+The UI must expose contact policies, their current mode, scope and expiry. The operator must be able to disable autonomous correspondence globally with one action.
+
+Every autonomous outbound message must retain:
+- source conversation/thread identity;
+- policy decision evidence;
+- policy version;
+- actor = coordinator;
+- send timestamp;
+- resulting thread/message ID;
+- immutable audit reference.
+
+Autonomous correspondence and sprint activation are separate authorities. AUTO_REPLY does not imply permission to Play/start a sprint. Sprint activation continues to follow MANUAL / DELEGATED / AUTO_SAFE activation policy.
+
