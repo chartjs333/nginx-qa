@@ -2,9 +2,9 @@
   "schema_version": 1,
   "sprint_type": "managed_workspace_v1",
   "git": {
-    "source_ref": "refs/heads/agent/ie2e-05-play-boundary",
-    "expected_source_commit": null,
-    "assigned_branch": "agent/ie2e-05-disposable-activation",
+    "source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e",
+    "expected_source_commit": "11bb6aadb2bf33de8f16484f70e01a4c1c018605",
+    "assigned_branch": "agent/ie2e-05-disposable-unused",
     "existing_branch_policy": "create"
   },
   "execution": {
@@ -38,12 +38,12 @@
       "tasks": [
         {
           "task_id": "IE2E-005-DISPOSABLE",
-          "queue": "worker-all",
-          "message": "Disposable activation-boundary probe. Do not execute; qualification inspects activation only."
+          "queue": "tester-all",
+          "message": "Confirm this disposable managed assignment is active. Do not modify files or launch processes. Return DONE at the pinned source commit."
         }
       ],
       "workspace": {
-        "access": "write"
+        "access": "read"
       },
       "transitions": {
         "DONE": "completed",
