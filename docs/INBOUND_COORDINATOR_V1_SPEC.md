@@ -37,6 +37,12 @@ Duplicate submission with the same idempotency binding must not create a second 
 
 The implementation must provide a versioned create/read/update action surface for pending proposals. Exact route names may reuse or extend existing pending-sprints routes, but existing Telegram behavior must remain compatible.
 
+The normative v1 routes, schemas, idempotency bindings, source metadata,
+authentication, error, correlation, and activation boundaries are frozen in
+[Inbound Pending Proposal API v1](INBOUND_PROPOSAL_API_V1.md). NQII-001 is a
+contract-only change; backend, managed-Git bridge, UI, Telegram status, and
+qualification remain owned by their subsequent sprint nodes.
+
 Machine-to-machine API concerns:
 - authentication boundary;
 - stable versioned request/response schema;
