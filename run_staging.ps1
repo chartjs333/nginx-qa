@@ -3,6 +3,9 @@ param(
     [ValidateSet("Check", "Setup", "Start")]
     [string]$Action = "Start",
 
+    [ValidateSet("umse-007", "premerge-inbound-hub-e2e-v1")]
+    [string]$Profile = "umse-007",
+
     [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9A-Fa-f]{40}$")]
     [string]$ExpectedCommit
@@ -644,6 +647,31 @@ function Assert-PortPool {
 }
 
 function Get-ExpectedStagingEnvironment {
+    param(
+        [ValidateSet("umse-007", "premerge-inbound-hub-e2e-v1")]
+        [string]$Profile = "umse-007"
+    )
+
+    if ($Profile -eq "premerge-inbound-hub-e2e-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18027"
+            NGINX_QA_SERVICE_ROOT = "D:/nginx-qa-staging/premerge-inbound-hub-e2e-v1"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging/universal-managed-sprint-engine","C:/Prompt","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state/umse-007"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nginx-qa-staging-state/premerge-inbound-hub-e2e-v1-18027-01"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nginx-qa-staging-state/premerge-inbound-hub-e2e-v1-18027-01/.venv"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nginx-qa-staging-state/premerge-inbound-hub-e2e-v1-18027-01/runtime_state"
+            NGINX_QA_PROMPT_ROOT = "C:/nginx-qa-staging-state/premerge-inbound-hub-e2e-v1-18027-01/prompt"
+            NGINX_QA_MANAGED_ROOT = "C:/nginx-qa-staging-state/premerge-inbound-hub-e2e-v1-18027-01/managed"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18300-18399"
+            NGINX_QA_INSTANCE_ID = "premerge-inbound-hub-e2e-v1-staging-18027"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
+
     return [ordered]@{
         NGINX_QA_HTTP_HOST = "127.0.0.1"
         NGINX_QA_HTTP_PORT = "18025"
@@ -701,6 +729,10 @@ $serviceRoot = Resolve-NormalizedPath $PSScriptRoot
 $expectedServiceRoot = "D:\nginx-qa-staging\universal-managed-sprint-engine"
 $expectedBranch = "agent/umse-07-staging-qualification"
 $expectedOrigin = "https://github.com/chartjs333/nginx-qa.git"
+if ($Profile -eq "premerge-inbound-hub-e2e-v1") {
+    $expectedServiceRoot = "D:\nginx-qa-staging\premerge-inbound-hub-e2e-v1"
+    $expectedBranch = "agent/ie2e-03-staging-runtime"
+}
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
 
@@ -749,7 +781,7 @@ function Import-StagingEnvironment {
 
 Import-StagingEnvironment
 
-$expectedValues = Get-ExpectedStagingEnvironment
+$expectedValues = Get-ExpectedStagingEnvironment -Profile $Profile
 Assert-ExactStagingEnvironment -ExpectedValues $expectedValues
 
 try {
