@@ -8,10 +8,11 @@ import unittest
 import urllib.parse
 from collections import deque
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import main
 from nginx_qa import inbound_proposals
+from nginx_qa.managed_import import ManagedImportError, ManagedStartResult
 
 
 async def asgi_request(
@@ -162,7 +163,13 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
                                 self.TOKEN.encode("ascii")
                             ).hexdigest(),
                             "project_ids": [self.PROJECT_PHONE],
-                            "actions": ["create", "read", "comment", "reject"],
+                            "actions": [
+                                "create",
+                                "read",
+                                "preview",
+                                "comment",
+                                "reject",
+                            ],
                         },
                         {
                             "producer_id": "other-hub",
@@ -170,7 +177,13 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
                                 self.OTHER_TOKEN.encode("ascii")
                             ).hexdigest(),
                             "project_ids": [self.PROJECT_PHONE],
-                            "actions": ["create", "read", "comment", "reject"],
+                            "actions": [
+                                "create",
+                                "read",
+                                "preview",
+                                "comment",
+                                "reject",
+                            ],
                         },
                     ],
                 },
@@ -220,6 +233,51 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
         }
+
+    def managed_proposal_payload(
+        self,
+        *,
+        proposal_id: str = "proposal-managed-1",
+        create_idempotency_key: str = "create:proposal-managed-1:v1",
+        activation_idempotency_key: str = "activate:proposal-managed-1:v1",
+    ) -> dict[str, object]:
+        payload = self.proposal_payload(
+            proposal_id=proposal_id,
+            idempotency_key=create_idempotency_key,
+            summary="Start the pinned managed Git sprint after Preview.",
+            source_type="api",
+        )
+        payload["candidate"] = {
+            "kind": "managed_git",
+            "request": {
+                "repository_id": "main",
+                "ref": "refs/heads/inbound-proposal",
+                "manifest_path": "orchestration/inbound-proposal.json",
+                "idempotency_key": activation_idempotency_key,
+            },
+        }
+        return payload
+
+    async def preview(
+        self,
+        pending_id: str,
+        *,
+        expected_revision: int = 0,
+        idempotency_key: str = "preview:proposal-managed-1:v1",
+        correlation_id: str = "corr-preview-1",
+    ) -> tuple[int, dict[str, str], object]:
+        return await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/preview",
+            method="POST",
+            payload={
+                "schema_version": 1,
+                "action": "preview",
+                "expected_revision": expected_revision,
+                "idempotency_key": idempotency_key,
+            },
+            headers=self.auth_headers(correlation_id=correlation_id),
+        )
 
     async def create(
         self,
@@ -291,6 +349,609 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             detail["pending_sprint"]["proposal"]["proposal_status"],
             "created",
         )
+
+    async def test_managed_preview_is_advisory_idempotent_and_nonactivating(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(),
+            correlation_id="corr-managed-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=AsyncMock(side_effect=AssertionError("Preview invoked managed Start")),
+        ), patch.object(
+            main,
+            "import_project_actors_data",
+            side_effect=AssertionError("Preview invoked the legacy importer"),
+        ):
+            preview_status, preview_headers, preview = await self.preview(pending_id)
+        self.assertEqual(preview_status, 200, preview)
+        self.assertEqual(preview_headers["x-correlation-id"], "corr-preview-1")
+        proposal = preview["proposal"]
+        self.assertEqual(proposal["proposal_status"], "ready")
+        self.assertEqual(proposal["activation_state"], "not_started")
+        self.assertEqual(proposal["validation"]["status"], "valid")
+        self.assertEqual(proposal["revision"], 1)
+        self.assertEqual(
+            main.managed_schema_errors(
+                preview,
+                "inbound-pending-proposal-response-v1.schema.json",
+                issue_code="TEST_SCHEMA_INVALID",
+            ),
+            [],
+        )
+        stored = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ][0]
+        self.assertEqual(stored["status"], "pending")
+        self.assertEqual(stored["activation_attempts"], 0)
+        self.assertTrue(main.pending_sprint_summary(stored)["startable"])
+        before_replay = main.pending_sprints_path.read_bytes()
+        replay_status, _, replay = await self.preview(
+            pending_id,
+            correlation_id="corr-preview-replay",
+        )
+        self.assertEqual(replay_status, 200, replay)
+        self.assertTrue(replay["deduplicated"])
+        self.assertEqual(replay["proposal"]["revision"], 1)
+        self.assertEqual(main.pending_sprints_path.read_bytes(), before_replay)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_managed_preview_records_sanitized_invalid_candidate(self) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(
+                proposal_id="proposal-managed-invalid-preview",
+                create_idempotency_key="create:managed-invalid-preview:v1",
+                activation_idempotency_key="activate:managed-invalid-preview:v1",
+            ),
+            correlation_id="corr-managed-invalid-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        storage = main.read_pending_sprints_file()
+        record = storage["projects"][self.PROJECT_CONTEXT]["sprints"][0]
+        record["proposal"]["candidate"]["request"]["ref"] = "invalid ref"
+        main.write_pending_sprints_file(storage)
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=AsyncMock(side_effect=AssertionError("Preview invoked managed Start")),
+        ):
+            preview_status, _, preview = await self.preview(
+                pending_id,
+                idempotency_key="preview:managed-invalid:v1",
+                correlation_id="corr-managed-invalid-preview",
+            )
+        self.assertEqual(preview_status, 200, preview)
+        proposal = preview["proposal"]
+        self.assertEqual(proposal["proposal_status"], "failed")
+        self.assertEqual(proposal["activation_state"], "not_started")
+        self.assertEqual(proposal["validation"]["status"], "invalid")
+        self.assertEqual(
+            proposal["validation"]["issues"][0]["code"],
+            "MANAGED_CANDIDATE_INVALID",
+        )
+        self.assertNotIn(
+            "invalid ref",
+            json.dumps(proposal["validation"]),
+        )
+        self.assertEqual(record.get("activation_attempts"), 0)
+
+    async def test_managed_start_is_fenced_once_and_preserves_concurrent_comment(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(),
+            correlation_id="corr-managed-start-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, preview = await self.preview(pending_id)
+        self.assertEqual(preview_status, 200, preview)
+        entered = asyncio.Event()
+        release = asyncio.Event()
+        managed_calls = []
+
+        async def fake_managed_start(project_id, start_request, correlation_id):
+            managed_calls.append((project_id, start_request, correlation_id))
+            entered.set()
+            await release.wait()
+            return ManagedStartResult(
+                {
+                    "sprint_id": "msv1-" + ("a" * 64),
+                    "status": "active",
+                    "phase": "ACTIVATE",
+                    "deduplicated": False,
+                },
+                201,
+            )
+
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=fake_managed_start,
+        ), patch.object(
+            main,
+            "import_project_actors_data",
+            side_effect=AssertionError("Managed proposal invoked legacy import"),
+        ):
+            first_task = asyncio.create_task(
+                asgi_request(start_url, method="POST")
+            )
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            second_status, _, second = await asgi_request(start_url, method="POST")
+            self.assertEqual(second_status, 409, second)
+            self.assertEqual(second["detail"]["error"], "PROPOSAL_STATE_CONFLICT")
+            comment_status, _, commented = await asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                f"{pending_id}/comments",
+                method="POST",
+                payload={
+                    "schema_version": 1,
+                    "action": "comment",
+                    "expected_revision": 2,
+                    "idempotency_key": "comment:during-managed-start:v1",
+                    "comment": "Keep this comment across managed settlement.",
+                },
+                headers=self.auth_headers(
+                    correlation_id="corr-comment-during-managed-start"
+                ),
+            )
+            self.assertEqual(comment_status, 200, commented)
+            release.set()
+            first_status, _, first = await first_task
+        self.assertEqual(first_status, 200, first)
+        self.assertTrue(first["started"])
+        self.assertTrue(first["managed"])
+        self.assertEqual(len(managed_calls), 1)
+        project_id, start_request, _ = managed_calls[0]
+        self.assertEqual(project_id, self.PROJECT_PHONE)
+        self.assertEqual(start_request.repository_id, "main")
+        self.assertEqual(start_request.ref, "refs/heads/inbound-proposal")
+        self.assertEqual(
+            start_request.manifest_path,
+            "orchestration/inbound-proposal.json",
+        )
+        self.assertEqual(
+            start_request.idempotency_key,
+            "activate:proposal-managed-1:v1",
+        )
+        proposal = first["pending_sprint"]["proposal"]
+        self.assertEqual(proposal["proposal_status"], "started")
+        self.assertEqual(proposal["activation_state"], "started")
+        self.assertEqual(proposal["revision"], 4)
+        self.assertEqual(len(proposal["comments"]), 1)
+        self.assertEqual(first["pending_sprint"]["activation_attempts"], 1)
+
+    async def test_managed_preflight_failure_is_sanitized_and_not_retryable(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(
+                proposal_id="proposal-managed-failure",
+                create_idempotency_key="create:managed-failure:v1",
+                activation_idempotency_key="activate:managed-failure:v1",
+            ),
+            correlation_id="corr-managed-failure-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, _ = await self.preview(
+            pending_id,
+            idempotency_key="preview:managed-failure:v1",
+        )
+        self.assertEqual(preview_status, 200)
+        error = ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            409,
+            "managed-preflight-correlation",
+            phase="VALIDATE",
+            issues=[
+                {
+                    "code": "MANIFEST_SCHEMA_INVALID",
+                    "path": "manifest",
+                    "message": "Managed manifest validation failed",
+                }
+            ],
+            evidence={"stderr": "credential-canary-must-not-persist"},
+        )
+        runner = AsyncMock(side_effect=error)
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=runner,
+        ), patch.object(
+            main,
+            "import_project_actors_data",
+            side_effect=AssertionError("Managed proposal invoked legacy import"),
+        ):
+            failed_status, _, failed = await asgi_request(
+                start_url,
+                method="POST",
+            )
+        self.assertEqual(failed_status, 409, failed)
+        self.assertEqual(failed["detail"]["error"], "SPRINT_PREFLIGHT_FAILED")
+        bytes_after_failure = main.pending_sprints_path.read_bytes()
+        retry_status, _, retry = await asgi_request(start_url, method="POST")
+        self.assertEqual(retry_status, 409, retry)
+        self.assertEqual(retry, failed)
+        self.assertEqual(runner.await_count, 1)
+        self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_after_failure)
+        stored_text = main.pending_sprints_path.read_text(encoding="utf-8")
+        self.assertNotIn("credential-canary-must-not-persist", stored_text)
+        record = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ][0]
+        self.assertEqual(record["status"], "pending")
+        self.assertIsNone(record["activation_attempt_id"])
+        self.assertEqual(record["proposal"]["proposal_status"], "failed")
+        self.assertEqual(record["proposal"]["activation_state"], "failed")
+        self.assertEqual(record["proposal"]["validation"]["status"], "valid")
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_managed_nonterminal_receipt_remains_ambiguous_until_recovery(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(
+                proposal_id="proposal-managed-ambiguous",
+                create_idempotency_key="create:managed-ambiguous:v1",
+                activation_idempotency_key="activate:managed-ambiguous:v1",
+            ),
+            correlation_id="corr-managed-ambiguous-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, _ = await self.preview(
+            pending_id,
+            idempotency_key="preview:managed-ambiguous:v1",
+        )
+        self.assertEqual(preview_status, 200)
+        error = ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            503,
+            "managed-ambiguous-correlation",
+            phase="VALIDATE",
+        )
+        error.managed_receipt_status = "VALIDATING"
+        runner = AsyncMock(side_effect=error)
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=runner,
+        ):
+            ambiguous_status, _, ambiguous = await asgi_request(
+                start_url,
+                method="POST",
+            )
+            live_retry_status, _, live_retry = await asgi_request(
+                start_url,
+                method="POST",
+            )
+        self.assertEqual(ambiguous_status, 503, ambiguous)
+        self.assertEqual(live_retry_status, 409, live_retry)
+        self.assertEqual(
+            live_retry["detail"]["error"],
+            "PROPOSAL_STATE_CONFLICT",
+        )
+        self.assertEqual(runner.await_count, 1)
+        record = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ][0]
+        self.assertEqual(record["status"], "activating")
+        self.assertTrue(record["activation_attempt_id"])
+        self.assertEqual(record["proposal"]["proposal_status"], "ready")
+        self.assertEqual(record["proposal"]["activation_state"], "starting")
+
+    async def test_managed_503_without_receipt_remains_ambiguous_until_recovery(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(
+                proposal_id="proposal-managed-unavailable",
+                create_idempotency_key="create:managed-unavailable:v1",
+                activation_idempotency_key="activate:managed-unavailable:v1",
+            ),
+            correlation_id="corr-managed-unavailable-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, _ = await self.preview(
+            pending_id,
+            idempotency_key="preview:managed-unavailable:v1",
+        )
+        self.assertEqual(preview_status, 200)
+        error = ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            503,
+            "managed-unavailable-correlation",
+            phase="VALIDATE",
+        )
+        runner = AsyncMock(side_effect=error)
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=runner,
+        ):
+            unavailable_status, _, unavailable = await asgi_request(
+                start_url,
+                method="POST",
+            )
+            live_retry_status, _, live_retry = await asgi_request(
+                start_url,
+                method="POST",
+            )
+        self.assertEqual(unavailable_status, 503, unavailable)
+        self.assertEqual(live_retry_status, 409, live_retry)
+        self.assertEqual(
+            live_retry["detail"]["error"],
+            "PROPOSAL_STATE_CONFLICT",
+        )
+        self.assertEqual(runner.await_count, 1)
+        record = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ][0]
+        self.assertEqual(record["status"], "activating")
+        self.assertTrue(record["activation_attempt_id"])
+        self.assertEqual(record["proposal"]["proposal_status"], "ready")
+        self.assertEqual(record["proposal"]["activation_state"], "starting")
+
+    async def test_managed_runner_classifies_only_matching_terminal_receipts(
+        self,
+    ) -> None:
+        request_payload = self.managed_proposal_payload()["candidate"]["request"]
+        start_request = main.validate_start_request(
+            request_payload,
+            "runner-terminal-race",
+        )
+        expected_fingerprint = start_request.request_fingerprint(self.PROJECT_PHONE)
+        project_entry = {
+            "project_phone": self.PROJECT_PHONE,
+            "git_address": "https://github.com/example/inbound-proposals.git",
+        }
+
+        class Store:
+            def __init__(self, receipt):
+                self.receipt = receipt
+
+            def lookup(self, project_id, idempotency_key):
+                return self.receipt
+
+        class TerminalRaceImporter:
+            def __init__(self, receipt, terminal_result):
+                self.store = Store(receipt)
+                self.terminal_result = terminal_result
+                self.calls = 0
+
+            def start(self, project_id, request):
+                self.calls += 1
+                if self.calls == 1:
+                    raise ManagedImportError(
+                        "PROJECT_ACTIVATION_IN_PROGRESS",
+                        409,
+                        "competing-owner",
+                        phase="VALIDATE",
+                    )
+                if isinstance(self.terminal_result, Exception):
+                    raise self.terminal_result
+                return self.terminal_result
+
+        success_importer = TerminalRaceImporter(
+            {
+                "status": "SUCCEEDED",
+                "request_fingerprint": expected_fingerprint,
+            },
+            None,
+        )
+        common_patches = (
+            patch.object(main, "read_git_config", AsyncMock(return_value={})),
+            patch.object(
+                main,
+                "project_for_group_api",
+                return_value=("key", self.PROJECT_CONTEXT, project_entry, project_entry),
+            ),
+            patch.object(main, "managed_repository_registry_for_project", return_value={}),
+            patch.object(main, "load_managed_runtime_config", return_value={}),
+        )
+        with common_patches[0], common_patches[1], common_patches[2], common_patches[3], patch.object(
+            main,
+            "managed_sprint_importer_factory",
+            return_value=success_importer,
+        ):
+            with self.assertRaises(ManagedImportError) as succeeded:
+                await main.execute_managed_project_sprint_start(
+                    self.PROJECT_PHONE,
+                    start_request,
+                    "runner-terminal-race",
+                )
+        self.assertEqual(succeeded.exception.code, "PROJECT_ACTIVATION_IN_PROGRESS")
+        self.assertEqual(succeeded.exception.managed_receipt_status, "SUCCEEDED")
+        self.assertEqual(success_importer.calls, 1)
+
+        stored_failure = ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            409,
+            "stored-terminal-failure",
+            phase="VALIDATE",
+        )
+        failed_importer = TerminalRaceImporter(
+            {
+                "status": "FAILED",
+                "request_fingerprint": expected_fingerprint,
+                "error": stored_failure.envelope,
+                "http_status": stored_failure.http_status,
+            },
+            None,
+        )
+        with patch.object(
+            main, "read_git_config", AsyncMock(return_value={})
+        ), patch.object(
+            main,
+            "project_for_group_api",
+            return_value=("key", self.PROJECT_CONTEXT, project_entry, project_entry),
+        ), patch.object(
+            main, "managed_repository_registry_for_project", return_value={}
+        ), patch.object(
+            main, "load_managed_runtime_config", return_value={}
+        ), patch.object(
+            main,
+            "managed_sprint_importer_factory",
+            return_value=failed_importer,
+        ):
+            with self.assertRaises(ManagedImportError) as raised:
+                await main.execute_managed_project_sprint_start(
+                    self.PROJECT_PHONE,
+                    start_request,
+                    "runner-terminal-failure",
+                )
+        self.assertEqual(raised.exception.code, "SPRINT_PREFLIGHT_FAILED")
+        self.assertEqual(raised.exception.managed_receipt_status, "FAILED")
+        self.assertEqual(failed_importer.calls, 1)
+
+        mismatch_importer = TerminalRaceImporter(
+            {
+                "status": "SUCCEEDED",
+                "request_fingerprint": "0" * 64,
+            },
+            None,
+        )
+        with patch.object(
+            main, "read_git_config", AsyncMock(return_value={})
+        ), patch.object(
+            main,
+            "project_for_group_api",
+            return_value=("key", self.PROJECT_CONTEXT, project_entry, project_entry),
+        ), patch.object(
+            main, "managed_repository_registry_for_project", return_value={}
+        ), patch.object(
+            main, "load_managed_runtime_config", return_value={}
+        ), patch.object(
+            main,
+            "managed_sprint_importer_factory",
+            return_value=mismatch_importer,
+        ):
+            with self.assertRaises(ManagedImportError) as mismatch:
+                await main.execute_managed_project_sprint_start(
+                    self.PROJECT_PHONE,
+                    start_request,
+                    "runner-mismatched-terminal",
+                )
+        self.assertEqual(mismatch.exception.code, "PROJECT_ACTIVATION_IN_PROGRESS")
+        self.assertIsNone(mismatch.exception.managed_receipt_status)
+        self.assertEqual(mismatch_importer.calls, 1)
+
+    async def test_managed_lost_completion_replays_frozen_request(self) -> None:
+        create_status, _, created = await self.create(
+            self.managed_proposal_payload(
+                proposal_id="proposal-managed-recovery",
+                create_idempotency_key="create:managed-recovery:v1",
+                activation_idempotency_key="activate:managed-recovery:v1",
+            ),
+            correlation_id="corr-managed-recovery-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, _ = await self.preview(
+            pending_id,
+            idempotency_key="preview:managed-recovery:v1",
+        )
+        self.assertEqual(preview_status, 200)
+        sprint_id = "msv1-" + ("b" * 64)
+        frozen_requests = []
+
+        async def fake_managed_start(project_id, start_request, correlation_id):
+            frozen_requests.append(
+                (
+                    start_request.repository_id,
+                    start_request.ref,
+                    start_request.manifest_path,
+                    start_request.idempotency_key,
+                )
+            )
+            return ManagedStartResult(
+                {
+                    "sprint_id": sprint_id,
+                    "status": "active",
+                    "phase": "ACTIVATE",
+                    "deduplicated": len(frozen_requests) > 1,
+                },
+                200 if len(frozen_requests) > 1 else 201,
+            )
+
+        real_settle = main.settle_managed_pending_proposal_file
+        fail_completion_once = True
+
+        def flaky_settle(**kwargs):
+            nonlocal fail_completion_once
+            if kwargs.get("action") == "complete" and fail_completion_once:
+                fail_completion_once = False
+                raise RuntimeError("simulated lost proposal completion")
+            return real_settle(**kwargs)
+
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=fake_managed_start,
+        ), patch.object(
+            main,
+            "settle_managed_pending_proposal_file",
+            new=flaky_settle,
+        ):
+            first_status, _, first = await asgi_request(start_url, method="POST")
+            self.assertEqual(first_status, 500, first)
+            storage = main.read_pending_sprints_file()
+            record = storage["projects"][self.PROJECT_CONTEXT]["sprints"][0]
+            first_attempt_id = record["activation_attempt_id"]
+            candidate_sha256 = record["managed_activation"]["candidate_sha256"]
+            self.assertEqual(record["proposal"]["activation_state"], "starting")
+            record["activating_at"] = "2000-01-01T00:00:00+00:00"
+            main.write_pending_sprints_file(storage)
+            second_status, _, second = await asgi_request(start_url, method="POST")
+        self.assertEqual(second_status, 200, second)
+        self.assertTrue(second["started"])
+        self.assertTrue(second["reconciled"])
+        self.assertEqual(len(frozen_requests), 2)
+        self.assertEqual(frozen_requests[0], frozen_requests[1])
+        self.assertEqual(
+            frozen_requests[0][3],
+            "activate:managed-recovery:v1",
+        )
+        self.assertEqual(second["pending_sprint"]["activated_sprint_id"], sprint_id)
+        self.assertEqual(second["pending_sprint"]["activation_attempts"], 2)
+        with self.assertRaises(main.HTTPException):
+            real_settle(
+                context_key=self.PROJECT_CONTEXT,
+                project_phone=self.PROJECT_PHONE,
+                sprint_id=pending_id,
+                activation_attempt_id=first_attempt_id,
+                candidate_sha256=candidate_sha256,
+                action="complete",
+                activated_sprint_id=sprint_id,
+            )
 
     async def test_concurrent_duplicate_create_has_one_record(self) -> None:
         results = await asyncio.gather(

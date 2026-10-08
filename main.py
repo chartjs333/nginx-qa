@@ -57,6 +57,7 @@ from nginx_qa.managed_import import (
     normalize_managed_runtime_config,
     parse_strict_json_object,
     parse_start_request_bytes,
+    validate_start_request,
 )
 from nginx_qa.legacy_scope_control import (
     ADMIN_TOKEN_HEADER,
@@ -24124,20 +24125,32 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
         if activating_at is not None:
             retry_at = activating_at + PENDING_SPRINT_ACTIVATION_LEASE
     summary["retry_at"] = retry_at.isoformat() if retry_at is not None else None
+    managed_recovery = bool(
+        record_status == "activating"
+        and retry_at is not None
+        and datetime.now(timezone.utc) >= retry_at
+        and proposal is not None
+        and (proposal.get("candidate") or {}).get("kind") == "managed_git"
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "starting"
+    )
     summary["startable"] = bool(
-        (
-            record_status == "pending"
-            or (
-                record_status == "activating"
-                and retry_at is not None
-                and datetime.now(timezone.utc) >= retry_at
+        managed_recovery
+        or (
+            (
+                record_status == "pending"
+                or (
+                    record_status == "activating"
+                    and retry_at is not None
+                    and datetime.now(timezone.utc) >= retry_at
+                )
             )
-        )
-        and (
-            proposal is None
-            or (
-                proposal.get("proposal_status") == "ready"
-                and proposal.get("activation_state") == "not_started"
+            and (
+                proposal is None
+                or (
+                    proposal.get("proposal_status") == "ready"
+                    and proposal.get("activation_state") == "not_started"
+                )
             )
         )
     )
@@ -24706,6 +24719,70 @@ def create_inbound_pending_proposal_file(
         }
 
 
+def inbound_proposal_candidate_validation(
+    candidate: Any,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Return a value-free advisory validation result without activating work."""
+
+    checked_at = utc_now()
+    kind = candidate.get("kind") if isinstance(candidate, dict) else None
+    try:
+        if kind == "managed_git":
+            request = candidate.get("request")
+            validate_start_request(request, correlation_id)
+        elif kind == "legacy_json":
+            payload = candidate.get("payload")
+            legacy_sprint_import_dispatch(payload, correlation_id=correlation_id)
+            actor_import_options(payload)
+        else:
+            raise ValueError("unsupported proposal candidate")
+    except ManagedImportError as exc:
+        detail = exc.envelope.get("detail")
+        detail = detail if isinstance(detail, dict) else {}
+        field = str(detail.get("field") or "candidate.request")
+        return {
+            "status": "invalid",
+            "checked_at": checked_at,
+            "issues": [
+                {
+                    "code": "MANAGED_CANDIDATE_INVALID",
+                    "field": field,
+                    "message": (
+                        "The managed Git candidate does not satisfy the start "
+                        "request contract."
+                    ),
+                }
+            ],
+        }
+    except Exception:
+        managed = kind == "managed_git"
+        return {
+            "status": "invalid",
+            "checked_at": checked_at,
+            "issues": [
+                {
+                    "code": (
+                        "MANAGED_CANDIDATE_INVALID"
+                        if managed
+                        else "LEGACY_CANDIDATE_INVALID"
+                    ),
+                    "field": (
+                        "candidate.request" if managed else "candidate.payload"
+                    ),
+                    "message": (
+                        "The managed Git candidate does not satisfy the start "
+                        "request contract."
+                        if managed
+                        else "The legacy candidate does not satisfy the sprint "
+                        "import contract."
+                    ),
+                }
+            ],
+        }
+    return {"status": "valid", "checked_at": checked_at, "issues": []}
+
+
 def mutate_inbound_pending_proposal_file(
     *,
     context_key: str,
@@ -24843,33 +24920,61 @@ def mutate_inbound_pending_proposal_file(
                 actual_revision=actual_revision,
             )
         action = str(payload["action"])
-        if action == "reject" and (
-            proposal.get("proposal_status") in {"started", "rejected"}
-            or proposal.get("activation_state") in {"starting", "started"}
-        ):
+        activation_state = str(proposal.get("activation_state") or "")
+        proposal_status = str(proposal.get("proposal_status") or "")
+        invalid_state = bool(
+            action == "preview"
+            and (
+                activation_state != "not_started"
+                or proposal_status not in {"created", "ready", "failed"}
+                or (
+                    proposal_status == "failed"
+                    and (proposal.get("validation") or {}).get("status") != "invalid"
+                )
+            )
+        ) or bool(
+            action == "reject"
+            and (
+                proposal_status in {"started", "rejected"}
+                or activation_state in {"starting", "started"}
+            )
+        )
+        if invalid_state:
             raise InboundProposalError(
                 "PROPOSAL_STATE_CONFLICT",
                 status.HTTP_409_CONFLICT,
                 correlation_id,
-                "The proposal cannot be rejected in its current state.",
+                "The proposal cannot perform this action in its current state.",
             )
         now = utc_now()
-        comment = {
-            "comment_id": f"comment-{uuid4().hex}",
-            "text": str(payload["comment"]),
-            "created_at": now,
-            "actor": {
-                "actor_type": actor_type,
-                "actor_id": actor_id,
-            },
-        }
-        comments = [
-            deepcopy(item)
-            for item in proposal.get("comments") or []
-            if isinstance(item, dict)
-        ]
-        comments.append(comment)
-        proposal["comments"] = comments
+        if action == "preview":
+            validation = inbound_proposal_candidate_validation(
+                proposal.get("candidate"),
+                correlation_id,
+            )
+            proposal["validation"] = validation
+            proposal["proposal_status"] = (
+                "ready" if validation["status"] == "valid" else "failed"
+            )
+            proposal["activation_state"] = "not_started"
+            proposal["started_sprint_id"] = None
+        else:
+            comment = {
+                "comment_id": f"comment-{uuid4().hex}",
+                "text": str(payload["comment"]),
+                "created_at": now,
+                "actor": {
+                    "actor_type": actor_type,
+                    "actor_id": actor_id,
+                },
+            }
+            comments = [
+                deepcopy(item)
+                for item in proposal.get("comments") or []
+                if isinstance(item, dict)
+            ]
+            comments.append(comment)
+            proposal["comments"] = comments
         proposal["revision"] = actual_revision + 1
         proposal["updated_at"] = now
         if action == "reject":
@@ -25041,6 +25146,326 @@ def update_pending_sprint_activation_file(
         storage["projects"] = projects
         write_pending_sprints_file(storage)
         return pending_sprint_summary(record)
+
+
+def pending_project_record_for_update(
+    projects: dict[str, Any],
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+) -> tuple[str, dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    candidate_keys = [context_key]
+    candidate_keys.extend(
+        str(key)
+        for key, value in projects.items()
+        if str(key) != context_key
+        and isinstance(value, dict)
+        and str(value.get("project_phone") or "").strip() == project_phone
+    )
+    for candidate_key in candidate_keys:
+        raw_project = projects.get(candidate_key)
+        if not isinstance(raw_project, dict):
+            continue
+        records = [
+            deepcopy(item)
+            for item in raw_project.get("sprints") or []
+            if isinstance(item, dict)
+        ]
+        record = next(
+            (
+                item
+                for item in records
+                if str(item.get("id") or "").strip() == sprint_id.strip()
+            ),
+            None,
+        )
+        if record is not None:
+            return candidate_key, dict(raw_project), records, record
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Pending sprint was not found for this project",
+    )
+
+
+def managed_proposal_state_conflict(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "PROPOSAL_STATE_CONFLICT",
+            "message": message,
+        },
+    )
+
+
+def claim_managed_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Atomically fence a managed proposal before invoking start-from-git."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        project_key, project, records, record = pending_project_record_for_update(
+            projects,
+            context_key,
+            project_phone,
+            sprint_id,
+        )
+        proposal = pending_proposal_resource(record)
+        candidate = proposal.get("candidate") if isinstance(proposal, dict) else None
+        if (
+            not isinstance(proposal, dict)
+            or not isinstance(candidate, dict)
+            or candidate.get("kind") != "managed_git"
+        ):
+            raise managed_proposal_state_conflict(
+                "The pending sprint is not a managed Git proposal."
+            )
+        request_payload = candidate.get("request")
+        validate_start_request(request_payload, correlation_id)
+        assert isinstance(request_payload, dict)
+        candidate_sha256 = pending_sprint_payload_sha256(candidate)
+        if str(record.get("payload_sha256") or "") != candidate_sha256:
+            raise managed_proposal_state_conflict(
+                "The managed proposal candidate changed after it was accepted."
+            )
+
+        record_status = str(record.get("status") or "pending").strip()
+        bridge = (
+            deepcopy(record.get("managed_activation"))
+            if isinstance(record.get("managed_activation"), dict)
+            else None
+        )
+        terminal_error = (
+            bridge.get("error") if isinstance(bridge, dict) else None
+        )
+        if (
+            record_status == "pending"
+            and proposal.get("proposal_status") == "failed"
+            and proposal.get("activation_state") == "failed"
+            and isinstance(bridge, dict)
+            and bridge.get("state") == "failed"
+            and isinstance(terminal_error, dict)
+            and isinstance(terminal_error.get("http_status"), int)
+            and isinstance(terminal_error.get("detail"), dict)
+        ):
+            return {
+                "terminal_failure": deepcopy(terminal_error),
+                "pending_sprint": pending_sprint_summary(record),
+            }
+
+        other_activating = next(
+            (
+                item
+                for item in records
+                if item is not record
+                and str(item.get("status") or "").strip() == "activating"
+            ),
+            None,
+        )
+        if other_activating is not None:
+            raise managed_proposal_state_conflict(
+                "Another sprint for this project is already being started."
+            )
+
+        now = utc_now()
+        recovering = record_status == "activating"
+        if recovering:
+            activating_at = parse_utc_datetime(record.get("activating_at"))
+            if (
+                activating_at is None
+                or datetime.now(timezone.utc) - activating_at
+                < PENDING_SPRINT_ACTIVATION_LEASE
+            ):
+                raise managed_proposal_state_conflict(
+                    "This managed proposal is already being started."
+                )
+            if (
+                proposal.get("proposal_status") != "ready"
+                or proposal.get("activation_state") != "starting"
+                or not isinstance(bridge, dict)
+                or bridge.get("candidate_sha256") != candidate_sha256
+                or bridge.get("request") != request_payload
+            ):
+                raise managed_proposal_state_conflict(
+                    "The managed proposal activation cannot be recovered safely."
+                )
+            frozen_request = deepcopy(bridge["request"])
+        else:
+            if (
+                record_status != "pending"
+                or proposal.get("proposal_status") != "ready"
+                or proposal.get("activation_state") != "not_started"
+                or (proposal.get("validation") or {}).get("status") != "valid"
+            ):
+                raise managed_proposal_state_conflict(
+                    "The proposal is not eligible for Start."
+                )
+            frozen_request = deepcopy(request_payload)
+            bridge = {
+                "candidate_sha256": candidate_sha256,
+                "request": deepcopy(frozen_request),
+            }
+
+        activation_attempt_id = f"proposal-activation-{uuid4().hex}"
+        assert isinstance(bridge, dict)
+        bridge.update(
+            {
+                "activation_attempt_id": activation_attempt_id,
+                "claimed_at": now,
+                "state": "starting",
+            }
+        )
+        record["managed_activation"] = bridge
+        record["status"] = "activating"
+        record["activating_at"] = now
+        record["activation_attempt_id"] = activation_attempt_id
+        record["activation_attempts"] = int(record.get("activation_attempts") or 0) + 1
+        record["last_activation_error"] = None
+        proposal["proposal_status"] = "ready"
+        proposal["activation_state"] = "starting"
+        proposal["revision"] = int(proposal.get("revision") or 0) + 1
+        proposal["updated_at"] = now
+        record["proposal"] = proposal
+        project["updated_at"] = now
+        project["sprints"] = records
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {
+            "activation_attempt_id": activation_attempt_id,
+            "candidate_sha256": candidate_sha256,
+            "request": frozen_request,
+            "recovering": recovering,
+            "pending_sprint": pending_sprint_summary(record),
+        }
+
+
+def settle_managed_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+    activation_attempt_id: str,
+    candidate_sha256: str,
+    action: str,
+    activated_sprint_id: str = "",
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Settle a managed proposal using its physical-attempt and candidate fences."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        project_key, project, records, record = pending_project_record_for_update(
+            projects,
+            context_key,
+            project_phone,
+            sprint_id,
+        )
+        proposal = pending_proposal_resource(record)
+        bridge = record.get("managed_activation")
+        candidate = proposal.get("candidate") if isinstance(proposal, dict) else None
+        current_candidate_sha256 = (
+            pending_sprint_payload_sha256(candidate)
+            if isinstance(candidate, dict)
+            else ""
+        )
+        current_attempt_id = str(record.get("activation_attempt_id") or "")
+        bridge_attempt_id = (
+            str(bridge.get("activation_attempt_id") or "")
+            if isinstance(bridge, dict)
+            else ""
+        )
+        bridge_candidate_sha256 = (
+            str(bridge.get("candidate_sha256") or "")
+            if isinstance(bridge, dict)
+            else ""
+        )
+        if (
+            not isinstance(proposal, dict)
+            or not isinstance(bridge, dict)
+            or str(record.get("status") or "") != "activating"
+            or not hmac.compare_digest(current_attempt_id, activation_attempt_id)
+            or not hmac.compare_digest(bridge_attempt_id, activation_attempt_id)
+            or not hmac.compare_digest(current_candidate_sha256, candidate_sha256)
+            or not hmac.compare_digest(bridge_candidate_sha256, candidate_sha256)
+        ):
+            raise managed_proposal_state_conflict(
+                "The managed proposal activation attempt was superseded."
+            )
+
+        now = utc_now()
+        if action == "complete":
+            clean_sprint_id = str(activated_sprint_id or "").strip()
+            if not clean_sprint_id:
+                raise RuntimeError("Managed activation result has no sprint id")
+            record["status"] = "activated"
+            record["activating_at"] = None
+            record["activation_attempt_id"] = None
+            record["activated_at"] = now
+            record["activated_sprint_id"] = clean_sprint_id
+            record["last_activation_error"] = None
+            proposal["proposal_status"] = "started"
+            proposal["activation_state"] = "started"
+            proposal["started_sprint_id"] = clean_sprint_id
+            bridge["state"] = "started"
+            bridge["settled_at"] = now
+            bridge["sprint_id"] = clean_sprint_id
+        elif action == "fail":
+            safe_error = deepcopy(error) if isinstance(error, dict) else {}
+            record["status"] = "pending"
+            record["activating_at"] = None
+            record["activation_attempt_id"] = None
+            record["last_activation_failed_at"] = now
+            record["last_activation_error"] = safe_error
+            proposal["proposal_status"] = "failed"
+            proposal["activation_state"] = "failed"
+            proposal["started_sprint_id"] = None
+            bridge["state"] = "failed"
+            bridge["settled_at"] = now
+            bridge["error"] = safe_error
+        else:
+            raise ValueError(f"Unsupported managed proposal settle action: {action}")
+        proposal["revision"] = int(proposal.get("revision") or 0) + 1
+        proposal["updated_at"] = now
+        record["managed_activation"] = bridge
+        record["proposal"] = proposal
+        project["updated_at"] = now
+        project["sprints"] = records
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return pending_sprint_summary(record)
+
+
+def sanitized_managed_activation_error(error: ManagedImportError) -> dict[str, Any]:
+    """Keep only the existing public error envelope; never persist evidence."""
+
+    detail = error.envelope.get("detail")
+    safe_detail: dict[str, Any] = {}
+    if isinstance(detail, dict):
+        for key in ("error", "correlation_id", "phase", "field", "supported"):
+            if key in detail:
+                safe_detail[key] = deepcopy(detail[key])
+        raw_issues = detail.get("issues")
+        if isinstance(raw_issues, list):
+            safe_detail["issues"] = [
+                {
+                    key: deepcopy(issue[key])
+                    for key in ("code", "path", "message")
+                    if key in issue
+                }
+                for issue in raw_issues
+                if isinstance(issue, dict)
+            ]
+    return {"http_status": error.http_status, "detail": safe_detail}
 
 
 def record_project_sprint_import_file(
@@ -31250,6 +31675,20 @@ async def comment_project_pending_proposal(
     )
 
 
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/preview")
+async def preview_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="preview",
+    )
+
+
 @app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/reject")
 async def reject_project_pending_proposal(
     project_id: str,
@@ -31264,12 +31703,138 @@ async def reject_project_pending_proposal(
     )
 
 
+async def start_managed_pending_proposal(
+    *,
+    project_phone: str,
+    context_key: str,
+    sprint_id: str,
+) -> Any:
+    correlation_id = f"request-{uuid4().hex}"
+    try:
+        async with pending_sprints_lock:
+            claimed = await asyncio.to_thread(
+                claim_managed_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                sprint_id=sprint_id,
+                correlation_id=correlation_id,
+            )
+    except ManagedImportError as exc:
+        return managed_start_error_response(exc)
+    terminal_failure = claimed.get("terminal_failure")
+    if isinstance(terminal_failure, dict):
+        return JSONResponse(
+            status_code=int(terminal_failure["http_status"]),
+            content={"detail": deepcopy(terminal_failure["detail"])},
+        )
+    activation_attempt_id = str(claimed["activation_attempt_id"])
+    candidate_sha256 = str(claimed["candidate_sha256"])
+    start_request = validate_start_request(claimed["request"], correlation_id)
+    try:
+        result = await execute_managed_project_sprint_start(
+            project_phone,
+            start_request,
+            correlation_id,
+        )
+    except ManagedImportError as exc:
+        receipt_status = getattr(exc, "managed_receipt_status", None)
+        if (
+            receipt_status
+            in {"VALIDATING", "PREPARING", "ACTIVATING", "SUCCEEDED"}
+            or (
+                exc.http_status == status.HTTP_503_SERVICE_UNAVAILABLE
+                and receipt_status != "FAILED"
+            )
+            or (
+                exc.code == "PROJECT_ACTIVATION_IN_PROGRESS"
+                and receipt_status != "FAILED"
+            )
+        ):
+            return managed_start_error_response(exc)
+        try:
+            async with pending_sprints_lock:
+                await asyncio.to_thread(
+                    settle_managed_pending_proposal_file,
+                    context_key=context_key,
+                    project_phone=project_phone,
+                    sprint_id=sprint_id,
+                    activation_attempt_id=activation_attempt_id,
+                    candidate_sha256=candidate_sha256,
+                    action="fail",
+                    error=sanitized_managed_activation_error(exc),
+                )
+        except Exception:
+            return managed_start_error_response(
+                ManagedImportError(
+                    "SPRINT_ACTIVATE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    phase="ACTIVATE",
+                )
+            )
+        return managed_start_error_response(exc)
+    except Exception:
+        # An unknown or lost outcome stays fenced as ready/starting.  Expired
+        # recovery will replay the exact frozen request and activation key.
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_ACTIVATE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="ACTIVATE",
+            )
+        )
+
+    managed_response = deepcopy(result.response)
+    activated_sprint_id = str(managed_response.get("sprint_id") or "").strip()
+    try:
+        async with pending_sprints_lock:
+            completed = await asyncio.to_thread(
+                settle_managed_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                sprint_id=sprint_id,
+                activation_attempt_id=activation_attempt_id,
+                candidate_sha256=candidate_sha256,
+                action="complete",
+                activated_sprint_id=activated_sprint_id,
+            )
+    except Exception:
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_ACTIVATE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="ACTIVATE",
+            )
+        )
+    reconciled = bool(managed_response.get("deduplicated"))
+    return {
+        "started": True,
+        "managed": True,
+        "reconciled": reconciled,
+        "reconciled_from_status": "active" if reconciled else None,
+        "superseded": False,
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_sprint": completed,
+        "claimed_sprint": deepcopy(claimed["pending_sprint"]),
+        "sprint": {
+            "id": activated_sprint_id,
+            "status": managed_response.get("status"),
+            "managed": True,
+        },
+        "import_result": managed_response,
+    }
+
+
 @app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start")
 async def start_project_pending_sprint(
     project_id: str,
     sprint_id: str,
     request: Request,
-) -> dict[str, Any]:
+) -> Any:
     project_phone, context_key, project = await project_pending_sprints_snapshot(
         project_id,
         sprint_id,
@@ -31282,10 +31847,18 @@ async def start_project_pending_sprint(
             detail="Pending sprint was not found for this project",
         )
     proposal = pending_proposal_resource(record)
+    if (
+        proposal is not None
+        and (proposal.get("candidate") or {}).get("kind") == "managed_git"
+    ):
+        return await start_managed_pending_proposal(
+            project_phone=project_phone,
+            context_key=context_key,
+            sprint_id=sprint_id,
+        )
     if proposal is not None and (
         proposal.get("proposal_status") != "ready"
         or proposal.get("activation_state") != "not_started"
-        or (proposal.get("candidate") or {}).get("kind") == "managed_git"
     ):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -31690,6 +32263,121 @@ def managed_continuity_error_response(
     return JSONResponse(status_code=error.http_status, content=error.envelope)
 
 
+async def execute_managed_project_sprint_start(
+    project_id: str,
+    start_request: Any,
+    correlation_id: str,
+) -> Any:
+    """Run the canonical managed start operation after transport parsing."""
+
+    try:
+        config = await read_git_config()
+    except Exception:
+        raise ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            correlation_id,
+            phase="VALIDATE",
+        ) from None
+    try:
+        _, _, project_entry, context = project_for_group_api(config, project_id)
+    except HTTPException as exc:
+        code = (
+            "PROJECT_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "INVALID_MANAGED_SPRINT_REQUEST"
+        )
+        raise ManagedImportError(
+            code,
+            exc.status_code,
+            correlation_id,
+            phase="VALIDATE",
+            field="project_id",
+        ) from None
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if not project_phone:
+        raise ManagedImportError(
+            "INVALID_MANAGED_SPRINT_REQUEST",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            phase="VALIDATE",
+            field="project_id",
+        )
+    repository_registry = managed_repository_registry_for_project(
+        project_entry, context
+    )
+    try:
+        runtime_config = load_managed_runtime_config()
+    except (TypeError, ValueError):
+        raise ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            status.HTTP_409_CONFLICT,
+            correlation_id,
+            phase="VALIDATE",
+            issues=[
+                {
+                    "code": "RUNTIME_ROOT_NOT_ISOLATED",
+                    "path": "runtime_config",
+                    "message": "Managed runtime configuration is unavailable",
+                }
+            ],
+        ) from None
+
+    def run_import() -> Any:
+        importer = managed_sprint_importer_factory(
+            runtime_config, repository_registry
+        )
+        try:
+            result = importer.start(project_phone, start_request)
+        except ManagedImportError as exc:
+            receipt_status: str | None = None
+            receipt: dict[str, Any] | None = None
+            try:
+                raw_receipt = importer.store.lookup(
+                    project_phone,
+                    start_request.idempotency_key,
+                )
+                receipt = raw_receipt if isinstance(raw_receipt, dict) else None
+                expected_fingerprint = start_request.request_fingerprint(
+                    project_phone
+                )
+                receipt_fingerprint = (
+                    str(receipt.get("request_fingerprint") or "")
+                    if receipt is not None
+                    else ""
+                )
+                if (
+                    receipt is not None
+                    and receipt_fingerprint
+                    and hmac.compare_digest(
+                        receipt_fingerprint,
+                        expected_fingerprint,
+                    )
+                ):
+                    receipt_status = str(receipt.get("status") or "") or None
+            except Exception:
+                pass
+            if (
+                receipt_status == "FAILED"
+                and receipt is not None
+                and isinstance(receipt.get("error"), dict)
+                and isinstance(receipt.get("http_status"), int)
+            ):
+                stored_error = ManagedImportError.from_stored(
+                    receipt["error"],
+                    receipt["http_status"],
+                )
+                stored_error.managed_receipt_status = "FAILED"
+                raise stored_error
+            exc.managed_receipt_status = receipt_status
+            raise
+        if isinstance(importer, TransactionalSprintImporter):
+            activate_managed_processes(runtime_config, importer, result)
+        return result
+
+    return await asyncio.to_thread(run_import)
+
+
 @app.post("/api/v1/projects/{project_id}/sprints/start-from-git")
 async def start_managed_project_sprint_from_git(
     project_id: str,
@@ -31737,77 +32425,11 @@ async def start_managed_project_sprint_from_git(
         return managed_start_error_response(exc)
 
     try:
-        config = await read_git_config()
-    except Exception:
-        return managed_start_error_response(
-            ManagedImportError(
-                "SPRINT_PREFLIGHT_FAILED",
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                correlation_id,
-                phase="VALIDATE",
-            )
+        result = await execute_managed_project_sprint_start(
+            project_id,
+            start_request,
+            correlation_id,
         )
-    try:
-        _, _, project_entry, context = project_for_group_api(config, project_id)
-    except HTTPException as exc:
-        code = (
-            "PROJECT_NOT_FOUND"
-            if exc.status_code == status.HTTP_404_NOT_FOUND
-            else "INVALID_MANAGED_SPRINT_REQUEST"
-        )
-        return managed_start_error_response(
-            ManagedImportError(
-                code,
-                exc.status_code,
-                correlation_id,
-                phase="VALIDATE",
-                field="project_id",
-            )
-        )
-    project_phone = normalize_project_phone(project_entry.get("project_phone"))
-    if not project_phone:
-        return managed_start_error_response(
-            ManagedImportError(
-                "INVALID_MANAGED_SPRINT_REQUEST",
-                status.HTTP_400_BAD_REQUEST,
-                correlation_id,
-                phase="VALIDATE",
-                field="project_id",
-            )
-        )
-    repository_registry = managed_repository_registry_for_project(
-        project_entry, context
-    )
-    try:
-        runtime_config = load_managed_runtime_config()
-    except (TypeError, ValueError):
-        return managed_start_error_response(
-            ManagedImportError(
-                "SPRINT_PREFLIGHT_FAILED",
-                status.HTTP_409_CONFLICT,
-                correlation_id,
-                phase="VALIDATE",
-                issues=[
-                    {
-                        "code": "RUNTIME_ROOT_NOT_ISOLATED",
-                        "path": "runtime_config",
-                        "message": "Managed runtime configuration is unavailable",
-                    }
-                ],
-            )
-        )
-
-    def run_import() -> Any:
-        importer = managed_sprint_importer_factory(
-            runtime_config, repository_registry
-        )
-        result = importer.start(project_phone, start_request)
-        if isinstance(importer, TransactionalSprintImporter):
-            activate_managed_processes(runtime_config, importer, result)
-        return result
-
-    try:
-        result = await asyncio.to_thread(run_import)
     except ManagedImportError as exc:
         return managed_start_error_response(exc)
     except Exception:
