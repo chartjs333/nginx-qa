@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "kind": "inbound_hub_proposal_api_e2e_resume",
+  "generated_at": "2026-10-08T16:46:08Z",
+  "assignment": {
+    "assignment_id": "assignment-a47b8da98f92c09203cdf89c",
+    "node_id": "inbound-hub-e2e",
+    "agent_phone": "2964",
+    "source_commit": "172f0c23e985c337f180cc84de1f1a2ec70d503e",
+    "evidence_branch": "agent/ie2e-04-inbound-hub-e2e"
+  },
+  "target": {
+    "runtime": "isolated_loopback_staging",
+    "tested_commit": "d1d8daa54706b4d88fb37e6e288d243ae237ea50",
+    "instance_id": "premerge-inbound-hub-e2e-v1-staging-18027",
+    "http_port": 18027,
+    "project_id": "9000"
+  },
+  "producer": {
+    "mode": "synthetic_test_producer",
+    "producer_id": "inbound-hub-e2e",
+    "credential_verified_in_memory": true,
+    "start_permission_absent": true,
+    "credential_recorded": false,
+    "credential_verifier_recorded": false,
+    "registry_recorded": false
+  },
+  "fixture": {
+    "run_id": "a47b8da9-20261008164608",
+    "proposal_id": "ie2e-004-resume-a47b8da9-20261008164608",
+    "pending_sprint_id": "pending-d2c0fea8b7f54f29b6fa9c1f065bce2a",
+    "source_projection": {
+      "source_type": "api",
+      "conversation_id_present": true,
+      "message_id_present": true
+    },
+    "candidate_kind": "legacy_json",
+    "raw_candidate_recorded": false
+  },
+  "exchanges": [
+    {
+      "step": "create",
+      "http_status": 201,
+      "deduplicated": false,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "create_replay",
+      "http_status": 200,
+      "deduplicated": true,
+      "same_pending_sprint_id": true,
+      "revision": 0,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "detail_read",
+      "http_status": 200,
+      "provenance_preserved": true,
+      "correlation_valid": true
+    },
+    {
+      "step": "status_read",
+      "http_status": 200,
+      "provenance_preserved": true,
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "invalid_payload",
+      "http_status": 400,
+      "error": "PROPOSAL_REQUEST_INVALID",
+      "retryable": false,
+      "record_created": false,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "invalid_correlation",
+      "http_status": 400,
+      "error": "PROPOSAL_REQUEST_INVALID",
+      "invalid_value_not_echoed": true,
+      "generated_header_body_equal": true,
+      "schema_valid": true
+    },
+    {
+      "step": "comment",
+      "http_status": 200,
+      "deduplicated": false,
+      "revision": 1,
+      "comment_count": 1,
+      "activation_state": "not_started",
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "comment_replay",
+      "http_status": 200,
+      "deduplicated": true,
+      "revision": 1,
+      "comment_count": 1,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "reject",
+      "http_status": 200,
+      "deduplicated": false,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "reject_replay",
+      "http_status": 200,
+      "deduplicated": true,
+      "revision": 2,
+      "comment_count": 2,
+      "correlation_valid": true,
+      "schema_valid": true
+    },
+    {
+      "step": "terminal_read",
+      "detail_http_status": 200,
+      "status_http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "provenance_preserved": true,
+      "correlation_valid": true,
+      "status_schema_valid": true
+    }
+  ],
+  "collection_lifecycle": {
+    "baseline_pending_count": 1,
+    "pending_count_after_create": 2,
+    "pending_count_after_replay": 2,
+    "pending_count_after_invalid_payload": 2,
+    "final_pending_count": 1,
+    "preexisting_pending_unchanged": true,
+    "rejected_record_remains_detail_readable": true
+  },
+  "activation_guard": {
+    "start_endpoint_invocations": 0,
+    "sprint_inventory_unchanged": true,
+    "inventory_checked_after_steps": [
+      "baseline_before_create",
+      "create",
+      "create_replay",
+      "detail_read",
+      "status_read",
+      "invalid_payload",
+      "invalid_correlation",
+      "comment",
+      "comment_replay",
+      "reject",
+      "reject_replay",
+      "terminal_read"
+    ],
+    "sprint_count_at_every_check": 0,
+    "current_sprint_id_at_every_check": null,
+    "sorted_sprint_ids_at_every_check": [],
+    "all_observed_activation_states": [
+      "not_started"
+    ],
+    "all_observed_started_sprint_ids_null": true
+  },
+  "schema_validation": {
+    "create_request": true,
+    "action_requests": true,
+    "mutation_responses": true,
+    "status_responses": true,
+    "normalized_errors": true
+  },
+  "security_boundary": {
+    "allowlisted_projections_only": true,
+    "credential_in_responses": false,
+    "excluded": [
+      "authorization_headers",
+      "raw_bearer_credentials",
+      "token_hashes_or_verifiers",
+      "producer_registry_contents_or_paths",
+      "raw_request_or_response_bodies",
+      "raw_comments_and_summaries",
+      "candidate_or_import_payloads",
+      "absolute_filesystem_paths",
+      "machine_local_logs",
+      "email_or_folder_adapter_configuration"
+    ]
+  },
+  "outcome": "PASS"
+}
