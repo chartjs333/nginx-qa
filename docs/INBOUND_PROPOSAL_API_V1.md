@@ -139,7 +139,7 @@ Direct legacy JSON uses:
   "summary": "Legacy sprint JSON supplied by an authenticated producer.",
   "candidate": {
     "kind": "legacy_json",
-    "payload": {"sprint_type": "legacy_v1", "actors": {}}
+    "payload": {"sprint_type": "legacy_v1", "actors": []}
   }
 }
 ```
@@ -149,6 +149,11 @@ semantics. An explicit value must be `legacy_v1`. A direct payload declaring
 `managed_workspace_v1`, or an unknown sprint type, is rejected before proposal
 storage. Managed proposals must use `managed_git` so immutable Git provenance
 can be established by the existing start-from-git contract.
+
+Create applies the existing legacy actor-import semantic validation without
+executing the import. The pending summary records the derived assignment mode,
+agent count, and task count; malformed actor/task structures are rejected
+before storage.
 
 ### 3.1 Source metadata
 

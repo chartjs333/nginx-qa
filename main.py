@@ -17246,7 +17246,25 @@ def render_index_v2() -> str:
         }
         return "запускается";
       }
+      if (sprint && sprint.startable !== true) {
+        return "ожидает проверки";
+      }
       return "ожидает запуска";
+    }
+
+    function pendingSprintStartPresentation(sprint, isStartingLocally) {
+      const isActivating = String((sprint && sprint.status) || "").trim().toLowerCase() === "activating";
+      const isStartable = Boolean(sprint && sprint.startable === true);
+      const canRetry = isActivating && isStartable;
+      const disabled = Boolean(isStartingLocally) || !isStartable;
+      const label = isStartingLocally || (isActivating && !canRetry)
+        ? "Запускается..."
+        : canRetry
+          ? "Повторить запуск"
+          : isStartable
+            ? "Запустить"
+            : "Запуск недоступен";
+      return {disabled, label};
     }
 
     function sprintTypeBadge(sprint) {
@@ -17281,14 +17299,7 @@ def render_index_v2() -> str:
         const mode = sprint.assignment_mode || "sequential";
         const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}`;
         const isStartingLocally = sprintId === pendingSprintStartInFlightId;
-        const isActivating = String(sprint.status || "").trim().toLowerCase() === "activating";
-        const canRetry = isActivating && sprint.startable === true;
-        const startDisabled = isStartingLocally || (isActivating && !canRetry);
-        const startLabel = isStartingLocally || (isActivating && !canRetry)
-          ? "Запускается..."
-          : canRetry
-            ? "Повторить запуск"
-            : "Запустить";
+        const startPresentation = pendingSprintStartPresentation(sprint, isStartingLocally);
         return `<article class="pending-sprint-card${selected}" data-pending-sprint-id="${escapeHtml(sprintId)}">
           <div class="pending-sprint-card-head">
             <div>
@@ -17298,7 +17309,7 @@ def render_index_v2() -> str:
           </div>
           <div class="actions">
             <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button">Показать JSON</button>
-            <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startDisabled ? " disabled" : ""}>${startLabel}</button>
+            <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startPresentation.disabled ? " disabled" : ""}>${startPresentation.label}</button>
           </div>
         </article>`;
       }).join("");
@@ -24431,6 +24442,9 @@ def create_inbound_pending_proposal_file(
     repository_key: str,
     producer_id: str,
     payload: dict[str, Any],
+    assignment_mode: str,
+    agent_count: int,
+    task_count: int,
     correlation_id: str,
 ) -> dict[str, Any]:
     """Atomically create or replay a proposal in the shared pending store."""
@@ -24636,9 +24650,9 @@ def create_inbound_pending_proposal_file(
             "source": "inbound-proposal",
             "source_filename": "",
             "received_at": now,
-            "assignment_mode": "parallel",
-            "agent_count": 0,
-            "task_count": 0,
+            "assignment_mode": assignment_mode,
+            "agent_count": agent_count,
+            "task_count": task_count,
             "payload_sha256": pending_sprint_payload_sha256(candidate),
             "git_address": git_address,
             "repository_key": repository_key,
@@ -30397,6 +30411,9 @@ def inbound_authenticate_request(
             correlation_id,
             "The inbound proposal service is unavailable.",
         ) from exc
+    request.state.inbound_producer_token_sha256 = tuple(
+        principal.token_sha256 for principal in principals
+    )
     principal = authenticate_bearer(
         request.headers.getlist("authorization"),
         principals,
@@ -30409,6 +30426,30 @@ def inbound_authenticate_request(
             "Producer authentication is required.",
         )
     return principal
+
+
+def inbound_registered_token_digests(
+    request: Request,
+    correlation_id: str,
+) -> tuple[str, ...]:
+    cached = getattr(request.state, "inbound_producer_token_sha256", None)
+    if isinstance(cached, tuple):
+        return cached
+    if not str(os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV) or "").strip():
+        request.state.inbound_producer_token_sha256 = ()
+        return ()
+    try:
+        principals = configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    digests = tuple(principal.token_sha256 for principal in principals)
+    request.state.inbound_producer_token_sha256 = digests
+    return digests
 
 
 async def inbound_project_context(
@@ -30554,6 +30595,9 @@ def inbound_reject_secret_values(
     unsafe = contains_recognized_secret(
         value,
         configured_values=request_secret_values,
+        registered_token_sha256=inbound_registered_token_digests(
+            request, correlation_id
+        ),
         recognize_shapes=recognize_shapes,
     )
     if unsafe:
@@ -30791,11 +30835,18 @@ async def create_project_pending_proposal(
             field="summary",
         )
         candidate = payload["candidate"]
+        assignment_mode = "parallel"
+        agent_count = 0
+        task_count = 0
         if candidate["kind"] == "legacy_json":
             legacy_sprint_import_dispatch(
                 candidate["payload"],
                 correlation_id=correlation_id,
             )
+            options = actor_import_options(candidate["payload"])
+            assignment_mode = str(options.get("assignment_mode") or "parallel")
+            agent_count = len(options.get("actors") or [])
+            task_count = int(options.get("task_count") or 0)
         else:
             managed_request = candidate["request"]
             inbound_reject_secret_values(
@@ -30833,6 +30884,9 @@ async def create_project_pending_proposal(
                 repository_key=project_repository_key_for_context(context),
                 producer_id=principal.producer_id,
                 payload=payload,
+                assignment_mode=assignment_mode,
+                agent_count=agent_count,
+                task_count=task_count,
                 correlation_id=correlation_id,
             )
         proposal = result["proposal"]

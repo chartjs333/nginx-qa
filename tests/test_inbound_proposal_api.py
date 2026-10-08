@@ -216,7 +216,7 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
                 "kind": "legacy_json",
                 "payload": {
                     "sprint_type": "legacy_v1",
-                    "actors": {},
+                    "actors": [],
                 },
             },
         }
@@ -687,6 +687,223 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(mixed_status, 401, mixed_body)
         self.assertEqual(mixed_body["detail"]["error"], "PROPOSAL_AUTH_REQUIRED")
+
+    async def test_registered_producer_token_cannot_cross_persist(self) -> None:
+        bytes_before = (
+            main.pending_sprints_path.read_bytes()
+            if main.pending_sprints_path.exists()
+            else None
+        )
+        cross_producer = self.proposal_payload(
+            proposal_id="proposal-cross-producer-token",
+            idempotency_key="create:cross-producer-token:v1",
+            summary=f"Credential canary {self.OTHER_TOKEN}",
+        )
+        status_code, _, response = await self.create(
+            cross_producer,
+            correlation_id="corr-cross-producer-token",
+        )
+        self.assertEqual(status_code, 400, response)
+        self.assertEqual(response["detail"]["error"], "PROPOSAL_REQUEST_INVALID")
+        self.assertNotIn(self.OTHER_TOKEN, json.dumps(response))
+        if bytes_before is None:
+            self.assertFalse(main.pending_sprints_path.exists())
+        else:
+            self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_before)
+
+        create_status, _, created = await self.create(
+            correlation_id="corr-create-for-cross-token-comment"
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        stored_before_comment = main.pending_sprints_path.read_bytes()
+        comment_status, _, comment_response = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/comments",
+            method="POST",
+            payload={
+                "schema_version": 1,
+                "action": "comment",
+                "expected_revision": 0,
+                "idempotency_key": "comment:cross-producer-token:v1",
+                "comment": f"Credential canary {self.OTHER_TOKEN}",
+            },
+            headers=self.auth_headers(correlation_id="corr-cross-token-comment"),
+        )
+        self.assertEqual(comment_status, 400, comment_response)
+        self.assertNotIn(self.OTHER_TOKEN, json.dumps(comment_response))
+        self.assertEqual(
+            main.pending_sprints_path.read_bytes(), stored_before_comment
+        )
+        self.assertNotIn(
+            self.OTHER_TOKEN,
+            main.pending_sprints_path.read_text(encoding="utf-8"),
+        )
+
+    async def test_registered_token_lazy_local_scan_fails_closed(self) -> None:
+        create_status, _, created = await self.create(
+            correlation_id="corr-create-for-local-token-scan"
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        comment_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/comments"
+        )
+        storage_before = main.pending_sprints_path.read_bytes()
+        exact_token_action = {
+            "schema_version": 1,
+            "action": "comment",
+            "expected_revision": 0,
+            "idempotency_key": "comment:local-cross-token:v1",
+            "comment": self.OTHER_TOKEN,
+        }
+        exact_status, _, exact_response = await asgi_request(
+            comment_url,
+            method="POST",
+            payload=exact_token_action,
+            headers=[(b"x-correlation-id", b"corr-local-cross-token")],
+        )
+        self.assertEqual(exact_status, 400, exact_response)
+        self.assertEqual(
+            exact_response["detail"]["error"], "PROPOSAL_REQUEST_INVALID"
+        )
+        self.assertNotIn(self.OTHER_TOKEN, json.dumps(exact_response))
+        self.assertEqual(main.pending_sprints_path.read_bytes(), storage_before)
+
+        with patch.object(
+            main,
+            "configured_producer_registry",
+            side_effect=RuntimeError("registry unavailable canary"),
+        ):
+            unavailable_status, unavailable_headers, unavailable_response = (
+                await asgi_request(
+                    comment_url,
+                    method="POST",
+                    payload={
+                        **exact_token_action,
+                        "idempotency_key": "comment:local-registry-unavailable:v1",
+                        "comment": "Ordinary local operator comment.",
+                    },
+                    headers=[
+                        (b"x-correlation-id", b"corr-local-registry-unavailable")
+                    ],
+                )
+            )
+        self.assertEqual(unavailable_status, 503, unavailable_response)
+        self.assertEqual(
+            unavailable_response["detail"]["error"],
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+        )
+        self.assertTrue(unavailable_response["detail"]["retryable"])
+        self.assertEqual(
+            unavailable_response["detail"]["correlation_id"],
+            "corr-local-registry-unavailable",
+        )
+        self.assertEqual(
+            unavailable_headers["x-correlation-id"],
+            "corr-local-registry-unavailable",
+        )
+        self.assertEqual(main.pending_sprints_path.read_bytes(), storage_before)
+
+    async def test_documented_minimal_legacy_candidate_is_accepted(self) -> None:
+        payload = self.proposal_payload(
+            proposal_id="proposal-documented-minimal-legacy",
+            idempotency_key="create:documented-minimal-legacy:v1",
+        )
+        self.assertEqual(
+            payload["candidate"]["payload"],
+            {"sprint_type": "legacy_v1", "actors": []},
+        )
+        status_code, _, response = await self.create(
+            payload,
+            correlation_id="corr-documented-minimal-legacy",
+        )
+        self.assertEqual(status_code, 201, response)
+        record = main.read_pending_sprints_file()["projects"][
+            self.PROJECT_CONTEXT
+        ]["sprints"][0]
+        self.assertEqual(record["assignment_mode"], "parallel")
+        self.assertEqual(record["agent_count"], 0)
+        self.assertEqual(record["task_count"], 0)
+
+    async def test_legacy_candidate_semantics_and_summary_metadata_are_validated(
+        self,
+    ) -> None:
+        invalid = self.proposal_payload(
+            proposal_id="proposal-invalid-legacy-candidate",
+            idempotency_key="create:invalid-legacy-candidate:v1",
+        )
+        invalid["candidate"]["payload"] = {
+            "sprint_type": "legacy_v1",
+            "agents": "not-an-object",
+        }
+        invalid_status, _, invalid_response = await self.create(
+            invalid,
+            correlation_id="corr-invalid-legacy-candidate",
+        )
+        self.assertEqual(invalid_status, 400, invalid_response)
+        self.assertEqual(
+            invalid_response["detail"]["error"], "PROPOSAL_REQUEST_INVALID"
+        )
+        self.assertFalse(main.pending_sprints_path.exists())
+
+        valid = self.proposal_payload(
+            proposal_id="proposal-sequential-metadata",
+            idempotency_key="create:sequential-metadata:v1",
+        )
+        valid["candidate"]["payload"] = {
+            "sprint_type": "legacy_v1",
+            "agents": {
+                "overwrite": True,
+                "assignment_mode": "sequential",
+                "items": [
+                    {
+                        "id": "first-agent",
+                        "name": "First Agent",
+                        "phone": "2101",
+                        "tasks": ["First task."],
+                    },
+                    {
+                        "id": "second-agent",
+                        "name": "Second Agent",
+                        "phone": "2102",
+                        "tasks": ["Second task."],
+                    },
+                ],
+            },
+        }
+        with patch.object(
+            main,
+            "update_pending_sprint_activation_file",
+            side_effect=AssertionError("proposal validation must not activate"),
+        ), patch.object(
+            main,
+            "import_project_actors_data",
+            side_effect=AssertionError("proposal validation must not import"),
+        ):
+            create_status, _, created = await self.create(
+                valid,
+                correlation_id="corr-sequential-metadata",
+            )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        record = main.read_pending_sprints_file()["projects"][
+            self.PROJECT_CONTEXT
+        ]["sprints"][0]
+        self.assertEqual(record["assignment_mode"], "sequential")
+        self.assertEqual(record["agent_count"], 2)
+        self.assertEqual(record["task_count"], 2)
+
+        detail_status, _, detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{pending_id}",
+            headers=self.auth_headers(correlation_id="corr-sequential-detail"),
+        )
+        self.assertEqual(detail_status, 200, detail)
+        self.assertEqual(detail["pending_sprint"]["assignment_mode"], "sequential")
+        self.assertEqual(detail["pending_sprint"]["agent_count"], 2)
+        self.assertEqual(detail["pending_sprint"]["task_count"], 2)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
 
     async def test_deep_link_capability_cannot_be_persisted_as_comment(self) -> None:
         create_status, _, created = await self.create()

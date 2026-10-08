@@ -1,3 +1,4 @@
+import json
 import re
 import shutil
 import subprocess
@@ -135,7 +136,7 @@ class PendingSprintsUiTests(unittest.TestCase):
             self.javascript,
         )
 
-    def test_activating_sprint_respects_backend_startable_flag(self) -> None:
+    def test_pending_sprint_respects_backend_startable_flag(self) -> None:
         render_source = re.search(
             r"function renderPendingSprints\(\) \{(.*?)\n    \}\n\n"
             r"    function syncPendingSprintsUrl",
@@ -144,10 +145,9 @@ class PendingSprintsUiTests(unittest.TestCase):
         )
         self.assertIsNotNone(render_source)
         for marker in (
-            "const canRetry = isActivating && sprint.startable === true;",
-            'isActivating && !canRetry',
-            '"Запускается..."',
-            '"Повторить запуск"',
+            "pendingSprintStartPresentation(sprint, isStartingLocally)",
+            "startPresentation.disabled",
+            "startPresentation.label",
         ):
             self.assertIn(marker, render_source.group(1))
 
@@ -164,6 +164,46 @@ class PendingSprintsUiTests(unittest.TestCase):
             'isRetry ? "Повторяю запуск" : "Запускаю"',
         ):
             self.assertIn(marker, start_source.group(1))
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for JS behavior check")
+    def test_created_proposal_is_rendered_non_startable(self) -> None:
+        status_source = re.search(
+            r"function pendingSprintStatusLabel\(sprint\) \{(.*?)\n    \}",
+            self.javascript,
+            flags=re.DOTALL,
+        )
+        presentation_source = re.search(
+            r"function pendingSprintStartPresentation\(sprint, isStartingLocally\) "
+            r"\{(.*?)\n    \}",
+            self.javascript,
+            flags=re.DOTALL,
+        )
+        self.assertIsNotNone(status_source)
+        self.assertIsNotNone(presentation_source)
+        script = "\n".join(
+            (
+                status_source.group(0),
+                presentation_source.group(0),
+                "const sprint = {status: 'pending', startable: false, "
+                "proposal: {proposal_status: 'created', activation_state: 'not_started'}};",
+                "process.stdout.write(JSON.stringify({"
+                "status: pendingSprintStatusLabel(sprint), "
+                "start: pendingSprintStartPresentation(sprint, false)}));",
+            )
+        )
+        result = subprocess.run(
+            [shutil.which("node"), "-e", script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = json.loads(result.stdout)
+        self.assertEqual(rendered["status"], "ожидает проверки")
+        self.assertEqual(
+            rendered["start"],
+            {"disabled": True, "label": "Запуск недоступен"},
+        )
 
     def test_successful_start_refreshes_all_affected_views(self) -> None:
         start_source = re.search(

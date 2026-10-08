@@ -31,6 +31,9 @@ ACTION_SCHEMA = "inbound-pending-proposal-action-v1.schema.json"
 
 CORRELATION_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}\Z")
 BEARER_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,}\Z")
+_BEARER_TOKEN_LITERAL = re.compile(
+    r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43,}(?![A-Za-z0-9_-])"
+)
 _SECRET_LITERAL = re.compile(
     r"(?:"
     r"\b(?:Bearer|Basic)\s+\S+|"
@@ -189,9 +192,15 @@ def contains_recognized_secret(
     value: Any,
     *,
     configured_values: Iterable[str] = (),
+    registered_token_sha256: Iterable[str] = (),
     recognize_shapes: bool = True,
 ) -> bool:
     protected_values = tuple(item for item in configured_values if item)
+    protected_digests = tuple(
+        item.casefold()
+        for item in registered_token_sha256
+        if re.fullmatch(r"[0-9a-fA-F]{64}", item)
+    )
     stack = [value]
     while stack:
         candidate = stack.pop()
@@ -203,6 +212,15 @@ def contains_recognized_secret(
                 return True
             if any(secret in candidate for secret in protected_values):
                 return True
+            for match in _BEARER_TOKEN_LITERAL.finditer(candidate):
+                digest = hashlib.sha256(match.group(0).encode("ascii")).hexdigest()
+                matched = False
+                for protected_digest in protected_digests:
+                    matched = (
+                        hmac.compare_digest(protected_digest, digest) or matched
+                    )
+                if matched:
+                    return True
         if isinstance(candidate, Mapping):
             stack.extend(candidate.keys())
             stack.extend(candidate.values())
