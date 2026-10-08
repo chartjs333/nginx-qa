@@ -13677,8 +13677,55 @@ def render_index_v2() -> str:
       margin: 0;
       font-size: 14px;
     }
+    .pending-sprint-proposal-details {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .pending-sprint-proposal-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .pending-sprint-proposal-field {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+      padding: 8px;
+    }
+    .pending-sprint-proposal-field strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .pending-sprint-proposal-field span {
+      overflow-wrap: anywhere;
+    }
+    .pending-sprint-validation-issues,
+    .pending-sprint-comments {
+      margin: 4px 0 0;
+      padding-left: 20px;
+    }
+    .pending-sprint-action-panel {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .pending-sprint-action-panel .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    textarea.pending-sprint-comment {
+      min-height: 84px;
+      margin-top: 6px;
+      white-space: pre-wrap;
+    }
     textarea.pending-sprint-json {
-      min-height: 420px;
+      min-height: 240px;
       margin-top: 10px;
       font-family: Consolas, "Courier New", monospace;
       font-size: 12px;
@@ -14497,6 +14544,9 @@ def render_index_v2() -> str:
       .pending-sprints-layout {
         grid-template-columns: 1fr;
       }
+      .pending-sprint-proposal-grid {
+        grid-template-columns: 1fr;
+      }
       .email-route-row {
         grid-template-columns: 1fr;
       }
@@ -14910,7 +14960,7 @@ def render_index_v2() -> str:
     <section>
       <div class="panel">
         <h2>Спринты, ожидающие запуска</h2>
-        <div class="subtle">Спринт, полученный через Telegram, хранится как черновик и не меняет агентов или очереди, пока вы явно не запустите его здесь.</div>
+        <div class="subtle">Спринт из Telegram или внешнего proposal хранится как черновик. Просмотр, проверка, комментарий, отклонение и запрос перегенерации не меняют активный sprint; только Play / Start запускает работу.</div>
         <div class="pending-sprints-toolbar">
           <div>
             <label for="pendingSprintsProjectSelect">Проект</label>
@@ -14933,9 +14983,26 @@ def render_index_v2() -> str:
             <div class="pending-sprints-list-items" id="pendingSprints"></div>
           </div>
           <div class="pending-sprint-preview">
-            <h3 id="pendingSprintPreviewTitle">JSON спринта</h3>
-            <div class="subtle">Выберите спринт слева, чтобы проверить полный исходный JSON перед запуском.</div>
+            <h3 id="pendingSprintPreviewTitle">Детали спринта</h3>
+            <div class="subtle">Выберите запись слева, чтобы проверить источник, proposal, validation и JSON либо Git manifest reference.</div>
+            <div class="pending-sprint-proposal-details" id="pendingSprintProposalDetails">
+              <div class="subtle">Детали выбранного спринта появятся здесь.</div>
+            </div>
+            <label for="pendingSprintJsonPreview" id="pendingSprintPayloadLabel">JSON спринта</label>
             <textarea class="pending-sprint-json" id="pendingSprintJsonPreview" readonly spellcheck="false" placeholder="JSON выбранного спринта появится здесь"></textarea>
+            <div class="pending-sprint-action-panel">
+              <div id="pendingSprintProposalActionFields" hidden>
+                <label for="pendingSprintOperatorComment">Комментарий оператора / причина / инструкция</label>
+                <textarea class="pending-sprint-comment" id="pendingSprintOperatorComment" maxlength="4000" disabled spellcheck="true" placeholder="Добавьте комментарий, причину отклонения или инструкцию для перегенерации"></textarea>
+              </div>
+              <div class="actions">
+                <button class="secondary" id="pendingSprintValidateButton" type="button" disabled hidden>Preview / Проверить</button>
+                <button class="primary" id="pendingSprintPlayButton" type="button" disabled>Play / Start</button>
+                <button class="secondary" id="pendingSprintCommentButton" type="button" disabled hidden>Добавить комментарий</button>
+                <button class="secondary" id="pendingSprintRegenerateButton" type="button" disabled hidden>Запросить перегенерацию</button>
+                <button class="danger" id="pendingSprintRejectButton" type="button" disabled hidden>Отклонить</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -15436,8 +15503,8 @@ def render_index_v2() -> str:
       },
       "page:pending-sprints": {
         title: "Ожидающие спринты",
-        purpose: "Показывает JSON-спринты, полученные через Telegram, но еще не запущенные в выбранном проекте.",
-        logic: "Откройте исходный JSON, проверьте проект и задачи, затем нажмите «Запустить». Только после подтверждения система заменит агентов при overwrite и поставит задачи в очереди."
+        purpose: "Показывает Telegram JSON и внешние proposals, которые ещё не запущены в выбранном проекте.",
+        logic: "Откройте детали, проверьте source, JSON или Git manifest reference и выполните Preview. Комментарий, Reject и Regenerate-request сохраняют только metadata; единственное действие активации — Play / Start."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -16341,7 +16408,16 @@ def render_index_v2() -> str:
     const pendingSprintsStatusEl = document.getElementById("pendingSprintsStatus");
     const pendingSprintsEl = document.getElementById("pendingSprints");
     const pendingSprintPreviewTitleEl = document.getElementById("pendingSprintPreviewTitle");
+    const pendingSprintProposalDetailsEl = document.getElementById("pendingSprintProposalDetails");
+    const pendingSprintPayloadLabelEl = document.getElementById("pendingSprintPayloadLabel");
     const pendingSprintJsonPreviewEl = document.getElementById("pendingSprintJsonPreview");
+    const pendingSprintProposalActionFieldsEl = document.getElementById("pendingSprintProposalActionFields");
+    const pendingSprintOperatorCommentEl = document.getElementById("pendingSprintOperatorComment");
+    const pendingSprintValidateButtonEl = document.getElementById("pendingSprintValidateButton");
+    const pendingSprintPlayButtonEl = document.getElementById("pendingSprintPlayButton");
+    const pendingSprintCommentButtonEl = document.getElementById("pendingSprintCommentButton");
+    const pendingSprintRegenerateButtonEl = document.getElementById("pendingSprintRegenerateButton");
+    const pendingSprintRejectButtonEl = document.getElementById("pendingSprintRejectButton");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -16446,6 +16522,9 @@ def render_index_v2() -> str:
     let pendingSprintsRequestVersion = 0;
     let pendingSprintPreviewRequestVersion = 0;
     let pendingSprintStartInFlightId = "";
+    let pendingSprintActionInFlightId = "";
+    let pendingSprintSelectedDetail = null;
+    const pendingSprintActionAttempts = new Map();
     let pendingSprintsDeepLinkApplied = false;
     let launchPromptRequestVersion = 0;
     let launchPromptSettingsLoaded = false;
@@ -17222,21 +17301,406 @@ def render_index_v2() -> str:
           return `<option value="${escapeHtml(choice.phone)}"${selected}>${escapeHtml(choice.name)} · phone ${escapeHtml(choice.phone)}</option>`;
         }).join("")
         : `<option value="">Нет доступных проектов</option>`;
-      pendingSprintsProjectSelectEl.disabled = !choices.length || Boolean(pendingSprintStartInFlightId);
+      const mutationInFlight = Boolean(
+        pendingSprintStartInFlightId || pendingSprintActionInFlightId
+      );
+      pendingSprintsProjectSelectEl.disabled = !choices.length || mutationInFlight;
       if (activePhone && hasActiveChoice) {
         pendingSprintsProjectSelectEl.value = activePhone;
       }
-      refreshPendingSprintsButtonEl.disabled = !activePhone || Boolean(pendingSprintStartInFlightId);
+      refreshPendingSprintsButtonEl.disabled = !activePhone || mutationInFlight;
       const context = activeProjectContext();
       pendingSprintsProjectSummaryEl.textContent = activePhone && context
         ? `Проект: ${context.project_name || context.git_context_key || "Project"} · phone ${activePhone}`
         : "Выберите проект с каноническим телефоном, чтобы увидеть ожидающие спринты.";
     }
 
+    function pendingSprintProposalPresentation(summary = {}, detail = {}) {
+      const proposal = summary && typeof summary.proposal === "object"
+        ? summary.proposal
+        : null;
+      const sourceMetadata = proposal && proposal.source_metadata
+        && typeof proposal.source_metadata === "object"
+        ? proposal.source_metadata
+        : {};
+      const candidate = proposal && proposal.candidate
+        && typeof proposal.candidate === "object"
+        ? proposal.candidate
+        : {};
+      const validation = proposal && proposal.validation
+        && typeof proposal.validation === "object"
+        ? proposal.validation
+        : {};
+      const activationError = summary && summary.last_activation_error
+        && typeof summary.last_activation_error === "object"
+        ? summary.last_activation_error
+        : null;
+      const proposalStatus = String((proposal && proposal.proposal_status) || "").trim();
+      const activationState = String((proposal && proposal.activation_state) || "").trim();
+      const validationStatus = String(validation.status || "not_run").trim();
+      const candidateKind = String(candidate.kind || "").trim();
+      const managedRequest = candidateKind === "managed_git"
+        && candidate.request && typeof candidate.request === "object"
+        ? candidate.request
+        : null;
+      const candidatePayload = candidateKind === "legacy_json"
+        && candidate.payload && typeof candidate.payload === "object"
+        ? candidate.payload
+        : null;
+      const importPayload = detail && detail.import_payload
+        && typeof detail.import_payload === "object"
+        ? detail.import_payload
+        : null;
+      const previewPayload = managedRequest || candidatePayload || importPayload || {};
+      const canPreview = Boolean(
+        proposal
+        && activationState === "not_started"
+        && (
+          ["created", "ready"].includes(proposalStatus)
+          || (proposalStatus === "failed" && validationStatus === "invalid")
+        )
+      );
+      const canReject = Boolean(
+        proposal
+        && !["started", "rejected"].includes(proposalStatus)
+        && !["starting", "started"].includes(activationState)
+      );
+      const canRegenerate = Boolean(
+        proposal
+        && proposalStatus !== "started"
+        && !["starting", "started"].includes(activationState)
+      );
+      return {
+        hasProposal: Boolean(proposal),
+        proposal,
+        sourceMetadata,
+        sourceType: String(sourceMetadata.source_type || summary.source || "").trim(),
+        summary: String((proposal && proposal.summary) || summary.title || "").trim(),
+        proposalStatus,
+        activationState,
+        revision: proposal ? Number(proposal.revision || 0) : null,
+        validationStatus,
+        validationCheckedAt: validation.checked_at || null,
+        validationIssues: Array.isArray(validation.issues)
+          ? validation.issues.filter((issue) => issue && typeof issue === "object")
+          : [],
+        activationError,
+        candidateKind,
+        managedRequest,
+        previewPayload,
+        comments: proposal && Array.isArray(proposal.comments)
+          ? proposal.comments.filter((comment) => comment && typeof comment === "object")
+          : [],
+        regenerateRequested: Boolean(proposal && proposal.regenerate_requested),
+        submittedBy: proposal && proposal.submitted_by
+          && typeof proposal.submitted_by === "object"
+          ? proposal.submitted_by
+          : {},
+        canPreview,
+        canComment: Boolean(proposal),
+        canReject,
+        canRegenerate,
+        canPlay: Boolean(summary && summary.startable === true),
+      };
+    }
+
+    function renderPendingSprintProposalDetails() {
+      const detail = pendingSprintSelectedDetail;
+      const summary = detail && detail.pending_sprint && typeof detail.pending_sprint === "object"
+        ? detail.pending_sprint
+        : null;
+      if (!summary) {
+        pendingSprintProposalDetailsEl.innerHTML = `<div class="subtle">Детали выбранного спринта появятся здесь.</div>`;
+        pendingSprintPayloadLabelEl.textContent = "JSON спринта";
+        pendingSprintJsonPreviewEl.value = "";
+        pendingSprintProposalActionFieldsEl.hidden = true;
+        for (const button of [
+          pendingSprintValidateButtonEl,
+          pendingSprintCommentButtonEl,
+          pendingSprintRegenerateButtonEl,
+          pendingSprintRejectButtonEl,
+        ]) {
+          button.hidden = true;
+          button.disabled = true;
+        }
+        pendingSprintPlayButtonEl.disabled = true;
+        pendingSprintPlayButtonEl.textContent = "Play / Start";
+        pendingSprintOperatorCommentEl.disabled = true;
+        return;
+      }
+
+      const view = pendingSprintProposalPresentation(summary, detail);
+      const field = (label, value) => value === null || value === undefined || value === ""
+        ? ""
+        : `<div class="pending-sprint-proposal-field"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value))}</span></div>`;
+      const sourceFields = [
+        ["Source type", view.sourceType || "legacy"],
+        ["Source title", view.sourceMetadata.title],
+        ["Sender", view.sourceMetadata.sender_label],
+        ["Conversation", view.sourceMetadata.conversation_id],
+        ["Thread", view.sourceMetadata.thread_id],
+        ["Message", view.sourceMetadata.message_id],
+        ["Observed", view.sourceMetadata.observed_at],
+      ].map(([label, value]) => field(label, value)).join("");
+      const lifecycleFields = view.hasProposal
+        ? [
+          field("Proposal ID", view.proposal.proposal_id),
+          field("Proposal status", view.proposalStatus),
+          field("Activation state", view.activationState),
+          field("Revision", view.revision),
+          field("Candidate", view.candidateKind),
+          field("Validation", view.validationStatus),
+          field("Validation checked", view.validationCheckedAt),
+          field("Regeneration requested", view.regenerateRequested ? "yes" : "no"),
+          field("Producer", view.submittedBy.producer_id),
+        ].join("")
+        : field("Record type", "legacy pending sprint");
+      const managedFields = view.managedRequest
+        ? [
+          field("Repository ID", view.managedRequest.repository_id),
+          field("Git ref", view.managedRequest.ref),
+          field("Manifest path", view.managedRequest.manifest_path),
+        ].join("")
+        : "";
+      const issueItems = view.validationIssues.map((issue) => {
+        const code = String(issue.code || "VALIDATION_ISSUE");
+        const location = String(issue.field || issue.path || "");
+        const message = String(issue.message || "Validation failed.");
+        const suffix = location ? ` · ${location}` : "";
+        return `<li><strong>${escapeHtml(code)}</strong>${escapeHtml(suffix)} — ${escapeHtml(message)}</li>`;
+      }).join("");
+      const validationHtml = view.hasProposal
+        ? `<div><strong>Advisory Preview / validation</strong>${issueItems
+          ? `<ul class="pending-sprint-validation-issues">${issueItems}</ul>`
+          : `<div class="subtle">Сохранённых validation issues нет.</div>`}</div>`
+        : "";
+      const activationDetail = view.activationError
+        && view.activationError.detail
+        && typeof view.activationError.detail === "object"
+        ? view.activationError.detail
+        : {};
+      const activationIssueItems = Array.isArray(activationDetail.issues)
+        ? activationDetail.issues.filter((issue) => issue && typeof issue === "object")
+        : [];
+      const activationIssuesHtml = activationIssueItems.map((issue) => {
+        const code = String(issue.code || "ACTIVATION_ISSUE");
+        const location = String(issue.field || issue.path || "");
+        const message = String(issue.message || "Managed activation failed.");
+        const suffix = location ? ` · ${location}` : "";
+        return `<li><strong>${escapeHtml(code)}</strong>${escapeHtml(suffix)} — ${escapeHtml(message)}</li>`;
+      }).join("");
+      const activationErrorHtml = view.activationError
+        ? `<div><strong>Последний Play preflight / activation error</strong>
+            <div>${escapeHtml(String(activationDetail.error || "SPRINT_ACTIVATE_FAILED"))}
+              ${view.activationError.http_status ? ` · HTTP ${escapeHtml(String(view.activationError.http_status))}` : ""}
+              ${activationDetail.phase ? ` · ${escapeHtml(String(activationDetail.phase))}` : ""}
+            </div>
+            ${activationIssuesHtml ? `<ul class="pending-sprint-validation-issues">${activationIssuesHtml}</ul>` : ""}
+          </div>`
+        : "";
+      const commentItems = view.comments.map((comment) => {
+        const actor = comment.actor && typeof comment.actor === "object"
+          ? `${comment.actor.actor_type || "actor"}:${comment.actor.actor_id || "unknown"}`
+          : "actor";
+        const createdAt = comment.created_at ? ` · ${comment.created_at}` : "";
+        return `<li><strong>${escapeHtml(actor)}</strong>${escapeHtml(createdAt)} — ${escapeHtml(String(comment.text || ""))}</li>`;
+      }).join("");
+      const commentsHtml = view.hasProposal
+        ? `<div><strong>Комментарии</strong>${commentItems
+          ? `<ul class="pending-sprint-comments">${commentItems}</ul>`
+          : `<div class="subtle">Комментариев пока нет.</div>`}</div>`
+        : "";
+      pendingSprintProposalDetailsEl.innerHTML = `
+        <div class="pending-sprint-proposal-grid">
+          ${sourceFields}
+          ${lifecycleFields}
+          ${managedFields}
+        </div>
+        <div><strong>Summary</strong><div>${escapeHtml(view.summary || "Описание отсутствует.")}</div></div>
+        ${validationHtml}
+        ${activationErrorHtml}
+        ${commentsHtml}`;
+      pendingSprintPayloadLabelEl.textContent = view.candidateKind === "managed_git"
+        ? "Git manifest reference (request)"
+        : "JSON спринта";
+      pendingSprintJsonPreviewEl.value = JSON.stringify(view.previewPayload, null, 2);
+
+      const sprintId = String(summary.id || "");
+      const startingLocally = pendingSprintStartInFlightId === sprintId;
+      const actionBusy = Boolean(pendingSprintActionInFlightId);
+      const mutatingThis = pendingSprintActionInFlightId === sprintId;
+      const startPresentation = pendingSprintStartPresentation(
+        summary,
+        startingLocally,
+        actionBusy
+      );
+      pendingSprintProposalActionFieldsEl.hidden = !view.hasProposal;
+      for (const button of [
+        pendingSprintValidateButtonEl,
+        pendingSprintCommentButtonEl,
+        pendingSprintRegenerateButtonEl,
+        pendingSprintRejectButtonEl,
+      ]) {
+        button.hidden = !view.hasProposal;
+      }
+      pendingSprintOperatorCommentEl.disabled = !view.canComment || actionBusy;
+      pendingSprintValidateButtonEl.disabled = !view.canPreview || actionBusy || startingLocally;
+      pendingSprintCommentButtonEl.disabled = !view.canComment || actionBusy;
+      pendingSprintRegenerateButtonEl.disabled = !view.canRegenerate || actionBusy || startingLocally;
+      pendingSprintRejectButtonEl.disabled = !view.canReject || actionBusy || startingLocally;
+      pendingSprintPlayButtonEl.disabled = startPresentation.disabled;
+      pendingSprintPlayButtonEl.textContent = `Play / ${startPresentation.label}`;
+    }
+
     function clearPendingSprintPreview() {
       pendingSprintPreviewRequestVersion += 1;
-      pendingSprintPreviewTitleEl.textContent = "JSON спринта";
-      pendingSprintJsonPreviewEl.value = "";
+      pendingSprintSelectedDetail = null;
+      pendingSprintPreviewTitleEl.textContent = "Детали спринта";
+      pendingSprintOperatorCommentEl.value = "";
+      renderPendingSprintProposalDetails();
+    }
+
+    function pendingSprintActionRequest(sprintId, proposal, action, comment = "") {
+      const contracts = {
+        preview: {suffix: "preview", action: "preview", needsComment: false},
+        comment: {suffix: "comments", action: "comment", needsComment: true},
+        reject: {suffix: "reject", action: "reject", needsComment: true},
+        request_regeneration: {
+          suffix: "regenerate-request",
+          action: "request_regeneration",
+          needsComment: true,
+        },
+      };
+      const contract = contracts[action];
+      if (!contract || !proposal || !Number.isInteger(Number(proposal.revision))) {
+        throw new Error("Proposal action is unavailable for this record.");
+      }
+      const revision = Number(proposal.revision);
+      const cleanComment = String(comment || "").trim();
+      if (contract.needsComment && !cleanComment) {
+        throw new Error("Добавьте комментарий, причину или инструкцию.");
+      }
+      if (contract.needsComment && /[\\u0000-\\u001F\\u007F]/.test(cleanComment)) {
+        throw new Error("Комментарий должен быть одной строкой без управляющих символов.");
+      }
+      const intentKey = JSON.stringify([
+        String(sprintId || ""),
+        contract.action,
+        revision,
+        contract.needsComment ? cleanComment : null,
+      ]);
+      let idempotencyKey = pendingSprintActionAttempts.get(intentKey);
+      if (!idempotencyKey) {
+        const nonce = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        idempotencyKey = `pending-ui:${contract.action}:${revision}:${nonce}`;
+        pendingSprintActionAttempts.set(intentKey, idempotencyKey);
+      }
+      const payload = {
+        schema_version: 1,
+        action: contract.action,
+        expected_revision: revision,
+        idempotency_key: idempotencyKey,
+      };
+      if (contract.needsComment) {
+        payload.comment = cleanComment;
+      }
+      return {suffix: contract.suffix, payload, intentKey};
+    }
+
+    async function submitPendingSprintAction(action) {
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      const selectedId = String(pendingSprintsSelectedId || "").trim();
+      const detail = pendingSprintSelectedDetail;
+      const summary = detail && detail.pending_sprint;
+      const proposal = summary && summary.proposal;
+      if (!projectPhone || !selectedId || !proposal || pendingSprintActionInFlightId) {
+        return;
+      }
+      if (pendingSprintStartInFlightId && action !== "comment") {
+        setPendingSprintsStatus("Во время запуска доступен только комментарий.", "error");
+        return;
+      }
+      const comment = action === "preview" ? "" : pendingSprintOperatorCommentEl.value;
+      const request = pendingSprintActionRequest(selectedId, proposal, action, comment);
+      if (action === "reject" && !window.confirm("Отклонить выбранный proposal без запуска?")) {
+        return;
+      }
+      if (
+        action === "request_regeneration"
+        && !window.confirm("Сохранить запрос перегенерации? nginx-qa только установит marker и не вызовет внешний adapter.")
+      ) {
+        return;
+      }
+      pendingSprintActionInFlightId = selectedId;
+      renderPendingSprints();
+      renderPendingSprintProposalDetails();
+      const actionLabels = {
+        preview: "Проверяю proposal...",
+        comment: "Сохраняю комментарий...",
+        reject: "Отклоняю proposal...",
+        request_regeneration: "Сохраняю запрос перегенерации...",
+      };
+      setPendingSprintsStatus(actionLabels[action] || "Обновляю proposal...");
+      try {
+        const response = await fetch(
+          `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}/${request.suffix}`,
+          pendingSprintsFetchOptions({
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body: JSON.stringify(request.payload),
+          })
+        );
+        const data = await pendingSprintsResponseJson(
+          response,
+          "Не удалось обновить proposal."
+        );
+        if (!response.ok) {
+          if (response.status === 409) {
+            await refreshPendingSprints();
+          }
+          throw new Error(pendingSprintErrorMessage(data, "Не удалось обновить proposal."));
+        }
+        pendingSprintActionAttempts.delete(request.intentKey);
+        if (
+          action !== "preview"
+          && projectPhone === pendingSprintsActiveProjectPhone()
+          && selectedId === pendingSprintsSelectedId
+        ) {
+          pendingSprintOperatorCommentEl.value = "";
+        }
+        if (action === "reject") {
+          await refreshPendingSprints();
+          setPendingSprintsStatus("Proposal отклонён без запуска sprint.", "ok");
+          return;
+        }
+        await refreshPendingSprints();
+        if (action === "preview") {
+          const validationStatus = String(
+            (data.proposal && data.proposal.validation && data.proposal.validation.status) || ""
+          );
+          setPendingSprintsStatus(
+            validationStatus === "valid"
+              ? "Preview завершён: request contract valid; Git preflight выполняется только при Play / Start."
+              : "Preview завершён: proposal не прошёл validation; sprint не запускался.",
+            validationStatus === "valid" ? "ok" : "error"
+          );
+        } else if (action === "request_regeneration") {
+          setPendingSprintsStatus(
+            "Запрос перегенерации сохранён как marker; внешний adapter не вызывался.",
+            "ok"
+          );
+        } else {
+          setPendingSprintsStatus("Комментарий сохранён без запуска sprint.", "ok");
+        }
+      } finally {
+        if (pendingSprintActionInFlightId === selectedId) {
+          pendingSprintActionInFlightId = "";
+        }
+        renderPendingSprints();
+        renderPendingSprintProposalDetails();
+      }
     }
 
     function pendingSprintStatusLabel(sprint) {
@@ -17253,18 +17717,25 @@ def render_index_v2() -> str:
       return "ожидает запуска";
     }
 
-    function pendingSprintStartPresentation(sprint, isStartingLocally) {
+    function pendingSprintStartPresentation(
+      sprint,
+      isStartingLocally,
+      isMutatingLocally = false
+    ) {
       const isActivating = String((sprint && sprint.status) || "").trim().toLowerCase() === "activating";
       const isStartable = Boolean(sprint && sprint.startable === true);
       const canRetry = isActivating && isStartable;
-      const disabled = Boolean(isStartingLocally) || !isStartable;
-      const label = isStartingLocally || (isActivating && !canRetry)
-        ? "Запускается..."
-        : canRetry
-          ? "Повторить запуск"
-          : isStartable
-            ? "Запустить"
-            : "Запуск недоступен";
+      const disabled = Boolean(isStartingLocally || isMutatingLocally) || !isStartable;
+      let label = "Запуск недоступен";
+      if (isStartingLocally || (isActivating && !canRetry)) {
+        label = "Запускается...";
+      } else if (isMutatingLocally) {
+        label = "Обновление...";
+      } else if (canRetry) {
+        label = "Повторить запуск";
+      } else if (isStartable) {
+        label = "Запустить";
+      }
       return {disabled, label};
     }
 
@@ -17298,18 +17769,34 @@ def render_index_v2() -> str:
         const receivedAt = sprint.received_at ? formatLocalDateTime(sprint.received_at) : "дата неизвестна";
         const source = sprint.source_filename ? ` · файл: ${sprint.source_filename}` : "";
         const mode = sprint.assignment_mode || "sequential";
-        const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}`;
+        const proposalView = pendingSprintProposalPresentation(sprint);
+        const proposalMeta = proposalView.hasProposal
+          ? ` · source: ${proposalView.sourceType || "unknown"} · proposal: ${proposalView.proposalStatus}/${proposalView.activationState} · validation: ${proposalView.validationStatus}`
+          : "";
+        const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}${proposalMeta}`;
         const isStartingLocally = sprintId === pendingSprintStartInFlightId;
-        const startPresentation = pendingSprintStartPresentation(sprint, isStartingLocally);
+        const operationInFlight = Boolean(
+          pendingSprintStartInFlightId || pendingSprintActionInFlightId
+        );
+        const startPresentation = pendingSprintStartPresentation(
+          sprint,
+          isStartingLocally,
+          operationInFlight && !isStartingLocally
+        );
+        const managedReference = proposalView.managedRequest
+          ? `${proposalView.managedRequest.repository_id || ""} · ${proposalView.managedRequest.ref || ""} · ${proposalView.managedRequest.manifest_path || ""}`
+          : "";
         return `<article class="pending-sprint-card${selected}" data-pending-sprint-id="${escapeHtml(sprintId)}">
           <div class="pending-sprint-card-head">
             <div>
               <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence || ""}`)}<span class="sprint-history-badge">${escapeHtml(pendingSprintStatusLabel(sprint))}</span>${sprintTypeBadge(sprint)}</div>
               <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
+              ${proposalView.hasProposal ? `<div>${escapeHtml(proposalView.summary)}</div>` : ""}
+              ${managedReference ? `<div class="agent-project-item-meta">Git manifest: ${escapeHtml(managedReference)}</div>` : ""}
             </div>
           </div>
           <div class="actions">
-            <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button">Показать JSON</button>
+            <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${operationInFlight ? " disabled" : ""}>Детали / JSON</button>
             <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startPresentation.disabled ? " disabled" : ""}>${startPresentation.label}</button>
           </div>
         </article>`;
@@ -17346,13 +17833,31 @@ def render_index_v2() -> str:
         clearPendingSprintPreview();
         return;
       }
+      const operationInFlight = Boolean(
+        pendingSprintStartInFlightId || pendingSprintActionInFlightId
+      );
+      if (
+        operationInFlight
+        && pendingSprintsSelectedId
+        && selectedId !== pendingSprintsSelectedId
+      ) {
+        setPendingSprintsStatus(
+          "Дождитесь завершения текущей операции перед выбором другого proposal.",
+          "error"
+        );
+        return;
+      }
+      if (selectedId !== pendingSprintsSelectedId) {
+        pendingSprintOperatorCommentEl.value = "";
+      }
       pendingSprintsSelectedId = selectedId;
       renderPendingSprints();
       if (syncUrl) {
         syncPendingSprintsUrl();
       }
-      pendingSprintPreviewTitleEl.textContent = "Загружаю JSON...";
-      pendingSprintJsonPreviewEl.value = "";
+      pendingSprintPreviewTitleEl.textContent = "Загружаю детали...";
+      pendingSprintSelectedDetail = null;
+      renderPendingSprintProposalDetails();
       const requestVersion = ++pendingSprintPreviewRequestVersion;
       const response = await fetch(
         `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}`,
@@ -17370,13 +17875,14 @@ def render_index_v2() -> str:
         return;
       }
       if (!response.ok) {
-        pendingSprintPreviewTitleEl.textContent = "JSON недоступен";
-        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить JSON спринта."));
+        pendingSprintPreviewTitleEl.textContent = "Детали недоступны";
+        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить детали спринта."));
       }
       const summary = data.pending_sprint || {};
-      pendingSprintPreviewTitleEl.textContent = summary.title || "JSON спринта";
-      pendingSprintJsonPreviewEl.value = JSON.stringify(data.import_payload || {}, null, 2);
-      setPendingSprintsStatus("Полный JSON выбранного спринта загружен.", "ok");
+      pendingSprintSelectedDetail = data;
+      pendingSprintPreviewTitleEl.textContent = summary.title || "Детали спринта";
+      renderPendingSprintProposalDetails();
+      setPendingSprintsStatus("Детали выбранного спринта загружены.", "ok");
       const selectedCard = Array.from(
         pendingSprintsEl.querySelectorAll("[data-pending-sprint-id]")
       ).find((card) => card.dataset.pendingSprintId === selectedId);
@@ -17427,11 +17933,28 @@ def render_index_v2() -> str:
         await loadPendingSprintPreview(pendingSprintsSelectedId, {syncUrl: false});
         return;
       }
-      clearPendingSprintPreview();
       if (pendingSprintsSelectedId && !selectedExists) {
-        setPendingSprintsStatus("Указанный спринт уже запущен или больше не ожидает запуска.", "error");
+        try {
+          await loadPendingSprintPreview(
+            pendingSprintsSelectedId,
+            {syncUrl: false}
+          );
+          setPendingSprintsStatus(
+            "Запись больше не входит в pending-список; показаны её сохранённые детали.",
+            "ok"
+          );
+        } catch (_error) {
+          pendingSprintsSelectedId = "";
+          clearPendingSprintPreview();
+          syncPendingSprintsUrl();
+          setPendingSprintsStatus(
+            "Указанный спринт уже запущен или больше недоступен.",
+            "error"
+          );
+        }
         return;
       }
+      clearPendingSprintPreview();
       setPendingSprintsStatus(
         pendingSprints.length
           ? `Ожидают запуска: ${pendingSprints.length}.`
@@ -17444,12 +17967,23 @@ def render_index_v2() -> str:
       const projectPhone = pendingSprintsActiveProjectPhone();
       const selectedId = String(sprintId || "").trim();
       const sprint = pendingSprints.find((item) => String(item.id || "") === selectedId);
-      if (!projectPhone || !selectedId || !sprint || pendingSprintStartInFlightId) {
+      if (
+        !projectPhone
+        || !selectedId
+        || !sprint
+        || pendingSprintStartInFlightId
+        || pendingSprintActionInFlightId
+      ) {
         return;
       }
       const isRetry = String(sprint.status || "").trim().toLowerCase() === "activating";
-      if (isRetry && sprint.startable !== true) {
-        setPendingSprintsStatus("Спринт уже запускается. Дождитесь завершения текущей попытки.", "error");
+      if (sprint.startable !== true) {
+        setPendingSprintsStatus(
+          isRetry
+            ? "Спринт уже запускается. Дождитесь завершения текущей попытки."
+            : "Play недоступен: сначала выполните Preview и устраните validation issues.",
+          "error"
+        );
         return;
       }
       const title = sprint.title || `Спринт ${sprint.sequence || ""}`;
@@ -17465,6 +17999,7 @@ def render_index_v2() -> str:
       }
       pendingSprintStartInFlightId = selectedId;
       renderPendingSprints();
+      renderPendingSprintProposalDetails();
       setPendingSprintsStatus(`${isRetry ? "Повторяю запуск" : "Запускаю"} «${title}»...`);
       try {
         const response = await fetch(
@@ -17550,6 +18085,7 @@ def render_index_v2() -> str:
           pendingSprintStartInFlightId = "";
         }
         renderPendingSprints();
+        renderPendingSprintProposalDetails();
       }
     }
 
@@ -22050,6 +22586,26 @@ ${data.patch || ""}
         startPendingSprint(sprintId).catch((error) => setPendingSprintsStatus(error.message, "error"));
       }
     });
+    pendingSprintValidateButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("preview")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintPlayButtonEl.addEventListener("click", () => {
+      startPendingSprint(pendingSprintsSelectedId)
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintCommentButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("comment")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintRegenerateButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("request_regeneration")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintRejectButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("reject")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
     launchPromptEndpointModeEl.addEventListener("change", () => {
       refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
@@ -24938,6 +25494,12 @@ def mutate_inbound_pending_proposal_file(
                 proposal_status in {"started", "rejected"}
                 or activation_state in {"starting", "started"}
             )
+        ) or bool(
+            action == "request_regeneration"
+            and (
+                proposal_status == "started"
+                or activation_state in {"starting", "started"}
+            )
         )
         if invalid_state:
             raise InboundProposalError(
@@ -24982,6 +25544,8 @@ def mutate_inbound_pending_proposal_file(
             proposal["activation_state"] = "not_started"
             proposal["started_sprint_id"] = None
             record["status"] = "rejected"
+        elif action == "request_regeneration":
+            proposal["regenerate_requested"] = True
         record["proposal"] = proposal
         bindings.append(
             {
@@ -31672,6 +32236,22 @@ async def comment_project_pending_proposal(
         sprint_id,
         request,
         expected_action="comment",
+    )
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/regenerate-request"
+)
+async def regenerate_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="request_regeneration",
     )
 
 

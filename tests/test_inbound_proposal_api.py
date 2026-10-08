@@ -490,6 +490,23 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             second_status, _, second = await asgi_request(start_url, method="POST")
             self.assertEqual(second_status, 409, second)
             self.assertEqual(second["detail"]["error"], "PROPOSAL_STATE_CONFLICT")
+            regenerate_status, _, regenerate = await asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                f"{pending_id}/regenerate-request",
+                method="POST",
+                payload={
+                    "schema_version": 1,
+                    "action": "request_regeneration",
+                    "expected_revision": 2,
+                    "idempotency_key": "regenerate:during-managed-start:v1",
+                    "comment": "Regenerate after the active attempt settles.",
+                },
+            )
+            self.assertEqual(regenerate_status, 409, regenerate)
+            self.assertEqual(
+                regenerate["detail"]["error"],
+                "PROPOSAL_STATE_CONFLICT",
+            )
             comment_status, _, commented = await asgi_request(
                 f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
                 f"{pending_id}/comments",
@@ -1112,6 +1129,96 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(start_status, 409, start_body)
         self.assertEqual(start_body["detail"]["error"], "PROPOSAL_STATE_CONFLICT")
         self.assertEqual(main.pending_sprints_path.read_bytes(), before_start)
+        self.assertTrue(all(not queue for queue in main.queues.values()))
+
+    async def test_operator_regeneration_marker_is_idempotent_and_nonactivating(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create()
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        project = main.read_pending_sprints_file()["projects"][
+            self.PROJECT_CONTEXT
+        ]
+        capability = project["access_token"]
+        payload = {
+            "schema_version": 1,
+            "action": "request_regeneration",
+            "expected_revision": 0,
+            "idempotency_key": "regenerate:operator:proposal-1:v1",
+            "comment": "Regenerate the source proposal with corrected metadata.",
+        }
+        url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/regenerate-request"
+        )
+        headers = [
+            (
+                main.PENDING_SPRINT_TOKEN_HEADER.lower().encode("ascii"),
+                capability.encode("ascii"),
+            ),
+            (b"x-correlation-id", b"corr-operator-regenerate"),
+        ]
+        with patch.object(
+            main,
+            "update_pending_sprint_activation_file",
+            side_effect=AssertionError("regeneration marker activated a sprint"),
+        ), patch.object(
+            main,
+            "execute_managed_project_sprint_start",
+            new=AsyncMock(
+                side_effect=AssertionError("regeneration marker invoked managed Start")
+            ),
+        ):
+            status_code, _, response = await asgi_request(
+                url,
+                method="POST",
+                payload=payload,
+                headers=headers,
+                host="pending.example.test",
+                client_host="203.0.113.10",
+            )
+        self.assertEqual(status_code, 200, response)
+        self.assertFalse(response["deduplicated"])
+        proposal = response["proposal"]
+        self.assertTrue(proposal["regenerate_requested"])
+        self.assertEqual(proposal["revision"], 1)
+        self.assertEqual(proposal["proposal_status"], "created")
+        self.assertEqual(proposal["activation_state"], "not_started")
+        self.assertEqual(proposal["validation"]["status"], "not_run")
+        self.assertIsNone(proposal["started_sprint_id"])
+        self.assertEqual(len(proposal["comments"]), 1)
+        self.assertEqual(
+            proposal["comments"][0]["actor"],
+            {
+                "actor_type": "operator",
+                "actor_id": f"pending-token:{self.PROJECT_PHONE}",
+            },
+        )
+        stored = main.read_pending_sprints_file()["projects"][
+            self.PROJECT_CONTEXT
+        ]["sprints"][0]
+        self.assertEqual(stored["status"], "pending")
+        self.assertEqual(stored["activation_attempts"], 0)
+        self.assertIsNone(stored["activation_attempt_id"])
+        bytes_after_first = main.pending_sprints_path.read_bytes()
+
+        replay_status, _, replay = await asgi_request(
+            url,
+            method="POST",
+            payload=payload,
+            headers=[
+                headers[0],
+                (b"x-correlation-id", b"corr-operator-regenerate-replay"),
+            ],
+            host="pending.example.test",
+            client_host="203.0.113.10",
+        )
+        self.assertEqual(replay_status, 200, replay)
+        self.assertTrue(replay["deduplicated"])
+        self.assertEqual(replay["proposal"]["revision"], 1)
+        self.assertEqual(len(replay["proposal"]["comments"]), 1)
+        self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_after_first)
         self.assertTrue(all(not queue for queue in main.queues.values()))
 
     async def test_conflicts_invalid_payload_secrets_and_ownership_are_stable(self) -> None:
