@@ -1,0 +1,250 @@
+{
+  "schema_version": 1,
+  "kind": "inbound_proposal_play_boundary_e2e",
+  "generated_at": "2026-10-08T14:24:32.4942056Z",
+  "assignment": {
+    "sprint_id": "msv1-11ef3bb45b8a5fdcb7633307de1e429fa12091a239d6a2285e1b22ece7bd86d0",
+    "assignment_id": "assignment-92885edd0a085c0ad889b583",
+    "task_id": "IE2E-005",
+    "source_commit": "980809b30d18496fa30e7136d38029b499790011",
+    "branch": "agent/ie2e-05-play-boundary-r2"
+  },
+  "target": {
+    "runtime": "isolated_loopback_staging",
+    "instance_id": "premerge-inbound-hub-e2e-v1-r2-staging-18029",
+    "http_port": 18029,
+    "project_id": "9000",
+    "deployed_commit": "cb42b635d6b6ef31434d1edd4686d48852c64526"
+  },
+  "fixture": {
+    "manifest_path": "orchestration/sprints/premerge-inbound-hub-e2e-v1/play-boundary-disposable-r2.json",
+    "manifest_ref": "refs/heads/agent/ie2e-05-play-boundary-r2",
+    "manifest_ref_commit": "26e7533d1344618120106e229ecff5bdb792fc31",
+    "workspace_source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e-r2",
+    "workspace_source_commit": "980809b30d18496fa30e7136d38029b499790011",
+    "assigned_branch": "agent/ie2e-05-disposable-activation-r2",
+    "assigned_branch_absent_before_play": true,
+    "all_workspaces_read_only": true,
+    "process_blocks": 0,
+    "schema_errors": 0,
+    "semantic_issues": [],
+    "activation_proposal": {
+      "proposal_id": "ie2e-005-r2-play-92885edd",
+      "pending_sprint_id": "pending-310c748e3f0c408e83da9e5b689d9390"
+    },
+    "reject_control": {
+      "proposal_id": "ie2e-005-r2-reject-92885edd",
+      "pending_sprint_id": "pending-1faf9d3692b74d61ba8a17968d15b14e"
+    }
+  },
+  "non_activation_checks": [
+    {
+      "step": "baseline",
+      "http_status": 200,
+      "project_sprint_count": 0,
+      "current_sprint_id": null
+    },
+    {
+      "step": "create_activation_proposal",
+      "http_status": 201,
+      "revision": 0,
+      "proposal_status": "created",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "create_reject_control",
+      "http_status": 201,
+      "revision": 0,
+      "proposal_status": "created",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "preview_validate_activation_proposal",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_activation_proposal",
+      "http_status": 200,
+      "source_provenance_present": true,
+      "snapshot_confirmed_by_status_read": true,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_activation_proposal",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "source_provenance_present": true,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_activation_proposal",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "comment_count": 1,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_reject_control",
+      "http_status": 200,
+      "source_provenance_present": true,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_reject_control",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "created",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "comment_count": 1,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "reject_control",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "comment_count": 2,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_rejected_control",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "source_provenance_present": true,
+      "project_sprint_count": 0,
+      "correlation_header_body_match": true
+    }
+  ],
+  "pre_play_invariants": {
+    "activation_proposal_ready_and_valid": true,
+    "reject_control_terminal_and_not_started": true,
+    "pending_count": 1,
+    "project_sprint_count": 0,
+    "activation_attempts": 0,
+    "start_requests_observed_in_access_log": 0
+  },
+  "explicit_play": {
+    "request": {
+      "method": "POST",
+      "route_template": "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/start",
+      "bodyless": true,
+      "producer_authorization_sent": false,
+      "operator_boundary": "loopback",
+      "request_dispatched": true
+    },
+    "client_transport": {
+      "response_body_captured": false,
+      "caller_timeout_seconds": 10,
+      "note": "The local caller ended before the response was captured; durable API state subsequently proved successful completion. The request was not repeated."
+    },
+    "durable_result": {
+      "detail_http_status": 200,
+      "status_http_status": 200,
+      "pending_status": "activated",
+      "activation_attempts": 1,
+      "proposal_revision": 4,
+      "proposal_status": "started",
+      "validation_status": "valid",
+      "activation_state": "started",
+      "started_sprint_id": "msv1-6048e14dad58c13296386ed2c419ed3ecb2502d8a5c87e2a49127680c0ed1d39",
+      "startable": false,
+      "retry_at": null
+    },
+    "managed_observability": {
+      "http_status": 200,
+      "runtime_type": "managed",
+      "execution_status": "active",
+      "execution_revision": 1,
+      "current_assignment_ids": [
+        "assignment-5e8ea970acff42d4feb5ca98"
+      ],
+      "initial_assignment": {
+        "assignment_id": "assignment-5e8ea970acff42d4feb5ca98",
+        "node_id": "activation-probe-r2",
+        "agent_id": "activation-probe-agent-r2",
+        "agent_phone": "2993",
+        "status": "active",
+        "source_commit": "980809b30d18496fa30e7136d38029b499790011",
+        "initial_head_commit": "980809b30d18496fa30e7136d38029b499790011",
+        "branch_lease_id": null,
+        "workspace_access": "read"
+      }
+    },
+    "consistency": {
+      "pending_and_proposal_started_sprint_ids_match": true,
+      "observed_sprint_id_matches_proposal": true,
+      "exactly_one_durable_activation_attempt": true,
+      "disposable_assignment_not_executed": true
+    }
+  },
+  "isolation": {
+    "service_pids": {
+      "18025": 23840,
+      "18026": 17508,
+      "18027": 17288,
+      "18028": 34984,
+      "18029": 12132
+    },
+    "reserved_child_listener_count": 0,
+    "staging_checkout_clean": true,
+    "assignment_checkout_clean_before_evidence": true,
+    "main_changed": false,
+    "protected_instances_restarted": false,
+    "manual_runtime_or_database_edits": false,
+    "protected_material_recorded": false,
+    "raw_request_or_response_bodies_recorded": false
+  },
+  "outcome": {
+    "status": "DONE",
+    "completed_assertions": [
+      "create_does_not_activate",
+      "read_does_not_activate",
+      "status_read_does_not_activate",
+      "preview_validate_does_not_activate",
+      "comment_does_not_activate",
+      "reject_does_not_activate",
+      "only_explicit_play_entered_managed_start_from_git",
+      "explicit_play_created_one_active_managed_sprint",
+      "disposable_initial_assignment_is_active_and_untouched"
+    ],
+    "blockers": []
+  }
+}
