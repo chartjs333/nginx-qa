@@ -88,7 +88,7 @@
             "required": ["actor_type", "actor_id"],
             "properties": {
               "actor_type": {"enum": ["producer", "operator"]},
-              "actor_id": {"type": "string", "minLength": 1, "maxLength": 200}
+              "actor_id": {"type": "string", "minLength": 1, "maxLength": 209}
             },
             "additionalProperties": false
           }

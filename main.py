@@ -33,6 +33,22 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from nginx_qa.git_provider import RepositorySpec, canonical_remote_from_address
+from nginx_qa.inbound_proposals import (
+    ACTION_SCHEMA as INBOUND_PROPOSAL_ACTION_SCHEMA,
+    CREATE_SCHEMA as INBOUND_PROPOSAL_CREATE_SCHEMA,
+    INBOUND_PRODUCER_REGISTRY_ENV,
+    InboundProposalError,
+    ProducerPrincipal,
+    action_request_fingerprint,
+    authenticate_bearer,
+    configured_producer_registry,
+    configured_secret_values,
+    contains_recognized_secret,
+    correlation_id_from_values,
+    create_request_fingerprint,
+    is_canonical_bearer_token,
+    schema_issues as inbound_proposal_schema_issues,
+)
 from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedPortReservationRegistry,
@@ -92,6 +108,8 @@ from nginx_qa.sprint_types import (
     SprintPipeline,
     SprintTypeSelection,
     SprintTypeUnsupported,
+    git_ref_format_valid,
+    relative_git_path_valid,
     resolve_sprint_type,
 )
 
@@ -125,6 +143,11 @@ def _reconcile_managed_continuity_background(
 async def app_lifespan(_: FastAPI):
     global managed_continuity_runtime, managed_process_supervisor
     global managed_continuity_stop_event, managed_continuity_thread
+    if os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV):
+        inbound_config = await read_git_config()
+        configured_producer_registry(
+            known_project_ids=inbound_known_project_ids(inbound_config),
+        )
     await restore_runtime_state()
     notifications = None
     try:
@@ -378,6 +401,8 @@ IMPORTED_ACTOR_PHONE_MAX = 2999
 MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 PENDING_SPRINT_TOKEN_HEADER = "X-Pending-Sprints-Token"
 PENDING_SPRINT_ACTIVATION_LEASE = timedelta(minutes=15)
+INBOUND_PROPOSAL_CREATE_MAX_BYTES = 1024 * 1024
+INBOUND_PROPOSAL_ACTION_MAX_BYTES = 64 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
@@ -24018,6 +24043,34 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def pending_proposal_resource(record: dict[str, Any]) -> dict[str, Any] | None:
+    raw = record.get("proposal")
+    if not isinstance(raw, dict):
+        return None
+    return {
+        key: deepcopy(raw.get(key))
+        for key in (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "candidate",
+            "validation",
+            "comments",
+            "regenerate_requested",
+            "submitted_by",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
+    }
+
+
 def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
     summary = {
         key: deepcopy(record.get(key))
@@ -24051,6 +24104,8 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
     }
     if "sprint_type" in record:
         summary["sprint_type"] = deepcopy(record["sprint_type"])
+    proposal = pending_proposal_resource(record)
+    summary["proposal"] = proposal
     record_status = str(record.get("status") or "pending").strip().lower()
     retry_at: datetime | None = None
     if record_status == "activating":
@@ -24059,11 +24114,20 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
             retry_at = activating_at + PENDING_SPRINT_ACTIVATION_LEASE
     summary["retry_at"] = retry_at.isoformat() if retry_at is not None else None
     summary["startable"] = bool(
-        record_status == "pending"
-        or (
-            record_status == "activating"
-            and retry_at is not None
-            and datetime.now(timezone.utc) >= retry_at
+        (
+            record_status == "pending"
+            or (
+                record_status == "activating"
+                and retry_at is not None
+                and datetime.now(timezone.utc) >= retry_at
+            )
+        )
+        and (
+            proposal is None
+            or (
+                proposal.get("proposal_status") == "ready"
+                and proposal.get("activation_state") == "not_started"
+            )
         )
     )
     return summary
@@ -24356,6 +24420,466 @@ def pending_sprint_record_from_project(
         ),
         None,
     )
+
+
+def create_inbound_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    project_name: str,
+    git_address: str,
+    repository_key: str,
+    producer_id: str,
+    payload: dict[str, Any],
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Atomically create or replay a proposal in the shared pending store."""
+
+    fingerprint = create_request_fingerprint(project_phone, payload)
+    idempotency_key = str(payload["idempotency_key"])
+    proposal_id = str(payload["proposal_id"])
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        durable_capabilities = tuple(
+            str(candidate.get("access_token") or "").strip()
+            for candidate in projects.values()
+            if isinstance(candidate, dict)
+            and str(candidate.get("access_token") or "").strip()
+        )
+        if contains_recognized_secret(
+            payload,
+            configured_values=durable_capabilities,
+            recognize_shapes=False,
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request contains prohibited credential material.",
+                field="$",
+            )
+        raw_project = projects.get(context_key)
+        project = dict(raw_project) if isinstance(raw_project, dict) else {}
+        raw_records = project.get("sprints")
+        records = [
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+        ] if isinstance(raw_records, list) else []
+        raw_bindings = project.get("inbound_proposal_create_bindings")
+        bindings = [
+            deepcopy(binding)
+            for binding in raw_bindings
+            if isinstance(binding, dict)
+        ] if isinstance(raw_bindings, list) else []
+        candidate_projects = [
+            (str(key), value)
+            for key, value in projects.items()
+            if isinstance(value, dict)
+            and (
+                str(key) == context_key
+                or str(value.get("project_phone") or "") == project_phone
+            )
+        ]
+
+        key_match = next(
+            (
+                (candidate_key, candidate_project, binding)
+                for candidate_key, candidate_project in candidate_projects
+                for binding in candidate_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+                and binding.get("producer_id") == producer_id
+                and binding.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+        if key_match is not None:
+            _, bound_project, key_binding = key_match
+            if key_binding.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_IDEMPOTENCY_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The idempotency key is already bound to another request.",
+                )
+            bound_id = str(key_binding.get("pending_sprint_id") or "")
+            record = next(
+                (
+                    item
+                    for item in bound_project.get("sprints") or []
+                    if isinstance(item, dict)
+                    if str(item.get("id") or "") == bound_id
+                ),
+                None,
+            )
+            if record is None or pending_proposal_resource(record) is None:
+                raise RuntimeError("Inbound proposal binding has no pending record")
+            return {
+                "proposal": pending_proposal_resource(record),
+                "deduplicated": True,
+                "created": False,
+            }
+
+        proposal_match = next(
+            (
+                (candidate_key, candidate_project, binding)
+                for candidate_key, candidate_project in candidate_projects
+                for binding in candidate_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+                and binding.get("producer_id") == producer_id
+                and binding.get("proposal_id") == proposal_id
+            ),
+            None,
+        )
+        if proposal_match is not None:
+            bound_project_key, raw_bound_project, proposal_binding = proposal_match
+            if proposal_binding.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_ID_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The proposal ID is already bound to another request.",
+                    proposal_id=proposal_id,
+                )
+            bound_id = str(proposal_binding.get("pending_sprint_id") or "")
+            record = next(
+                (
+                    item
+                    for item in raw_bound_project.get("sprints") or []
+                    if isinstance(item, dict)
+                    if str(item.get("id") or "") == bound_id
+                ),
+                None,
+            )
+            if record is None or pending_proposal_resource(record) is None:
+                raise RuntimeError("Inbound proposal binding has no pending record")
+            bound_project = dict(raw_bound_project)
+            bound_bindings = [
+                deepcopy(binding)
+                for binding in bound_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+            ]
+            bound_bindings.append(
+                {
+                    "producer_id": producer_id,
+                    "proposal_id": proposal_id,
+                    "idempotency_key": idempotency_key,
+                    "request_fingerprint": fingerprint,
+                    "pending_sprint_id": bound_id,
+                }
+            )
+            bound_project["inbound_proposal_create_bindings"] = bound_bindings
+            projects[bound_project_key] = bound_project
+            storage["projects"] = projects
+            write_pending_sprints_file(storage)
+            return {
+                "proposal": pending_proposal_resource(record),
+                "deduplicated": True,
+                "created": False,
+            }
+
+        sequence = max(
+            (int(record.get("sequence") or 0) for record in records),
+            default=0,
+        ) + 1
+        now = utc_now()
+        pending_sprint_id = f"pending-{uuid4().hex}"
+        source_metadata = deepcopy(payload["source"])
+        candidate = deepcopy(payload["candidate"])
+        proposal = {
+            "schema_version": 1,
+            "proposal_id": proposal_id,
+            "pending_sprint_id": pending_sprint_id,
+            "project_id": project_phone,
+            "revision": 0,
+            "proposal_status": "created",
+            "activation_state": "not_started",
+            "source_metadata": source_metadata,
+            "summary": str(payload["summary"]),
+            "candidate": candidate,
+            "validation": {
+                "status": "not_run",
+                "checked_at": None,
+                "issues": [],
+            },
+            "comments": [],
+            "regenerate_requested": False,
+            "submitted_by": {"producer_id": producer_id},
+            "created_at": now,
+            "updated_at": now,
+            "started_sprint_id": None,
+        }
+        import_payload = (
+            deepcopy(candidate.get("payload"))
+            if candidate.get("kind") == "legacy_json"
+            and isinstance(candidate.get("payload"), dict)
+            else None
+        )
+        title = str(source_metadata.get("title") or payload["summary"]).strip()
+        record = {
+            "id": pending_sprint_id,
+            "sequence": sequence,
+            "external_id": proposal_id,
+            "title": title[:512],
+            "status": "pending",
+            "project_phone": project_phone,
+            "project_name": project_name,
+            "git_context_key": context_key,
+            "source": "inbound-proposal",
+            "source_filename": "",
+            "received_at": now,
+            "assignment_mode": "parallel",
+            "agent_count": 0,
+            "task_count": 0,
+            "payload_sha256": pending_sprint_payload_sha256(candidate),
+            "git_address": git_address,
+            "repository_key": repository_key,
+            "telegram_update_id": "",
+            "telegram_chat_id": "",
+            "telegram_message_id": "",
+            "activation_attempts": 0,
+            "activation_attempt_id": None,
+            "activating_at": None,
+            "activated_at": None,
+            "activated_sprint_id": None,
+            "last_activation_failed_at": None,
+            "last_activation_error": None,
+            "import_payload": import_payload,
+            "proposal": proposal,
+        }
+        if isinstance(import_payload, dict) and "sprint_type" in import_payload:
+            record["sprint_type"] = deepcopy(import_payload["sprint_type"])
+        records.append(record)
+        bindings.append(
+            {
+                "producer_id": producer_id,
+                "proposal_id": proposal_id,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
+                "pending_sprint_id": pending_sprint_id,
+            }
+        )
+        project.update(
+            {
+                "project_phone": project_phone,
+                "project_name": project_name,
+                "git_context_key": context_key,
+                "access_token": (
+                    str(project.get("access_token") or "").strip()
+                    or secrets.token_urlsafe(32)
+                ),
+                "updated_at": now,
+                "sprints": records,
+                "inbound_proposal_create_bindings": bindings,
+            }
+        )
+        projects[context_key] = project
+        storage["schema_version"] = 1
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {
+            "proposal": pending_proposal_resource(record),
+            "deduplicated": False,
+            "created": True,
+        }
+
+
+def mutate_inbound_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    pending_sprint_id: str,
+    actor_id: str,
+    actor_type: str,
+    owner_producer_id: str | None,
+    payload: dict[str, Any],
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Apply one non-activation proposal action under the shared file lock."""
+
+    idempotency_key = str(payload["idempotency_key"])
+    fingerprint = action_request_fingerprint(
+        project_phone,
+        pending_sprint_id,
+        payload,
+    )
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        durable_capabilities = tuple(
+            str(candidate.get("access_token") or "").strip()
+            for candidate in projects.values()
+            if isinstance(candidate, dict)
+            and str(candidate.get("access_token") or "").strip()
+        )
+        if contains_recognized_secret(
+            payload,
+            configured_values=durable_capabilities,
+            recognize_shapes=False,
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request contains prohibited credential material.",
+                field="$",
+            )
+        candidate_keys = [context_key]
+        candidate_keys.extend(
+            str(key)
+            for key, value in projects.items()
+            if str(key) != context_key
+            and isinstance(value, dict)
+            and str(value.get("project_phone") or "") == project_phone
+        )
+        project_key = ""
+        project: dict[str, Any] | None = None
+        records: list[dict[str, Any]] = []
+        record: dict[str, Any] | None = None
+        for candidate_key in candidate_keys:
+            raw_project = projects.get(candidate_key)
+            if not isinstance(raw_project, dict):
+                continue
+            candidate_records = [
+                deepcopy(item)
+                for item in raw_project.get("sprints") or []
+                if isinstance(item, dict)
+            ]
+            candidate_record = next(
+                (
+                    item
+                    for item in candidate_records
+                    if str(item.get("id") or "") == pending_sprint_id
+                ),
+                None,
+            )
+            if candidate_record is not None:
+                project_key = candidate_key
+                project = dict(raw_project)
+                records = candidate_records
+                record = candidate_record
+                break
+        if project is None or record is None:
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+        proposal = pending_proposal_resource(record or {})
+        if proposal is None or (
+            owner_producer_id is not None
+            and str((proposal.get("submitted_by") or {}).get("producer_id") or "")
+            != owner_producer_id
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+
+        raw_bindings = project.get("inbound_proposal_action_bindings")
+        bindings = [
+            deepcopy(binding)
+            for binding in raw_bindings
+            if isinstance(binding, dict)
+        ] if isinstance(raw_bindings, list) else []
+        existing = next(
+            (
+                binding
+                for binding in bindings
+                if binding.get("pending_sprint_id") == pending_sprint_id
+                and binding.get("actor_id") == actor_id
+                and binding.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_IDEMPOTENCY_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The idempotency key is already bound to another request.",
+                )
+            snapshot = existing.get("proposal_snapshot")
+            if not isinstance(snapshot, dict):
+                raise RuntimeError("Inbound proposal action binding has no snapshot")
+            return {"proposal": deepcopy(snapshot), "deduplicated": True}
+
+        expected_revision = int(payload["expected_revision"])
+        actual_revision = int(proposal.get("revision") or 0)
+        if expected_revision != actual_revision:
+            raise InboundProposalError(
+                "PROPOSAL_REVISION_CONFLICT",
+                status.HTTP_409_CONFLICT,
+                correlation_id,
+                "The proposal revision no longer matches the request.",
+                expected_revision=expected_revision,
+                actual_revision=actual_revision,
+            )
+        action = str(payload["action"])
+        if action == "reject" and (
+            proposal.get("proposal_status") in {"started", "rejected"}
+            or proposal.get("activation_state") in {"starting", "started"}
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_STATE_CONFLICT",
+                status.HTTP_409_CONFLICT,
+                correlation_id,
+                "The proposal cannot be rejected in its current state.",
+            )
+        now = utc_now()
+        comment = {
+            "comment_id": f"comment-{uuid4().hex}",
+            "text": str(payload["comment"]),
+            "created_at": now,
+            "actor": {
+                "actor_type": actor_type,
+                "actor_id": actor_id,
+            },
+        }
+        comments = [
+            deepcopy(item)
+            for item in proposal.get("comments") or []
+            if isinstance(item, dict)
+        ]
+        comments.append(comment)
+        proposal["comments"] = comments
+        proposal["revision"] = actual_revision + 1
+        proposal["updated_at"] = now
+        if action == "reject":
+            proposal["proposal_status"] = "rejected"
+            proposal["activation_state"] = "not_started"
+            proposal["started_sprint_id"] = None
+            record["status"] = "rejected"
+        record["proposal"] = proposal
+        bindings.append(
+            {
+                "pending_sprint_id": pending_sprint_id,
+                "actor_id": actor_id,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
+                "proposal_snapshot": deepcopy(proposal),
+            }
+        )
+        project["sprints"] = records
+        project["updated_at"] = now
+        project["inbound_proposal_action_bindings"] = bindings
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {"proposal": deepcopy(proposal), "deduplicated": False}
 
 
 def update_pending_sprint_activation_file(
@@ -29803,6 +30327,332 @@ async def project_pending_sprints_snapshot(
     return project_phone, context_key, project
 
 
+def inbound_known_project_ids(config: dict[str, Any]) -> set[str]:
+    raw_projects = config.get(PROJECTS_KEY)
+    if not isinstance(raw_projects, dict):
+        return set()
+    return {
+        phone
+        for entry in raw_projects.values()
+        if isinstance(entry, dict)
+        if (phone := normalize_project_phone(entry.get("project_phone")))
+    }
+
+
+def inbound_proposal_error_response(error: InboundProposalError) -> JSONResponse:
+    headers = {"X-Correlation-ID": error.correlation_id}
+    if error.code == "PROPOSAL_AUTH_REQUIRED":
+        headers["WWW-Authenticate"] = "Bearer"
+    return JSONResponse(
+        status_code=error.http_status,
+        content=error.envelope,
+        headers=headers,
+    )
+
+
+def inbound_proposal_success_response(
+    *,
+    correlation_id: str,
+    proposal: dict[str, Any],
+    deduplicated: bool,
+    http_status: int = status.HTTP_200_OK,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=http_status,
+        content={
+            "schema_version": 1,
+            "correlation_id": correlation_id,
+            "deduplicated": deduplicated,
+            "proposal": deepcopy(proposal),
+        },
+        headers={"X-Correlation-ID": correlation_id},
+    )
+
+
+def inbound_request_correlation_id(request: Request) -> str:
+    correlation_id, valid = correlation_id_from_values(
+        request.headers.getlist("x-correlation-id")
+    )
+    if not valid:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request correlation ID is invalid.",
+            field="X-Correlation-ID",
+        )
+    return correlation_id
+
+
+def inbound_authenticate_request(
+    request: Request,
+    correlation_id: str,
+) -> ProducerPrincipal:
+    try:
+        principals = configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    principal = authenticate_bearer(
+        request.headers.getlist("authorization"),
+        principals,
+    )
+    if principal is None:
+        raise InboundProposalError(
+            "PROPOSAL_AUTH_REQUIRED",
+            status.HTTP_401_UNAUTHORIZED,
+            correlation_id,
+            "Producer authentication is required.",
+        )
+    return principal
+
+
+async def inbound_project_context(
+    project_id: str,
+    principal: ProducerPrincipal,
+    action: str,
+    correlation_id: str,
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    try:
+        config = await read_git_config()
+        _, context_key, project_entry, context = project_for_group_api(
+            config,
+            project_id,
+        )
+    except HTTPException as exc:
+        code = (
+            "PROPOSAL_PROJECT_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "PROPOSAL_REQUEST_INVALID"
+        )
+        http_status = (
+            status.HTTP_404_NOT_FOUND
+            if code == "PROPOSAL_PROJECT_NOT_FOUND"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise InboundProposalError(
+            code,
+            http_status,
+            correlation_id,
+            (
+                "The project was not found."
+                if code == "PROPOSAL_PROJECT_NOT_FOUND"
+                else "The project identifier is invalid."
+            ),
+            field="project_id",
+        ) from exc
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if project_phone not in principal.project_ids or action not in principal.actions:
+        raise InboundProposalError(
+            "PROPOSAL_FORBIDDEN",
+            status.HTTP_403_FORBIDDEN,
+            correlation_id,
+            "The producer is not authorized for this project and action.",
+        )
+    return project_phone, context_key, project_entry, context
+
+
+async def inbound_json_request(
+    request: Request,
+    *,
+    maximum_bytes: int,
+    schema_filename: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    content_type = (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    if content_type != "application/json":
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request must use application/json.",
+            field="content-type",
+        )
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            parsed_length = int(declared_length)
+        except ValueError:
+            parsed_length = -1
+        if parsed_length < 0:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request length is invalid.",
+                field="content-length",
+            )
+        if parsed_length > maximum_bytes:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_TOO_LARGE",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                correlation_id,
+                "The proposal request is too large.",
+            )
+    bounded_body = bytearray()
+    async for chunk in request.stream():
+        if len(chunk) > maximum_bytes - len(bounded_body):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_TOO_LARGE",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                correlation_id,
+                "The proposal request is too large.",
+            )
+        bounded_body.extend(chunk)
+    try:
+        payload = parse_strict_json_object(bytes(bounded_body))
+    except ValueError as exc:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request JSON is invalid.",
+        ) from exc
+    issues = inbound_proposal_schema_issues(payload, schema_filename)
+    if issues:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request does not satisfy the proposal contract.",
+            issues=issues,
+        )
+    return payload
+
+
+def inbound_reject_secret_values(
+    value: Any,
+    request: Request,
+    correlation_id: str,
+    *,
+    field: str,
+    recognize_shapes: bool = True,
+) -> None:
+    request_secret_values = list(configured_secret_values())
+    for authorization in request.headers.getlist("authorization"):
+        _, separator, token = authorization.partition(" ")
+        if separator and token:
+            request_secret_values.append(token)
+    request_secret_values.extend(
+        value
+        for value in request.headers.getlist(PENDING_SPRINT_TOKEN_HEADER)
+        if value
+    )
+    unsafe = contains_recognized_secret(
+        value,
+        configured_values=request_secret_values,
+        recognize_shapes=recognize_shapes,
+    )
+    if unsafe:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request contains prohibited credential material.",
+            field=field,
+        )
+
+
+_INBOUND_CREDENTIAL_PARAMETER = re.compile(
+    r"(?:^|[-_])(?:authorization|access[-_]?token|api[-_]?key|"
+    r"bearer(?:[-_]?token)?|credential|password|secret|token|"
+    r"pending[-_]?token|producer[-_]?token)(?:$|[-_])",
+    re.IGNORECASE,
+)
+
+
+def inbound_has_alternate_credentials(request: Request) -> bool:
+    authorization_values = request.headers.getlist("authorization")
+    query_items = list(request.query_params.multi_items())
+    cookie_values = request.headers.getlist("cookie")
+    pending_token_values = request.headers.getlist(PENDING_SPRINT_TOKEN_HEADER)
+    producer_with_alternate_transport = bool(authorization_values) and bool(
+        query_items or cookie_values or pending_token_values
+    )
+    if producer_with_alternate_transport:
+        return True
+    suspicious_named_query = any(
+        _INBOUND_CREDENTIAL_PARAMETER.search(str(name))
+        or re.match(r"(?i)^(?:Bearer|Basic)\s+", str(value)) is not None
+        for name, value in query_items
+    )
+    opaque_candidates = [
+        str(value)
+        for _, value in query_items
+        if is_canonical_bearer_token(str(value))
+    ]
+    suspicious_named_cookie = False
+    for raw_cookie in cookie_values:
+        for part in raw_cookie.split(";"):
+            name, separator, value = part.strip().partition("=")
+            if not separator:
+                continue
+            decoded_value = urllib.parse.unquote_plus(value).strip('"')
+            if (
+                _INBOUND_CREDENTIAL_PARAMETER.search(name)
+                or re.match(
+                    r"(?i)^(?:Bearer|Basic)(?:%20|\s)+",
+                    decoded_value,
+                )
+            ):
+                suspicious_named_cookie = True
+                break
+            if is_canonical_bearer_token(decoded_value):
+                opaque_candidates.append(decoded_value)
+        if suspicious_named_cookie:
+            break
+    if suspicious_named_query or suspicious_named_cookie:
+        return True
+    if not opaque_candidates:
+        return False
+    try:
+        principals = configured_producer_registry()
+    except Exception:
+        return bool(os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV))
+    return any(
+        authenticate_bearer([f"Bearer {candidate}"], principals) is not None
+        for candidate in opaque_candidates
+    )
+
+
+def inbound_reject_alternate_credentials(
+    request: Request,
+    correlation_id: str,
+) -> None:
+    """Reject bearer/capability material outside the supported headers."""
+
+    if not inbound_has_alternate_credentials(request):
+        return
+    try:
+        configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    raise InboundProposalError(
+        "PROPOSAL_AUTH_REQUIRED",
+        status.HTTP_401_UNAUTHORIZED,
+        correlation_id,
+        "Producer authentication is required.",
+    )
+
+
 def pending_sprints_request_hostname(request: Request) -> str:
     raw_host = str(request.headers.get("host") or "").strip()
     if raw_host:
@@ -29895,21 +30745,199 @@ def pending_sprint_urls(project_phone: str, sprint_id: str) -> dict[str, str]:
     }
 
 
+@app.post("/api/v1/projects/{project_id}/pending-sprints")
+async def create_project_pending_proposal(
+    project_id: str,
+    request: Request,
+) -> JSONResponse:
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        principal = inbound_authenticate_request(request, correlation_id)
+        (
+            project_phone,
+            context_key,
+            project_entry,
+            context,
+        ) = await inbound_project_context(
+            project_id,
+            principal,
+            "create",
+            correlation_id,
+        )
+        payload = await inbound_json_request(
+            request,
+            maximum_bytes=INBOUND_PROPOSAL_CREATE_MAX_BYTES,
+            schema_filename=INBOUND_PROPOSAL_CREATE_SCHEMA,
+            correlation_id=correlation_id,
+        )
+        inbound_reject_secret_values(
+            payload,
+            request,
+            correlation_id,
+            field="$",
+            recognize_shapes=False,
+        )
+        inbound_reject_secret_values(
+            payload.get("source"),
+            request,
+            correlation_id,
+            field="source",
+        )
+        inbound_reject_secret_values(
+            payload.get("summary"),
+            request,
+            correlation_id,
+            field="summary",
+        )
+        candidate = payload["candidate"]
+        if candidate["kind"] == "legacy_json":
+            legacy_sprint_import_dispatch(
+                candidate["payload"],
+                correlation_id=correlation_id,
+            )
+        else:
+            managed_request = candidate["request"]
+            inbound_reject_secret_values(
+                managed_request,
+                request,
+                correlation_id,
+                field="candidate.request",
+            )
+            if not git_ref_format_valid(str(managed_request["ref"])):
+                raise InboundProposalError(
+                    "PROPOSAL_REQUEST_INVALID",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    "The managed Git reference is invalid.",
+                    field="candidate.request.ref",
+                )
+            if not relative_git_path_valid(str(managed_request["manifest_path"])):
+                raise InboundProposalError(
+                    "PROPOSAL_REQUEST_INVALID",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    "The managed manifest path is invalid.",
+                    field="candidate.request.manifest_path",
+                )
+        async with pending_sprints_lock:
+            result = await asyncio.to_thread(
+                create_inbound_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                project_name=normalize_project_name(
+                    project_entry.get("project_name"),
+                    str(project_entry.get("git_address") or ""),
+                ),
+                git_address=str(project_entry.get("git_address") or "").strip(),
+                repository_key=project_repository_key_for_context(context),
+                producer_id=principal.producer_id,
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+        proposal = result["proposal"]
+        assert isinstance(proposal, dict)
+        return inbound_proposal_success_response(
+            correlation_id=correlation_id,
+            proposal=proposal,
+            deduplicated=bool(result["deduplicated"]),
+            http_status=(
+                status.HTTP_201_CREATED
+                if result["created"]
+                else status.HTTP_200_OK
+            ),
+        )
+    except InboundProposalError as exc:
+        return inbound_proposal_error_response(exc)
+    except HTTPException as exc:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The proposal request is invalid.",
+            )
+        )
+    except Exception:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal could not be stored.",
+            )
+        )
+
+
 @app.get("/api/v1/projects/{project_id}/pending-sprints")
 async def get_project_pending_sprints(
     project_id: str,
     request: Request,
-) -> dict[str, Any]:
-    project_phone, context_key, project = await project_pending_sprints_snapshot(
-        project_id,
-    )
-    ensure_pending_sprints_access(request, project)
+) -> Any:
+    authorization_values = request.headers.getlist("authorization")
+    producer: ProducerPrincipal | None = None
+    correlation_id = ""
+    if inbound_has_alternate_credentials(request):
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            inbound_reject_alternate_credentials(request, correlation_id)
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+    if authorization_values:
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                "read",
+                correlation_id,
+            )
+            async with pending_sprints_lock:
+                project = await asyncio.to_thread(
+                    project_pending_sprints_file_snapshot,
+                    context_key,
+                    project_phone,
+                    "",
+                )
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+        except Exception:
+            correlation_id = correlation_id or correlation_id_from_values([])[0]
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_STORAGE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    "The proposal collection could not be read.",
+                )
+            )
+    else:
+        project_phone, context_key, project = await project_pending_sprints_snapshot(
+            project_id,
+        )
+        ensure_pending_sprints_access(request, project)
     raw_records = project.get("sprints") if isinstance(project, dict) else []
     records = [
         pending_sprint_summary(record)
         for record in raw_records
         if isinstance(record, dict)
         and str(record.get("status") or "pending") in {"pending", "activating"}
+        and (
+            producer is None
+            or (
+                isinstance(record.get("proposal"), dict)
+                and str(
+                    (record["proposal"].get("submitted_by") or {}).get(
+                        "producer_id"
+                    )
+                    or ""
+                )
+                == producer.producer_id
+            )
+        )
     ] if isinstance(raw_records, list) else []
     records.sort(
         key=lambda record: int(record.get("sequence") or 0),
@@ -29919,13 +30947,21 @@ async def get_project_pending_sprints(
         record.update(
             pending_sprint_urls(project_phone, str(record.get("id") or ""))
         )
-    return {
+    response = {
         "project_id": project_phone,
         "project_phone": project_phone,
         "git_context_key": context_key,
         "pending_count": len(records),
         "pending_sprints": records,
     }
+    if producer is None:
+        return response
+    response["correlation_id"] = correlation_id
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=response,
+        headers={"X-Correlation-ID": correlation_id},
+    )
 
 
 @app.get("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}")
@@ -29933,13 +30969,65 @@ async def get_project_pending_sprint(
     project_id: str,
     sprint_id: str,
     request: Request,
-) -> dict[str, Any]:
-    project_phone, context_key, project = await project_pending_sprints_snapshot(
-        project_id,
-        sprint_id,
-    )
-    ensure_pending_sprints_access(request, project)
+) -> Any:
+    authorization_values = request.headers.getlist("authorization")
+    producer: ProducerPrincipal | None = None
+    correlation_id = ""
+    if inbound_has_alternate_credentials(request):
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            inbound_reject_alternate_credentials(request, correlation_id)
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+    if authorization_values:
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                "read",
+                correlation_id,
+            )
+            async with pending_sprints_lock:
+                project = await asyncio.to_thread(
+                    project_pending_sprints_file_snapshot,
+                    context_key,
+                    project_phone,
+                    sprint_id,
+                )
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+        except Exception:
+            correlation_id = correlation_id or correlation_id_from_values([])[0]
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_STORAGE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    "The proposal could not be read.",
+                )
+            )
+    else:
+        project_phone, context_key, project = await project_pending_sprints_snapshot(
+            project_id,
+            sprint_id,
+        )
+        ensure_pending_sprints_access(request, project)
     record = pending_sprint_record_from_project(project, sprint_id)
+    if producer is not None:
+        proposal = pending_proposal_resource(record or {})
+        if proposal is None or str(
+            (proposal.get("submitted_by") or {}).get("producer_id") or ""
+        ) != producer.producer_id:
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_NOT_FOUND",
+                    status.HTTP_404_NOT_FOUND,
+                    correlation_id,
+                    "The proposal was not found.",
+                )
+            )
     if record is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -29947,13 +31035,179 @@ async def get_project_pending_sprint(
         )
     summary = pending_sprint_summary(record)
     summary.update(pending_sprint_urls(project_phone, sprint_id))
-    return {
+    response = {
         "project_id": project_phone,
         "project_phone": project_phone,
         "git_context_key": context_key,
         "pending_sprint": summary,
         "import_payload": deepcopy(record.get("import_payload")),
     }
+    if producer is None:
+        return response
+    response["correlation_id"] = correlation_id
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=response,
+        headers={"X-Correlation-ID": correlation_id},
+    )
+
+
+async def mutate_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+    *,
+    expected_action: str,
+) -> JSONResponse:
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        authorization_values = request.headers.getlist("authorization")
+        producer: ProducerPrincipal | None = None
+        if authorization_values:
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                expected_action,
+                correlation_id,
+            )
+            actor_id = f"producer:{producer.producer_id}"
+            actor_type = "producer"
+        else:
+            (
+                project_phone,
+                context_key,
+                project,
+            ) = await project_pending_sprints_snapshot(project_id, sprint_id)
+            try:
+                ensure_pending_sprints_access(request, project)
+            except HTTPException as exc:
+                raise InboundProposalError(
+                    "PROPOSAL_FORBIDDEN",
+                    status.HTTP_403_FORBIDDEN,
+                    correlation_id,
+                    "The operator is not authorized for this project.",
+                ) from exc
+            actor_id = (
+                "local-operator"
+                if pending_sprints_request_is_local(request)
+                else f"pending-token:{project_phone}"
+            )
+            actor_type = "operator"
+        payload = await inbound_json_request(
+            request,
+            maximum_bytes=INBOUND_PROPOSAL_ACTION_MAX_BYTES,
+            schema_filename=INBOUND_PROPOSAL_ACTION_SCHEMA,
+            correlation_id=correlation_id,
+        )
+        if payload.get("action") != expected_action:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request action does not match the route.",
+                field="action",
+            )
+        inbound_reject_secret_values(
+            payload,
+            request,
+            correlation_id,
+            field="$",
+            recognize_shapes=False,
+        )
+        inbound_reject_secret_values(
+            payload.get("comment"),
+            request,
+            correlation_id,
+            field="comment",
+        )
+        async with pending_sprints_lock:
+            result = await asyncio.to_thread(
+                mutate_inbound_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                pending_sprint_id=sprint_id.strip(),
+                actor_id=actor_id,
+                actor_type=actor_type,
+                owner_producer_id=(
+                    producer.producer_id if producer is not None else None
+                ),
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+        proposal = result["proposal"]
+        assert isinstance(proposal, dict)
+        return inbound_proposal_success_response(
+            correlation_id=correlation_id,
+            proposal=proposal,
+            deduplicated=bool(result["deduplicated"]),
+        )
+    except InboundProposalError as exc:
+        return inbound_proposal_error_response(exc)
+    except HTTPException as exc:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        code = (
+            "PROPOSAL_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "PROPOSAL_REQUEST_INVALID"
+        )
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                code,
+                (
+                    status.HTTP_404_NOT_FOUND
+                    if code == "PROPOSAL_NOT_FOUND"
+                    else status.HTTP_400_BAD_REQUEST
+                ),
+                correlation_id,
+                (
+                    "The proposal was not found."
+                    if code == "PROPOSAL_NOT_FOUND"
+                    else "The proposal request is invalid."
+                ),
+            )
+        )
+    except Exception:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal could not be updated.",
+            )
+        )
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/comments"
+)
+async def comment_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="comment",
+    )
+
+
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/reject")
+async def reject_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="reject",
+    )
 
 
 @app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start")
@@ -29972,6 +31226,19 @@ async def start_project_pending_sprint(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pending sprint was not found for this project",
+        )
+    proposal = pending_proposal_resource(record)
+    if proposal is not None and (
+        proposal.get("proposal_status") != "ready"
+        or proposal.get("activation_state") != "not_started"
+        or (proposal.get("candidate") or {}).get("kind") == "managed_git"
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "PROPOSAL_STATE_CONFLICT",
+                "message": "The proposal is not eligible for Start.",
+            },
         )
     if str(record.get("status") or "") == "activated":
         raise HTTPException(
