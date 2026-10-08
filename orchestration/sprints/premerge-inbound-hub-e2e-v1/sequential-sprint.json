@@ -1,0 +1,308 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/premerge-inbound-hub-e2e-sprint",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/nginx-qa-inbound-hub-e2e-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "completed-sprint-baseline",
+    "required_approvals": 2,
+    "max_rework_cycles": 10,
+    "reviewers": [
+      {
+        "id": "premerge-api-reviewer",
+        "name": "Pre-merge API Boundary Reviewer",
+        "phone": "2968",
+        "git_branch": "review/premerge-api-boundary",
+        "profile": "Проверяй proposal API boundary, idempotency, source provenance, Play-only activation and absence of source-adapter leakage."
+      },
+      {
+        "id": "premerge-evidence-reviewer",
+        "name": "Pre-merge Evidence and Operations Reviewer",
+        "phone": "2969",
+        "git_branch": "review/premerge-evidence-ops",
+        "profile": "Проверяй staging isolation, Inbound Hub E2E evidence, pending UI/Telegram compatibility, tests and no production/runtime mutation."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "e2e-continuity-coordinator",
+    "routes": {
+      "STOP": "e2e-continuity-coordinator",
+      "NEED_DECISION": "e2e-continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "completed-sprint-baseline",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "completed-sprint-baseline-engineer",
+        "name": "Completed Sprint Baseline Engineer",
+        "phone": "2961",
+        "profile": "Определяет фактическое completed managed sprint evidence и cumulative code state без merge в main."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-001",
+          "queue": "worker-all",
+          "message": "Через managed HTTP observability зафиксируй completed sprint msv1-73283eef635f07783771ac13564a74ec55bd191a97a7095bf7cb5b5412e8b6d3: node results, result commits, approvals, qualification PASS, тестовые evidence и stale/superseded records. Определи финальное cumulative состояние кода, которое прошло qualification. Не merge в main, не трогай 18025."
+        }
+      ],
+      "transitions": {
+        "DONE": "integration-branch",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-01-completed-sprint-baseline",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "integration-branch",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "integration-branch-engineer",
+        "name": "Pre-merge Integration Branch Engineer",
+        "phone": "2962",
+        "profile": "Создаёт staging integration branch из completed sprint result без прямого изменения main."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-002",
+          "queue": "worker-all",
+          "message": "Создай или обнови integration/inbound-coordinator-e2e-20261007 от актуального origin/main и внеси завершённые изменения completed sprint в правильном порядке. Не push в main. Если fast-forward/clean integration невозможен, верни NEED_DECISION с точным конфликтом. Прогони базовые контрактные и regression проверки, достаточные перед staging."
+        }
+      ],
+      "transitions": {
+        "DONE": "staging-nginx-qa",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-02-integration-branch",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "staging-nginx-qa",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "staging-runtime-engineer",
+        "name": "Isolated Staging Runtime Engineer",
+        "phone": "2963",
+        "profile": "Поднимает изолированный nginx-qa staging instance для pre-merge E2E."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-003",
+          "queue": "worker-all",
+          "message": "Подними отдельный staging nginx-qa на свободном порту, предпочтительно 18027, из integration branch. Используй отдельные runtime_root, managed_root, prompt_root, project registry и child port range. Не трогай 18025 и не используй state 18026. Проверь GET /, /git-config, OpenAPI и proposal API readiness."
+        }
+      ],
+      "transitions": {
+        "DONE": "inbound-hub-e2e",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-03-staging-runtime",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "inbound-hub-e2e",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "inbound-hub-e2e-engineer",
+        "name": "Inbound Hub E2E Engineer",
+        "phone": "2964",
+        "profile": "Проверяет внешний Inbound Hub producer против staging nginx-qa proposal API."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-004",
+          "queue": "worker-all",
+          "message": "Подключи Inbound Hub или его тестовый producer к staging nginx-qa API. Проверь create proposal, duplicate idempotency no-duplicate, read/status/provenance, comment, reject, invalid payloads and correlation. Create/read/comment/reject не должны активировать sprint. Если нужны изменения в Inbound Hub вне nginx-qa, верни NEED_DECISION/BLOCKED_EXTERNAL с owner и evidence."
+        }
+      ],
+      "transitions": {
+        "DONE": "play-boundary",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-04-inbound-hub-e2e",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "play-boundary",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "play-boundary-engineer",
+        "name": "Pending Proposal Play Boundary Engineer",
+        "phone": "2965",
+        "profile": "Проверяет, что managed activation происходит только через явный Play/Start boundary."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-005",
+          "queue": "worker-all",
+          "message": "На disposable/test proposal проверь Preview/Play boundary: preview/validate не активирует; reject/comment/read не активируют; только явный Play/Start вызывает managed start-from-git. Не используй production proposal. Зафиксируй requests/responses без секретов и resulting status."
+        }
+      ],
+      "transitions": {
+        "DONE": "qualification",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-05-play-boundary",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "qualification",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "premerge-e2e-qa",
+        "name": "Pre-merge E2E Qualification QA",
+        "phone": "2966",
+        "profile": "Проводит final pre-merge qualification for Inbound Hub ↔ nginx-qa integration."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-006",
+          "queue": "tester-all",
+          "message": "Проведи final qualification: regression, managed-focused, legacy actor-import, inbound proposal API tests, pending UI evidence, Telegram pending compatibility, Inbound Hub E2E evidence, no-secret/no-adapter-leak checks. Верни PASS только если staging E2E and tests pass and main/18025 were untouched."
+        }
+      ],
+      "transitions": {
+        "PASS": "merge-plan",
+        "FAIL": "e2e-continuity-coordinator",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-06-qualification",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "merge-plan",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "merge-plan-engineer",
+        "name": "Main Merge Plan Engineer",
+        "phone": "2967",
+        "profile": "Готовит PR/merge plan after E2E; не выполняет merge без отдельного gate."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-007",
+          "queue": "consultant-all",
+          "message": "Подготовь PR/merge plan в main: integration branch, exact commits, test evidence, completed sprint evidence, E2E proof, risk notes, rollback plan, stale review maintenance issue. Не merge в main и не push напрямую в main без отдельного разрешения."
+        }
+      ],
+      "transitions": {
+        "DONE": "completed",
+        "NEED_DECISION": "e2e-continuity-coordinator",
+        "STOP": "e2e-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-07-merge-plan",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "e2e-continuity-coordinator",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "e2e-continuity-coordinator",
+        "name": "Pre-merge E2E Continuity Coordinator",
+        "phone": "2960",
+        "profile": "Разбирает blockers и возвращает только future sprint-owned plan; не bypass gates и не merge в main."
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-COORD",
+          "queue": "consultant-all",
+          "message": "Проанализируй blocker и верни RESUME_BASELINE, RESUME_INTEGRATION, RESUME_STAGING, RESUME_HUB_E2E, RESUME_PLAY, RESUME_QA, RESUME_MERGE_PLAN или BLOCKED_EXTERNAL. Не делай ручной queue handoff и не merge в main."
+        }
+      ],
+      "transitions": {
+        "RESUME_BASELINE": "completed-sprint-baseline",
+        "RESUME_INTEGRATION": "integration-branch",
+        "RESUME_STAGING": "staging-nginx-qa",
+        "RESUME_HUB_E2E": "inbound-hub-e2e",
+        "RESUME_PLAY": "play-boundary",
+        "RESUME_QA": "qualification",
+        "RESUME_MERGE_PLAN": "merge-plan",
+        "BLOCKED_EXTERNAL": "blocked-external"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/ie2e-continuity-coordinator",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Inbound Hub ↔ nginx-qa pre-merge E2E qualification completed and PR/merge plan prepared. main remains unchanged until explicit merge gate."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "External dependency or Inbound Hub change required before merge. main and production instances remain unchanged."
+    }
+  ],
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    }
+  ]
+}
