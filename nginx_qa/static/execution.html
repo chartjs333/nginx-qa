@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ru">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
 <title>nginx-qa · Выполнение спринта</title><link rel="stylesheet" href="/execution/assets/execution.css">
 <script defer src="/execution/assets/execution.js"></script></head>
 <body>
@@ -14,6 +14,7 @@
 </section>
 <p id="auth" class="notice">Проверка операторской сессии…</p>
 <p id="error" role="alert" hidden></p>
+<section id="email-decision" class="email-decision" aria-label="Решение из email" aria-live="polite" hidden></section>
 <section class="overview" aria-label="Состояние"><div><h2>Graph execution</h2><div id="execution"></div></div><div><h2>Operator attention</h2><div id="attention"></div></div></section>
 <div class="dashboard">
 <section class="graph-panel"><h2>Graph</h2><p class="hint">Топология не заменяет историю visits. Непосещённая ветка не означает skipped.</p><div id="graph"></div><h3>Посещения</h3><div id="visits"></div></section>
