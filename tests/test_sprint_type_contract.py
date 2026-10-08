@@ -72,6 +72,7 @@ EXPECTED_SCHEMA_FILES = {
     "inbound-pending-proposal-action-v1.schema.json",
     "inbound-pending-proposal-create-v1.schema.json",
     "inbound-pending-proposal-response-v1.schema.json",
+    "inbound-pending-proposal-status-response-v1.schema.json",
     "inbound-pending-proposal-v1.schema.json",
     "inbound-producer-registry-v1.schema.json",
     "legacy-scope-ack-v1.schema.json",
@@ -2306,6 +2307,22 @@ class SprintSchemaContractTests(unittest.TestCase):
             "updated_at": TIMESTAMP,
             "started_sprint_id": None,
         }
+        inbound_status_fields = (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "validation",
+            "regenerate_requested",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
         cases = {
             "managed-api-error-v1.schema.json": {
                 "detail": {"error": "SPRINT_PREFLIGHT_FAILED", "correlation_id": "corr-1"}
@@ -2330,6 +2347,14 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "correlation_id": "corr-inbound-1",
                 "deduplicated": False,
                 "proposal": inbound_proposal,
+            },
+            "inbound-pending-proposal-status-response-v1.schema.json": {
+                "schema_version": 1,
+                "correlation_id": "corr-inbound-status-1",
+                "status": {
+                    field: copy.deepcopy(inbound_proposal[field])
+                    for field in inbound_status_fields
+                },
             },
             "inbound-pending-proposal-v1.schema.json": inbound_proposal,
             "inbound-producer-registry-v1.schema.json": {

@@ -20,6 +20,7 @@ CONTRACT_SCHEMAS = {
     "inbound-pending-proposal-action-v1.schema.json",
     "inbound-pending-proposal-create-v1.schema.json",
     "inbound-pending-proposal-response-v1.schema.json",
+    "inbound-pending-proposal-status-response-v1.schema.json",
     "inbound-pending-proposal-v1.schema.json",
     "inbound-producer-registry-v1.schema.json",
 }
@@ -76,6 +77,31 @@ def proposal_fixture() -> dict:
     }
 
 
+def status_response_fixture() -> dict:
+    proposal = proposal_fixture()
+    status_fields = (
+        "schema_version",
+        "proposal_id",
+        "pending_sprint_id",
+        "project_id",
+        "revision",
+        "proposal_status",
+        "activation_state",
+        "source_metadata",
+        "summary",
+        "validation",
+        "regenerate_requested",
+        "created_at",
+        "updated_at",
+        "started_sprint_id",
+    )
+    return {
+        "schema_version": 1,
+        "correlation_id": "corr-status-17",
+        "status": {field: copy.deepcopy(proposal[field]) for field in status_fields},
+    }
+
+
 class InboundCoordinatorContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -119,6 +145,9 @@ class InboundCoordinatorContractTests(unittest.TestCase):
                 "deduplicated": False,
                 "proposal": proposal,
             },
+            "inbound-pending-proposal-status-response-v1.schema.json": (
+                status_response_fixture()
+            ),
             "inbound-pending-proposal-action-v1.schema.json": {
                 "schema_version": 1,
                 "action": "comment",
@@ -304,6 +333,111 @@ class InboundCoordinatorContractTests(unittest.TestCase):
             "inbound-pending-proposal-v1.schema.json", impossible_activation
         )
 
+    def test_reduced_status_response_is_closed_and_covers_every_lifecycle(self) -> None:
+        schema = "inbound-pending-proposal-status-response-v1.schema.json"
+        created = status_response_fixture()
+        self.validator(schema).validate(created)
+
+        for forbidden in (
+            "candidate",
+            "comments",
+            "submitted_by",
+            "import_payload",
+            "activation_attempt_id",
+            "telegram_update_id",
+        ):
+            value = status_response_fixture()
+            value["status"][forbidden] = "must-not-be-published"
+            with self.subTest(forbidden=forbidden):
+                self.assert_invalid(schema, value)
+
+        extra_envelope = status_response_fixture()
+        extra_envelope["pending_sprint"] = {}
+        self.assert_invalid(schema, extra_envelope)
+
+        ready = status_response_fixture()
+        ready["status"].update(
+            {
+                "revision": 1,
+                "proposal_status": "ready",
+                "validation": {
+                    "status": "valid",
+                    "checked_at": "2026-10-08T08:32:00Z",
+                    "issues": [],
+                },
+                "updated_at": "2026-10-08T08:32:00Z",
+            }
+        )
+        self.validator(schema).validate(ready)
+        ready_without_check_time = copy.deepcopy(ready)
+        ready_without_check_time["status"]["validation"]["checked_at"] = None
+        self.assert_invalid(schema, ready_without_check_time)
+        ready["status"]["activation_state"] = "starting"
+        self.validator(schema).validate(ready)
+
+        started = copy.deepcopy(ready)
+        started["status"].update(
+            {
+                "revision": 3,
+                "proposal_status": "started",
+                "activation_state": "started",
+                "started_sprint_id": "msv1-" + ("a" * 64),
+            }
+        )
+        self.validator(schema).validate(started)
+        started_without_id = copy.deepcopy(started)
+        started_without_id["status"]["started_sprint_id"] = None
+        self.assert_invalid(schema, started_without_id)
+
+        rejected = status_response_fixture()
+        rejected["status"].update(
+            {
+                "revision": 1,
+                "proposal_status": "rejected",
+                "updated_at": "2026-10-08T08:32:00Z",
+            }
+        )
+        self.validator(schema).validate(rejected)
+        rejected_starting = copy.deepcopy(rejected)
+        rejected_starting["status"]["activation_state"] = "starting"
+        self.assert_invalid(schema, rejected_starting)
+
+        validation_failed = status_response_fixture()
+        validation_failed["status"].update(
+            {
+                "revision": 1,
+                "proposal_status": "failed",
+                "validation": {
+                    "status": "invalid",
+                    "checked_at": "2026-10-08T08:32:00Z",
+                    "issues": [
+                        {
+                            "code": "MANIFEST_INVALID",
+                            "message": "Manifest is invalid.",
+                        }
+                    ],
+                },
+                "updated_at": "2026-10-08T08:32:00Z",
+            }
+        )
+        self.validator(schema).validate(validation_failed)
+        validation_failed_without_issues = copy.deepcopy(validation_failed)
+        validation_failed_without_issues["status"]["validation"]["issues"] = []
+        self.assert_invalid(schema, validation_failed_without_issues)
+
+        activation_failed = copy.deepcopy(ready)
+        activation_failed["status"].update(
+            {
+                "revision": 3,
+                "proposal_status": "failed",
+                "activation_state": "failed",
+                "started_sprint_id": None,
+            }
+        )
+        self.validator(schema).validate(activation_failed)
+        activation_failed["status"]["activation_state"] = "not_started"
+        self.assert_invalid(schema, activation_failed)
+
     def test_non_activation_actions_are_closed_and_revision_bound(self) -> None:
         action = {
             "schema_version": 1,
@@ -411,6 +545,7 @@ class InboundCoordinatorContractTests(unittest.TestCase):
         spec = SPEC_PATH.read_text(encoding="utf-8")
         for marker in (
             "POST` | `/api/v1/projects/{project_id}/pending-sprints`",
+            "GET` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status`",
             "/pending-sprints/{pending_sprint_id}/reject",
             "/pending-sprints/{pending_sprint_id}/comments",
             "/pending-sprints/{pending_sprint_id}/regenerate-request",
@@ -426,6 +561,9 @@ class InboundCoordinatorContractTests(unittest.TestCase):
             "fresh transport envelope",
             "proposal: null",
             "detail record remains readable after",
+            "bearer-only status route",
+            "level-triggered snapshot",
+            "Telegram is optional",
             "NQII-001 intentionally changes no backend route",
         ):
             with self.subTest(marker=marker):

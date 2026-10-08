@@ -29,8 +29,9 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPBearer
 
 from nginx_qa.git_provider import RepositorySpec, canonical_remote_from_address
 from nginx_qa.inbound_proposals import (
@@ -239,6 +240,11 @@ async def app_lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=app_lifespan)
+inbound_proposal_bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="InboundProposalBearer",
+    description="Bearer credential issued to an inbound proposal producer.",
+)
 
 QUEUE_DEFINITIONS: dict[str, dict[str, str]] = {
     "work": {
@@ -24611,11 +24617,102 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _later_pending_proposal_timestamp(
+    current_value: Any,
+    transition_value: Any,
+) -> Any:
+    """Keep proposal timestamps monotonic while projecting legacy state."""
+
+    current_at = parse_utc_datetime(current_value)
+    transition_at = parse_utc_datetime(transition_value)
+    if transition_at is None:
+        return current_value
+    if current_at is None or transition_at > current_at:
+        return transition_value
+    return current_value
+
+
+def _project_legacy_proposal_lifecycle(
+    record: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    """Project outer activation state for records written before NQII-005.
+
+    Older ``legacy_json`` proposal records only mutated the pending-sprint
+    envelope during Start. Their nested proposal therefore remained
+    ``ready/not_started`` even after an activation attempt. The projection is
+    deliberately read-only and applies only to that exact stale state, so new
+    records whose proposal lifecycle was persisted are left untouched.
+    """
+
+    candidate = proposal.get("candidate")
+    validation = proposal.get("validation")
+    if not (
+        isinstance(candidate, dict)
+        and candidate.get("kind") == "legacy_json"
+        and isinstance(validation, dict)
+        and validation.get("status") == "valid"
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "not_started"
+    ):
+        return proposal
+
+    try:
+        attempts = max(0, int(record.get("activation_attempts") or 0))
+    except (TypeError, ValueError):
+        attempts = 0
+    if attempts < 1:
+        return proposal
+
+    record_status = str(record.get("status") or "pending").strip().lower()
+    projected = deepcopy(proposal)
+    revision_delta = 0
+    transition_at: Any = None
+    if record_status == "activated":
+        started_sprint_id = str(
+            record.get("activated_sprint_id") or ""
+        ).strip()
+        if not started_sprint_id:
+            return proposal
+        projected["proposal_status"] = "started"
+        projected["activation_state"] = "started"
+        projected["started_sprint_id"] = started_sprint_id
+        revision_delta = attempts * 2
+        transition_at = record.get("activated_at")
+    elif record_status == "activating":
+        projected["activation_state"] = "starting"
+        revision_delta = attempts * 2 - 1
+        transition_at = record.get("activating_at")
+    elif (
+        record_status == "pending"
+        and parse_utc_datetime(record.get("last_activation_failed_at"))
+        is not None
+    ):
+        projected["proposal_status"] = "failed"
+        projected["activation_state"] = "failed"
+        projected["started_sprint_id"] = None
+        revision_delta = attempts * 2
+        transition_at = record.get("last_activation_failed_at")
+    else:
+        return proposal
+
+    try:
+        base_revision = max(0, int(proposal.get("revision") or 0))
+    except (TypeError, ValueError):
+        base_revision = 0
+    projected["revision"] = base_revision + revision_delta
+    projected["updated_at"] = _later_pending_proposal_timestamp(
+        proposal.get("updated_at"),
+        transition_at,
+    )
+    return projected
+
+
 def pending_proposal_resource(record: dict[str, Any]) -> dict[str, Any] | None:
     raw = record.get("proposal")
     if not isinstance(raw, dict):
         return None
-    return {
+    proposal = {
         key: deepcopy(raw.get(key))
         for key in (
             "schema_version",
@@ -24632,6 +24729,36 @@ def pending_proposal_resource(record: dict[str, Any]) -> dict[str, Any] | None:
             "comments",
             "regenerate_requested",
             "submitted_by",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
+    }
+    return _project_legacy_proposal_lifecycle(record, proposal)
+
+
+def pending_proposal_status_resource(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the closed, transport-neutral status projection for a proposal."""
+
+    proposal = pending_proposal_resource(record)
+    if proposal is None:
+        return None
+    return {
+        key: deepcopy(proposal.get(key))
+        for key in (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "validation",
+            "regenerate_requested",
             "created_at",
             "updated_at",
             "started_sprint_id",
@@ -24690,8 +24817,35 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
         and proposal.get("proposal_status") == "ready"
         and proposal.get("activation_state") == "starting"
     )
+    proposal_candidate = (
+        proposal.get("candidate")
+        if isinstance(proposal, dict)
+        and isinstance(proposal.get("candidate"), dict)
+        else {}
+    )
+    candidate_kind = str(proposal_candidate.get("kind") or "")
+    legacy_retry = bool(
+        record_status == "pending"
+        and candidate_kind == "legacy_json"
+        and proposal is not None
+        and proposal.get("proposal_status") == "failed"
+        and proposal.get("activation_state") == "failed"
+        and (proposal.get("validation") or {}).get("status") == "valid"
+    )
+    legacy_recovery = bool(
+        record_status == "activating"
+        and retry_at is not None
+        and datetime.now(timezone.utc) >= retry_at
+        and candidate_kind == "legacy_json"
+        and proposal is not None
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "starting"
+        and (proposal.get("validation") or {}).get("status") == "valid"
+    )
     summary["startable"] = bool(
         managed_recovery
+        or legacy_retry
+        or legacy_recovery
         or (
             (
                 record_status == "pending"
@@ -25607,7 +25761,18 @@ def update_pending_sprint_activation_file(
             )
         now = utc_now()
         current_status = str(record.get("status") or "pending").strip()
+        proposal = pending_proposal_resource(record)
+        candidate = (
+            proposal.get("candidate")
+            if isinstance(proposal, dict)
+            and isinstance(proposal.get("candidate"), dict)
+            else None
+        )
+        legacy_proposal = bool(
+            isinstance(candidate, dict) and candidate.get("kind") == "legacy_json"
+        )
         if action == "claim":
+            recovering_expired = False
             other_activating = next(
                 (
                     item
@@ -25652,11 +25817,32 @@ def update_pending_sprint_activation_file(
                     )
                 record["status"] = "pending"
                 current_status = "pending"
+                recovering_expired = True
             if current_status != "pending":
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={"error": "pending_sprint_not_startable"},
                 )
+            if proposal is not None:
+                proposal_state = (
+                    str(proposal.get("proposal_status") or ""),
+                    str(proposal.get("activation_state") or ""),
+                    str((proposal.get("validation") or {}).get("status") or ""),
+                )
+                eligible_states = {
+                    ("ready", "not_started", "valid"),
+                    ("failed", "failed", "valid"),
+                }
+                if recovering_expired:
+                    eligible_states.add(("ready", "starting", "valid"))
+                if not legacy_proposal or proposal_state not in eligible_states:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "PROPOSAL_STATE_CONFLICT",
+                            "message": "The proposal is not eligible for Start.",
+                        },
+                    )
             record["status"] = "activating"
             record["activating_at"] = now
             record["activation_attempt_id"] = uuid4().hex
@@ -25664,6 +25850,13 @@ def update_pending_sprint_activation_file(
                 record.get("activation_attempts") or 0
             ) + 1
             record["last_activation_error"] = None
+            if legacy_proposal and proposal is not None:
+                proposal["proposal_status"] = "ready"
+                proposal["activation_state"] = "starting"
+                proposal["started_sprint_id"] = None
+                proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                proposal["updated_at"] = now
+                record["proposal"] = proposal
         elif action == "complete":
             if current_status != "activating":
                 raise HTTPException(
@@ -25678,12 +25871,31 @@ def update_pending_sprint_activation_file(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={"error": "pending_sprint_activation_superseded"},
                 )
+            clean_activated_sprint_id = str(
+                activated_sprint_id or ""
+            ).strip()
+            if legacy_proposal and not clean_activated_sprint_id:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error": "pending_sprint_activation_result_invalid"},
+                )
             record["status"] = "activated"
             record["activating_at"] = None
             record["activation_attempt_id"] = None
             record["activated_at"] = str(activated_at or "").strip() or now
-            record["activated_sprint_id"] = activated_sprint_id
+            record["activated_sprint_id"] = (
+                clean_activated_sprint_id
+                if legacy_proposal
+                else activated_sprint_id
+            )
             record["last_activation_error"] = None
+            if legacy_proposal and proposal is not None:
+                proposal["proposal_status"] = "started"
+                proposal["activation_state"] = "started"
+                proposal["started_sprint_id"] = clean_activated_sprint_id
+                proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                proposal["updated_at"] = now
+                record["proposal"] = proposal
             # The canonical sprint archive now owns the full import JSON. Keep
             # only the fingerprint/source metadata here for Telegram dedupe.
             record["import_payload"] = None
@@ -25702,6 +25914,13 @@ def update_pending_sprint_activation_file(
                 record["activation_attempt_id"] = None
                 record["last_activation_failed_at"] = now
                 record["last_activation_error"] = deepcopy(error)
+                if legacy_proposal and proposal is not None:
+                    proposal["proposal_status"] = "failed"
+                    proposal["activation_state"] = "failed"
+                    proposal["started_sprint_id"] = None
+                    proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                    proposal["updated_at"] = now
+                    record["proposal"] = proposal
         else:
             raise ValueError(f"Unsupported pending sprint action: {action}")
         project["updated_at"] = now
@@ -32095,6 +32314,235 @@ async def get_project_pending_sprint(
     )
 
 
+def _inline_openapi_schema(filename: str) -> dict[str, Any]:
+    """Load a local JSON Schema and inline all of its file/pointer refs."""
+
+    schema_root = (base_dir / "schemas").resolve()
+    cache: dict[Path, Any] = {}
+
+    def load_document(path: Path) -> Any:
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(schema_root)
+        except ValueError as exc:
+            raise RuntimeError("OpenAPI schema reference escapes schema root") from exc
+        if resolved not in cache:
+            cache[resolved] = json.loads(resolved.read_text(encoding="utf-8"))
+        return cache[resolved]
+
+    def resolve_pointer(document: Any, fragment: str) -> Any:
+        if not fragment:
+            return document
+        if not fragment.startswith("/"):
+            raise RuntimeError("OpenAPI schema reference has an invalid pointer")
+        current = document
+        for raw_part in fragment[1:].split("/"):
+            part = urllib.parse.unquote(raw_part).replace("~1", "/").replace(
+                "~0", "~"
+            )
+            if isinstance(current, dict):
+                current = current[part]
+            elif isinstance(current, list):
+                current = current[int(part)]
+            else:
+                raise RuntimeError("OpenAPI schema pointer cannot be resolved")
+        return current
+
+    def expand(
+        value: Any,
+        current_path: Path,
+        stack: frozenset[tuple[Path, str]],
+    ) -> Any:
+        if isinstance(value, list):
+            return [expand(item, current_path, stack) for item in value]
+        if not isinstance(value, dict):
+            return deepcopy(value)
+        reference = value.get("$ref")
+        if isinstance(reference, str):
+            reference_file, _, fragment = reference.partition("#")
+            if urllib.parse.urlsplit(reference_file).scheme:
+                raise RuntimeError("OpenAPI schema reference must be local")
+            target_path = (
+                (current_path.parent / reference_file).resolve()
+                if reference_file
+                else current_path
+            )
+            key = (target_path, fragment)
+            if key in stack:
+                raise RuntimeError("OpenAPI schema reference cycle is unsupported")
+            target = resolve_pointer(load_document(target_path), fragment)
+            expanded = expand(target, target_path, stack | {key})
+            siblings = {
+                item_key: item_value
+                for item_key, item_value in value.items()
+                if item_key != "$ref"
+            }
+            if siblings:
+                return {
+                    "allOf": [
+                        expanded,
+                        expand(siblings, current_path, stack),
+                    ]
+                }
+            return expanded
+        return {
+            item_key: expand(item_value, current_path, stack)
+            for item_key, item_value in value.items()
+            if item_key not in {"$schema", "$id"}
+        }
+
+    root_path = (schema_root / filename).resolve()
+    return expand(load_document(root_path), root_path, frozenset())
+
+
+INBOUND_PROPOSAL_STATUS_OPENAPI_SCHEMA = _inline_openapi_schema(
+    "inbound-pending-proposal-status-response-v1.schema.json"
+)
+INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA = _inline_openapi_schema(
+    "inbound-api-error-v1.schema.json"
+)
+INBOUND_CORRELATION_OPENAPI_HEADER = {
+    "description": "Correlation identifier returned for this request.",
+    "schema": {"type": "string"},
+}
+
+
+def _inbound_status_openapi_response(
+    description: str,
+    schema: dict[str, Any],
+    *,
+    authentication_required: bool = False,
+) -> dict[str, Any]:
+    headers: dict[str, Any] = {
+        "X-Correlation-ID": deepcopy(INBOUND_CORRELATION_OPENAPI_HEADER)
+    }
+    if authentication_required:
+        headers["WWW-Authenticate"] = {
+            "description": "Authentication challenge.",
+            "schema": {"type": "string", "const": "Bearer"},
+        }
+    return {
+        "description": description,
+        "headers": headers,
+        "content": {
+            "application/json": {"schema": deepcopy(schema)}
+        },
+    }
+
+
+INBOUND_PROPOSAL_STATUS_OPENAPI_RESPONSES: dict[Any, Any] = {
+    200: _inbound_status_openapi_response(
+        "Transport-neutral inbound proposal status snapshot",
+        INBOUND_PROPOSAL_STATUS_OPENAPI_SCHEMA,
+    ),
+    400: _inbound_status_openapi_response(
+        "Invalid status request",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    401: _inbound_status_openapi_response(
+        "Producer authentication required",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+        authentication_required=True,
+    ),
+    403: _inbound_status_openapi_response(
+        "Producer is not authorized to read this project",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    404: _inbound_status_openapi_response(
+        "Proposal status not found",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    500: _inbound_status_openapi_response(
+        "Proposal status storage failure",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    503: _inbound_status_openapi_response(
+        "Inbound proposal service unavailable",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    "default": _inbound_status_openapi_response(
+        "Normalized inbound proposal error",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+}
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status",
+    dependencies=[Depends(inbound_proposal_bearer)],
+    responses=INBOUND_PROPOSAL_STATUS_OPENAPI_RESPONSES,
+)
+async def get_project_pending_proposal_status(
+    project_id: str,
+    pending_sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    """Return a closed producer-owned snapshot without transport coupling."""
+
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        producer = inbound_authenticate_request(request, correlation_id)
+        project_phone, context_key, _, _ = await inbound_project_context(
+            project_id,
+            producer,
+            "read",
+            correlation_id,
+        )
+        async with pending_sprints_lock:
+            project = await asyncio.to_thread(
+                project_pending_sprints_file_snapshot,
+                context_key,
+                project_phone,
+                pending_sprint_id,
+            )
+        record = pending_sprint_record_from_project(project, pending_sprint_id)
+        proposal = pending_proposal_resource(record or {})
+        owner_id = str(
+            ((proposal or {}).get("submitted_by") or {}).get("producer_id") or ""
+        )
+        if proposal is None or owner_id != producer.producer_id:
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+        status_resource = pending_proposal_status_resource(record or {})
+        if status_resource is None:
+            raise RuntimeError("Proposal status projection is unavailable")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "schema_version": 1,
+                "correlation_id": correlation_id,
+                "status": status_resource,
+            },
+            headers={
+                "X-Correlation-ID": correlation_id,
+                "Cache-Control": "no-store",
+            },
+        )
+    except InboundProposalError as exc:
+        response = inbound_proposal_error_response(exc)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except Exception:
+        correlation_id = (
+            locals().get("correlation_id") or correlation_id_from_values([])[0]
+        )
+        response = inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal status could not be read.",
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
 async def mutate_project_pending_proposal(
     project_id: str,
     sprint_id: str,
@@ -32436,10 +32884,7 @@ async def start_project_pending_sprint(
             context_key=context_key,
             sprint_id=sprint_id,
         )
-    if proposal is not None and (
-        proposal.get("proposal_status") != "ready"
-        or proposal.get("activation_state") != "not_started"
-    ):
+    if proposal is not None and not pending_sprint_summary(record).get("startable"):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail={
@@ -32473,6 +32918,25 @@ async def start_project_pending_sprint(
         record.get("assignment_mode") or "sequential"
     ).strip().lower()
     payload = actor_payload_with_assignment_mode(payload, assignment_mode)
+    if (
+        proposal is not None
+        and ((proposal.get("candidate") or {}).get("kind") == "legacy_json")
+        and not any(
+            actor_import_reference_items(payload, key)
+            for key in (
+                "project_id",
+                "project_phone",
+                "git_address",
+                "git_context_key",
+            )
+        )
+    ):
+        # The project in this route was already resolved and authorized.  The
+        # producer contract therefore does not require a duplicate project
+        # reference inside a legacy candidate, while explicit references are
+        # still checked below for mismatch.
+        payload = deepcopy(payload)
+        payload["project_id"] = project_phone
     result: dict[str, Any] | None = None
     if int(record.get("activation_attempts") or 0) > 0:
         # Wait for any still-running attempt before deciding whether recovery

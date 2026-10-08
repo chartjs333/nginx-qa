@@ -17,7 +17,8 @@ nginx-qa does NOT read email, folders, Slack, Drive or other external sources in
 5. Support operator actions: Preview, Play/Start, Reject, Comment/Regenerate request.
 6. Keep Play/Start as the explicit activation gate.
 7. Support managed start-from-git proposals in addition to existing direct pending JSON where applicable.
-8. Emit status suitable for external consumers and Telegram notifications.
+8. Expose a closed, reduced, read-only status snapshot suitable for external
+   consumers and optional Telegram notifications.
 9. Preserve legacy Telegram pending-sprint behavior.
 
 ## External producer contract
@@ -43,6 +44,21 @@ authentication, error, correlation, and activation boundaries are frozen in
 contract-only change; backend, managed-Git bridge, UI, Telegram status, and
 qualification remain owned by their subsequent sprint nodes.
 
+The neutral notification-read boundary is the bearer-only endpoint:
+
+```text
+GET /api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status
+```
+
+Its closed
+`schemas/inbound-pending-proposal-status-response-v1.schema.json` response
+contains lifecycle/source display data only. It excludes candidate content,
+comments, producer identity, durable pending-record internals, and Telegram
+fields. It uses the producer `read` scope and owner isolation, returns terminal
+states, follows the normalized error/correlation contract, and never activates
+or mutates a proposal. Existing collection/detail endpoints remain compatible
+operator and Telegram surfaces rather than becoming the Hub status contract.
+
 Machine-to-machine API concerns:
 - authentication boundary;
 - stable versioned request/response schema;
@@ -50,6 +66,7 @@ Machine-to-machine API concerns:
 - normalized errors;
 - correlation IDs;
 - no source-system secrets in stored proposal metadata.
+- level-triggered status polling with revision-based Hub deduplication.
 
 ## UI
 
@@ -75,10 +92,17 @@ For managed Git proposals, Play must call the existing managed start-from-git pa
 Telegram remains a human-facing observability/notification channel. Existing Telegram pending JSON import remains supported.
 
 nginx-qa may provide status information that an external Hub can relay to Telegram, but Telegram is not required for machine-to-machine integration.
+The Hub, not nginx-qa, owns notification delivery, retry, and channel-specific
+formatting. Repeated reads of the same proposal revision must not create a
+duplicate notification. nginx-qa does not require a Telegram bot, webhook, or
+chat to serve proposal status, and the status route does not send Telegram
+messages or call an external adapter.
 
 ## Safety
 
 - Preview/read/reject/comment must not activate a sprint.
+- Status reads must not change proposal revision, pending storage, active
+  execution, queues, workspaces, or leases.
 - Play/Start is the activation boundary.
 - Invalid managed proposals fail before mutation.
 - Existing pending-sprint and Telegram regressions must remain green.
@@ -97,4 +121,8 @@ PASS requires:
 7. Play activates exactly once;
 8. managed Git proposal can invoke start-from-git;
 9. duplicate API submission does not duplicate pending sprint;
-10. regression coverage passes.
+10. a bearer-authenticated Hub can read closed status snapshots for
+    created/ready/started/rejected/failed proposals, including terminal records;
+11. repeated status reads are non-mutating and support Hub-side deduplication;
+12. status polling works without Telegram configuration or outbound adapters;
+13. regression coverage passes.

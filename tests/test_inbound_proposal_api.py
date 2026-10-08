@@ -81,6 +81,22 @@ async def asgi_request(
 class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
     PROJECT_PHONE = "9008"
     PROJECT_CONTEXT = "github.com/example/inbound-proposals"
+    STATUS_RESOURCE_KEYS = {
+        "schema_version",
+        "proposal_id",
+        "pending_sprint_id",
+        "project_id",
+        "revision",
+        "proposal_status",
+        "activation_state",
+        "source_metadata",
+        "summary",
+        "validation",
+        "regenerate_requested",
+        "created_at",
+        "updated_at",
+        "started_sprint_id",
+    }
     TOKEN = base64.urlsafe_b64encode(b"A" * 32).decode("ascii").rstrip("=")
     OTHER_TOKEN = base64.urlsafe_b64encode(b"B" * 32).decode("ascii").rstrip("=")
     UNRELATED_TOKEN = (
@@ -296,6 +312,168 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             ),
         )
 
+    async def read_status(
+        self,
+        pending_id: str,
+        *,
+        correlation_id: str,
+        token: str | None = None,
+        headers: list[tuple[bytes, bytes]] | None = None,
+    ) -> tuple[int, dict[str, str], object]:
+        return await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/status",
+            headers=(
+                headers
+                if headers is not None
+                else self.auth_headers(
+                    token=token,
+                    correlation_id=correlation_id,
+                )
+            ),
+        )
+
+    def assert_status_response(
+        self,
+        response_headers: dict[str, str],
+        response: object,
+        *,
+        correlation_id: str,
+        proposal_status: str,
+        activation_state: str,
+        pending_id: str,
+    ) -> dict[str, object]:
+        self.assertIsInstance(response, dict)
+        assert isinstance(response, dict)
+        self.assertEqual(set(response), {"schema_version", "correlation_id", "status"})
+        self.assertEqual(response["schema_version"], 1)
+        self.assertEqual(response["correlation_id"], correlation_id)
+        self.assertEqual(response_headers["x-correlation-id"], correlation_id)
+        resource = response["status"]
+        self.assertIsInstance(resource, dict)
+        assert isinstance(resource, dict)
+        self.assertEqual(set(resource), self.STATUS_RESOURCE_KEYS)
+        self.assertEqual(resource["pending_sprint_id"], pending_id)
+        self.assertEqual(resource["project_id"], self.PROJECT_PHONE)
+        self.assertEqual(resource["proposal_status"], proposal_status)
+        self.assertEqual(resource["activation_state"], activation_state)
+        for forbidden in (
+            "candidate",
+            "comments",
+            "submitted_by",
+            "import_payload",
+            "activation_attempt_id",
+            "telegram_update_id",
+        ):
+            self.assertNotIn(forbidden, resource)
+        self.assertEqual(
+            main.managed_schema_errors(
+                response,
+                "inbound-pending-proposal-status-response-v1.schema.json",
+                issue_code="TEST_STATUS_SCHEMA_INVALID",
+            ),
+            [],
+        )
+        return resource
+
+    def test_status_openapi_is_bearer_only_local_and_normalized(self) -> None:
+        specification = main.app.openapi()
+        path = (
+            "/api/v1/projects/{project_id}/pending-sprints/"
+            "{pending_sprint_id}/status"
+        )
+        self.assertIn(path, specification["paths"])
+        self.assertNotIn(
+            "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/status",
+            specification["paths"],
+        )
+        operation = specification["paths"][path]["get"]
+        path_parameters = {
+            parameter["name"]: parameter
+            for parameter in operation.get("parameters", [])
+            if parameter.get("in") == "path"
+        }
+        self.assertEqual(set(path_parameters), {"project_id", "pending_sprint_id"})
+        self.assertTrue(all(item.get("required") is True for item in path_parameters.values()))
+        self.assertNotIn("requestBody", operation)
+
+        security_schemes = specification["components"]["securitySchemes"]
+        bearer_schemes = {
+            name
+            for name, definition in security_schemes.items()
+            if str(definition.get("type") or "").casefold() == "http"
+            and str(definition.get("scheme") or "").casefold() == "bearer"
+        }
+        self.assertTrue(bearer_schemes)
+        operation_security = operation.get("security")
+        self.assertIsInstance(operation_security, list)
+        self.assertTrue(operation_security)
+        self.assertNotIn({}, operation_security)
+        self.assertTrue(
+            any(bearer_schemes.intersection(requirement) for requirement in operation_security)
+        )
+
+        expected_responses = {
+            "200",
+            "400",
+            "401",
+            "403",
+            "404",
+            "500",
+            "503",
+            "default",
+        }
+        responses = operation["responses"]
+        self.assertEqual(set(responses), expected_responses)
+        self.assertNotIn("422", responses)
+        self.assertEqual(
+            responses["default"]["description"],
+            "Normalized inbound proposal error",
+        )
+
+        def resolve_local_reference(reference: str) -> object:
+            self.assertTrue(reference.startswith("#/"), reference)
+            current: object = specification
+            for raw_part in reference[2:].split("/"):
+                part = raw_part.replace("~1", "/").replace("~0", "~")
+                self.assertIsInstance(current, dict)
+                assert isinstance(current, dict)
+                self.assertIn(part, current)
+                current = current[part]
+            return current
+
+        visited_references: set[str] = set()
+
+        def assert_local_schema(node: object) -> None:
+            if isinstance(node, list):
+                for item in node:
+                    assert_local_schema(item)
+                return
+            if not isinstance(node, dict):
+                return
+            reference = node.get("$ref")
+            if isinstance(reference, str):
+                self.assertFalse(reference.startswith(("http://", "https://")))
+                target = resolve_local_reference(reference)
+                if reference not in visited_references:
+                    visited_references.add(reference)
+                    assert_local_schema(target)
+            for key, value in node.items():
+                if key != "$ref":
+                    assert_local_schema(value)
+
+        for response_code in sorted(expected_responses):
+            response = responses[response_code]
+            correlation_header = response["headers"]["X-Correlation-ID"]
+            self.assertEqual(correlation_header["schema"]["type"], "string")
+            response_schema = response["content"]["application/json"]["schema"]
+            self.assertIsInstance(response_schema, dict)
+            assert_local_schema(response_schema)
+
+        authenticate_header = responses["401"]["headers"]["WWW-Authenticate"]
+        self.assertEqual(authenticate_header["schema"]["type"], "string")
+        self.assertIn("Bearer", json.dumps(authenticate_header))
+
     async def test_create_replay_and_read_are_durable_without_activation(self) -> None:
         with patch.object(
             main,
@@ -349,6 +527,511 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             detail["pending_sprint"]["proposal"]["proposal_status"],
             "created",
         )
+
+    async def test_bearer_status_read_is_transport_neutral_for_every_lifecycle(
+        self,
+    ) -> None:
+        observed_statuses: list[str] = []
+
+        async def assert_read(
+            pending_id: str,
+            *,
+            correlation_id: str,
+            proposal_status: str,
+            activation_state: str,
+            validation_status: str,
+            started_sprint_id: str | None = None,
+        ) -> dict[str, object]:
+            bytes_before = main.pending_sprints_path.read_bytes()
+            status_code, response_headers, response = await self.read_status(
+                pending_id,
+                correlation_id=correlation_id,
+            )
+            self.assertEqual(status_code, 200, response)
+            self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_before)
+            resource = self.assert_status_response(
+                response_headers,
+                response,
+                correlation_id=correlation_id,
+                proposal_status=proposal_status,
+                activation_state=activation_state,
+                pending_id=pending_id,
+            )
+            self.assertEqual(resource["validation"]["status"], validation_status)
+            self.assertEqual(resource["started_sprint_id"], started_sprint_id)
+            observed_statuses.append(str(resource["proposal_status"]))
+            return resource
+
+        with patch.object(
+            main,
+            "telegram_api_json",
+            side_effect=AssertionError("status read used Telegram transport"),
+        ) as telegram_api, patch.object(
+            main,
+            "send_telegram_import_reply",
+            side_effect=AssertionError("status read sent a Telegram reply"),
+        ) as telegram_reply, patch.object(
+            main,
+            "send_telegram_import_error_reply",
+            side_effect=AssertionError("status read sent a Telegram error"),
+        ) as telegram_error:
+            started_payload = self.managed_proposal_payload(
+                proposal_id="proposal-status-started",
+                create_idempotency_key="create:proposal-status-started:v1",
+                activation_idempotency_key="activate:proposal-status-started:v1",
+            )
+            create_status, _, created = await self.create(
+                started_payload,
+                correlation_id="corr-status-created-create",
+            )
+            self.assertEqual(create_status, 201, created)
+            started_pending_id = created["proposal"]["pending_sprint_id"]
+            await assert_read(
+                started_pending_id,
+                correlation_id="corr-status-created-read",
+                proposal_status="created",
+                activation_state="not_started",
+                validation_status="not_run",
+            )
+
+            preview_status, _, preview = await self.preview(
+                started_pending_id,
+                idempotency_key="preview:proposal-status-started:v1",
+                correlation_id="corr-status-ready-preview",
+            )
+            self.assertEqual(preview_status, 200, preview)
+            await assert_read(
+                started_pending_id,
+                correlation_id="corr-status-ready-read",
+                proposal_status="ready",
+                activation_state="not_started",
+                validation_status="valid",
+            )
+
+            activated_sprint_id = "msv1-" + ("d" * 64)
+            managed_result = ManagedStartResult(
+                {
+                    "sprint_id": activated_sprint_id,
+                    "status": "active",
+                    "phase": "ACTIVATE",
+                    "deduplicated": False,
+                },
+                201,
+            )
+            with patch.object(
+                main,
+                "execute_managed_project_sprint_start",
+                new=AsyncMock(return_value=managed_result),
+            ):
+                start_status, _, started = await asgi_request(
+                    f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                    f"{started_pending_id}/start",
+                    method="POST",
+                )
+            self.assertEqual(start_status, 200, started)
+            await assert_read(
+                started_pending_id,
+                correlation_id="corr-status-started-read",
+                proposal_status="started",
+                activation_state="started",
+                validation_status="valid",
+                started_sprint_id=activated_sprint_id,
+            )
+
+            rejected_payload = self.proposal_payload(
+                proposal_id="proposal-status-rejected",
+                idempotency_key="create:proposal-status-rejected:v1",
+            )
+            rejected_create_status, _, rejected_create = await self.create(
+                rejected_payload,
+                correlation_id="corr-status-rejected-create",
+            )
+            self.assertEqual(rejected_create_status, 201, rejected_create)
+            rejected_pending_id = rejected_create["proposal"]["pending_sprint_id"]
+            reject_status, _, rejected = await asgi_request(
+                f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                f"{rejected_pending_id}/reject",
+                method="POST",
+                payload={
+                    "schema_version": 1,
+                    "action": "reject",
+                    "expected_revision": 0,
+                    "idempotency_key": "reject:proposal-status-rejected:v1",
+                    "comment": "Reject this proposal without activation.",
+                },
+                headers=self.auth_headers(
+                    correlation_id="corr-status-rejected-action"
+                ),
+            )
+            self.assertEqual(reject_status, 200, rejected)
+            await assert_read(
+                rejected_pending_id,
+                correlation_id="corr-status-rejected-read",
+                proposal_status="rejected",
+                activation_state="not_started",
+                validation_status="not_run",
+            )
+
+            failed_payload = self.managed_proposal_payload(
+                proposal_id="proposal-status-failed",
+                create_idempotency_key="create:proposal-status-failed:v1",
+                activation_idempotency_key="activate:proposal-status-failed:v1",
+            )
+            failed_create_status, _, failed_create = await self.create(
+                failed_payload,
+                correlation_id="corr-status-failed-create",
+            )
+            self.assertEqual(failed_create_status, 201, failed_create)
+            failed_pending_id = failed_create["proposal"]["pending_sprint_id"]
+            failed_preview_status, _, failed_preview = await self.preview(
+                failed_pending_id,
+                idempotency_key="preview:proposal-status-failed:v1",
+                correlation_id="corr-status-failed-preview",
+            )
+            self.assertEqual(failed_preview_status, 200, failed_preview)
+            activation_error = ManagedImportError(
+                "SPRINT_PREFLIGHT_FAILED",
+                409,
+                "managed-status-failure",
+                phase="VALIDATE",
+                issues=[
+                    {
+                        "code": "MANIFEST_SCHEMA_INVALID",
+                        "path": "manifest",
+                        "message": "Managed manifest validation failed",
+                    }
+                ],
+            )
+            with patch.object(
+                main,
+                "execute_managed_project_sprint_start",
+                new=AsyncMock(side_effect=activation_error),
+            ):
+                failed_start_status, _, failed_start = await asgi_request(
+                    f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+                    f"{failed_pending_id}/start",
+                    method="POST",
+                )
+            self.assertEqual(failed_start_status, 409, failed_start)
+            await assert_read(
+                failed_pending_id,
+                correlation_id="corr-status-failed-read",
+                proposal_status="failed",
+                activation_state="failed",
+                validation_status="valid",
+            )
+
+        self.assertEqual(
+            observed_statuses,
+            ["created", "ready", "started", "rejected", "failed"],
+        )
+        telegram_api.assert_not_called()
+        telegram_reply.assert_not_called()
+        telegram_error.assert_not_called()
+
+    async def test_status_read_requires_bearer_ownership_and_a_proposal(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.proposal_payload(
+                proposal_id="proposal-status-access",
+                idempotency_key="create:proposal-status-access:v1",
+            ),
+            correlation_id="corr-status-access-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        legacy = main.stage_project_sprint_file(
+            context_key=self.PROJECT_CONTEXT,
+            project_phone=self.PROJECT_PHONE,
+            project_name="Inbound Proposal Project",
+            git_address="https://github.com/example/inbound-proposals.git",
+            repository_key="github.com/example/inbound-proposals",
+            payload={"sprint": {"title": "Telegram pending without proposal"}},
+            source="telegram",
+            source_filename="telegram.json",
+            assignment_mode="parallel",
+            agent_count=0,
+            task_count=0,
+            telegram_update_id="telegram-status-null-1",
+        )
+        local_detail_status, _, local_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{legacy['id']}"
+        )
+        self.assertEqual(local_detail_status, 200, local_detail)
+        self.assertEqual(local_detail["pending_sprint"]["source"], "telegram")
+        self.assertIsNone(local_detail["pending_sprint"]["proposal"])
+        storage_before = main.pending_sprints_path.read_bytes()
+
+        with patch.object(
+            main,
+            "telegram_api_json",
+            side_effect=AssertionError("status denial used Telegram transport"),
+        ) as telegram_api, patch.object(
+            main,
+            "send_telegram_import_reply",
+            side_effect=AssertionError("status denial sent a Telegram reply"),
+        ) as telegram_reply, patch.object(
+            main,
+            "send_telegram_import_error_reply",
+            side_effect=AssertionError("status denial sent a Telegram error"),
+        ) as telegram_error:
+            missing_status, missing_headers, missing = await self.read_status(
+                pending_id,
+                correlation_id="unused",
+                headers=[(b"x-correlation-id", b"corr-status-missing-bearer")],
+            )
+            self.assertEqual(missing_status, 401, missing)
+            self.assertEqual(missing["detail"]["error"], "PROPOSAL_AUTH_REQUIRED")
+            self.assertEqual(
+                missing["detail"]["correlation_id"],
+                "corr-status-missing-bearer",
+            )
+            self.assertEqual(
+                missing_headers["x-correlation-id"],
+                "corr-status-missing-bearer",
+            )
+            self.assertEqual(missing_headers["www-authenticate"], "Bearer")
+
+            foreign_status, _, foreign = await self.read_status(
+                pending_id,
+                correlation_id="corr-status-foreign-owner",
+                token=self.OTHER_TOKEN,
+            )
+            self.assertEqual(foreign_status, 404, foreign)
+            self.assertEqual(foreign["detail"]["error"], "PROPOSAL_NOT_FOUND")
+
+            legacy_status, _, legacy_response = await self.read_status(
+                str(legacy["id"]),
+                correlation_id="corr-status-legacy-null",
+            )
+            self.assertEqual(legacy_status, 404, legacy_response)
+            self.assertEqual(
+                legacy_response["detail"]["error"],
+                "PROPOSAL_NOT_FOUND",
+            )
+
+        self.assertEqual(main.pending_sprints_path.read_bytes(), storage_before)
+        local_again_status, _, local_again = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{legacy['id']}"
+        )
+        self.assertEqual(local_again_status, 200, local_again)
+        self.assertEqual(local_again["pending_sprint"]["source"], "telegram")
+        self.assertIsNone(local_again["pending_sprint"]["proposal"])
+        telegram_api.assert_not_called()
+        telegram_reply.assert_not_called()
+        telegram_error.assert_not_called()
+
+    async def test_status_read_forbidden_and_invalid_correlation_are_normalized(
+        self,
+    ) -> None:
+        create_status, _, created = await self.create(
+            self.proposal_payload(
+                proposal_id="proposal-status-normalized-errors",
+                idempotency_key="create:proposal-status-normalized-errors:v1",
+            ),
+            correlation_id="corr-status-normalized-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+
+        no_read_token = base64.urlsafe_b64encode(b"D" * 32).decode("ascii").rstrip("=")
+        registry = json.loads(self.registry_path.read_text(encoding="utf-8"))
+        registry["producers"].append(
+            {
+                "producer_id": "status-without-read",
+                "token_sha256": hashlib.sha256(
+                    no_read_token.encode("ascii")
+                ).hexdigest(),
+                "project_ids": [self.PROJECT_PHONE],
+                "actions": ["create"],
+            }
+        )
+        self.registry_path.write_text(
+            json.dumps(registry, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        bytes_before = main.pending_sprints_path.read_bytes()
+
+        forbidden_status, forbidden_headers, forbidden = await self.read_status(
+            pending_id,
+            correlation_id="corr-status-forbidden",
+            token=no_read_token,
+        )
+        self.assertEqual(forbidden_status, 403, forbidden)
+        self.assertEqual(forbidden["detail"]["error"], "PROPOSAL_FORBIDDEN")
+        self.assertEqual(
+            forbidden["detail"]["correlation_id"],
+            "corr-status-forbidden",
+        )
+        self.assertEqual(
+            forbidden_headers["x-correlation-id"],
+            "corr-status-forbidden",
+        )
+
+        invalid_correlation = "invalid correlation must not echo"
+        invalid_status, invalid_headers, invalid = await self.read_status(
+            pending_id,
+            correlation_id="unused",
+            headers=[
+                (b"authorization", f"Bearer {self.TOKEN}".encode("ascii")),
+                (b"x-correlation-id", invalid_correlation.encode("ascii")),
+            ],
+        )
+        self.assertEqual(invalid_status, 400, invalid)
+        self.assertEqual(invalid["detail"]["error"], "PROPOSAL_REQUEST_INVALID")
+        self.assertEqual(invalid["detail"]["field"], "X-Correlation-ID")
+        generated_correlation = invalid["detail"]["correlation_id"]
+        self.assertTrue(generated_correlation)
+        self.assertNotEqual(generated_correlation, invalid_correlation)
+        self.assertEqual(
+            invalid_headers["x-correlation-id"],
+            generated_correlation,
+        )
+        self.assertNotIn(invalid_correlation, json.dumps(invalid))
+        self.assertNotIn(invalid_correlation, json.dumps(invalid_headers))
+        self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_before)
+
+    async def test_status_projects_pre_upgrade_legacy_activation_without_mutation(
+        self,
+    ) -> None:
+        async def create_ready(suffix: str) -> str:
+            create_status, _, created = await self.create(
+                self.proposal_payload(
+                    proposal_id=f"proposal-stale-legacy-{suffix}",
+                    idempotency_key=f"create:proposal-stale-legacy-{suffix}:v1",
+                ),
+                correlation_id=f"corr-stale-legacy-{suffix}-create",
+            )
+            self.assertEqual(create_status, 201, created)
+            pending_id = created["proposal"]["pending_sprint_id"]
+            preview_status, _, preview = await self.preview(
+                pending_id,
+                idempotency_key=f"preview:proposal-stale-legacy-{suffix}:v1",
+                correlation_id=f"corr-stale-legacy-{suffix}-preview",
+            )
+            self.assertEqual(preview_status, 200, preview)
+            self.assertEqual(preview["proposal"]["proposal_status"], "ready")
+            self.assertEqual(preview["proposal"]["activation_state"], "not_started")
+            self.assertEqual(preview["proposal"]["revision"], 1)
+            return str(pending_id)
+
+        activated_id = await create_ready("activated")
+        activating_id = await create_ready("activating")
+        failed_id = await create_ready("failed")
+        activated_at = "2026-10-08T10:01:00+00:00"
+        activating_at = "2026-10-08T10:02:00+00:00"
+        failed_at = "2026-10-08T10:03:00+00:00"
+        activated_sprint_id = "legacy-pre-upgrade-started"
+
+        storage = main.read_pending_sprints_file()
+        records = storage["projects"][self.PROJECT_CONTEXT]["sprints"]
+        records_by_id = {str(record["id"]): record for record in records}
+        raw_proposals = {
+            pending_id: json.loads(
+                json.dumps(records_by_id[pending_id]["proposal"], ensure_ascii=False)
+            )
+            for pending_id in (activated_id, activating_id, failed_id)
+        }
+        records_by_id[activated_id].update(
+            {
+                "status": "activated",
+                "activation_attempts": 1,
+                "activation_attempt_id": None,
+                "activating_at": None,
+                "activated_at": activated_at,
+                "activated_sprint_id": activated_sprint_id,
+                "last_activation_failed_at": None,
+                "last_activation_error": None,
+                "import_payload": None,
+            }
+        )
+        records_by_id[activating_id].update(
+            {
+                "status": "activating",
+                "activation_attempts": 1,
+                "activation_attempt_id": "pre-upgrade-activation-attempt",
+                "activating_at": activating_at,
+                "activated_at": None,
+                "activated_sprint_id": None,
+                "last_activation_failed_at": None,
+                "last_activation_error": None,
+            }
+        )
+        records_by_id[failed_id].update(
+            {
+                "status": "pending",
+                "activation_attempts": 1,
+                "activation_attempt_id": None,
+                "activating_at": None,
+                "activated_at": None,
+                "activated_sprint_id": None,
+                "last_activation_failed_at": failed_at,
+                "last_activation_error": {
+                    "error": "legacy_import_failed",
+                    "message": "Pre-upgrade legacy activation failed.",
+                },
+            }
+        )
+        main.write_pending_sprints_file(storage)
+        bytes_before = main.pending_sprints_path.read_bytes()
+
+        expected = (
+            (
+                activated_id,
+                "started",
+                "started",
+                3,
+                activated_at,
+                activated_sprint_id,
+            ),
+            (activating_id, "ready", "starting", 2, activating_at, None),
+            (failed_id, "failed", "failed", 3, failed_at, None),
+        )
+        for (
+            pending_id,
+            proposal_status,
+            activation_state,
+            revision,
+            updated_at,
+            started_sprint_id,
+        ) in expected:
+            correlation_id = f"corr-stale-projection-{proposal_status}"
+            status_code, response_headers, response = await self.read_status(
+                pending_id,
+                correlation_id=correlation_id,
+            )
+            self.assertEqual(status_code, 200, response)
+            projected = self.assert_status_response(
+                response_headers,
+                response,
+                correlation_id=correlation_id,
+                proposal_status=proposal_status,
+                activation_state=activation_state,
+                pending_id=pending_id,
+            )
+            self.assertEqual(projected["revision"], revision)
+            self.assertEqual(projected["updated_at"], updated_at)
+            self.assertEqual(projected["started_sprint_id"], started_sprint_id)
+            self.assertEqual(projected["validation"]["status"], "valid")
+
+        self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_before)
+        persisted = main.read_pending_sprints_file()["projects"][self.PROJECT_CONTEXT][
+            "sprints"
+        ]
+        persisted_by_id = {str(record["id"]): record for record in persisted}
+        for pending_id, raw_proposal in raw_proposals.items():
+            self.assertEqual(persisted_by_id[pending_id]["proposal"], raw_proposal)
+            self.assertEqual(raw_proposal["proposal_status"], "ready")
+            self.assertEqual(raw_proposal["activation_state"], "not_started")
+            self.assertEqual(raw_proposal["revision"], 1)
+
+        detail_status, _, failed_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{failed_id}"
+        )
+        self.assertEqual(detail_status, 200, failed_detail)
+        self.assertTrue(failed_detail["pending_sprint"]["startable"])
+        self.assertEqual(main.pending_sprints_path.read_bytes(), bytes_before)
 
     async def test_managed_preview_is_advisory_idempotent_and_nonactivating(
         self,
@@ -1594,6 +2277,194 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record["assignment_mode"], "parallel")
         self.assertEqual(record["agent_count"], 0)
         self.assertEqual(record["task_count"], 0)
+
+    async def test_minimal_legacy_proposal_start_tracks_failure_retry_and_completion(
+        self,
+    ) -> None:
+        payload = self.proposal_payload(
+            proposal_id="proposal-minimal-legacy-start",
+            idempotency_key="create:proposal-minimal-legacy-start:v1",
+        )
+        self.assertEqual(
+            payload["candidate"]["payload"],
+            {"sprint_type": "legacy_v1", "actors": []},
+        )
+        create_status, _, created = await self.create(
+            payload,
+            correlation_id="corr-minimal-legacy-start-create",
+        )
+        self.assertEqual(create_status, 201, created)
+        pending_id = created["proposal"]["pending_sprint_id"]
+        preview_status, _, preview = await self.preview(
+            pending_id,
+            idempotency_key="preview:minimal-legacy-start:v1",
+            correlation_id="corr-minimal-legacy-start-preview",
+        )
+        self.assertEqual(preview_status, 200, preview)
+        self.assertEqual(preview["proposal"]["proposal_status"], "ready")
+        self.assertEqual(preview["proposal"]["activation_state"], "not_started")
+        self.assertEqual(preview["proposal"]["revision"], 1)
+
+        observed_during_import: list[dict[str, object]] = []
+        importer_payloads: list[dict[str, object]] = []
+
+        async def observe_starting(correlation_id: str) -> None:
+            status_code, response_headers, response = await self.read_status(
+                pending_id,
+                correlation_id=correlation_id,
+            )
+            self.assertEqual(status_code, 200, response)
+            observed_during_import.append(
+                self.assert_status_response(
+                    response_headers,
+                    response,
+                    correlation_id=correlation_id,
+                    proposal_status="ready",
+                    activation_state="starting",
+                    pending_id=pending_id,
+                )
+            )
+
+        async def failing_import(
+            project_phone: str,
+            import_payload: dict[str, object],
+            **kwargs: object,
+        ) -> dict[str, object]:
+            self.assertEqual(project_phone, self.PROJECT_PHONE)
+            self.assertEqual(kwargs["source"], "inbound-proposal")
+            importer_payloads.append(
+                json.loads(json.dumps(import_payload, ensure_ascii=False))
+            )
+            await observe_starting("corr-minimal-legacy-starting-failed")
+            raise main.HTTPException(
+                status_code=409,
+                detail={
+                    "error": "legacy_import_failed",
+                    "message": "Synthetic legacy importer failure.",
+                },
+            )
+
+        start_url = (
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/"
+            f"{pending_id}/start"
+        )
+        with patch.object(
+            main,
+            "import_project_actors_data",
+            new=failing_import,
+        ):
+            failed_status, _, failed = await asgi_request(start_url, method="POST")
+        self.assertEqual(failed_status, 409, failed)
+        self.assertEqual(failed["detail"]["error"], "legacy_import_failed")
+
+        failed_read_status, failed_headers, failed_read = await self.read_status(
+            pending_id,
+            correlation_id="corr-minimal-legacy-failed-read",
+        )
+        self.assertEqual(failed_read_status, 200, failed_read)
+        failed_resource = self.assert_status_response(
+            failed_headers,
+            failed_read,
+            correlation_id="corr-minimal-legacy-failed-read",
+            proposal_status="failed",
+            activation_state="failed",
+            pending_id=pending_id,
+        )
+        self.assertEqual(failed_resource["validation"]["status"], "valid")
+        self.assertEqual(failed_resource["revision"], 3)
+        failed_detail_status, _, failed_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{pending_id}"
+        )
+        self.assertEqual(failed_detail_status, 200, failed_detail)
+        self.assertTrue(failed_detail["pending_sprint"]["startable"])
+        self.assertIsNotNone(failed_detail["import_payload"])
+
+        activated_sprint_id = "legacy-started-from-proposal"
+
+        async def successful_import(
+            project_phone: str,
+            import_payload: dict[str, object],
+            **kwargs: object,
+        ) -> dict[str, object]:
+            self.assertEqual(project_phone, self.PROJECT_PHONE)
+            self.assertTrue(kwargs["reconcile_existing_pending_sprint"])
+            importer_payloads.append(
+                json.loads(json.dumps(import_payload, ensure_ascii=False))
+            )
+            await observe_starting("corr-minimal-legacy-starting-retry")
+            return {
+                "source": "inbound-proposal",
+                "sprint": {
+                    "id": activated_sprint_id,
+                    "status": "current",
+                    "imported_at": "2026-10-08T09:00:00Z",
+                },
+            }
+
+        with patch.object(
+            main,
+            "project_sprint_for_pending_id_file",
+            return_value=None,
+        ), patch.object(
+            main,
+            "import_project_actors_data",
+            new=successful_import,
+        ):
+            retry_status, _, retried = await asgi_request(start_url, method="POST")
+        self.assertEqual(retry_status, 200, retried)
+        self.assertTrue(retried["started"])
+        self.assertEqual(
+            retried["claimed_sprint"]["proposal"]["proposal_status"],
+            "ready",
+        )
+        self.assertEqual(
+            retried["claimed_sprint"]["proposal"]["activation_state"],
+            "starting",
+        )
+        self.assertEqual(
+            retried["pending_sprint"]["proposal"]["proposal_status"],
+            "started",
+        )
+        self.assertEqual(
+            retried["pending_sprint"]["proposal"]["activation_state"],
+            "started",
+        )
+
+        started_read_status, started_headers, started_read = await self.read_status(
+            pending_id,
+            correlation_id="corr-minimal-legacy-started-read",
+        )
+        self.assertEqual(started_read_status, 200, started_read)
+        started_resource = self.assert_status_response(
+            started_headers,
+            started_read,
+            correlation_id="corr-minimal-legacy-started-read",
+            proposal_status="started",
+            activation_state="started",
+            pending_id=pending_id,
+        )
+        self.assertEqual(started_resource["started_sprint_id"], activated_sprint_id)
+        self.assertEqual(started_resource["revision"], 5)
+        self.assertEqual(
+            [resource["revision"] for resource in observed_during_import],
+            [2, 4],
+        )
+        expected_import_payload = {
+            "sprint_type": "legacy_v1",
+            "actors": [],
+            "assignment_mode": "parallel",
+            "project_id": self.PROJECT_PHONE,
+        }
+        self.assertEqual(importer_payloads, [expected_import_payload] * 2)
+        terminal_detail_status, _, terminal_detail = await asgi_request(
+            f"/api/v1/projects/{self.PROJECT_PHONE}/pending-sprints/{pending_id}"
+        )
+        self.assertEqual(terminal_detail_status, 200, terminal_detail)
+        self.assertIsNone(terminal_detail["import_payload"])
+        self.assertEqual(
+            terminal_detail["pending_sprint"]["proposal"]["candidate"]["payload"],
+            {"sprint_type": "legacy_v1", "actors": []},
+        )
 
     async def test_legacy_candidate_semantics_and_summary_metadata_are_validated(
         self,

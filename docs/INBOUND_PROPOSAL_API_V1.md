@@ -1,8 +1,9 @@
 # Inbound Pending Proposal API v1
 
-Status: normative nginx-qa contract for NQII-001. Backend, managed-Git
-bridging, UI, Telegram status integration, and qualification are implemented by
-later sprint nodes.
+Status: normative nginx-qa contract initially frozen by NQII-001. Backend,
+managed-Git bridging, UI, neutral status integration, and qualification are
+implemented by later sprint nodes. NQII-005 adds the closed status/read
+projection without changing the existing operator and Telegram surfaces.
 
 ## 1. Scope and compatibility boundary
 
@@ -29,17 +30,18 @@ The following rules are normative:
   returned from those fields.
 
 The version is frozen by both the `/api/v1` URI and `schema_version: 1` in
-successful mutation request/response documents. The FastAPI-compatible error
-envelope has its separately versioned machine schema and does not add a
-top-level `schema_version`. Producer request objects are closed. Changing a
-field's meaning, removing a field, or adding a required field needs a new
-API/schema version.
+successful mutation request/response documents and the status response. The
+FastAPI-compatible error envelope has its separately versioned machine schema
+and does not add a top-level `schema_version`. Producer request and status
+response objects are closed. Changing a field's meaning, removing a field, or
+adding a required field needs a new API/schema version.
 
 Machine-readable contracts:
 
 - `schemas/inbound-pending-proposal-create-v1.schema.json`;
 - `schemas/inbound-pending-proposal-v1.schema.json`;
 - `schemas/inbound-pending-proposal-response-v1.schema.json`;
+- `schemas/inbound-pending-proposal-status-response-v1.schema.json`;
 - `schemas/inbound-pending-proposal-action-v1.schema.json`;
 - `schemas/inbound-api-error-v1.schema.json`;
 - `schemas/inbound-producer-registry-v1.schema.json`.
@@ -53,6 +55,7 @@ The v1 implementation extends the existing resource rather than replacing it.
 | `POST` | `/api/v1/projects/{project_id}/pending-sprints` | Create a producer proposal | No |
 | `GET` | `/api/v1/projects/{project_id}/pending-sprints` | Existing collection, additively enriched | No |
 | `GET` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}` | Existing detail/read | No |
+| `GET` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status` | Closed producer-neutral lifecycle snapshot | No |
 | `POST` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/preview` | Validate and record proposal-local preflight metadata | No |
 | `POST` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/reject` | Reject proposal metadata | No |
 | `POST` | `/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/comments` | Append an operator/producer comment | No |
@@ -69,18 +72,22 @@ routes. `proposal_id` is the producer's stable project-scoped business ID and is
 stored separately.
 
 The closed `inbound-pending-proposal-response-v1` envelope applies only to the
-new create, preview, reject, comment, and regeneration-request mutations. The
-existing collection/detail GET envelopes and existing `/start` response retain
-all current keys. Each existing `pending_sprint` summary is additively enriched
-with one nested `proposal` member: a v1 proposal resource for producer-created
-records, or `null` for legacy/Telegram records. The existing string-valued
-`pending_sprint.source`, `status`, `import_payload`, JSON preview, deep-link
-token, and Start behavior are not replaced or reinterpreted. Legacy records are
-projected at read time and are never rewritten merely to add `proposal: null`.
+create, preview, reject, comment, and regeneration-request mutations. The
+closed `inbound-pending-proposal-status-response-v1` envelope applies only to
+the bearer-only status route. The existing collection/detail GET envelopes and
+existing `/start` response retain all current keys. Each existing
+`pending_sprint` summary is additively enriched with one nested `proposal`
+member: a v1 proposal resource for producer-created records, or `null` for
+legacy/Telegram records. The existing string-valued `pending_sprint.source`,
+`status`, `import_payload`, JSON preview, deep-link token, and Start behavior
+are not replaced or reinterpreted. Legacy records are projected at read time
+and are never rewritten merely to add `proposal: null`.
+
 The collection retains its current selection and ordering behavior. A producer
-uses the `pending_sprint_id` returned by Create for status polling; the owned
+uses the `pending_sprint_id` returned by Create for status polling. The owned
 detail record remains readable after `started`, `rejected`, or `failed` even
-when it is no longer selected by the collection view.
+when the proposal is no longer selected by the collection view; the closed
+status record remains readable under the same terminal-state rule.
 
 ## 3. Create request
 
@@ -232,6 +239,75 @@ Start path, moving back through `ready/starting`; a `managed_git` candidate may
 not.
 Reject is forbidden while `starting`, after `started`, or after `rejected`.
 
+### 4.1 Neutral status/read projection
+
+`GET /api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status`
+is the stable machine-to-machine read surface for an external producer such as
+Inbound Hub. It returns the closed
+`inbound-pending-proposal-status-response-v1` envelope:
+
+```json
+{
+  "schema_version": 1,
+  "correlation_id": "corr-hub-status-17",
+  "status": {
+    "schema_version": 1,
+    "proposal_id": "hub-thread-2026-10-08-17",
+    "pending_sprint_id": "pending-0123456789abcdef0123456789abcdef",
+    "project_id": "9000",
+    "revision": 4,
+    "proposal_status": "started",
+    "activation_state": "started",
+    "source_metadata": {
+      "source_type": "email",
+      "conversation_id": "conversation-17",
+      "message_id": "message-42"
+    },
+    "summary": "Review and start the pinned managed sprint after validation.",
+    "validation": {
+      "status": "valid",
+      "checked_at": "2026-10-08T08:32:00Z",
+      "issues": []
+    },
+    "regenerate_requested": false,
+    "created_at": "2026-10-08T08:31:00Z",
+    "updated_at": "2026-10-08T08:35:00Z",
+    "started_sprint_id": "msv1-0123456789abcdef"
+  }
+}
+```
+
+The `status` object contains exactly `schema_version`, `proposal_id`,
+`pending_sprint_id`, `project_id`, `revision`, `proposal_status`,
+`activation_state`, `source_metadata`, `summary`, `validation`,
+`regenerate_requested`, `created_at`, `updated_at`, and `started_sprint_id`.
+It deliberately excludes the candidate, comments, producer identity, complete
+durable pending record, import payload, activation attempt details, credentials,
+and Telegram-specific fields. Its five lifecycle states and their validation,
+activation, and Start-ID constraints are the same as the table above.
+
+The status route is read-only. It does not increment `revision`, update a
+timestamp, write a pending record, validate or fetch a candidate, emit a
+notification, or invoke either legacy import or managed start-from-git. It
+reads terminal proposals directly by `pending_sprint_id`; collection omission
+after `started` or `rejected` does not make the status resource disappear.
+
+The response is a level-triggered snapshot, not an event feed and not a
+delivery acknowledgement. A Hub records the highest observed `revision` and
+the last observed `(proposal_status, activation_state)` for each
+`(project_id, pending_sprint_id)`. Repeating the same revision is a polling or
+delivery retry and must not duplicate a notification. A later revision with an
+unchanged lifecycle pair may reflect metadata-only work and need not generate
+a lifecycle notification; a changed pair is eligible for a new notification.
+This contract does not guarantee observation of every short-lived intermediate
+state. A future transition-history or push-delivery API would require its own
+versioned contract.
+
+The Hub may relay an observed status to Telegram or any other user-facing
+channel, but nginx-qa neither calls such a channel from this route nor requires
+Telegram to be configured. Telegram is optional notification transport, not a
+machine-to-machine dependency.
+
 ## 5. Idempotency and concurrency
 
 ### 5.1 Create binding
@@ -340,6 +416,12 @@ may authenticate upstream traffic, but it must translate that identity to this
 same bearer contract over its protected hop; nginx-qa does not trust an
 alternate identity header in v1.
 
+The new bearer-only status route always uses this producer boundary, including
+on loopback. It never falls back to localhost operator access,
+`X-Pending-Sprints-Token`, the Telegram webhook secret, a query parameter, or a
+cookie. Existing collection/detail routes retain their local/deep-link
+compatibility behavior and are not the neutral Hub status contract.
+
 `NGINX_QA_INBOUND_PRODUCER_REGISTRY` names an absolute JSON file whose existing
 path components are not symlinks, junctions, or reparse points and that
 validates against `schemas/inbound-producer-registry-v1.schema.json`.
@@ -400,6 +482,12 @@ not waive this ownership check. Existing loopback and
 `X-Pending-Sprints-Token` operator surfaces retain their current project-wide
 visibility.
 
+The status route requires the existing `read` action scope. Authentication is
+performed before canonical project lookup; project/action denial is `403
+PROPOSAL_FORBIDDEN`, while a missing or non-owned proposal is the same `404
+PROPOSAL_NOT_FOUND` used for an unknown ID. Thus the status projection does not
+disclose cross-producer or cross-project existence.
+
 For action idempotency and comment attribution, actor IDs are server-derived:
 Bearer calls use `producer:<producer_id>`, the existing project deep-link
 capability uses `pending-token:<canonical_project_id>`, and current loopback
@@ -414,11 +502,12 @@ a producer bearer.
 
 The caller may supply `X-Correlation-ID` matching
 `[A-Za-z0-9][A-Za-z0-9._:-]{0,127}`. Otherwise the server generates one. Every
-request to a new proposal mutation route, and every bearer-authenticated
-collection/detail read, returns it in both the `X-Correlation-ID` response
-header and JSON body. Mutation successes carry it in the closed response
-envelope; bearer GETs add a top-level `correlation_id` without removing current
-keys. An invalid supplied value produces a normalized `400` using a new
+request to a new proposal mutation route, every bearer-authenticated
+collection/detail read, and every status read returns it in both the
+`X-Correlation-ID` response header and JSON body. Mutation successes and status
+successes carry it in their respective closed response envelopes; existing
+bearer collection/detail GETs add a top-level `correlation_id` without removing
+current keys. An invalid supplied value produces a normalized `400` using a new
 server-generated correlation ID; the invalid value is not echoed or logged.
 Existing local/deep-link GET and `/start` body/error shapes remain outside this
 normalized producer contract.
@@ -546,7 +635,17 @@ Later implementation nodes must prove:
    legacy `source` string and `import_payload`, using only additive
    `proposal: null` for legacy records;
 10. existing Pending Sprints UI, deep links, legacy Start, Telegram staging and
-    Telegram `update_id` deduplication remain green.
+    Telegram `update_id` deduplication remain green;
+11. the closed status response validates in `created`, `ready`, `started`,
+    `rejected`, validation-failed, and activation-failed states, remains readable
+    after collection omission, and a status read is byte-for-byte non-mutating;
+12. missing/invalid/forbidden status authentication, cross-project and
+    cross-producer reads, correlation handling, and terminal `404` behavior use
+    the normalized producer contract; and
+13. status polling works with Telegram disabled and does not send a message or
+    call any external adapter.
 
 NQII-001 intentionally changes no backend route, runtime state, UI, Telegram
-adapter, or activation behavior.
+adapter, or activation behavior. NQII-005 adds the versioned status/read
+contract while keeping its implementation transport-neutral and Telegram
+optional.
