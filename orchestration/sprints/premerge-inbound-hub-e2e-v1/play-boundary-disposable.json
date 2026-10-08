@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git": {
+    "source_ref": "refs/heads/agent/ie2e-05-play-boundary",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/ie2e-05-disposable-activation",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "activation-probe",
+    "required_approvals": 2,
+    "reviewers": [
+      {
+        "id": "activation-probe-reviewer-a",
+        "name": "Activation Probe Reviewer A",
+        "phone": "2991",
+        "git_branch": "review/ie2e-05-activation-a"
+      },
+      {
+        "id": "activation-probe-reviewer-b",
+        "name": "Activation Probe Reviewer B",
+        "phone": "2992",
+        "git_branch": "review/ie2e-05-activation-b"
+      }
+    ],
+    "max_rework_cycles": 0
+  },
+  "nodes": [
+    {
+      "id": "activation-probe",
+      "agent": {
+        "id": "activation-probe-agent",
+        "name": "Activation Boundary Probe",
+        "phone": "2993"
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-005-DISPOSABLE",
+          "queue": "worker-all",
+          "message": "Disposable activation-boundary probe. Do not execute; qualification inspects activation only."
+        }
+      ],
+      "workspace": {
+        "access": "write"
+      },
+      "transitions": {
+        "DONE": "completed",
+        "NEED_DECISION": "activation-probe-coordinator",
+        "STOP": "activation-probe-coordinator"
+      }
+    },
+    {
+      "id": "activation-probe-coordinator",
+      "agent": {
+        "id": "activation-probe-coordinator-agent",
+        "name": "Activation Probe Coordinator",
+        "phone": "2994"
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-005-DISPOSABLE-COORD",
+          "queue": "consultant-all",
+          "message": "Keep this disposable activation probe isolated; do not resume production work."
+        }
+      ],
+      "workspace": {
+        "access": "read"
+      },
+      "activation_policy": "any_parent",
+      "transitions": {
+        "RESUME": "activation-probe",
+        "BLOCKED_EXTERNAL": "blocked"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Disposable activation-boundary probe completed."
+    },
+    {
+      "id": "blocked",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Disposable activation-boundary probe blocked."
+    }
+  ],
+  "coordinator": {
+    "node_id": "activation-probe-coordinator",
+    "routes": {
+      "STOP": "activation-probe-coordinator",
+      "NEED_DECISION": "activation-probe-coordinator"
+    }
+  },
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    }
+  ]
+}
