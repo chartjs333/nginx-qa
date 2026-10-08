@@ -9,7 +9,7 @@
   },
   "execution": {
     "mode": "sequential",
-    "start_node": "activation-probe",
+    "start_node": "activation-probe-r2",
     "required_approvals": 2,
     "reviewers": [
       {
@@ -29,7 +29,7 @@
   },
   "nodes": [
     {
-      "id": "activation-probe",
+      "id": "activation-probe-r2",
       "agent": {
         "id": "activation-probe-agent-r2",
         "name": "Activation Boundary Probe R2",
@@ -46,13 +46,13 @@
         "access": "read"
       },
       "transitions": {
-        "DONE": "completed",
-        "NEED_DECISION": "activation-probe-coordinator",
-        "STOP": "activation-probe-coordinator"
+        "DONE": "completed-r2",
+        "NEED_DECISION": "activation-probe-coordinator-r2",
+        "STOP": "activation-probe-coordinator-r2"
       }
     },
     {
-      "id": "activation-probe-coordinator",
+      "id": "activation-probe-coordinator-r2",
       "agent": {
         "id": "activation-probe-coordinator-agent-r2",
         "name": "Activation Probe Coordinator R2",
@@ -70,28 +70,28 @@
       },
       "activation_policy": "any_parent",
       "transitions": {
-        "RESUME": "activation-probe",
-        "BLOCKED_EXTERNAL": "blocked"
+        "RESUME": "activation-probe-r2",
+        "BLOCKED_EXTERNAL": "blocked-r2"
       }
     },
     {
-      "id": "completed",
+      "id": "completed-r2",
       "type": "terminal",
       "status": "DONE",
-      "message": "Disposable activation-boundary probe completed."
+      "message": "Disposable activation-boundary probe R2 completed."
     },
     {
-      "id": "blocked",
+      "id": "blocked-r2",
       "type": "terminal",
       "status": "BLOCKED_EXTERNAL",
-      "message": "Disposable activation-boundary probe blocked."
+      "message": "Disposable activation-boundary probe R2 blocked."
     }
   ],
   "coordinator": {
-    "node_id": "activation-probe-coordinator",
+    "node_id": "activation-probe-coordinator-r2",
     "routes": {
-      "STOP": "activation-probe-coordinator",
-      "NEED_DECISION": "activation-probe-coordinator"
+      "STOP": "activation-probe-coordinator-r2",
+      "NEED_DECISION": "activation-probe-coordinator-r2"
     }
   },
   "files": [
