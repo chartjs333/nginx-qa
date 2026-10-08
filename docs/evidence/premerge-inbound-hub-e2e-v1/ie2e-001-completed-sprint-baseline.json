@@ -1,0 +1,366 @@
+{
+  "schema_version": 1,
+  "kind": "managed_completed_sprint_baseline",
+  "generated_at": "2026-10-08T15:20:39.7320481+02:00",
+  "repository": {
+    "repository_id": "main",
+    "evidence_branch": "agent/ie2e-01-completed-sprint-baseline-r2",
+    "evidence_from_commit": "631391115e8e6e79f50a13e00880e9f6459b2a3a",
+    "prior_evidence_commit": "556a0442b0e4666f6456cd94f773de51decf21c9"
+  },
+  "project_id": "9000",
+  "sprint_id": "msv1-73283eef635f07783771ac13564a74ec55bd191a97a7095bf7cb5b5412e8b6d3",
+  "source_observability": {
+    "endpoint_path": "/api/v1/projects/9000/sprints/msv1-73283eef635f07783771ac13564a74ec55bd191a97a7095bf7cb5b5412e8b6d3/observability",
+    "schema_version": 1,
+    "cursor": "54c33244a85eb1e1280a99f6989d15fce07bcd6412633ff00f7cd4a2528158c6",
+    "execution_revision": 46,
+    "mutated": false,
+    "stable_repoll_unchanged": true,
+    "collected_from_loopback": true,
+    "raw_response_committed": false,
+    "revalidated_at": "2026-10-08T15:20:39.7320481+02:00",
+    "prior_cursor_revalidated": true
+  },
+  "execution": {
+    "status": "completed",
+    "visits_completed": 6,
+    "qualification": null,
+    "terminal_node": null,
+    "current_assignment_ids": [
+      "review-ac278d22d5bcf84267deb398"
+    ],
+    "projection_note": "The null qualification/terminal fields and current stale review are retained exactly as observed. The PASS result and committed terminal transition are recorded separately below."
+  },
+  "result_history": [
+    {
+      "node_id": "contract",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-e4aaa4f62fe0769c4b229695",
+      "agent_id": "inbound-contract-engineer",
+      "git_branch": "agent/nqii-01-contract",
+      "from_commit": "2b44a3eebdae743c13d14ae8584cd322e4acb50e",
+      "result_commit": "c16f0a8d9bab63707ffd9939979267909561b6f4",
+      "outcome": "DONE",
+      "result_key": "result-2539e671b14b645da2b908b8c590f3e6b59a7872f307d677b4aa783065eff105",
+      "disposition": "accepted",
+      "reviews": [
+        {
+          "assignment_id": "review-95e9d0ce76d8f26f1f656d99",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-4d20003612ff83942d84e6b1",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    },
+    {
+      "node_id": "proposal-api",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-1855d5fb357db908a1823954",
+      "agent_id": "proposal-api-engineer",
+      "git_branch": "agent/nqii-02-proposal-api",
+      "from_commit": "c16f0a8d9bab63707ffd9939979267909561b6f4",
+      "result_commit": "291e9e053bd0fe39d69357b3df5ac5fa25f484cd",
+      "outcome": "DONE",
+      "result_key": "result-17557e1a742ee66f1170b4a1723e2d06f1a237b80d7517dfd91ab9d3620154ee",
+      "disposition": "rejected_and_superseded",
+      "reviews": [
+        {
+          "assignment_id": "review-0fcad4623491609877fef3b8",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "REJECT"
+        },
+        {
+          "assignment_id": "review-ac278d22d5bcf84267deb398",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": null,
+          "observed_status": "active",
+          "classification": "stale_after_rejection"
+        }
+      ]
+    },
+    {
+      "node_id": "proposal-api",
+      "visit": 2,
+      "rework_cycle": 1,
+      "assignment_id": "assignment-2409927cf5f23eb92e2d2ba9",
+      "agent_id": "proposal-api-engineer",
+      "git_branch": "agent/nqii-02-proposal-api",
+      "from_commit": "291e9e053bd0fe39d69357b3df5ac5fa25f484cd",
+      "result_commit": "8ce4519941f3aeab2dfcc6e600679b076bca16d9",
+      "outcome": "DONE",
+      "result_key": "result-3407049b2859fa952f33bfc3c0da0c1084bcf7e2d006f8adb7d7db6a7378e63c",
+      "disposition": "accepted_rework",
+      "reviews": [
+        {
+          "assignment_id": "review-8cc20850a780dcbdfcf6c2aa",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-52e415aa4f1dafdfc6a2a58b",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    },
+    {
+      "node_id": "managed-git-bridge",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-4c3ab1e5312cf141b80d6f2d",
+      "agent_id": "managed-git-bridge-engineer",
+      "git_branch": "agent/nqii-03-managed-git-bridge",
+      "from_commit": "8ce4519941f3aeab2dfcc6e600679b076bca16d9",
+      "result_commit": "cdc24f5a0d325b456993180f20996e7f4bc2f883",
+      "outcome": "DONE",
+      "result_key": "result-1a917f8568e75d79604339926dfc4510d9cdf404579a164909aea0b86fa8d147",
+      "disposition": "accepted",
+      "reviews": [
+        {
+          "assignment_id": "review-3beac7faadae9ff1b8ae8266",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-d7f55bc1594756ca2e9672c1",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    },
+    {
+      "node_id": "pending-ui",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-7078ae4a879fbe965a04e8f6",
+      "agent_id": "pending-ui-engineer",
+      "git_branch": "agent/nqii-04-pending-ui",
+      "from_commit": "cdc24f5a0d325b456993180f20996e7f4bc2f883",
+      "result_commit": "e47daed0803c4b920941ee5d21532e5cd86584e9",
+      "outcome": "DONE",
+      "result_key": "result-b210a40177efc22d579a5bcbfc8d6e0bddc6ffcf7f1742477ac550fdba6bcb8a",
+      "disposition": "accepted",
+      "reviews": [
+        {
+          "assignment_id": "review-fe909c73a4158be108a2ea71",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-6190293099c62d3e55f69f5f",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    },
+    {
+      "node_id": "telegram-observability",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-41166cebb2dd55f6371c8c10",
+      "agent_id": "telegram-observability-engineer",
+      "git_branch": "agent/nqii-05-telegram-observability",
+      "from_commit": "e47daed0803c4b920941ee5d21532e5cd86584e9",
+      "result_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+      "outcome": "DONE",
+      "result_key": "result-8d0ea9cc29ca4bb5bf8ce802d9650ec6fc526447a8deecfbc8e55e4d790eed4b",
+      "disposition": "accepted",
+      "reviews": [
+        {
+          "assignment_id": "review-9151d08fd4c3b3e1299c3132",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-c77fcdebe0044aa691bb55a3",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    },
+    {
+      "node_id": "qualification",
+      "visit": 1,
+      "rework_cycle": 0,
+      "assignment_id": "assignment-4194f4aaed64d6d170f5b068",
+      "agent_id": "inbound-integration-qa",
+      "git_branch": "agent/nqii-06-qualification",
+      "from_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+      "result_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+      "outcome": "PASS",
+      "result_key": "result-498b35b6c182ca0bffbf350ac74371e121f1122f5329eccfa4958dc448766c14",
+      "disposition": "qualified_no_code_delta",
+      "reviews": [
+        {
+          "assignment_id": "review-17c8c7120a5355fbffaa1c75",
+          "reviewer_id": "inbound-api-reviewer",
+          "decision": "APPROVE"
+        },
+        {
+          "assignment_id": "review-5d7bf3c99ea407fcdbc666c3",
+          "reviewer_id": "inbound-ui-evidence-reviewer",
+          "decision": "APPROVE"
+        }
+      ]
+    }
+  ],
+  "final_cumulative_state": {
+    "commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "tree": "cc06ff4aeea488e2bad62a1532361bb8dd5c3e2f",
+    "remote_refs": [
+      "refs/heads/agent/nqii-05-telegram-observability",
+      "refs/heads/agent/nqii-06-qualification"
+    ],
+    "qualification_outcome": "PASS",
+    "qualification_changed_code": false
+  },
+  "qualification_result": {
+    "assignment_id": "assignment-4194f4aaed64d6d170f5b068",
+    "result_key": "result-498b35b6c182ca0bffbf350ac74371e121f1122f5329eccfa4958dc448766c14",
+    "outcome": "PASS",
+    "from_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "result_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "terminal_transition_committed": true,
+    "approval_assignment_ids": [
+      "review-17c8c7120a5355fbffaa1c75",
+      "review-5d7bf3c99ea407fcdbc666c3"
+    ]
+  },
+  "test_evidence": {
+    "source": "server-redacted qualification result summary",
+    "assignment_id": "assignment-4194f4aaed64d6d170f5b068",
+    "result_key": "result-498b35b6c182ca0bffbf350ac74371e121f1122f5329eccfa4958dc448766c14",
+    "commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "counts_are_non_additive": true,
+    "suites": [
+      {
+        "name": "core pending/API/UI/contract/schema/legacy",
+        "passed": 157,
+        "total": 157
+      },
+      {
+        "name": "API/contract/schema",
+        "passed": 86,
+        "total": 86
+      },
+      {
+        "name": "UI/actor import",
+        "passed": 71,
+        "total": 71
+      },
+      {
+        "name": "focused UI/status",
+        "passed": 45,
+        "total": 45
+      },
+      {
+        "name": "focused Telegram flows",
+        "passed": 13,
+        "total": 13
+      },
+      {
+        "name": "focused managed Preview/Play/preflight/concurrency/recovery/legacy retry",
+        "passed": 9,
+        "total": 9
+      },
+      {
+        "name": "inbound proposal API plus ManagedRequestParser and ManagedStartRoute",
+        "passed": 36,
+        "total": 36
+      },
+      {
+        "name": "legacy project_actor_import",
+        "passed": 57,
+        "total": 57
+      },
+      {
+        "name": "real managed importer activation/replay/preflight/crash/concurrency scenarios",
+        "passed": 12,
+        "total": 12
+      }
+    ],
+    "py_compile_passed": true,
+    "historical_diff_checks_passed": true
+  },
+  "rejected_or_superseded": [
+    {
+      "kind": "rejected_result",
+      "assignment_id": "assignment-1855d5fb357db908a1823954",
+      "result_key": "result-17557e1a742ee66f1170b4a1723e2d06f1a237b80d7517dfd91ab9d3620154ee",
+      "result_commit": "291e9e053bd0fe39d69357b3df5ac5fa25f484cd",
+      "rejected_by": "review-0fcad4623491609877fef3b8",
+      "reason": "The UI enabled Start for created/not-started proposals even when the backend record reported startable=false.",
+      "replacement_assignment_id": "assignment-2409927cf5f23eb92e2d2ba9",
+      "replacement_commit": "8ce4519941f3aeab2dfcc6e600679b076bca16d9"
+    },
+    {
+      "kind": "stale_review",
+      "assignment_id": "review-ac278d22d5bcf84267deb398",
+      "observed_status": "active",
+      "is_current": true,
+      "source_result_key": "result-17557e1a742ee66f1170b4a1723e2d06f1a237b80d7517dfd91ab9d3620154ee",
+      "source_result_disposition": "rejected_and_superseded",
+      "active_queue_reference_present": false,
+      "attention_gate_present": false,
+      "classification": "stale/superseded; excluded from accepted evidence and live gates",
+      "maintenance_issue_required": true
+    }
+  ],
+  "git_provenance": {
+    "full_contiguous_lineage": [
+      "2b44a3eebdae743c13d14ae8584cd322e4acb50e",
+      "c16f0a8d9bab63707ffd9939979267909561b6f4",
+      "291e9e053bd0fe39d69357b3df5ac5fa25f484cd",
+      "8ce4519941f3aeab2dfcc6e600679b076bca16d9",
+      "cdc24f5a0d325b456993180f20996e7f4bc2f883",
+      "e47daed0803c4b920941ee5d21532e5cd86584e9",
+      "02d16fdf2e2220a0dfd9854721e89da73d7fe545"
+    ],
+    "rejected_commit_is_required_parent_of_rework": true,
+    "origin_main_at_audit": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "origin_main_is_ancestor_of_qualified_commit": true,
+    "commits_from_origin_main_to_qualified_tip": 93,
+    "prerequisite_commits_through_initial_sprint_source": 87,
+    "completed_sprint_commits_after_initial_source": 6,
+    "manifest_commit": "631391115e8e6e79f50a13e00880e9f6459b2a3a",
+    "manifest_and_qualified_lineages_merge_base": "8581390511838efb15a69cb2fadac89b12483b3b",
+    "manifest_commit_is_ancestor_of_qualified_commit": false,
+    "integration_note": "Preserve both the isolated r2 manifest/evidence lineage and the full qualified code lineage; advancing only to the qualified tip would omit the r2 manifest commits."
+  },
+  "checks": {
+    "all_graph_visits_completed": true,
+    "full_result_history_is_git_ancestry_contiguous": true,
+    "accepted_results_have_two_exact_result_approvals": true,
+    "qualification_pass_has_no_code_delta": true,
+    "final_remote_refs_advertise_exact_commit": true,
+    "rejected_result_excluded_from_accepted_evidence": true,
+    "stale_review_recorded": true,
+    "stable_observability_repoll_passed": true,
+    "artifact_json_parse_passed": true,
+    "artifact_secret_scan_passed": true,
+    "artifact_git_diff_check_passed": true,
+    "prior_baseline_commit_inspected": true,
+    "current_observability_matches_prior_cursor": true
+  },
+  "security_boundary": {
+    "content": "Only server-redacted summaries, identifiers, Git refs, commits, trees, decisions, and aggregate test counts are recorded.",
+    "excluded": [
+      "Authorization and bearer values",
+      "token and cookie headers",
+      "pending and deep-link tokens",
+      "raw whoami and prompt payloads",
+      "query strings",
+      "credential hashes and fragments",
+      "raw observability responses",
+      "runtime databases and queue files",
+      "absolute managed workspace and state paths"
+    ]
+  }
+}
