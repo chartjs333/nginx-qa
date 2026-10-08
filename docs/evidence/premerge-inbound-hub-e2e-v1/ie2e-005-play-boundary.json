@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "kind": "inbound_proposal_play_boundary_e2e",
+  "generated_at": "2026-10-08T11:11:35.7953312Z",
+  "assignment": {
+    "sprint_id": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "assignment_id": "assignment-c12032e4da63e2a2efe53520",
+    "task_id": "IE2E-005",
+    "source_commit": "11bb6aadb2bf33de8f16484f70e01a4c1c018605",
+    "branch": "agent/ie2e-05-play-boundary"
+  },
+  "target": {
+    "runtime": "isolated_loopback_staging",
+    "instance_id": "premerge-inbound-hub-e2e-v1-staging-18027",
+    "http_port": 18027,
+    "project_id": "9000"
+  },
+  "fixture": {
+    "manifest_path": "orchestration/sprints/premerge-inbound-hub-e2e-v1/play-boundary-disposable.json",
+    "manifest_ref": "refs/heads/agent/ie2e-05-play-boundary",
+    "manifest_ref_commit": "678a5e7acb9bc8b81808caacf300dbfecdbb5039",
+    "workspace_source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e",
+    "workspace_source_commit": "11bb6aadb2bf33de8f16484f70e01a4c1c018605",
+    "all_workspaces_read_only": true,
+    "process_blocks": 0,
+    "schema_errors": 0,
+    "semantic_issues": [],
+    "activation_proposal": {
+      "proposal_id": "ie2e-005-play-activation-c12032e4",
+      "pending_sprint_id": "pending-2ed1e0f2ea8f437997da2d6cc61ec34d"
+    },
+    "reject_control": {
+      "proposal_id": "ie2e-005-reject-control-c12032e4",
+      "pending_sprint_id": "pending-06f2e85e20cd40f98ae7ecec1d1959cb"
+    }
+  },
+  "non_activation_checks": [
+    {
+      "step": "baseline",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null
+    },
+    {
+      "step": "create_activation_proposal",
+      "http_status": 201,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "create_reject_control",
+      "http_status": 201,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "preview_validate_activation_proposal",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_activation_proposal",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "ready",
+      "activation_state": "not_started",
+      "source_provenance_present": true,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_activation_proposal",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "ready",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_activation_proposal",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "comment_count": 1,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_reject_control",
+      "http_status": 200,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "source_provenance_present": true,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_reject_control",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "comment_count": 1,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "reject_control",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "comment_count": 2,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_rejected_control",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "managed_sprint_count": 0,
+      "correlation_header_body_match": true
+    }
+  ],
+  "explicit_play": {
+    "request": {
+      "method": "POST",
+      "route_template": "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/start",
+      "bodyless": true,
+      "producer_authorization_sent": false,
+      "operator_boundary": "loopback"
+    },
+    "response": {
+      "http_status": 409,
+      "error": "SPRINT_PREFLIGHT_FAILED",
+      "phase": "VALIDATE",
+      "issue_code": "REPOSITORY_BINDING_INVALID"
+    },
+    "proposal_after": {
+      "revision": 4,
+      "proposal_status": "failed",
+      "activation_state": "failed",
+      "started_sprint_id": null
+    },
+    "managed_inventory_after": {
+      "sprint_count": 0,
+      "current_sprint_id": null
+    }
+  },
+  "root_cause": {
+    "classification": "staging_configuration_path_budget",
+    "managed_root_length": 70,
+    "durable_request_ref_lock_path_length": 260,
+    "windows_git_failure": "request binding ref lock filename too long",
+    "reproduced_with_disposable_provider": true,
+    "short_root_control": {
+      "managed_root_length": 42,
+      "durable_repository_binding_succeeded": true
+    },
+    "source_code_contract": "The request binding uses refs/nginx-qa/request-bindings/<sha256> inside the managed bare mirror before managed activation.",
+    "secrets_observed": false
+  },
+  "isolation": {
+    "port_18025_pid_before_after": 23840,
+    "port_18026_pid_before_after": 17508,
+    "port_18027_pid_before_after": 17288,
+    "production_or_managed_coordinator_instances_restarted": false,
+    "manual_runtime_or_sqlite_edits": false,
+    "credential_material_recorded": false,
+    "producer_registry_recorded": false,
+    "raw_request_or_response_bodies_recorded": false
+  },
+  "outcome": {
+    "status": "NEED_DECISION",
+    "completed_assertions": [
+      "create_does_not_activate",
+      "read_does_not_activate",
+      "status_read_does_not_activate",
+      "preview_validate_does_not_activate",
+      "comment_does_not_activate",
+      "reject_does_not_activate",
+      "only_explicit_play_entered_managed_start_from_git"
+    ],
+    "blocked_assertion": "explicit_play_successfully_creates_one_managed_sprint",
+    "recommended_recovery": "Return to the staging node and provision a fresh isolated staging state profile with a shorter managed root, leaving ports 18025 and 18026 untouched; then resume IE2E-005 with new disposable proposals.",
+    "alternative_code_work": "Define and test a shorter backward-compatible durable request-ref namespace or otherwise make Windows Git request-binding publication long-path safe before re-running the activation boundary."
+  }
+}
