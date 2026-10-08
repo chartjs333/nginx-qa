@@ -1,9 +1,11 @@
+from contextlib import nullcontext
 from datetime import datetime, timedelta, timezone
 from copy import deepcopy
 import json
 import unittest
 from unittest.mock import Mock, patch
 
+from nginx_qa.git_provider import ManagedGitError
 from nginx_qa.managed_continuity import (
     ManagedContinuityError,
     ManagedContinuityRuntime,
@@ -24,6 +26,227 @@ FIXED_CLOCK = datetime(2026, 10, 3, 10, 0, tzinfo=timezone.utc)
 
 
 class ManagedContinuityImportRecoveryTests(ManagedImportFixture):
+    def test_current_identity_recovers_pending_reused_branch_fast_forward(
+        self,
+    ) -> None:
+        manifest_path = self.source / self.manifest_path
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        build = manifest["nodes"][0]
+        build["transitions"]["DONE"] = "bridge"
+        build["activation_policy"] = "any_parent"
+        bridge = deepcopy(build)
+        bridge.update(
+            {
+                "id": "bridge",
+                "agent": {
+                    "id": "bridge-engineer",
+                    "name": "Bridge Engineer",
+                    "phone": "2865",
+                },
+                "tasks": [
+                    {
+                        "task_id": "BRIDGE-1",
+                        "queue": "worker-all",
+                        "message": "Advance the accepted source",
+                    }
+                ],
+                "transitions": {"DONE": "build"},
+                "workspace": {
+                    "access": "write",
+                    "git": {
+                        "assigned_branch": "agent/bridge",
+                        "existing_branch_policy": "create",
+                    },
+                },
+            }
+        )
+        manifest["nodes"].insert(1, bridge)
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        self.git("add", self.manifest_path, cwd=self.source)
+        self.git("commit", "-m", "exercise reused managed branch", cwd=self.source)
+        source_a = self.git("rev-parse", "HEAD", cwd=self.source)
+        self.git("push", str(self.remote), "main", cwd=self.source)
+
+        importer = self.importer(clock=lambda: FIXED_CLOCK)
+        started = importer.start(self.project_id, self.request)
+        sprint_id = started.response["sprint_id"]
+        runtime = ManagedContinuityRuntime(
+            importer,
+            clock=lambda: FIXED_CLOCK,
+            result_verifier=lambda *_: nullcontext(),
+        )
+
+        def source_commit(content: str, message: str) -> str:
+            (self.source / "service.py").write_text(content, encoding="utf-8")
+            self.git("add", "service.py", cwd=self.source)
+            self.git("commit", "-m", message, cwd=self.source)
+            return self.git("rev-parse", "HEAD", cwd=self.source)
+
+        source_b = source_commit("print('bridge source')\n", "bridge source")
+        source_c = source_commit("print('second build')\n", "second build source")
+        self.git("push", str(self.remote), "main", cwd=self.source)
+        repository = importer.git_provider.ensure_mirror(
+            self.repository_id, fetch=True
+        )
+
+        def active_assignment(phone: str) -> dict:
+            state = importer.store.runtime_state(self.project_id, sprint_id)
+            assert state is not None
+            return next(
+                assignment
+                for assignment in state["assignments"]
+                if assignment["status"] == "active"
+                and assignment["agent_phone"] == phone
+            )
+
+        def submit_done(phone: str, commit: str, branch: str) -> dict:
+            assignment = active_assignment(phone)
+            response = runtime.submit_if_managed(
+                self.project_id,
+                phone,
+                canonical_json_bytes(
+                    {
+                        "assignment_id": assignment["assignment_id"],
+                        "status": "DONE",
+                        "result": "Accepted test result",
+                        "from_commit": assignment["source_commit"],
+                        "git_commit": commit,
+                        "git_branch": branch,
+                    }
+                ),
+                f"result-{assignment['assignment_id']}",
+            )
+            self.assertIsNotNone(response)
+            return assignment
+
+        def active_reviews(source_assignment_id: str) -> list[dict]:
+            state = importer.store.runtime_state(self.project_id, sprint_id)
+            assert state is not None
+            return sorted(
+                (
+                    review
+                    for review in state["review_assignments"]
+                    if review["source_assignment_id"] == source_assignment_id
+                    and review["status"] == "active"
+                ),
+                key=lambda review: review["reviewer_index"],
+            )
+
+        def approve(review: dict) -> None:
+            response = runtime.submit_if_managed(
+                self.project_id,
+                review["reviewer_phone"],
+                canonical_json_bytes(
+                    {
+                        "assignment_id": review["assignment_id"],
+                        "status": "APPROVE",
+                    }
+                ),
+                f"review-{review['assignment_id']}",
+            )
+            self.assertIsNotNone(response)
+
+        first = submit_done("2864", source_b, "agent/managed-build")
+        for review in active_reviews(first["assignment_id"]):
+            approve(review)
+
+        bridge_assignment = submit_done("2865", source_c, "agent/bridge")
+        bridge_reviews = active_reviews(bridge_assignment["assignment_id"])
+        self.assertEqual(len(bridge_reviews), 2)
+        approve(bridge_reviews[0])
+        original_publish = importer.git_provider.ensure_local_branch_publication
+
+        def interrupt_generation_two(repository, branch, **kwargs):
+            if (
+                branch == "agent/managed-build"
+                and kwargs.get("selected_head") == source_c
+            ):
+                raise ManagedGitError(
+                    "GIT_COMMAND_TIMEOUT", "injected post-commit publication gap"
+                )
+            return original_publish(repository, branch, **kwargs)
+
+        with patch.object(
+            importer.git_provider,
+            "ensure_local_branch_publication",
+            side_effect=interrupt_generation_two,
+        ):
+            approve(bridge_reviews[1])
+
+        staged = importer.store.runtime_state(self.project_id, sprint_id)
+        self.assertIsNotNone(staged)
+        assert staged is not None
+        self.assertEqual(managed_activation_invariant_issues(staged), ())
+        second_build = next(
+            assignment
+            for assignment in staged["assignments"]
+            if assignment["status"] == "active"
+            and assignment["agent_phone"] == "2864"
+        )
+        self.assertEqual(second_build["source_commit"], source_c)
+        occurrence = next(
+            item
+            for item in staged["workflow"]["occurrences"]
+            if item["occurrence_id"] == second_build["occurrence_id"]
+        )
+        self.assertEqual(occurrence["generation"], 2)
+        pending = next(
+            event
+            for event in staged["outbox"]
+            if event.get("payload", {}).get("assignment_id")
+            == second_build["assignment_id"]
+        )
+        self.assertEqual(pending["status"], "pending")
+        branch = "agent/managed-build"
+        self.assertEqual(
+            importer.git_provider.branch_heads(repository, branch)[
+                f"refs/heads/{branch}"
+            ],
+            source_a,
+        )
+        self.assertTrue(
+            importer.git_provider.is_ancestor(repository, source_a, source_c)
+        )
+
+        identity = runtime.current_identity(self.project_id, "2864")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertTrue(identity["managed"])
+        self.assertEqual(
+            identity["assignment"]["assignment_id"],
+            second_build["assignment_id"],
+        )
+        self.assertEqual(identity["assignment"]["status"], "active")
+        self.assertEqual(identity["assignment"]["source_commit"], source_c)
+        self.assertEqual(
+            identity["workspace"]["workspace_id"], second_build["workspace_id"]
+        )
+        self.assertTrue(identity["workspace"]["actual_git_toplevel"])
+        self.assertEqual(identity["workspace"]["assigned_branch"], branch)
+        self.assertEqual(identity["workspace"]["source_commit"], source_c)
+        self.assertEqual(identity["workspace"]["initial_head_commit"], source_c)
+        self.assertEqual(
+            importer.git_provider.branch_heads(repository, branch)[
+                f"refs/heads/{branch}"
+            ],
+            source_c,
+        )
+        recovered = importer.store.runtime_state(self.project_id, sprint_id)
+        self.assertIsNotNone(recovered)
+        assert recovered is not None
+        recovered_event = next(
+            event
+            for event in recovered["outbox"]
+            if event.get("payload", {}).get("assignment_id")
+            == second_build["assignment_id"]
+        )
+        self.assertEqual(recovered_event["status"], "delivered")
+        self.assertTrue(recovered_event["queue_receipt_id"])
+        self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
     def _failed_import(self):
         def fail_after_preflight(point: str, _context: dict) -> None:
             if point == "after_validate":

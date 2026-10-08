@@ -2382,13 +2382,26 @@ class ManagedGitProvider:
                         "BRANCH_ALREADY_EXISTS",
                         "branch appeared before publication was receipted",
                     )
+                fast_forward_from: str | None = None
                 if current is not None and current != selected_head:
-                    raise ManagedGitError(
-                        "BRANCH_DIVERGED",
-                        "branch changed before publication was receipted",
-                    )
+                    if policy != "resume" or not self.is_ancestor(
+                        repository, current, selected_head
+                    ):
+                        raise ManagedGitError(
+                            "BRANCH_DIVERGED",
+                            "branch changed before publication was receipted",
+                        )
+                    # A later occurrence may reuse its logical branch while
+                    # starting from a newer accepted commit.  Publish that
+                    # monotonic continuation together with its receipt so a
+                    # crash can expose neither side effect on its own.
+                    fast_forward_from = current
                 if policy == "resume" and (
-                    (remote is not None and remote != selected_head)
+                    (
+                        remote is not None
+                        and remote != selected_head
+                        and not self.is_ancestor(repository, remote, selected_head)
+                    )
                     or (
                         current is None
                         and remote is None
@@ -2408,16 +2421,20 @@ class ManagedGitProvider:
                         "BRANCH_DIVERGED",
                         "exact branch head changed before publication was receipted",
                     )
-                branch_command = (
-                    f"create {branch_ref}"
-                    if current is None
-                    else f"verify {branch_ref}"
-                )
+                if current is None:
+                    branch_operation = (f"create {branch_ref}", selected_head)
+                elif fast_forward_from is not None:
+                    branch_operation = (
+                        f"update {branch_ref}",
+                        selected_head,
+                        fast_forward_from,
+                    )
+                else:
+                    branch_operation = (f"verify {branch_ref}", selected_head)
                 transaction = "\0".join(
                     (
                         "start",
-                        branch_command,
-                        selected_head,
+                        *branch_operation,
                         f"create {publication_ref}",
                         selected_head,
                         "prepare",
