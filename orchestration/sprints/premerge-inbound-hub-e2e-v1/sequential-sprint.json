@@ -5,7 +5,7 @@
   "git": {
     "source_ref": "refs/heads/codex/premerge-inbound-hub-e2e-sprint",
     "expected_source_commit": null,
-    "assigned_branch": "agent/nginx-qa-inbound-hub-e2e-root",
+    "assigned_branch": "agent/nginx-qa-inbound-hub-e2e-root-r2",
     "existing_branch_policy": "create"
   },
   "execution": {
@@ -18,14 +18,14 @@
         "id": "premerge-api-reviewer",
         "name": "Pre-merge API Boundary Reviewer",
         "phone": "2968",
-        "git_branch": "review/premerge-api-boundary",
+        "git_branch": "review/premerge-api-boundary-r2",
         "profile": "Проверяй proposal API boundary, idempotency, source provenance, Play-only activation and absence of source-adapter leakage."
       },
       {
         "id": "premerge-evidence-reviewer",
         "name": "Pre-merge Evidence and Operations Reviewer",
         "phone": "2969",
-        "git_branch": "review/premerge-evidence-ops",
+        "git_branch": "review/premerge-evidence-ops-r2",
         "profile": "Проверяй staging isolation, Inbound Hub E2E evidence, pending UI/Telegram compatibility, tests and no production/runtime mutation."
       }
     ]
@@ -72,7 +72,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-01-completed-sprint-baseline",
+          "assigned_branch": "agent/ie2e-01-completed-sprint-baseline-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -90,7 +90,7 @@
         {
           "task_id": "IE2E-002",
           "queue": "worker-all",
-          "message": "Создай или обнови integration/inbound-coordinator-e2e-20261007 от актуального origin/main и внеси завершённые изменения completed sprint в правильном порядке. Не push в main. Если fast-forward/clean integration невозможен, верни NEED_DECISION с точным конфликтом. Прогони базовые контрактные и regression проверки, достаточные перед staging."
+          "message": "Создай или обнови integration/inbound-coordinator-e2e-20261007-r2 от актуального origin/main и внеси завершённые изменения completed sprint в правильном порядке. Не push в main. Если fast-forward/clean integration невозможен, верни NEED_DECISION с точным конфликтом. Прогони базовые контрактные и regression проверки, достаточные перед staging."
         }
       ],
       "transitions": {
@@ -101,7 +101,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-02-integration-branch",
+          "assigned_branch": "agent/ie2e-02-integration-branch-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -119,7 +119,7 @@
         {
           "task_id": "IE2E-003",
           "queue": "worker-all",
-          "message": "Подними отдельный staging nginx-qa на свободном порту, предпочтительно 18027, из integration branch. Используй отдельные runtime_root, managed_root, prompt_root, project registry и child port range. Не трогай 18025 и не используй state 18026. Проверь GET /, /git-config, OpenAPI и proposal API readiness."
+          "message": "Подними отдельный staging nginx-qa на свободном порту, предпочтительно 18027, из integration branch. Используй wholly fresh short base C:\\nq-e2e-r2 с runtime_root=C:\\nq-e2e-r2\\r, managed_root=C:\\nq-e2e-r2\\m и prompt_root=C:\\nq-e2e-r2\\p, а также отдельные project registry/config, venv, instance ID и child port range. Не копируй прежние staging state, SQLite, registry или credentials. Не трогай 18025 и не используй state 18026. Проверь GET /, /git-config, OpenAPI и proposal API readiness."
         }
       ],
       "transitions": {
@@ -130,7 +130,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-03-staging-runtime",
+          "assigned_branch": "agent/ie2e-03-staging-runtime-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -159,7 +159,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-04-inbound-hub-e2e",
+          "assigned_branch": "agent/ie2e-04-inbound-hub-e2e-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -188,7 +188,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-05-play-boundary",
+          "assigned_branch": "agent/ie2e-05-play-boundary-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -218,7 +218,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-06-qualification",
+          "assigned_branch": "agent/ie2e-06-qualification-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -247,7 +247,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-07-merge-plan",
+          "assigned_branch": "agent/ie2e-07-merge-plan-r2",
           "existing_branch_policy": "create"
         }
       }
@@ -281,7 +281,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/ie2e-continuity-coordinator",
+          "assigned_branch": "agent/ie2e-continuity-coordinator-r2",
           "existing_branch_policy": "create"
         }
       }
