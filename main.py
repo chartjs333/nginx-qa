@@ -29,10 +29,27 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.security import HTTPBearer
 
 from nginx_qa.git_provider import RepositorySpec, canonical_remote_from_address
+from nginx_qa.inbound_proposals import (
+    ACTION_SCHEMA as INBOUND_PROPOSAL_ACTION_SCHEMA,
+    CREATE_SCHEMA as INBOUND_PROPOSAL_CREATE_SCHEMA,
+    INBOUND_PRODUCER_REGISTRY_ENV,
+    InboundProposalError,
+    ProducerPrincipal,
+    action_request_fingerprint,
+    authenticate_bearer,
+    configured_producer_registry,
+    configured_secret_values,
+    contains_recognized_secret,
+    correlation_id_from_values,
+    create_request_fingerprint,
+    is_canonical_bearer_token,
+    schema_issues as inbound_proposal_schema_issues,
+)
 from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedPortReservationRegistry,
@@ -41,6 +58,7 @@ from nginx_qa.managed_import import (
     normalize_managed_runtime_config,
     parse_strict_json_object,
     parse_start_request_bytes,
+    validate_start_request,
 )
 from nginx_qa.legacy_scope_control import (
     ADMIN_TOKEN_HEADER,
@@ -92,6 +110,8 @@ from nginx_qa.sprint_types import (
     SprintPipeline,
     SprintTypeSelection,
     SprintTypeUnsupported,
+    git_ref_format_valid,
+    relative_git_path_valid,
     resolve_sprint_type,
 )
 
@@ -125,7 +145,13 @@ def _reconcile_managed_continuity_background(
 async def app_lifespan(_: FastAPI):
     global managed_continuity_runtime, managed_process_supervisor
     global managed_continuity_stop_event, managed_continuity_thread
+    if os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV):
+        inbound_config = await read_git_config()
+        configured_producer_registry(
+            known_project_ids=inbound_known_project_ids(inbound_config),
+        )
     await restore_runtime_state()
+    notifications = None
     try:
         if os.environ.get("NGINX_QA_MANAGED_ROOT"):
             managed_runtime_config = load_managed_runtime_config()
@@ -167,8 +193,12 @@ async def app_lifespan(_: FastAPI):
             # start_background() wakes the monitor immediately, while each
             # assignment remains independently fail-closed in durable state.
             managed_process_supervisor.start_background()
+        notifications = app.state.configure_decision_notifications()
+        await notifications.start()
         yield
     finally:
+        if notifications is not None:
+            await notifications.stop()
         supervisor_quiescent = True
         close_error: Exception | None = None
         continuity_stop = managed_continuity_stop_event
@@ -210,6 +240,11 @@ async def app_lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=app_lifespan)
+inbound_proposal_bearer = HTTPBearer(
+    auto_error=False,
+    scheme_name="InboundProposalBearer",
+    description="Bearer credential issued to an inbound proposal producer.",
+)
 
 QUEUE_DEFINITIONS: dict[str, dict[str, str]] = {
     "work": {
@@ -373,6 +408,8 @@ IMPORTED_ACTOR_PHONE_MAX = 2999
 MAX_ACTOR_IMPORT_BYTES = 1024 * 1024
 PENDING_SPRINT_TOKEN_HEADER = "X-Pending-Sprints-Token"
 PENDING_SPRINT_ACTIVATION_LEASE = timedelta(minutes=15)
+INBOUND_PROPOSAL_CREATE_MAX_BYTES = 1024 * 1024
+INBOUND_PROPOSAL_ACTION_MAX_BYTES = 64 * 1024
 GROUP_QUEUE_NAMES = {"worker-all", "tester-all", "consultant-all"}
 AGENT_COMMUNICATION_BLOCK_START = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION START ==="
 AGENT_COMMUNICATION_BLOCK_END = "=== NGINX-QA: AUTOMATIC AGENT COMMUNICATION END ==="
@@ -13646,8 +13683,55 @@ def render_index_v2() -> str:
       margin: 0;
       font-size: 14px;
     }
+    .pending-sprint-proposal-details {
+      display: grid;
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .pending-sprint-proposal-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .pending-sprint-proposal-field {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfd;
+      padding: 8px;
+    }
+    .pending-sprint-proposal-field strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .pending-sprint-proposal-field span {
+      overflow-wrap: anywhere;
+    }
+    .pending-sprint-validation-issues,
+    .pending-sprint-comments {
+      margin: 4px 0 0;
+      padding-left: 20px;
+    }
+    .pending-sprint-action-panel {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    .pending-sprint-action-panel .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    textarea.pending-sprint-comment {
+      min-height: 84px;
+      margin-top: 6px;
+      white-space: pre-wrap;
+    }
     textarea.pending-sprint-json {
-      min-height: 420px;
+      min-height: 240px;
       margin-top: 10px;
       font-family: Consolas, "Courier New", monospace;
       font-size: 12px;
@@ -14466,6 +14550,9 @@ def render_index_v2() -> str:
       .pending-sprints-layout {
         grid-template-columns: 1fr;
       }
+      .pending-sprint-proposal-grid {
+        grid-template-columns: 1fr;
+      }
       .email-route-row {
         grid-template-columns: 1fr;
       }
@@ -14879,7 +14966,7 @@ def render_index_v2() -> str:
     <section>
       <div class="panel">
         <h2>Спринты, ожидающие запуска</h2>
-        <div class="subtle">Спринт, полученный через Telegram, хранится как черновик и не меняет агентов или очереди, пока вы явно не запустите его здесь.</div>
+        <div class="subtle">Спринт из Telegram или внешнего proposal хранится как черновик. Просмотр, проверка, комментарий, отклонение и запрос перегенерации не меняют активный sprint; только Play / Start запускает работу.</div>
         <div class="pending-sprints-toolbar">
           <div>
             <label for="pendingSprintsProjectSelect">Проект</label>
@@ -14902,9 +14989,26 @@ def render_index_v2() -> str:
             <div class="pending-sprints-list-items" id="pendingSprints"></div>
           </div>
           <div class="pending-sprint-preview">
-            <h3 id="pendingSprintPreviewTitle">JSON спринта</h3>
-            <div class="subtle">Выберите спринт слева, чтобы проверить полный исходный JSON перед запуском.</div>
+            <h3 id="pendingSprintPreviewTitle">Детали спринта</h3>
+            <div class="subtle">Выберите запись слева, чтобы проверить источник, proposal, validation и JSON либо Git manifest reference.</div>
+            <div class="pending-sprint-proposal-details" id="pendingSprintProposalDetails">
+              <div class="subtle">Детали выбранного спринта появятся здесь.</div>
+            </div>
+            <label for="pendingSprintJsonPreview" id="pendingSprintPayloadLabel">JSON спринта</label>
             <textarea class="pending-sprint-json" id="pendingSprintJsonPreview" readonly spellcheck="false" placeholder="JSON выбранного спринта появится здесь"></textarea>
+            <div class="pending-sprint-action-panel">
+              <div id="pendingSprintProposalActionFields" hidden>
+                <label for="pendingSprintOperatorComment">Комментарий оператора / причина / инструкция</label>
+                <textarea class="pending-sprint-comment" id="pendingSprintOperatorComment" maxlength="4000" disabled spellcheck="true" placeholder="Добавьте комментарий, причину отклонения или инструкцию для перегенерации"></textarea>
+              </div>
+              <div class="actions">
+                <button class="secondary" id="pendingSprintValidateButton" type="button" disabled hidden>Preview / Проверить</button>
+                <button class="primary" id="pendingSprintPlayButton" type="button" disabled>Play / Start</button>
+                <button class="secondary" id="pendingSprintCommentButton" type="button" disabled hidden>Добавить комментарий</button>
+                <button class="secondary" id="pendingSprintRegenerateButton" type="button" disabled hidden>Запросить перегенерацию</button>
+                <button class="danger" id="pendingSprintRejectButton" type="button" disabled hidden>Отклонить</button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -15405,8 +15509,8 @@ def render_index_v2() -> str:
       },
       "page:pending-sprints": {
         title: "Ожидающие спринты",
-        purpose: "Показывает JSON-спринты, полученные через Telegram, но еще не запущенные в выбранном проекте.",
-        logic: "Откройте исходный JSON, проверьте проект и задачи, затем нажмите «Запустить». Только после подтверждения система заменит агентов при overwrite и поставит задачи в очереди."
+        purpose: "Показывает Telegram JSON и внешние proposals, которые ещё не запущены в выбранном проекте.",
+        logic: "Откройте детали, проверьте source, JSON или Git manifest reference и выполните Preview. Комментарий, Reject и Regenerate-request сохраняют только metadata; единственное действие активации — Play / Start."
       },
       "page:cycles": {
         title: "Граф группы и циклы",
@@ -16310,7 +16414,16 @@ def render_index_v2() -> str:
     const pendingSprintsStatusEl = document.getElementById("pendingSprintsStatus");
     const pendingSprintsEl = document.getElementById("pendingSprints");
     const pendingSprintPreviewTitleEl = document.getElementById("pendingSprintPreviewTitle");
+    const pendingSprintProposalDetailsEl = document.getElementById("pendingSprintProposalDetails");
+    const pendingSprintPayloadLabelEl = document.getElementById("pendingSprintPayloadLabel");
     const pendingSprintJsonPreviewEl = document.getElementById("pendingSprintJsonPreview");
+    const pendingSprintProposalActionFieldsEl = document.getElementById("pendingSprintProposalActionFields");
+    const pendingSprintOperatorCommentEl = document.getElementById("pendingSprintOperatorComment");
+    const pendingSprintValidateButtonEl = document.getElementById("pendingSprintValidateButton");
+    const pendingSprintPlayButtonEl = document.getElementById("pendingSprintPlayButton");
+    const pendingSprintCommentButtonEl = document.getElementById("pendingSprintCommentButton");
+    const pendingSprintRegenerateButtonEl = document.getElementById("pendingSprintRegenerateButton");
+    const pendingSprintRejectButtonEl = document.getElementById("pendingSprintRejectButton");
     const emailRoutesEl = document.getElementById("emailRoutes");
     const emailRoutesStatusEl = document.getElementById("emailRoutesStatus");
     const emailSenderOptionsEl = document.getElementById("emailSenderOptions");
@@ -16415,6 +16528,9 @@ def render_index_v2() -> str:
     let pendingSprintsRequestVersion = 0;
     let pendingSprintPreviewRequestVersion = 0;
     let pendingSprintStartInFlightId = "";
+    let pendingSprintActionInFlightId = "";
+    let pendingSprintSelectedDetail = null;
+    const pendingSprintActionAttempts = new Map();
     let pendingSprintsDeepLinkApplied = false;
     let launchPromptRequestVersion = 0;
     let launchPromptSettingsLoaded = false;
@@ -17191,21 +17307,406 @@ def render_index_v2() -> str:
           return `<option value="${escapeHtml(choice.phone)}"${selected}>${escapeHtml(choice.name)} · phone ${escapeHtml(choice.phone)}</option>`;
         }).join("")
         : `<option value="">Нет доступных проектов</option>`;
-      pendingSprintsProjectSelectEl.disabled = !choices.length || Boolean(pendingSprintStartInFlightId);
+      const mutationInFlight = Boolean(
+        pendingSprintStartInFlightId || pendingSprintActionInFlightId
+      );
+      pendingSprintsProjectSelectEl.disabled = !choices.length || mutationInFlight;
       if (activePhone && hasActiveChoice) {
         pendingSprintsProjectSelectEl.value = activePhone;
       }
-      refreshPendingSprintsButtonEl.disabled = !activePhone || Boolean(pendingSprintStartInFlightId);
+      refreshPendingSprintsButtonEl.disabled = !activePhone || mutationInFlight;
       const context = activeProjectContext();
       pendingSprintsProjectSummaryEl.textContent = activePhone && context
         ? `Проект: ${context.project_name || context.git_context_key || "Project"} · phone ${activePhone}`
         : "Выберите проект с каноническим телефоном, чтобы увидеть ожидающие спринты.";
     }
 
+    function pendingSprintProposalPresentation(summary = {}, detail = {}) {
+      const proposal = summary && typeof summary.proposal === "object"
+        ? summary.proposal
+        : null;
+      const sourceMetadata = proposal && proposal.source_metadata
+        && typeof proposal.source_metadata === "object"
+        ? proposal.source_metadata
+        : {};
+      const candidate = proposal && proposal.candidate
+        && typeof proposal.candidate === "object"
+        ? proposal.candidate
+        : {};
+      const validation = proposal && proposal.validation
+        && typeof proposal.validation === "object"
+        ? proposal.validation
+        : {};
+      const activationError = summary && summary.last_activation_error
+        && typeof summary.last_activation_error === "object"
+        ? summary.last_activation_error
+        : null;
+      const proposalStatus = String((proposal && proposal.proposal_status) || "").trim();
+      const activationState = String((proposal && proposal.activation_state) || "").trim();
+      const validationStatus = String(validation.status || "not_run").trim();
+      const candidateKind = String(candidate.kind || "").trim();
+      const managedRequest = candidateKind === "managed_git"
+        && candidate.request && typeof candidate.request === "object"
+        ? candidate.request
+        : null;
+      const candidatePayload = candidateKind === "legacy_json"
+        && candidate.payload && typeof candidate.payload === "object"
+        ? candidate.payload
+        : null;
+      const importPayload = detail && detail.import_payload
+        && typeof detail.import_payload === "object"
+        ? detail.import_payload
+        : null;
+      const previewPayload = managedRequest || candidatePayload || importPayload || {};
+      const canPreview = Boolean(
+        proposal
+        && activationState === "not_started"
+        && (
+          ["created", "ready"].includes(proposalStatus)
+          || (proposalStatus === "failed" && validationStatus === "invalid")
+        )
+      );
+      const canReject = Boolean(
+        proposal
+        && !["started", "rejected"].includes(proposalStatus)
+        && !["starting", "started"].includes(activationState)
+      );
+      const canRegenerate = Boolean(
+        proposal
+        && proposalStatus !== "started"
+        && !["starting", "started"].includes(activationState)
+      );
+      return {
+        hasProposal: Boolean(proposal),
+        proposal,
+        sourceMetadata,
+        sourceType: String(sourceMetadata.source_type || summary.source || "").trim(),
+        summary: String((proposal && proposal.summary) || summary.title || "").trim(),
+        proposalStatus,
+        activationState,
+        revision: proposal ? Number(proposal.revision || 0) : null,
+        validationStatus,
+        validationCheckedAt: validation.checked_at || null,
+        validationIssues: Array.isArray(validation.issues)
+          ? validation.issues.filter((issue) => issue && typeof issue === "object")
+          : [],
+        activationError,
+        candidateKind,
+        managedRequest,
+        previewPayload,
+        comments: proposal && Array.isArray(proposal.comments)
+          ? proposal.comments.filter((comment) => comment && typeof comment === "object")
+          : [],
+        regenerateRequested: Boolean(proposal && proposal.regenerate_requested),
+        submittedBy: proposal && proposal.submitted_by
+          && typeof proposal.submitted_by === "object"
+          ? proposal.submitted_by
+          : {},
+        canPreview,
+        canComment: Boolean(proposal),
+        canReject,
+        canRegenerate,
+        canPlay: Boolean(summary && summary.startable === true),
+      };
+    }
+
+    function renderPendingSprintProposalDetails() {
+      const detail = pendingSprintSelectedDetail;
+      const summary = detail && detail.pending_sprint && typeof detail.pending_sprint === "object"
+        ? detail.pending_sprint
+        : null;
+      if (!summary) {
+        pendingSprintProposalDetailsEl.innerHTML = `<div class="subtle">Детали выбранного спринта появятся здесь.</div>`;
+        pendingSprintPayloadLabelEl.textContent = "JSON спринта";
+        pendingSprintJsonPreviewEl.value = "";
+        pendingSprintProposalActionFieldsEl.hidden = true;
+        for (const button of [
+          pendingSprintValidateButtonEl,
+          pendingSprintCommentButtonEl,
+          pendingSprintRegenerateButtonEl,
+          pendingSprintRejectButtonEl,
+        ]) {
+          button.hidden = true;
+          button.disabled = true;
+        }
+        pendingSprintPlayButtonEl.disabled = true;
+        pendingSprintPlayButtonEl.textContent = "Play / Start";
+        pendingSprintOperatorCommentEl.disabled = true;
+        return;
+      }
+
+      const view = pendingSprintProposalPresentation(summary, detail);
+      const field = (label, value) => value === null || value === undefined || value === ""
+        ? ""
+        : `<div class="pending-sprint-proposal-field"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(String(value))}</span></div>`;
+      const sourceFields = [
+        ["Source type", view.sourceType || "legacy"],
+        ["Source title", view.sourceMetadata.title],
+        ["Sender", view.sourceMetadata.sender_label],
+        ["Conversation", view.sourceMetadata.conversation_id],
+        ["Thread", view.sourceMetadata.thread_id],
+        ["Message", view.sourceMetadata.message_id],
+        ["Observed", view.sourceMetadata.observed_at],
+      ].map(([label, value]) => field(label, value)).join("");
+      const lifecycleFields = view.hasProposal
+        ? [
+          field("Proposal ID", view.proposal.proposal_id),
+          field("Proposal status", view.proposalStatus),
+          field("Activation state", view.activationState),
+          field("Revision", view.revision),
+          field("Candidate", view.candidateKind),
+          field("Validation", view.validationStatus),
+          field("Validation checked", view.validationCheckedAt),
+          field("Regeneration requested", view.regenerateRequested ? "yes" : "no"),
+          field("Producer", view.submittedBy.producer_id),
+        ].join("")
+        : field("Record type", "legacy pending sprint");
+      const managedFields = view.managedRequest
+        ? [
+          field("Repository ID", view.managedRequest.repository_id),
+          field("Git ref", view.managedRequest.ref),
+          field("Manifest path", view.managedRequest.manifest_path),
+        ].join("")
+        : "";
+      const issueItems = view.validationIssues.map((issue) => {
+        const code = String(issue.code || "VALIDATION_ISSUE");
+        const location = String(issue.field || issue.path || "");
+        const message = String(issue.message || "Validation failed.");
+        const suffix = location ? ` · ${location}` : "";
+        return `<li><strong>${escapeHtml(code)}</strong>${escapeHtml(suffix)} — ${escapeHtml(message)}</li>`;
+      }).join("");
+      const validationHtml = view.hasProposal
+        ? `<div><strong>Advisory Preview / validation</strong>${issueItems
+          ? `<ul class="pending-sprint-validation-issues">${issueItems}</ul>`
+          : `<div class="subtle">Сохранённых validation issues нет.</div>`}</div>`
+        : "";
+      const activationDetail = view.activationError
+        && view.activationError.detail
+        && typeof view.activationError.detail === "object"
+        ? view.activationError.detail
+        : {};
+      const activationIssueItems = Array.isArray(activationDetail.issues)
+        ? activationDetail.issues.filter((issue) => issue && typeof issue === "object")
+        : [];
+      const activationIssuesHtml = activationIssueItems.map((issue) => {
+        const code = String(issue.code || "ACTIVATION_ISSUE");
+        const location = String(issue.field || issue.path || "");
+        const message = String(issue.message || "Managed activation failed.");
+        const suffix = location ? ` · ${location}` : "";
+        return `<li><strong>${escapeHtml(code)}</strong>${escapeHtml(suffix)} — ${escapeHtml(message)}</li>`;
+      }).join("");
+      const activationErrorHtml = view.activationError
+        ? `<div><strong>Последний Play preflight / activation error</strong>
+            <div>${escapeHtml(String(activationDetail.error || "SPRINT_ACTIVATE_FAILED"))}
+              ${view.activationError.http_status ? ` · HTTP ${escapeHtml(String(view.activationError.http_status))}` : ""}
+              ${activationDetail.phase ? ` · ${escapeHtml(String(activationDetail.phase))}` : ""}
+            </div>
+            ${activationIssuesHtml ? `<ul class="pending-sprint-validation-issues">${activationIssuesHtml}</ul>` : ""}
+          </div>`
+        : "";
+      const commentItems = view.comments.map((comment) => {
+        const actor = comment.actor && typeof comment.actor === "object"
+          ? `${comment.actor.actor_type || "actor"}:${comment.actor.actor_id || "unknown"}`
+          : "actor";
+        const createdAt = comment.created_at ? ` · ${comment.created_at}` : "";
+        return `<li><strong>${escapeHtml(actor)}</strong>${escapeHtml(createdAt)} — ${escapeHtml(String(comment.text || ""))}</li>`;
+      }).join("");
+      const commentsHtml = view.hasProposal
+        ? `<div><strong>Комментарии</strong>${commentItems
+          ? `<ul class="pending-sprint-comments">${commentItems}</ul>`
+          : `<div class="subtle">Комментариев пока нет.</div>`}</div>`
+        : "";
+      pendingSprintProposalDetailsEl.innerHTML = `
+        <div class="pending-sprint-proposal-grid">
+          ${sourceFields}
+          ${lifecycleFields}
+          ${managedFields}
+        </div>
+        <div><strong>Summary</strong><div>${escapeHtml(view.summary || "Описание отсутствует.")}</div></div>
+        ${validationHtml}
+        ${activationErrorHtml}
+        ${commentsHtml}`;
+      pendingSprintPayloadLabelEl.textContent = view.candidateKind === "managed_git"
+        ? "Git manifest reference (request)"
+        : "JSON спринта";
+      pendingSprintJsonPreviewEl.value = JSON.stringify(view.previewPayload, null, 2);
+
+      const sprintId = String(summary.id || "");
+      const startingLocally = pendingSprintStartInFlightId === sprintId;
+      const actionBusy = Boolean(pendingSprintActionInFlightId);
+      const mutatingThis = pendingSprintActionInFlightId === sprintId;
+      const startPresentation = pendingSprintStartPresentation(
+        summary,
+        startingLocally,
+        actionBusy
+      );
+      pendingSprintProposalActionFieldsEl.hidden = !view.hasProposal;
+      for (const button of [
+        pendingSprintValidateButtonEl,
+        pendingSprintCommentButtonEl,
+        pendingSprintRegenerateButtonEl,
+        pendingSprintRejectButtonEl,
+      ]) {
+        button.hidden = !view.hasProposal;
+      }
+      pendingSprintOperatorCommentEl.disabled = !view.canComment || actionBusy;
+      pendingSprintValidateButtonEl.disabled = !view.canPreview || actionBusy || startingLocally;
+      pendingSprintCommentButtonEl.disabled = !view.canComment || actionBusy;
+      pendingSprintRegenerateButtonEl.disabled = !view.canRegenerate || actionBusy || startingLocally;
+      pendingSprintRejectButtonEl.disabled = !view.canReject || actionBusy || startingLocally;
+      pendingSprintPlayButtonEl.disabled = startPresentation.disabled;
+      pendingSprintPlayButtonEl.textContent = `Play / ${startPresentation.label}`;
+    }
+
     function clearPendingSprintPreview() {
       pendingSprintPreviewRequestVersion += 1;
-      pendingSprintPreviewTitleEl.textContent = "JSON спринта";
-      pendingSprintJsonPreviewEl.value = "";
+      pendingSprintSelectedDetail = null;
+      pendingSprintPreviewTitleEl.textContent = "Детали спринта";
+      pendingSprintOperatorCommentEl.value = "";
+      renderPendingSprintProposalDetails();
+    }
+
+    function pendingSprintActionRequest(sprintId, proposal, action, comment = "") {
+      const contracts = {
+        preview: {suffix: "preview", action: "preview", needsComment: false},
+        comment: {suffix: "comments", action: "comment", needsComment: true},
+        reject: {suffix: "reject", action: "reject", needsComment: true},
+        request_regeneration: {
+          suffix: "regenerate-request",
+          action: "request_regeneration",
+          needsComment: true,
+        },
+      };
+      const contract = contracts[action];
+      if (!contract || !proposal || !Number.isInteger(Number(proposal.revision))) {
+        throw new Error("Proposal action is unavailable for this record.");
+      }
+      const revision = Number(proposal.revision);
+      const cleanComment = String(comment || "").trim();
+      if (contract.needsComment && !cleanComment) {
+        throw new Error("Добавьте комментарий, причину или инструкцию.");
+      }
+      if (contract.needsComment && /[\\u0000-\\u001F\\u007F]/.test(cleanComment)) {
+        throw new Error("Комментарий должен быть одной строкой без управляющих символов.");
+      }
+      const intentKey = JSON.stringify([
+        String(sprintId || ""),
+        contract.action,
+        revision,
+        contract.needsComment ? cleanComment : null,
+      ]);
+      let idempotencyKey = pendingSprintActionAttempts.get(intentKey);
+      if (!idempotencyKey) {
+        const nonce = globalThis.crypto && typeof globalThis.crypto.randomUUID === "function"
+          ? globalThis.crypto.randomUUID()
+          : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+        idempotencyKey = `pending-ui:${contract.action}:${revision}:${nonce}`;
+        pendingSprintActionAttempts.set(intentKey, idempotencyKey);
+      }
+      const payload = {
+        schema_version: 1,
+        action: contract.action,
+        expected_revision: revision,
+        idempotency_key: idempotencyKey,
+      };
+      if (contract.needsComment) {
+        payload.comment = cleanComment;
+      }
+      return {suffix: contract.suffix, payload, intentKey};
+    }
+
+    async function submitPendingSprintAction(action) {
+      const projectPhone = pendingSprintsActiveProjectPhone();
+      const selectedId = String(pendingSprintsSelectedId || "").trim();
+      const detail = pendingSprintSelectedDetail;
+      const summary = detail && detail.pending_sprint;
+      const proposal = summary && summary.proposal;
+      if (!projectPhone || !selectedId || !proposal || pendingSprintActionInFlightId) {
+        return;
+      }
+      if (pendingSprintStartInFlightId && action !== "comment") {
+        setPendingSprintsStatus("Во время запуска доступен только комментарий.", "error");
+        return;
+      }
+      const comment = action === "preview" ? "" : pendingSprintOperatorCommentEl.value;
+      const request = pendingSprintActionRequest(selectedId, proposal, action, comment);
+      if (action === "reject" && !window.confirm("Отклонить выбранный proposal без запуска?")) {
+        return;
+      }
+      if (
+        action === "request_regeneration"
+        && !window.confirm("Сохранить запрос перегенерации? nginx-qa только установит marker и не вызовет внешний adapter.")
+      ) {
+        return;
+      }
+      pendingSprintActionInFlightId = selectedId;
+      renderPendingSprints();
+      renderPendingSprintProposalDetails();
+      const actionLabels = {
+        preview: "Проверяю proposal...",
+        comment: "Сохраняю комментарий...",
+        reject: "Отклоняю proposal...",
+        request_regeneration: "Сохраняю запрос перегенерации...",
+      };
+      setPendingSprintsStatus(actionLabels[action] || "Обновляю proposal...");
+      try {
+        const response = await fetch(
+          `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}/${request.suffix}`,
+          pendingSprintsFetchOptions({
+            method: "POST",
+            headers: {"Content-Type": "application/json; charset=utf-8"},
+            body: JSON.stringify(request.payload),
+          })
+        );
+        const data = await pendingSprintsResponseJson(
+          response,
+          "Не удалось обновить proposal."
+        );
+        if (!response.ok) {
+          if (response.status === 409) {
+            await refreshPendingSprints();
+          }
+          throw new Error(pendingSprintErrorMessage(data, "Не удалось обновить proposal."));
+        }
+        pendingSprintActionAttempts.delete(request.intentKey);
+        if (
+          action !== "preview"
+          && projectPhone === pendingSprintsActiveProjectPhone()
+          && selectedId === pendingSprintsSelectedId
+        ) {
+          pendingSprintOperatorCommentEl.value = "";
+        }
+        if (action === "reject") {
+          await refreshPendingSprints();
+          setPendingSprintsStatus("Proposal отклонён без запуска sprint.", "ok");
+          return;
+        }
+        await refreshPendingSprints();
+        if (action === "preview") {
+          const validationStatus = String(
+            (data.proposal && data.proposal.validation && data.proposal.validation.status) || ""
+          );
+          setPendingSprintsStatus(
+            validationStatus === "valid"
+              ? "Preview завершён: request contract valid; Git preflight выполняется только при Play / Start."
+              : "Preview завершён: proposal не прошёл validation; sprint не запускался.",
+            validationStatus === "valid" ? "ok" : "error"
+          );
+        } else if (action === "request_regeneration") {
+          setPendingSprintsStatus(
+            "Запрос перегенерации сохранён как marker; внешний adapter не вызывался.",
+            "ok"
+          );
+        } else {
+          setPendingSprintsStatus("Комментарий сохранён без запуска sprint.", "ok");
+        }
+      } finally {
+        if (pendingSprintActionInFlightId === selectedId) {
+          pendingSprintActionInFlightId = "";
+        }
+        renderPendingSprints();
+        renderPendingSprintProposalDetails();
+      }
     }
 
     function pendingSprintStatusLabel(sprint) {
@@ -17216,7 +17717,32 @@ def render_index_v2() -> str:
         }
         return "запускается";
       }
+      if (sprint && sprint.startable !== true) {
+        return "ожидает проверки";
+      }
       return "ожидает запуска";
+    }
+
+    function pendingSprintStartPresentation(
+      sprint,
+      isStartingLocally,
+      isMutatingLocally = false
+    ) {
+      const isActivating = String((sprint && sprint.status) || "").trim().toLowerCase() === "activating";
+      const isStartable = Boolean(sprint && sprint.startable === true);
+      const canRetry = isActivating && isStartable;
+      const disabled = Boolean(isStartingLocally || isMutatingLocally) || !isStartable;
+      let label = "Запуск недоступен";
+      if (isStartingLocally || (isActivating && !canRetry)) {
+        label = "Запускается...";
+      } else if (isMutatingLocally) {
+        label = "Обновление...";
+      } else if (canRetry) {
+        label = "Повторить запуск";
+      } else if (isStartable) {
+        label = "Запустить";
+      }
+      return {disabled, label};
     }
 
     function sprintTypeBadge(sprint) {
@@ -17249,26 +17775,35 @@ def render_index_v2() -> str:
         const receivedAt = sprint.received_at ? formatLocalDateTime(sprint.received_at) : "дата неизвестна";
         const source = sprint.source_filename ? ` · файл: ${sprint.source_filename}` : "";
         const mode = sprint.assignment_mode || "sequential";
-        const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}`;
+        const proposalView = pendingSprintProposalPresentation(sprint);
+        const proposalMeta = proposalView.hasProposal
+          ? ` · source: ${proposalView.sourceType || "unknown"} · proposal: ${proposalView.proposalStatus}/${proposalView.activationState} · validation: ${proposalView.validationStatus}`
+          : "";
+        const meta = `${receivedAt} · режим: ${mode} · агентов: ${sprint.agent_count || 0} · задач: ${sprint.task_count || 0}${source}${proposalMeta}`;
         const isStartingLocally = sprintId === pendingSprintStartInFlightId;
-        const isActivating = String(sprint.status || "").trim().toLowerCase() === "activating";
-        const canRetry = isActivating && sprint.startable === true;
-        const startDisabled = isStartingLocally || (isActivating && !canRetry);
-        const startLabel = isStartingLocally || (isActivating && !canRetry)
-          ? "Запускается..."
-          : canRetry
-            ? "Повторить запуск"
-            : "Запустить";
+        const operationInFlight = Boolean(
+          pendingSprintStartInFlightId || pendingSprintActionInFlightId
+        );
+        const startPresentation = pendingSprintStartPresentation(
+          sprint,
+          isStartingLocally,
+          operationInFlight && !isStartingLocally
+        );
+        const managedReference = proposalView.managedRequest
+          ? `${proposalView.managedRequest.repository_id || ""} · ${proposalView.managedRequest.ref || ""} · ${proposalView.managedRequest.manifest_path || ""}`
+          : "";
         return `<article class="pending-sprint-card${selected}" data-pending-sprint-id="${escapeHtml(sprintId)}">
           <div class="pending-sprint-card-head">
             <div>
               <div class="sprint-history-title">${escapeHtml(sprint.title || `Спринт ${sprint.sequence || ""}`)}<span class="sprint-history-badge">${escapeHtml(pendingSprintStatusLabel(sprint))}</span>${sprintTypeBadge(sprint)}</div>
               <div class="agent-project-item-meta">${escapeHtml(meta)}</div>
+              ${proposalView.hasProposal ? `<div>${escapeHtml(proposalView.summary)}</div>` : ""}
+              ${managedReference ? `<div class="agent-project-item-meta">Git manifest: ${escapeHtml(managedReference)}</div>` : ""}
             </div>
           </div>
           <div class="actions">
-            <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button">Показать JSON</button>
-            <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startDisabled ? " disabled" : ""}>${startLabel}</button>
+            <button class="secondary" data-action="preview-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${operationInFlight ? " disabled" : ""}>Детали / JSON</button>
+            <button class="primary" data-action="start-pending-sprint" data-sprint-id="${escapeHtml(sprintId)}" type="button"${startPresentation.disabled ? " disabled" : ""}>${startPresentation.label}</button>
           </div>
         </article>`;
       }).join("");
@@ -17304,13 +17839,31 @@ def render_index_v2() -> str:
         clearPendingSprintPreview();
         return;
       }
+      const operationInFlight = Boolean(
+        pendingSprintStartInFlightId || pendingSprintActionInFlightId
+      );
+      if (
+        operationInFlight
+        && pendingSprintsSelectedId
+        && selectedId !== pendingSprintsSelectedId
+      ) {
+        setPendingSprintsStatus(
+          "Дождитесь завершения текущей операции перед выбором другого proposal.",
+          "error"
+        );
+        return;
+      }
+      if (selectedId !== pendingSprintsSelectedId) {
+        pendingSprintOperatorCommentEl.value = "";
+      }
       pendingSprintsSelectedId = selectedId;
       renderPendingSprints();
       if (syncUrl) {
         syncPendingSprintsUrl();
       }
-      pendingSprintPreviewTitleEl.textContent = "Загружаю JSON...";
-      pendingSprintJsonPreviewEl.value = "";
+      pendingSprintPreviewTitleEl.textContent = "Загружаю детали...";
+      pendingSprintSelectedDetail = null;
+      renderPendingSprintProposalDetails();
       const requestVersion = ++pendingSprintPreviewRequestVersion;
       const response = await fetch(
         `/api/v1/projects/${encodeURIComponent(projectPhone)}/pending-sprints/${encodeURIComponent(selectedId)}`,
@@ -17328,13 +17881,14 @@ def render_index_v2() -> str:
         return;
       }
       if (!response.ok) {
-        pendingSprintPreviewTitleEl.textContent = "JSON недоступен";
-        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить JSON спринта."));
+        pendingSprintPreviewTitleEl.textContent = "Детали недоступны";
+        throw new Error(pendingSprintErrorMessage(data, "Не удалось загрузить детали спринта."));
       }
       const summary = data.pending_sprint || {};
-      pendingSprintPreviewTitleEl.textContent = summary.title || "JSON спринта";
-      pendingSprintJsonPreviewEl.value = JSON.stringify(data.import_payload || {}, null, 2);
-      setPendingSprintsStatus("Полный JSON выбранного спринта загружен.", "ok");
+      pendingSprintSelectedDetail = data;
+      pendingSprintPreviewTitleEl.textContent = summary.title || "Детали спринта";
+      renderPendingSprintProposalDetails();
+      setPendingSprintsStatus("Детали выбранного спринта загружены.", "ok");
       const selectedCard = Array.from(
         pendingSprintsEl.querySelectorAll("[data-pending-sprint-id]")
       ).find((card) => card.dataset.pendingSprintId === selectedId);
@@ -17385,11 +17939,28 @@ def render_index_v2() -> str:
         await loadPendingSprintPreview(pendingSprintsSelectedId, {syncUrl: false});
         return;
       }
-      clearPendingSprintPreview();
       if (pendingSprintsSelectedId && !selectedExists) {
-        setPendingSprintsStatus("Указанный спринт уже запущен или больше не ожидает запуска.", "error");
+        try {
+          await loadPendingSprintPreview(
+            pendingSprintsSelectedId,
+            {syncUrl: false}
+          );
+          setPendingSprintsStatus(
+            "Запись больше не входит в pending-список; показаны её сохранённые детали.",
+            "ok"
+          );
+        } catch (_error) {
+          pendingSprintsSelectedId = "";
+          clearPendingSprintPreview();
+          syncPendingSprintsUrl();
+          setPendingSprintsStatus(
+            "Указанный спринт уже запущен или больше недоступен.",
+            "error"
+          );
+        }
         return;
       }
+      clearPendingSprintPreview();
       setPendingSprintsStatus(
         pendingSprints.length
           ? `Ожидают запуска: ${pendingSprints.length}.`
@@ -17402,12 +17973,23 @@ def render_index_v2() -> str:
       const projectPhone = pendingSprintsActiveProjectPhone();
       const selectedId = String(sprintId || "").trim();
       const sprint = pendingSprints.find((item) => String(item.id || "") === selectedId);
-      if (!projectPhone || !selectedId || !sprint || pendingSprintStartInFlightId) {
+      if (
+        !projectPhone
+        || !selectedId
+        || !sprint
+        || pendingSprintStartInFlightId
+        || pendingSprintActionInFlightId
+      ) {
         return;
       }
       const isRetry = String(sprint.status || "").trim().toLowerCase() === "activating";
-      if (isRetry && sprint.startable !== true) {
-        setPendingSprintsStatus("Спринт уже запускается. Дождитесь завершения текущей попытки.", "error");
+      if (sprint.startable !== true) {
+        setPendingSprintsStatus(
+          isRetry
+            ? "Спринт уже запускается. Дождитесь завершения текущей попытки."
+            : "Play недоступен: сначала выполните Preview и устраните validation issues.",
+          "error"
+        );
         return;
       }
       const title = sprint.title || `Спринт ${sprint.sequence || ""}`;
@@ -17423,6 +18005,7 @@ def render_index_v2() -> str:
       }
       pendingSprintStartInFlightId = selectedId;
       renderPendingSprints();
+      renderPendingSprintProposalDetails();
       setPendingSprintsStatus(`${isRetry ? "Повторяю запуск" : "Запускаю"} «${title}»...`);
       try {
         const response = await fetch(
@@ -17508,6 +18091,7 @@ def render_index_v2() -> str:
           pendingSprintStartInFlightId = "";
         }
         renderPendingSprints();
+        renderPendingSprintProposalDetails();
       }
     }
 
@@ -22008,6 +22592,26 @@ ${data.patch || ""}
         startPendingSprint(sprintId).catch((error) => setPendingSprintsStatus(error.message, "error"));
       }
     });
+    pendingSprintValidateButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("preview")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintPlayButtonEl.addEventListener("click", () => {
+      startPendingSprint(pendingSprintsSelectedId)
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintCommentButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("comment")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintRegenerateButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("request_regeneration")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
+    pendingSprintRejectButtonEl.addEventListener("click", () => {
+      submitPendingSprintAction("reject")
+        .catch((error) => setPendingSprintsStatus(error.message, "error"));
+    });
     launchPromptEndpointModeEl.addEventListener("change", () => {
       refreshLaunchPrompt().catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
@@ -24013,6 +24617,155 @@ def sprint_record_summary(record: dict[str, Any]) -> dict[str, Any]:
     return summary
 
 
+def _later_pending_proposal_timestamp(
+    current_value: Any,
+    transition_value: Any,
+) -> Any:
+    """Keep proposal timestamps monotonic while projecting legacy state."""
+
+    current_at = parse_utc_datetime(current_value)
+    transition_at = parse_utc_datetime(transition_value)
+    if transition_at is None:
+        return current_value
+    if current_at is None or transition_at > current_at:
+        return transition_value
+    return current_value
+
+
+def _project_legacy_proposal_lifecycle(
+    record: dict[str, Any],
+    proposal: dict[str, Any],
+) -> dict[str, Any]:
+    """Project outer activation state for records written before NQII-005.
+
+    Older ``legacy_json`` proposal records only mutated the pending-sprint
+    envelope during Start. Their nested proposal therefore remained
+    ``ready/not_started`` even after an activation attempt. The projection is
+    deliberately read-only and applies only to that exact stale state, so new
+    records whose proposal lifecycle was persisted are left untouched.
+    """
+
+    candidate = proposal.get("candidate")
+    validation = proposal.get("validation")
+    if not (
+        isinstance(candidate, dict)
+        and candidate.get("kind") == "legacy_json"
+        and isinstance(validation, dict)
+        and validation.get("status") == "valid"
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "not_started"
+    ):
+        return proposal
+
+    try:
+        attempts = max(0, int(record.get("activation_attempts") or 0))
+    except (TypeError, ValueError):
+        attempts = 0
+    if attempts < 1:
+        return proposal
+
+    record_status = str(record.get("status") or "pending").strip().lower()
+    projected = deepcopy(proposal)
+    revision_delta = 0
+    transition_at: Any = None
+    if record_status == "activated":
+        started_sprint_id = str(
+            record.get("activated_sprint_id") or ""
+        ).strip()
+        if not started_sprint_id:
+            return proposal
+        projected["proposal_status"] = "started"
+        projected["activation_state"] = "started"
+        projected["started_sprint_id"] = started_sprint_id
+        revision_delta = attempts * 2
+        transition_at = record.get("activated_at")
+    elif record_status == "activating":
+        projected["activation_state"] = "starting"
+        revision_delta = attempts * 2 - 1
+        transition_at = record.get("activating_at")
+    elif (
+        record_status == "pending"
+        and parse_utc_datetime(record.get("last_activation_failed_at"))
+        is not None
+    ):
+        projected["proposal_status"] = "failed"
+        projected["activation_state"] = "failed"
+        projected["started_sprint_id"] = None
+        revision_delta = attempts * 2
+        transition_at = record.get("last_activation_failed_at")
+    else:
+        return proposal
+
+    try:
+        base_revision = max(0, int(proposal.get("revision") or 0))
+    except (TypeError, ValueError):
+        base_revision = 0
+    projected["revision"] = base_revision + revision_delta
+    projected["updated_at"] = _later_pending_proposal_timestamp(
+        proposal.get("updated_at"),
+        transition_at,
+    )
+    return projected
+
+
+def pending_proposal_resource(record: dict[str, Any]) -> dict[str, Any] | None:
+    raw = record.get("proposal")
+    if not isinstance(raw, dict):
+        return None
+    proposal = {
+        key: deepcopy(raw.get(key))
+        for key in (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "candidate",
+            "validation",
+            "comments",
+            "regenerate_requested",
+            "submitted_by",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
+    }
+    return _project_legacy_proposal_lifecycle(record, proposal)
+
+
+def pending_proposal_status_resource(
+    record: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Return the closed, transport-neutral status projection for a proposal."""
+
+    proposal = pending_proposal_resource(record)
+    if proposal is None:
+        return None
+    return {
+        key: deepcopy(proposal.get(key))
+        for key in (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "validation",
+            "regenerate_requested",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
+    }
+
+
 def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
     summary = {
         key: deepcopy(record.get(key))
@@ -24046,6 +24799,8 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
     }
     if "sprint_type" in record:
         summary["sprint_type"] = deepcopy(record["sprint_type"])
+    proposal = pending_proposal_resource(record)
+    summary["proposal"] = proposal
     record_status = str(record.get("status") or "pending").strip().lower()
     retry_at: datetime | None = None
     if record_status == "activating":
@@ -24053,12 +24808,60 @@ def pending_sprint_summary(record: dict[str, Any]) -> dict[str, Any]:
         if activating_at is not None:
             retry_at = activating_at + PENDING_SPRINT_ACTIVATION_LEASE
     summary["retry_at"] = retry_at.isoformat() if retry_at is not None else None
-    summary["startable"] = bool(
+    managed_recovery = bool(
+        record_status == "activating"
+        and retry_at is not None
+        and datetime.now(timezone.utc) >= retry_at
+        and proposal is not None
+        and (proposal.get("candidate") or {}).get("kind") == "managed_git"
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "starting"
+    )
+    proposal_candidate = (
+        proposal.get("candidate")
+        if isinstance(proposal, dict)
+        and isinstance(proposal.get("candidate"), dict)
+        else {}
+    )
+    candidate_kind = str(proposal_candidate.get("kind") or "")
+    legacy_retry = bool(
         record_status == "pending"
+        and candidate_kind == "legacy_json"
+        and proposal is not None
+        and proposal.get("proposal_status") == "failed"
+        and proposal.get("activation_state") == "failed"
+        and (proposal.get("validation") or {}).get("status") == "valid"
+    )
+    legacy_recovery = bool(
+        record_status == "activating"
+        and retry_at is not None
+        and datetime.now(timezone.utc) >= retry_at
+        and candidate_kind == "legacy_json"
+        and proposal is not None
+        and proposal.get("proposal_status") == "ready"
+        and proposal.get("activation_state") == "starting"
+        and (proposal.get("validation") or {}).get("status") == "valid"
+    )
+    summary["startable"] = bool(
+        managed_recovery
+        or legacy_retry
+        or legacy_recovery
         or (
-            record_status == "activating"
-            and retry_at is not None
-            and datetime.now(timezone.utc) >= retry_at
+            (
+                record_status == "pending"
+                or (
+                    record_status == "activating"
+                    and retry_at is not None
+                    and datetime.now(timezone.utc) >= retry_at
+                )
+            )
+            and (
+                proposal is None
+                or (
+                    proposal.get("proposal_status") == "ready"
+                    and proposal.get("activation_state") == "not_started"
+                )
+            )
         )
     )
     return summary
@@ -24353,6 +25156,569 @@ def pending_sprint_record_from_project(
     )
 
 
+def create_inbound_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    project_name: str,
+    git_address: str,
+    repository_key: str,
+    producer_id: str,
+    payload: dict[str, Any],
+    assignment_mode: str,
+    agent_count: int,
+    task_count: int,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Atomically create or replay a proposal in the shared pending store."""
+
+    fingerprint = create_request_fingerprint(project_phone, payload)
+    idempotency_key = str(payload["idempotency_key"])
+    proposal_id = str(payload["proposal_id"])
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        durable_capabilities = tuple(
+            str(candidate.get("access_token") or "").strip()
+            for candidate in projects.values()
+            if isinstance(candidate, dict)
+            and str(candidate.get("access_token") or "").strip()
+        )
+        if contains_recognized_secret(
+            payload,
+            configured_values=durable_capabilities,
+            recognize_shapes=False,
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request contains prohibited credential material.",
+                field="$",
+            )
+        raw_project = projects.get(context_key)
+        project = dict(raw_project) if isinstance(raw_project, dict) else {}
+        raw_records = project.get("sprints")
+        records = [
+            deepcopy(record)
+            for record in raw_records
+            if isinstance(record, dict)
+        ] if isinstance(raw_records, list) else []
+        raw_bindings = project.get("inbound_proposal_create_bindings")
+        bindings = [
+            deepcopy(binding)
+            for binding in raw_bindings
+            if isinstance(binding, dict)
+        ] if isinstance(raw_bindings, list) else []
+        candidate_projects = [
+            (str(key), value)
+            for key, value in projects.items()
+            if isinstance(value, dict)
+            and (
+                str(key) == context_key
+                or str(value.get("project_phone") or "") == project_phone
+            )
+        ]
+
+        key_match = next(
+            (
+                (candidate_key, candidate_project, binding)
+                for candidate_key, candidate_project in candidate_projects
+                for binding in candidate_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+                and binding.get("producer_id") == producer_id
+                and binding.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+        if key_match is not None:
+            _, bound_project, key_binding = key_match
+            if key_binding.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_IDEMPOTENCY_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The idempotency key is already bound to another request.",
+                )
+            bound_id = str(key_binding.get("pending_sprint_id") or "")
+            record = next(
+                (
+                    item
+                    for item in bound_project.get("sprints") or []
+                    if isinstance(item, dict)
+                    if str(item.get("id") or "") == bound_id
+                ),
+                None,
+            )
+            if record is None or pending_proposal_resource(record) is None:
+                raise RuntimeError("Inbound proposal binding has no pending record")
+            return {
+                "proposal": pending_proposal_resource(record),
+                "deduplicated": True,
+                "created": False,
+            }
+
+        proposal_match = next(
+            (
+                (candidate_key, candidate_project, binding)
+                for candidate_key, candidate_project in candidate_projects
+                for binding in candidate_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+                and binding.get("producer_id") == producer_id
+                and binding.get("proposal_id") == proposal_id
+            ),
+            None,
+        )
+        if proposal_match is not None:
+            bound_project_key, raw_bound_project, proposal_binding = proposal_match
+            if proposal_binding.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_ID_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The proposal ID is already bound to another request.",
+                    proposal_id=proposal_id,
+                )
+            bound_id = str(proposal_binding.get("pending_sprint_id") or "")
+            record = next(
+                (
+                    item
+                    for item in raw_bound_project.get("sprints") or []
+                    if isinstance(item, dict)
+                    if str(item.get("id") or "") == bound_id
+                ),
+                None,
+            )
+            if record is None or pending_proposal_resource(record) is None:
+                raise RuntimeError("Inbound proposal binding has no pending record")
+            bound_project = dict(raw_bound_project)
+            bound_bindings = [
+                deepcopy(binding)
+                for binding in bound_project.get(
+                    "inbound_proposal_create_bindings"
+                ) or []
+                if isinstance(binding, dict)
+            ]
+            bound_bindings.append(
+                {
+                    "producer_id": producer_id,
+                    "proposal_id": proposal_id,
+                    "idempotency_key": idempotency_key,
+                    "request_fingerprint": fingerprint,
+                    "pending_sprint_id": bound_id,
+                }
+            )
+            bound_project["inbound_proposal_create_bindings"] = bound_bindings
+            projects[bound_project_key] = bound_project
+            storage["projects"] = projects
+            write_pending_sprints_file(storage)
+            return {
+                "proposal": pending_proposal_resource(record),
+                "deduplicated": True,
+                "created": False,
+            }
+
+        sequence = max(
+            (int(record.get("sequence") or 0) for record in records),
+            default=0,
+        ) + 1
+        now = utc_now()
+        pending_sprint_id = f"pending-{uuid4().hex}"
+        source_metadata = deepcopy(payload["source"])
+        candidate = deepcopy(payload["candidate"])
+        proposal = {
+            "schema_version": 1,
+            "proposal_id": proposal_id,
+            "pending_sprint_id": pending_sprint_id,
+            "project_id": project_phone,
+            "revision": 0,
+            "proposal_status": "created",
+            "activation_state": "not_started",
+            "source_metadata": source_metadata,
+            "summary": str(payload["summary"]),
+            "candidate": candidate,
+            "validation": {
+                "status": "not_run",
+                "checked_at": None,
+                "issues": [],
+            },
+            "comments": [],
+            "regenerate_requested": False,
+            "submitted_by": {"producer_id": producer_id},
+            "created_at": now,
+            "updated_at": now,
+            "started_sprint_id": None,
+        }
+        import_payload = (
+            deepcopy(candidate.get("payload"))
+            if candidate.get("kind") == "legacy_json"
+            and isinstance(candidate.get("payload"), dict)
+            else None
+        )
+        title = str(source_metadata.get("title") or payload["summary"]).strip()
+        record = {
+            "id": pending_sprint_id,
+            "sequence": sequence,
+            "external_id": proposal_id,
+            "title": title[:512],
+            "status": "pending",
+            "project_phone": project_phone,
+            "project_name": project_name,
+            "git_context_key": context_key,
+            "source": "inbound-proposal",
+            "source_filename": "",
+            "received_at": now,
+            "assignment_mode": assignment_mode,
+            "agent_count": agent_count,
+            "task_count": task_count,
+            "payload_sha256": pending_sprint_payload_sha256(candidate),
+            "git_address": git_address,
+            "repository_key": repository_key,
+            "telegram_update_id": "",
+            "telegram_chat_id": "",
+            "telegram_message_id": "",
+            "activation_attempts": 0,
+            "activation_attempt_id": None,
+            "activating_at": None,
+            "activated_at": None,
+            "activated_sprint_id": None,
+            "last_activation_failed_at": None,
+            "last_activation_error": None,
+            "import_payload": import_payload,
+            "proposal": proposal,
+        }
+        if isinstance(import_payload, dict) and "sprint_type" in import_payload:
+            record["sprint_type"] = deepcopy(import_payload["sprint_type"])
+        records.append(record)
+        bindings.append(
+            {
+                "producer_id": producer_id,
+                "proposal_id": proposal_id,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
+                "pending_sprint_id": pending_sprint_id,
+            }
+        )
+        project.update(
+            {
+                "project_phone": project_phone,
+                "project_name": project_name,
+                "git_context_key": context_key,
+                "access_token": (
+                    str(project.get("access_token") or "").strip()
+                    or secrets.token_urlsafe(32)
+                ),
+                "updated_at": now,
+                "sprints": records,
+                "inbound_proposal_create_bindings": bindings,
+            }
+        )
+        projects[context_key] = project
+        storage["schema_version"] = 1
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {
+            "proposal": pending_proposal_resource(record),
+            "deduplicated": False,
+            "created": True,
+        }
+
+
+def inbound_proposal_candidate_validation(
+    candidate: Any,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Return a value-free advisory validation result without activating work."""
+
+    checked_at = utc_now()
+    kind = candidate.get("kind") if isinstance(candidate, dict) else None
+    try:
+        if kind == "managed_git":
+            request = candidate.get("request")
+            validate_start_request(request, correlation_id)
+        elif kind == "legacy_json":
+            payload = candidate.get("payload")
+            legacy_sprint_import_dispatch(payload, correlation_id=correlation_id)
+            actor_import_options(payload)
+        else:
+            raise ValueError("unsupported proposal candidate")
+    except ManagedImportError as exc:
+        detail = exc.envelope.get("detail")
+        detail = detail if isinstance(detail, dict) else {}
+        field = str(detail.get("field") or "candidate.request")
+        return {
+            "status": "invalid",
+            "checked_at": checked_at,
+            "issues": [
+                {
+                    "code": "MANAGED_CANDIDATE_INVALID",
+                    "field": field,
+                    "message": (
+                        "The managed Git candidate does not satisfy the start "
+                        "request contract."
+                    ),
+                }
+            ],
+        }
+    except Exception:
+        managed = kind == "managed_git"
+        return {
+            "status": "invalid",
+            "checked_at": checked_at,
+            "issues": [
+                {
+                    "code": (
+                        "MANAGED_CANDIDATE_INVALID"
+                        if managed
+                        else "LEGACY_CANDIDATE_INVALID"
+                    ),
+                    "field": (
+                        "candidate.request" if managed else "candidate.payload"
+                    ),
+                    "message": (
+                        "The managed Git candidate does not satisfy the start "
+                        "request contract."
+                        if managed
+                        else "The legacy candidate does not satisfy the sprint "
+                        "import contract."
+                    ),
+                }
+            ],
+        }
+    return {"status": "valid", "checked_at": checked_at, "issues": []}
+
+
+def mutate_inbound_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    pending_sprint_id: str,
+    actor_id: str,
+    actor_type: str,
+    owner_producer_id: str | None,
+    payload: dict[str, Any],
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Apply one non-activation proposal action under the shared file lock."""
+
+    idempotency_key = str(payload["idempotency_key"])
+    fingerprint = action_request_fingerprint(
+        project_phone,
+        pending_sprint_id,
+        payload,
+    )
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        durable_capabilities = tuple(
+            str(candidate.get("access_token") or "").strip()
+            for candidate in projects.values()
+            if isinstance(candidate, dict)
+            and str(candidate.get("access_token") or "").strip()
+        )
+        if contains_recognized_secret(
+            payload,
+            configured_values=durable_capabilities,
+            recognize_shapes=False,
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request contains prohibited credential material.",
+                field="$",
+            )
+        candidate_keys = [context_key]
+        candidate_keys.extend(
+            str(key)
+            for key, value in projects.items()
+            if str(key) != context_key
+            and isinstance(value, dict)
+            and str(value.get("project_phone") or "") == project_phone
+        )
+        project_key = ""
+        project: dict[str, Any] | None = None
+        records: list[dict[str, Any]] = []
+        record: dict[str, Any] | None = None
+        for candidate_key in candidate_keys:
+            raw_project = projects.get(candidate_key)
+            if not isinstance(raw_project, dict):
+                continue
+            candidate_records = [
+                deepcopy(item)
+                for item in raw_project.get("sprints") or []
+                if isinstance(item, dict)
+            ]
+            candidate_record = next(
+                (
+                    item
+                    for item in candidate_records
+                    if str(item.get("id") or "") == pending_sprint_id
+                ),
+                None,
+            )
+            if candidate_record is not None:
+                project_key = candidate_key
+                project = dict(raw_project)
+                records = candidate_records
+                record = candidate_record
+                break
+        if project is None or record is None:
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+        proposal = pending_proposal_resource(record or {})
+        if proposal is None or (
+            owner_producer_id is not None
+            and str((proposal.get("submitted_by") or {}).get("producer_id") or "")
+            != owner_producer_id
+        ):
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+
+        raw_bindings = project.get("inbound_proposal_action_bindings")
+        bindings = [
+            deepcopy(binding)
+            for binding in raw_bindings
+            if isinstance(binding, dict)
+        ] if isinstance(raw_bindings, list) else []
+        existing = next(
+            (
+                binding
+                for binding in bindings
+                if binding.get("pending_sprint_id") == pending_sprint_id
+                and binding.get("actor_id") == actor_id
+                and binding.get("idempotency_key") == idempotency_key
+            ),
+            None,
+        )
+        if existing is not None:
+            if existing.get("request_fingerprint") != fingerprint:
+                raise InboundProposalError(
+                    "PROPOSAL_IDEMPOTENCY_CONFLICT",
+                    status.HTTP_409_CONFLICT,
+                    correlation_id,
+                    "The idempotency key is already bound to another request.",
+                )
+            snapshot = existing.get("proposal_snapshot")
+            if not isinstance(snapshot, dict):
+                raise RuntimeError("Inbound proposal action binding has no snapshot")
+            return {"proposal": deepcopy(snapshot), "deduplicated": True}
+
+        expected_revision = int(payload["expected_revision"])
+        actual_revision = int(proposal.get("revision") or 0)
+        if expected_revision != actual_revision:
+            raise InboundProposalError(
+                "PROPOSAL_REVISION_CONFLICT",
+                status.HTTP_409_CONFLICT,
+                correlation_id,
+                "The proposal revision no longer matches the request.",
+                expected_revision=expected_revision,
+                actual_revision=actual_revision,
+            )
+        action = str(payload["action"])
+        activation_state = str(proposal.get("activation_state") or "")
+        proposal_status = str(proposal.get("proposal_status") or "")
+        invalid_state = bool(
+            action == "preview"
+            and (
+                activation_state != "not_started"
+                or proposal_status not in {"created", "ready", "failed"}
+                or (
+                    proposal_status == "failed"
+                    and (proposal.get("validation") or {}).get("status") != "invalid"
+                )
+            )
+        ) or bool(
+            action == "reject"
+            and (
+                proposal_status in {"started", "rejected"}
+                or activation_state in {"starting", "started"}
+            )
+        ) or bool(
+            action == "request_regeneration"
+            and (
+                proposal_status == "started"
+                or activation_state in {"starting", "started"}
+            )
+        )
+        if invalid_state:
+            raise InboundProposalError(
+                "PROPOSAL_STATE_CONFLICT",
+                status.HTTP_409_CONFLICT,
+                correlation_id,
+                "The proposal cannot perform this action in its current state.",
+            )
+        now = utc_now()
+        if action == "preview":
+            validation = inbound_proposal_candidate_validation(
+                proposal.get("candidate"),
+                correlation_id,
+            )
+            proposal["validation"] = validation
+            proposal["proposal_status"] = (
+                "ready" if validation["status"] == "valid" else "failed"
+            )
+            proposal["activation_state"] = "not_started"
+            proposal["started_sprint_id"] = None
+        else:
+            comment = {
+                "comment_id": f"comment-{uuid4().hex}",
+                "text": str(payload["comment"]),
+                "created_at": now,
+                "actor": {
+                    "actor_type": actor_type,
+                    "actor_id": actor_id,
+                },
+            }
+            comments = [
+                deepcopy(item)
+                for item in proposal.get("comments") or []
+                if isinstance(item, dict)
+            ]
+            comments.append(comment)
+            proposal["comments"] = comments
+        proposal["revision"] = actual_revision + 1
+        proposal["updated_at"] = now
+        if action == "reject":
+            proposal["proposal_status"] = "rejected"
+            proposal["activation_state"] = "not_started"
+            proposal["started_sprint_id"] = None
+            record["status"] = "rejected"
+        elif action == "request_regeneration":
+            proposal["regenerate_requested"] = True
+        record["proposal"] = proposal
+        bindings.append(
+            {
+                "pending_sprint_id": pending_sprint_id,
+                "actor_id": actor_id,
+                "idempotency_key": idempotency_key,
+                "request_fingerprint": fingerprint,
+                "proposal_snapshot": deepcopy(proposal),
+            }
+        )
+        project["sprints"] = records
+        project["updated_at"] = now
+        project["inbound_proposal_action_bindings"] = bindings
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {"proposal": deepcopy(proposal), "deduplicated": False}
+
+
 def update_pending_sprint_activation_file(
     context_key: str,
     sprint_id: str,
@@ -24395,7 +25761,18 @@ def update_pending_sprint_activation_file(
             )
         now = utc_now()
         current_status = str(record.get("status") or "pending").strip()
+        proposal = pending_proposal_resource(record)
+        candidate = (
+            proposal.get("candidate")
+            if isinstance(proposal, dict)
+            and isinstance(proposal.get("candidate"), dict)
+            else None
+        )
+        legacy_proposal = bool(
+            isinstance(candidate, dict) and candidate.get("kind") == "legacy_json"
+        )
         if action == "claim":
+            recovering_expired = False
             other_activating = next(
                 (
                     item
@@ -24440,11 +25817,32 @@ def update_pending_sprint_activation_file(
                     )
                 record["status"] = "pending"
                 current_status = "pending"
+                recovering_expired = True
             if current_status != "pending":
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={"error": "pending_sprint_not_startable"},
                 )
+            if proposal is not None:
+                proposal_state = (
+                    str(proposal.get("proposal_status") or ""),
+                    str(proposal.get("activation_state") or ""),
+                    str((proposal.get("validation") or {}).get("status") or ""),
+                )
+                eligible_states = {
+                    ("ready", "not_started", "valid"),
+                    ("failed", "failed", "valid"),
+                }
+                if recovering_expired:
+                    eligible_states.add(("ready", "starting", "valid"))
+                if not legacy_proposal or proposal_state not in eligible_states:
+                    raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail={
+                            "error": "PROPOSAL_STATE_CONFLICT",
+                            "message": "The proposal is not eligible for Start.",
+                        },
+                    )
             record["status"] = "activating"
             record["activating_at"] = now
             record["activation_attempt_id"] = uuid4().hex
@@ -24452,6 +25850,13 @@ def update_pending_sprint_activation_file(
                 record.get("activation_attempts") or 0
             ) + 1
             record["last_activation_error"] = None
+            if legacy_proposal and proposal is not None:
+                proposal["proposal_status"] = "ready"
+                proposal["activation_state"] = "starting"
+                proposal["started_sprint_id"] = None
+                proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                proposal["updated_at"] = now
+                record["proposal"] = proposal
         elif action == "complete":
             if current_status != "activating":
                 raise HTTPException(
@@ -24466,12 +25871,31 @@ def update_pending_sprint_activation_file(
                     status_code=status.HTTP_409_CONFLICT,
                     detail={"error": "pending_sprint_activation_superseded"},
                 )
+            clean_activated_sprint_id = str(
+                activated_sprint_id or ""
+            ).strip()
+            if legacy_proposal and not clean_activated_sprint_id:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail={"error": "pending_sprint_activation_result_invalid"},
+                )
             record["status"] = "activated"
             record["activating_at"] = None
             record["activation_attempt_id"] = None
             record["activated_at"] = str(activated_at or "").strip() or now
-            record["activated_sprint_id"] = activated_sprint_id
+            record["activated_sprint_id"] = (
+                clean_activated_sprint_id
+                if legacy_proposal
+                else activated_sprint_id
+            )
             record["last_activation_error"] = None
+            if legacy_proposal and proposal is not None:
+                proposal["proposal_status"] = "started"
+                proposal["activation_state"] = "started"
+                proposal["started_sprint_id"] = clean_activated_sprint_id
+                proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                proposal["updated_at"] = now
+                record["proposal"] = proposal
             # The canonical sprint archive now owns the full import JSON. Keep
             # only the fingerprint/source metadata here for Telegram dedupe.
             record["import_payload"] = None
@@ -24490,6 +25914,13 @@ def update_pending_sprint_activation_file(
                 record["activation_attempt_id"] = None
                 record["last_activation_failed_at"] = now
                 record["last_activation_error"] = deepcopy(error)
+                if legacy_proposal and proposal is not None:
+                    proposal["proposal_status"] = "failed"
+                    proposal["activation_state"] = "failed"
+                    proposal["started_sprint_id"] = None
+                    proposal["revision"] = int(proposal.get("revision") or 0) + 1
+                    proposal["updated_at"] = now
+                    record["proposal"] = proposal
         else:
             raise ValueError(f"Unsupported pending sprint action: {action}")
         project["updated_at"] = now
@@ -24498,6 +25929,326 @@ def update_pending_sprint_activation_file(
         storage["projects"] = projects
         write_pending_sprints_file(storage)
         return pending_sprint_summary(record)
+
+
+def pending_project_record_for_update(
+    projects: dict[str, Any],
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+) -> tuple[str, dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    candidate_keys = [context_key]
+    candidate_keys.extend(
+        str(key)
+        for key, value in projects.items()
+        if str(key) != context_key
+        and isinstance(value, dict)
+        and str(value.get("project_phone") or "").strip() == project_phone
+    )
+    for candidate_key in candidate_keys:
+        raw_project = projects.get(candidate_key)
+        if not isinstance(raw_project, dict):
+            continue
+        records = [
+            deepcopy(item)
+            for item in raw_project.get("sprints") or []
+            if isinstance(item, dict)
+        ]
+        record = next(
+            (
+                item
+                for item in records
+                if str(item.get("id") or "").strip() == sprint_id.strip()
+            ),
+            None,
+        )
+        if record is not None:
+            return candidate_key, dict(raw_project), records, record
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Pending sprint was not found for this project",
+    )
+
+
+def managed_proposal_state_conflict(message: str) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "PROPOSAL_STATE_CONFLICT",
+            "message": message,
+        },
+    )
+
+
+def claim_managed_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Atomically fence a managed proposal before invoking start-from-git."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        project_key, project, records, record = pending_project_record_for_update(
+            projects,
+            context_key,
+            project_phone,
+            sprint_id,
+        )
+        proposal = pending_proposal_resource(record)
+        candidate = proposal.get("candidate") if isinstance(proposal, dict) else None
+        if (
+            not isinstance(proposal, dict)
+            or not isinstance(candidate, dict)
+            or candidate.get("kind") != "managed_git"
+        ):
+            raise managed_proposal_state_conflict(
+                "The pending sprint is not a managed Git proposal."
+            )
+        request_payload = candidate.get("request")
+        validate_start_request(request_payload, correlation_id)
+        assert isinstance(request_payload, dict)
+        candidate_sha256 = pending_sprint_payload_sha256(candidate)
+        if str(record.get("payload_sha256") or "") != candidate_sha256:
+            raise managed_proposal_state_conflict(
+                "The managed proposal candidate changed after it was accepted."
+            )
+
+        record_status = str(record.get("status") or "pending").strip()
+        bridge = (
+            deepcopy(record.get("managed_activation"))
+            if isinstance(record.get("managed_activation"), dict)
+            else None
+        )
+        terminal_error = (
+            bridge.get("error") if isinstance(bridge, dict) else None
+        )
+        if (
+            record_status == "pending"
+            and proposal.get("proposal_status") == "failed"
+            and proposal.get("activation_state") == "failed"
+            and isinstance(bridge, dict)
+            and bridge.get("state") == "failed"
+            and isinstance(terminal_error, dict)
+            and isinstance(terminal_error.get("http_status"), int)
+            and isinstance(terminal_error.get("detail"), dict)
+        ):
+            return {
+                "terminal_failure": deepcopy(terminal_error),
+                "pending_sprint": pending_sprint_summary(record),
+            }
+
+        other_activating = next(
+            (
+                item
+                for item in records
+                if item is not record
+                and str(item.get("status") or "").strip() == "activating"
+            ),
+            None,
+        )
+        if other_activating is not None:
+            raise managed_proposal_state_conflict(
+                "Another sprint for this project is already being started."
+            )
+
+        now = utc_now()
+        recovering = record_status == "activating"
+        if recovering:
+            activating_at = parse_utc_datetime(record.get("activating_at"))
+            if (
+                activating_at is None
+                or datetime.now(timezone.utc) - activating_at
+                < PENDING_SPRINT_ACTIVATION_LEASE
+            ):
+                raise managed_proposal_state_conflict(
+                    "This managed proposal is already being started."
+                )
+            if (
+                proposal.get("proposal_status") != "ready"
+                or proposal.get("activation_state") != "starting"
+                or not isinstance(bridge, dict)
+                or bridge.get("candidate_sha256") != candidate_sha256
+                or bridge.get("request") != request_payload
+            ):
+                raise managed_proposal_state_conflict(
+                    "The managed proposal activation cannot be recovered safely."
+                )
+            frozen_request = deepcopy(bridge["request"])
+        else:
+            if (
+                record_status != "pending"
+                or proposal.get("proposal_status") != "ready"
+                or proposal.get("activation_state") != "not_started"
+                or (proposal.get("validation") or {}).get("status") != "valid"
+            ):
+                raise managed_proposal_state_conflict(
+                    "The proposal is not eligible for Start."
+                )
+            frozen_request = deepcopy(request_payload)
+            bridge = {
+                "candidate_sha256": candidate_sha256,
+                "request": deepcopy(frozen_request),
+            }
+
+        activation_attempt_id = f"proposal-activation-{uuid4().hex}"
+        assert isinstance(bridge, dict)
+        bridge.update(
+            {
+                "activation_attempt_id": activation_attempt_id,
+                "claimed_at": now,
+                "state": "starting",
+            }
+        )
+        record["managed_activation"] = bridge
+        record["status"] = "activating"
+        record["activating_at"] = now
+        record["activation_attempt_id"] = activation_attempt_id
+        record["activation_attempts"] = int(record.get("activation_attempts") or 0) + 1
+        record["last_activation_error"] = None
+        proposal["proposal_status"] = "ready"
+        proposal["activation_state"] = "starting"
+        proposal["revision"] = int(proposal.get("revision") or 0) + 1
+        proposal["updated_at"] = now
+        record["proposal"] = proposal
+        project["updated_at"] = now
+        project["sprints"] = records
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return {
+            "activation_attempt_id": activation_attempt_id,
+            "candidate_sha256": candidate_sha256,
+            "request": frozen_request,
+            "recovering": recovering,
+            "pending_sprint": pending_sprint_summary(record),
+        }
+
+
+def settle_managed_pending_proposal_file(
+    *,
+    context_key: str,
+    project_phone: str,
+    sprint_id: str,
+    activation_attempt_id: str,
+    candidate_sha256: str,
+    action: str,
+    activated_sprint_id: str = "",
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Settle a managed proposal using its physical-attempt and candidate fences."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+        raw_projects = storage.get("projects")
+        projects = dict(raw_projects) if isinstance(raw_projects, dict) else {}
+        project_key, project, records, record = pending_project_record_for_update(
+            projects,
+            context_key,
+            project_phone,
+            sprint_id,
+        )
+        proposal = pending_proposal_resource(record)
+        bridge = record.get("managed_activation")
+        candidate = proposal.get("candidate") if isinstance(proposal, dict) else None
+        current_candidate_sha256 = (
+            pending_sprint_payload_sha256(candidate)
+            if isinstance(candidate, dict)
+            else ""
+        )
+        current_attempt_id = str(record.get("activation_attempt_id") or "")
+        bridge_attempt_id = (
+            str(bridge.get("activation_attempt_id") or "")
+            if isinstance(bridge, dict)
+            else ""
+        )
+        bridge_candidate_sha256 = (
+            str(bridge.get("candidate_sha256") or "")
+            if isinstance(bridge, dict)
+            else ""
+        )
+        if (
+            not isinstance(proposal, dict)
+            or not isinstance(bridge, dict)
+            or str(record.get("status") or "") != "activating"
+            or not hmac.compare_digest(current_attempt_id, activation_attempt_id)
+            or not hmac.compare_digest(bridge_attempt_id, activation_attempt_id)
+            or not hmac.compare_digest(current_candidate_sha256, candidate_sha256)
+            or not hmac.compare_digest(bridge_candidate_sha256, candidate_sha256)
+        ):
+            raise managed_proposal_state_conflict(
+                "The managed proposal activation attempt was superseded."
+            )
+
+        now = utc_now()
+        if action == "complete":
+            clean_sprint_id = str(activated_sprint_id or "").strip()
+            if not clean_sprint_id:
+                raise RuntimeError("Managed activation result has no sprint id")
+            record["status"] = "activated"
+            record["activating_at"] = None
+            record["activation_attempt_id"] = None
+            record["activated_at"] = now
+            record["activated_sprint_id"] = clean_sprint_id
+            record["last_activation_error"] = None
+            proposal["proposal_status"] = "started"
+            proposal["activation_state"] = "started"
+            proposal["started_sprint_id"] = clean_sprint_id
+            bridge["state"] = "started"
+            bridge["settled_at"] = now
+            bridge["sprint_id"] = clean_sprint_id
+        elif action == "fail":
+            safe_error = deepcopy(error) if isinstance(error, dict) else {}
+            record["status"] = "pending"
+            record["activating_at"] = None
+            record["activation_attempt_id"] = None
+            record["last_activation_failed_at"] = now
+            record["last_activation_error"] = safe_error
+            proposal["proposal_status"] = "failed"
+            proposal["activation_state"] = "failed"
+            proposal["started_sprint_id"] = None
+            bridge["state"] = "failed"
+            bridge["settled_at"] = now
+            bridge["error"] = safe_error
+        else:
+            raise ValueError(f"Unsupported managed proposal settle action: {action}")
+        proposal["revision"] = int(proposal.get("revision") or 0) + 1
+        proposal["updated_at"] = now
+        record["managed_activation"] = bridge
+        record["proposal"] = proposal
+        project["updated_at"] = now
+        project["sprints"] = records
+        projects[project_key] = project
+        storage["projects"] = projects
+        write_pending_sprints_file(storage)
+        return pending_sprint_summary(record)
+
+
+def sanitized_managed_activation_error(error: ManagedImportError) -> dict[str, Any]:
+    """Keep only the existing public error envelope; never persist evidence."""
+
+    detail = error.envelope.get("detail")
+    safe_detail: dict[str, Any] = {}
+    if isinstance(detail, dict):
+        for key in ("error", "correlation_id", "phase", "field", "supported"):
+            if key in detail:
+                safe_detail[key] = deepcopy(detail[key])
+        raw_issues = detail.get("issues")
+        if isinstance(raw_issues, list):
+            safe_detail["issues"] = [
+                {
+                    key: deepcopy(issue[key])
+                    for key in ("code", "path", "message")
+                    if key in issue
+                }
+                for issue in raw_issues
+                if isinstance(issue, dict)
+            ]
+    return {"http_status": error.http_status, "detail": safe_detail}
 
 
 def record_project_sprint_import_file(
@@ -29798,6 +31549,362 @@ async def project_pending_sprints_snapshot(
     return project_phone, context_key, project
 
 
+def inbound_known_project_ids(config: dict[str, Any]) -> set[str]:
+    raw_projects = config.get(PROJECTS_KEY)
+    if not isinstance(raw_projects, dict):
+        return set()
+    return {
+        phone
+        for entry in raw_projects.values()
+        if isinstance(entry, dict)
+        if (phone := normalize_project_phone(entry.get("project_phone")))
+    }
+
+
+def inbound_proposal_error_response(error: InboundProposalError) -> JSONResponse:
+    headers = {"X-Correlation-ID": error.correlation_id}
+    if error.code == "PROPOSAL_AUTH_REQUIRED":
+        headers["WWW-Authenticate"] = "Bearer"
+    return JSONResponse(
+        status_code=error.http_status,
+        content=error.envelope,
+        headers=headers,
+    )
+
+
+def inbound_proposal_success_response(
+    *,
+    correlation_id: str,
+    proposal: dict[str, Any],
+    deduplicated: bool,
+    http_status: int = status.HTTP_200_OK,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=http_status,
+        content={
+            "schema_version": 1,
+            "correlation_id": correlation_id,
+            "deduplicated": deduplicated,
+            "proposal": deepcopy(proposal),
+        },
+        headers={"X-Correlation-ID": correlation_id},
+    )
+
+
+def inbound_request_correlation_id(request: Request) -> str:
+    correlation_id, valid = correlation_id_from_values(
+        request.headers.getlist("x-correlation-id")
+    )
+    if not valid:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request correlation ID is invalid.",
+            field="X-Correlation-ID",
+        )
+    return correlation_id
+
+
+def inbound_authenticate_request(
+    request: Request,
+    correlation_id: str,
+) -> ProducerPrincipal:
+    try:
+        principals = configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    request.state.inbound_producer_token_sha256 = tuple(
+        principal.token_sha256 for principal in principals
+    )
+    principal = authenticate_bearer(
+        request.headers.getlist("authorization"),
+        principals,
+    )
+    if principal is None:
+        raise InboundProposalError(
+            "PROPOSAL_AUTH_REQUIRED",
+            status.HTTP_401_UNAUTHORIZED,
+            correlation_id,
+            "Producer authentication is required.",
+        )
+    return principal
+
+
+def inbound_registered_token_digests(
+    request: Request,
+    correlation_id: str,
+) -> tuple[str, ...]:
+    cached = getattr(request.state, "inbound_producer_token_sha256", None)
+    if isinstance(cached, tuple):
+        return cached
+    if not str(os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV) or "").strip():
+        request.state.inbound_producer_token_sha256 = ()
+        return ()
+    try:
+        principals = configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    digests = tuple(principal.token_sha256 for principal in principals)
+    request.state.inbound_producer_token_sha256 = digests
+    return digests
+
+
+async def inbound_project_context(
+    project_id: str,
+    principal: ProducerPrincipal,
+    action: str,
+    correlation_id: str,
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    try:
+        config = await read_git_config()
+        _, context_key, project_entry, context = project_for_group_api(
+            config,
+            project_id,
+        )
+    except HTTPException as exc:
+        code = (
+            "PROPOSAL_PROJECT_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "PROPOSAL_REQUEST_INVALID"
+        )
+        http_status = (
+            status.HTTP_404_NOT_FOUND
+            if code == "PROPOSAL_PROJECT_NOT_FOUND"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise InboundProposalError(
+            code,
+            http_status,
+            correlation_id,
+            (
+                "The project was not found."
+                if code == "PROPOSAL_PROJECT_NOT_FOUND"
+                else "The project identifier is invalid."
+            ),
+            field="project_id",
+        ) from exc
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if project_phone not in principal.project_ids or action not in principal.actions:
+        raise InboundProposalError(
+            "PROPOSAL_FORBIDDEN",
+            status.HTTP_403_FORBIDDEN,
+            correlation_id,
+            "The producer is not authorized for this project and action.",
+        )
+    return project_phone, context_key, project_entry, context
+
+
+async def inbound_json_request(
+    request: Request,
+    *,
+    maximum_bytes: int,
+    schema_filename: str,
+    correlation_id: str,
+) -> dict[str, Any]:
+    content_type = (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    )
+    if content_type != "application/json":
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request must use application/json.",
+            field="content-type",
+        )
+    declared_length = request.headers.get("content-length")
+    if declared_length is not None:
+        try:
+            parsed_length = int(declared_length)
+        except ValueError:
+            parsed_length = -1
+        if parsed_length < 0:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request length is invalid.",
+                field="content-length",
+            )
+        if parsed_length > maximum_bytes:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_TOO_LARGE",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                correlation_id,
+                "The proposal request is too large.",
+            )
+    bounded_body = bytearray()
+    async for chunk in request.stream():
+        if len(chunk) > maximum_bytes - len(bounded_body):
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_TOO_LARGE",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                correlation_id,
+                "The proposal request is too large.",
+            )
+        bounded_body.extend(chunk)
+    try:
+        payload = parse_strict_json_object(bytes(bounded_body))
+    except ValueError as exc:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request JSON is invalid.",
+        ) from exc
+    issues = inbound_proposal_schema_issues(payload, schema_filename)
+    if issues:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request does not satisfy the proposal contract.",
+            issues=issues,
+        )
+    return payload
+
+
+def inbound_reject_secret_values(
+    value: Any,
+    request: Request,
+    correlation_id: str,
+    *,
+    field: str,
+    recognize_shapes: bool = True,
+) -> None:
+    request_secret_values = list(configured_secret_values())
+    for authorization in request.headers.getlist("authorization"):
+        _, separator, token = authorization.partition(" ")
+        if separator and token:
+            request_secret_values.append(token)
+    request_secret_values.extend(
+        value
+        for value in request.headers.getlist(PENDING_SPRINT_TOKEN_HEADER)
+        if value
+    )
+    unsafe = contains_recognized_secret(
+        value,
+        configured_values=request_secret_values,
+        registered_token_sha256=inbound_registered_token_digests(
+            request, correlation_id
+        ),
+        recognize_shapes=recognize_shapes,
+    )
+    if unsafe:
+        raise InboundProposalError(
+            "PROPOSAL_REQUEST_INVALID",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            "The request contains prohibited credential material.",
+            field=field,
+        )
+
+
+_INBOUND_CREDENTIAL_PARAMETER = re.compile(
+    r"(?:^|[-_])(?:authorization|access[-_]?token|api[-_]?key|"
+    r"bearer(?:[-_]?token)?|credential|password|secret|token|"
+    r"pending[-_]?token|producer[-_]?token)(?:$|[-_])",
+    re.IGNORECASE,
+)
+
+
+def inbound_has_alternate_credentials(request: Request) -> bool:
+    authorization_values = request.headers.getlist("authorization")
+    query_items = list(request.query_params.multi_items())
+    cookie_values = request.headers.getlist("cookie")
+    pending_token_values = request.headers.getlist(PENDING_SPRINT_TOKEN_HEADER)
+    producer_with_alternate_transport = bool(authorization_values) and bool(
+        query_items or cookie_values or pending_token_values
+    )
+    if producer_with_alternate_transport:
+        return True
+    suspicious_named_query = any(
+        _INBOUND_CREDENTIAL_PARAMETER.search(str(name))
+        or re.match(r"(?i)^(?:Bearer|Basic)\s+", str(value)) is not None
+        for name, value in query_items
+    )
+    opaque_candidates = [
+        str(value)
+        for _, value in query_items
+        if is_canonical_bearer_token(str(value))
+    ]
+    suspicious_named_cookie = False
+    for raw_cookie in cookie_values:
+        for part in raw_cookie.split(";"):
+            name, separator, value = part.strip().partition("=")
+            if not separator:
+                continue
+            decoded_value = urllib.parse.unquote_plus(value).strip('"')
+            if (
+                _INBOUND_CREDENTIAL_PARAMETER.search(name)
+                or re.match(
+                    r"(?i)^(?:Bearer|Basic)(?:%20|\s)+",
+                    decoded_value,
+                )
+            ):
+                suspicious_named_cookie = True
+                break
+            if is_canonical_bearer_token(decoded_value):
+                opaque_candidates.append(decoded_value)
+        if suspicious_named_cookie:
+            break
+    if suspicious_named_query or suspicious_named_cookie:
+        return True
+    if not opaque_candidates:
+        return False
+    try:
+        principals = configured_producer_registry()
+    except Exception:
+        return bool(os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV))
+    return any(
+        authenticate_bearer([f"Bearer {candidate}"], principals) is not None
+        for candidate in opaque_candidates
+    )
+
+
+def inbound_reject_alternate_credentials(
+    request: Request,
+    correlation_id: str,
+) -> None:
+    """Reject bearer/capability material outside the supported headers."""
+
+    if not inbound_has_alternate_credentials(request):
+        return
+    try:
+        configured_producer_registry()
+    except Exception as exc:
+        raise InboundProposalError(
+            "PROPOSAL_SERVICE_UNAVAILABLE",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            correlation_id,
+            "The inbound proposal service is unavailable.",
+        ) from exc
+    raise InboundProposalError(
+        "PROPOSAL_AUTH_REQUIRED",
+        status.HTTP_401_UNAUTHORIZED,
+        correlation_id,
+        "Producer authentication is required.",
+    )
+
+
 def pending_sprints_request_hostname(request: Request) -> str:
     raw_host = str(request.headers.get("host") or "").strip()
     if raw_host:
@@ -29890,21 +31997,209 @@ def pending_sprint_urls(project_phone: str, sprint_id: str) -> dict[str, str]:
     }
 
 
+@app.post("/api/v1/projects/{project_id}/pending-sprints")
+async def create_project_pending_proposal(
+    project_id: str,
+    request: Request,
+) -> JSONResponse:
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        principal = inbound_authenticate_request(request, correlation_id)
+        (
+            project_phone,
+            context_key,
+            project_entry,
+            context,
+        ) = await inbound_project_context(
+            project_id,
+            principal,
+            "create",
+            correlation_id,
+        )
+        payload = await inbound_json_request(
+            request,
+            maximum_bytes=INBOUND_PROPOSAL_CREATE_MAX_BYTES,
+            schema_filename=INBOUND_PROPOSAL_CREATE_SCHEMA,
+            correlation_id=correlation_id,
+        )
+        inbound_reject_secret_values(
+            payload,
+            request,
+            correlation_id,
+            field="$",
+            recognize_shapes=False,
+        )
+        inbound_reject_secret_values(
+            payload.get("source"),
+            request,
+            correlation_id,
+            field="source",
+        )
+        inbound_reject_secret_values(
+            payload.get("summary"),
+            request,
+            correlation_id,
+            field="summary",
+        )
+        candidate = payload["candidate"]
+        assignment_mode = "parallel"
+        agent_count = 0
+        task_count = 0
+        if candidate["kind"] == "legacy_json":
+            legacy_sprint_import_dispatch(
+                candidate["payload"],
+                correlation_id=correlation_id,
+            )
+            options = actor_import_options(candidate["payload"])
+            assignment_mode = str(options.get("assignment_mode") or "parallel")
+            agent_count = len(options.get("actors") or [])
+            task_count = int(options.get("task_count") or 0)
+        else:
+            managed_request = candidate["request"]
+            inbound_reject_secret_values(
+                managed_request,
+                request,
+                correlation_id,
+                field="candidate.request",
+            )
+            if not git_ref_format_valid(str(managed_request["ref"])):
+                raise InboundProposalError(
+                    "PROPOSAL_REQUEST_INVALID",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    "The managed Git reference is invalid.",
+                    field="candidate.request.ref",
+                )
+            if not relative_git_path_valid(str(managed_request["manifest_path"])):
+                raise InboundProposalError(
+                    "PROPOSAL_REQUEST_INVALID",
+                    status.HTTP_400_BAD_REQUEST,
+                    correlation_id,
+                    "The managed manifest path is invalid.",
+                    field="candidate.request.manifest_path",
+                )
+        async with pending_sprints_lock:
+            result = await asyncio.to_thread(
+                create_inbound_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                project_name=normalize_project_name(
+                    project_entry.get("project_name"),
+                    str(project_entry.get("git_address") or ""),
+                ),
+                git_address=str(project_entry.get("git_address") or "").strip(),
+                repository_key=project_repository_key_for_context(context),
+                producer_id=principal.producer_id,
+                payload=payload,
+                assignment_mode=assignment_mode,
+                agent_count=agent_count,
+                task_count=task_count,
+                correlation_id=correlation_id,
+            )
+        proposal = result["proposal"]
+        assert isinstance(proposal, dict)
+        return inbound_proposal_success_response(
+            correlation_id=correlation_id,
+            proposal=proposal,
+            deduplicated=bool(result["deduplicated"]),
+            http_status=(
+                status.HTTP_201_CREATED
+                if result["created"]
+                else status.HTTP_200_OK
+            ),
+        )
+    except InboundProposalError as exc:
+        return inbound_proposal_error_response(exc)
+    except HTTPException as exc:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The proposal request is invalid.",
+            )
+        )
+    except Exception:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal could not be stored.",
+            )
+        )
+
+
 @app.get("/api/v1/projects/{project_id}/pending-sprints")
 async def get_project_pending_sprints(
     project_id: str,
     request: Request,
-) -> dict[str, Any]:
-    project_phone, context_key, project = await project_pending_sprints_snapshot(
-        project_id,
-    )
-    ensure_pending_sprints_access(request, project)
+) -> Any:
+    authorization_values = request.headers.getlist("authorization")
+    producer: ProducerPrincipal | None = None
+    correlation_id = ""
+    if inbound_has_alternate_credentials(request):
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            inbound_reject_alternate_credentials(request, correlation_id)
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+    if authorization_values:
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                "read",
+                correlation_id,
+            )
+            async with pending_sprints_lock:
+                project = await asyncio.to_thread(
+                    project_pending_sprints_file_snapshot,
+                    context_key,
+                    project_phone,
+                    "",
+                )
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+        except Exception:
+            correlation_id = correlation_id or correlation_id_from_values([])[0]
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_STORAGE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    "The proposal collection could not be read.",
+                )
+            )
+    else:
+        project_phone, context_key, project = await project_pending_sprints_snapshot(
+            project_id,
+        )
+        ensure_pending_sprints_access(request, project)
     raw_records = project.get("sprints") if isinstance(project, dict) else []
     records = [
         pending_sprint_summary(record)
         for record in raw_records
         if isinstance(record, dict)
         and str(record.get("status") or "pending") in {"pending", "activating"}
+        and (
+            producer is None
+            or (
+                isinstance(record.get("proposal"), dict)
+                and str(
+                    (record["proposal"].get("submitted_by") or {}).get(
+                        "producer_id"
+                    )
+                    or ""
+                )
+                == producer.producer_id
+            )
+        )
     ] if isinstance(raw_records, list) else []
     records.sort(
         key=lambda record: int(record.get("sequence") or 0),
@@ -29914,13 +32209,21 @@ async def get_project_pending_sprints(
         record.update(
             pending_sprint_urls(project_phone, str(record.get("id") or ""))
         )
-    return {
+    response = {
         "project_id": project_phone,
         "project_phone": project_phone,
         "git_context_key": context_key,
         "pending_count": len(records),
         "pending_sprints": records,
     }
+    if producer is None:
+        return response
+    response["correlation_id"] = correlation_id
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=response,
+        headers={"X-Correlation-ID": correlation_id},
+    )
 
 
 @app.get("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}")
@@ -29928,7 +32231,638 @@ async def get_project_pending_sprint(
     project_id: str,
     sprint_id: str,
     request: Request,
+) -> Any:
+    authorization_values = request.headers.getlist("authorization")
+    producer: ProducerPrincipal | None = None
+    correlation_id = ""
+    if inbound_has_alternate_credentials(request):
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            inbound_reject_alternate_credentials(request, correlation_id)
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+    if authorization_values:
+        try:
+            correlation_id = inbound_request_correlation_id(request)
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                "read",
+                correlation_id,
+            )
+            async with pending_sprints_lock:
+                project = await asyncio.to_thread(
+                    project_pending_sprints_file_snapshot,
+                    context_key,
+                    project_phone,
+                    sprint_id,
+                )
+        except InboundProposalError as exc:
+            return inbound_proposal_error_response(exc)
+        except Exception:
+            correlation_id = correlation_id or correlation_id_from_values([])[0]
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_STORAGE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    "The proposal could not be read.",
+                )
+            )
+    else:
+        project_phone, context_key, project = await project_pending_sprints_snapshot(
+            project_id,
+            sprint_id,
+        )
+        ensure_pending_sprints_access(request, project)
+    record = pending_sprint_record_from_project(project, sprint_id)
+    if producer is not None:
+        proposal = pending_proposal_resource(record or {})
+        if proposal is None or str(
+            (proposal.get("submitted_by") or {}).get("producer_id") or ""
+        ) != producer.producer_id:
+            return inbound_proposal_error_response(
+                InboundProposalError(
+                    "PROPOSAL_NOT_FOUND",
+                    status.HTTP_404_NOT_FOUND,
+                    correlation_id,
+                    "The proposal was not found.",
+                )
+            )
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Pending sprint was not found for this project",
+        )
+    summary = pending_sprint_summary(record)
+    summary.update(pending_sprint_urls(project_phone, sprint_id))
+    response = {
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_sprint": summary,
+        "import_payload": deepcopy(record.get("import_payload")),
+    }
+    if producer is None:
+        return response
+    response["correlation_id"] = correlation_id
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content=response,
+        headers={"X-Correlation-ID": correlation_id},
+    )
+
+
+def _inline_openapi_schema(filename: str) -> dict[str, Any]:
+    """Load a local JSON Schema and inline all of its file/pointer refs."""
+
+    schema_root = (base_dir / "schemas").resolve()
+    cache: dict[Path, Any] = {}
+
+    def load_document(path: Path) -> Any:
+        resolved = path.resolve()
+        try:
+            resolved.relative_to(schema_root)
+        except ValueError as exc:
+            raise RuntimeError("OpenAPI schema reference escapes schema root") from exc
+        if resolved not in cache:
+            cache[resolved] = json.loads(resolved.read_text(encoding="utf-8"))
+        return cache[resolved]
+
+    def resolve_pointer(document: Any, fragment: str) -> Any:
+        if not fragment:
+            return document
+        if not fragment.startswith("/"):
+            raise RuntimeError("OpenAPI schema reference has an invalid pointer")
+        current = document
+        for raw_part in fragment[1:].split("/"):
+            part = urllib.parse.unquote(raw_part).replace("~1", "/").replace(
+                "~0", "~"
+            )
+            if isinstance(current, dict):
+                current = current[part]
+            elif isinstance(current, list):
+                current = current[int(part)]
+            else:
+                raise RuntimeError("OpenAPI schema pointer cannot be resolved")
+        return current
+
+    def expand(
+        value: Any,
+        current_path: Path,
+        stack: frozenset[tuple[Path, str]],
+    ) -> Any:
+        if isinstance(value, list):
+            return [expand(item, current_path, stack) for item in value]
+        if not isinstance(value, dict):
+            return deepcopy(value)
+        reference = value.get("$ref")
+        if isinstance(reference, str):
+            reference_file, _, fragment = reference.partition("#")
+            if urllib.parse.urlsplit(reference_file).scheme:
+                raise RuntimeError("OpenAPI schema reference must be local")
+            target_path = (
+                (current_path.parent / reference_file).resolve()
+                if reference_file
+                else current_path
+            )
+            key = (target_path, fragment)
+            if key in stack:
+                raise RuntimeError("OpenAPI schema reference cycle is unsupported")
+            target = resolve_pointer(load_document(target_path), fragment)
+            expanded = expand(target, target_path, stack | {key})
+            siblings = {
+                item_key: item_value
+                for item_key, item_value in value.items()
+                if item_key != "$ref"
+            }
+            if siblings:
+                return {
+                    "allOf": [
+                        expanded,
+                        expand(siblings, current_path, stack),
+                    ]
+                }
+            return expanded
+        return {
+            item_key: expand(item_value, current_path, stack)
+            for item_key, item_value in value.items()
+            if item_key not in {"$schema", "$id"}
+        }
+
+    root_path = (schema_root / filename).resolve()
+    return expand(load_document(root_path), root_path, frozenset())
+
+
+INBOUND_PROPOSAL_STATUS_OPENAPI_SCHEMA = _inline_openapi_schema(
+    "inbound-pending-proposal-status-response-v1.schema.json"
+)
+INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA = _inline_openapi_schema(
+    "inbound-api-error-v1.schema.json"
+)
+INBOUND_CORRELATION_OPENAPI_HEADER = {
+    "description": "Correlation identifier returned for this request.",
+    "schema": {"type": "string"},
+}
+
+
+def _inbound_status_openapi_response(
+    description: str,
+    schema: dict[str, Any],
+    *,
+    authentication_required: bool = False,
 ) -> dict[str, Any]:
+    headers: dict[str, Any] = {
+        "X-Correlation-ID": deepcopy(INBOUND_CORRELATION_OPENAPI_HEADER)
+    }
+    if authentication_required:
+        headers["WWW-Authenticate"] = {
+            "description": "Authentication challenge.",
+            "schema": {"type": "string", "const": "Bearer"},
+        }
+    return {
+        "description": description,
+        "headers": headers,
+        "content": {
+            "application/json": {"schema": deepcopy(schema)}
+        },
+    }
+
+
+INBOUND_PROPOSAL_STATUS_OPENAPI_RESPONSES: dict[Any, Any] = {
+    200: _inbound_status_openapi_response(
+        "Transport-neutral inbound proposal status snapshot",
+        INBOUND_PROPOSAL_STATUS_OPENAPI_SCHEMA,
+    ),
+    400: _inbound_status_openapi_response(
+        "Invalid status request",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    401: _inbound_status_openapi_response(
+        "Producer authentication required",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+        authentication_required=True,
+    ),
+    403: _inbound_status_openapi_response(
+        "Producer is not authorized to read this project",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    404: _inbound_status_openapi_response(
+        "Proposal status not found",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    500: _inbound_status_openapi_response(
+        "Proposal status storage failure",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    503: _inbound_status_openapi_response(
+        "Inbound proposal service unavailable",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+    "default": _inbound_status_openapi_response(
+        "Normalized inbound proposal error",
+        INBOUND_PROPOSAL_ERROR_OPENAPI_SCHEMA,
+    ),
+}
+
+
+@app.get(
+    "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status",
+    dependencies=[Depends(inbound_proposal_bearer)],
+    responses=INBOUND_PROPOSAL_STATUS_OPENAPI_RESPONSES,
+)
+async def get_project_pending_proposal_status(
+    project_id: str,
+    pending_sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    """Return a closed producer-owned snapshot without transport coupling."""
+
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        producer = inbound_authenticate_request(request, correlation_id)
+        project_phone, context_key, _, _ = await inbound_project_context(
+            project_id,
+            producer,
+            "read",
+            correlation_id,
+        )
+        async with pending_sprints_lock:
+            project = await asyncio.to_thread(
+                project_pending_sprints_file_snapshot,
+                context_key,
+                project_phone,
+                pending_sprint_id,
+            )
+        record = pending_sprint_record_from_project(project, pending_sprint_id)
+        proposal = pending_proposal_resource(record or {})
+        owner_id = str(
+            ((proposal or {}).get("submitted_by") or {}).get("producer_id") or ""
+        )
+        if proposal is None or owner_id != producer.producer_id:
+            raise InboundProposalError(
+                "PROPOSAL_NOT_FOUND",
+                status.HTTP_404_NOT_FOUND,
+                correlation_id,
+                "The proposal was not found.",
+            )
+        status_resource = pending_proposal_status_resource(record or {})
+        if status_resource is None:
+            raise RuntimeError("Proposal status projection is unavailable")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "schema_version": 1,
+                "correlation_id": correlation_id,
+                "status": status_resource,
+            },
+            headers={
+                "X-Correlation-ID": correlation_id,
+                "Cache-Control": "no-store",
+            },
+        )
+    except InboundProposalError as exc:
+        response = inbound_proposal_error_response(exc)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except Exception:
+        correlation_id = (
+            locals().get("correlation_id") or correlation_id_from_values([])[0]
+        )
+        response = inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal status could not be read.",
+            )
+        )
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+async def mutate_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+    *,
+    expected_action: str,
+) -> JSONResponse:
+    try:
+        correlation_id = inbound_request_correlation_id(request)
+        inbound_reject_alternate_credentials(request, correlation_id)
+        authorization_values = request.headers.getlist("authorization")
+        producer: ProducerPrincipal | None = None
+        if authorization_values:
+            producer = inbound_authenticate_request(request, correlation_id)
+            project_phone, context_key, _, _ = await inbound_project_context(
+                project_id,
+                producer,
+                expected_action,
+                correlation_id,
+            )
+            actor_id = f"producer:{producer.producer_id}"
+            actor_type = "producer"
+        else:
+            (
+                project_phone,
+                context_key,
+                project,
+            ) = await project_pending_sprints_snapshot(project_id, sprint_id)
+            try:
+                ensure_pending_sprints_access(request, project)
+            except HTTPException as exc:
+                raise InboundProposalError(
+                    "PROPOSAL_FORBIDDEN",
+                    status.HTTP_403_FORBIDDEN,
+                    correlation_id,
+                    "The operator is not authorized for this project.",
+                ) from exc
+            actor_id = (
+                "local-operator"
+                if pending_sprints_request_is_local(request)
+                else f"pending-token:{project_phone}"
+            )
+            actor_type = "operator"
+        payload = await inbound_json_request(
+            request,
+            maximum_bytes=INBOUND_PROPOSAL_ACTION_MAX_BYTES,
+            schema_filename=INBOUND_PROPOSAL_ACTION_SCHEMA,
+            correlation_id=correlation_id,
+        )
+        if payload.get("action") != expected_action:
+            raise InboundProposalError(
+                "PROPOSAL_REQUEST_INVALID",
+                status.HTTP_400_BAD_REQUEST,
+                correlation_id,
+                "The request action does not match the route.",
+                field="action",
+            )
+        inbound_reject_secret_values(
+            payload,
+            request,
+            correlation_id,
+            field="$",
+            recognize_shapes=False,
+        )
+        inbound_reject_secret_values(
+            payload.get("comment"),
+            request,
+            correlation_id,
+            field="comment",
+        )
+        async with pending_sprints_lock:
+            result = await asyncio.to_thread(
+                mutate_inbound_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                pending_sprint_id=sprint_id.strip(),
+                actor_id=actor_id,
+                actor_type=actor_type,
+                owner_producer_id=(
+                    producer.producer_id if producer is not None else None
+                ),
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+        proposal = result["proposal"]
+        assert isinstance(proposal, dict)
+        return inbound_proposal_success_response(
+            correlation_id=correlation_id,
+            proposal=proposal,
+            deduplicated=bool(result["deduplicated"]),
+        )
+    except InboundProposalError as exc:
+        return inbound_proposal_error_response(exc)
+    except HTTPException as exc:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        code = (
+            "PROPOSAL_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "PROPOSAL_REQUEST_INVALID"
+        )
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                code,
+                (
+                    status.HTTP_404_NOT_FOUND
+                    if code == "PROPOSAL_NOT_FOUND"
+                    else status.HTTP_400_BAD_REQUEST
+                ),
+                correlation_id,
+                (
+                    "The proposal was not found."
+                    if code == "PROPOSAL_NOT_FOUND"
+                    else "The proposal request is invalid."
+                ),
+            )
+        )
+    except Exception:
+        correlation_id = locals().get("correlation_id") or correlation_id_from_values([])[0]
+        return inbound_proposal_error_response(
+            InboundProposalError(
+                "PROPOSAL_STORAGE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                "The proposal could not be updated.",
+            )
+        )
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/comments"
+)
+async def comment_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="comment",
+    )
+
+
+@app.post(
+    "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/regenerate-request"
+)
+async def regenerate_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="request_regeneration",
+    )
+
+
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/preview")
+async def preview_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="preview",
+    )
+
+
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/reject")
+async def reject_project_pending_proposal(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> JSONResponse:
+    return await mutate_project_pending_proposal(
+        project_id,
+        sprint_id,
+        request,
+        expected_action="reject",
+    )
+
+
+async def start_managed_pending_proposal(
+    *,
+    project_phone: str,
+    context_key: str,
+    sprint_id: str,
+) -> Any:
+    correlation_id = f"request-{uuid4().hex}"
+    try:
+        async with pending_sprints_lock:
+            claimed = await asyncio.to_thread(
+                claim_managed_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                sprint_id=sprint_id,
+                correlation_id=correlation_id,
+            )
+    except ManagedImportError as exc:
+        return managed_start_error_response(exc)
+    terminal_failure = claimed.get("terminal_failure")
+    if isinstance(terminal_failure, dict):
+        return JSONResponse(
+            status_code=int(terminal_failure["http_status"]),
+            content={"detail": deepcopy(terminal_failure["detail"])},
+        )
+    activation_attempt_id = str(claimed["activation_attempt_id"])
+    candidate_sha256 = str(claimed["candidate_sha256"])
+    start_request = validate_start_request(claimed["request"], correlation_id)
+    try:
+        result = await execute_managed_project_sprint_start(
+            project_phone,
+            start_request,
+            correlation_id,
+        )
+    except ManagedImportError as exc:
+        receipt_status = getattr(exc, "managed_receipt_status", None)
+        if (
+            receipt_status
+            in {"VALIDATING", "PREPARING", "ACTIVATING", "SUCCEEDED"}
+            or (
+                exc.http_status == status.HTTP_503_SERVICE_UNAVAILABLE
+                and receipt_status != "FAILED"
+            )
+            or (
+                exc.code == "PROJECT_ACTIVATION_IN_PROGRESS"
+                and receipt_status != "FAILED"
+            )
+        ):
+            return managed_start_error_response(exc)
+        try:
+            async with pending_sprints_lock:
+                await asyncio.to_thread(
+                    settle_managed_pending_proposal_file,
+                    context_key=context_key,
+                    project_phone=project_phone,
+                    sprint_id=sprint_id,
+                    activation_attempt_id=activation_attempt_id,
+                    candidate_sha256=candidate_sha256,
+                    action="fail",
+                    error=sanitized_managed_activation_error(exc),
+                )
+        except Exception:
+            return managed_start_error_response(
+                ManagedImportError(
+                    "SPRINT_ACTIVATE_FAILED",
+                    status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    correlation_id,
+                    phase="ACTIVATE",
+                )
+            )
+        return managed_start_error_response(exc)
+    except Exception:
+        # An unknown or lost outcome stays fenced as ready/starting.  Expired
+        # recovery will replay the exact frozen request and activation key.
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_ACTIVATE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="ACTIVATE",
+            )
+        )
+
+    managed_response = deepcopy(result.response)
+    activated_sprint_id = str(managed_response.get("sprint_id") or "").strip()
+    try:
+        async with pending_sprints_lock:
+            completed = await asyncio.to_thread(
+                settle_managed_pending_proposal_file,
+                context_key=context_key,
+                project_phone=project_phone,
+                sprint_id=sprint_id,
+                activation_attempt_id=activation_attempt_id,
+                candidate_sha256=candidate_sha256,
+                action="complete",
+                activated_sprint_id=activated_sprint_id,
+            )
+    except Exception:
+        return managed_start_error_response(
+            ManagedImportError(
+                "SPRINT_ACTIVATE_FAILED",
+                status.HTTP_500_INTERNAL_SERVER_ERROR,
+                correlation_id,
+                phase="ACTIVATE",
+            )
+        )
+    reconciled = bool(managed_response.get("deduplicated"))
+    return {
+        "started": True,
+        "managed": True,
+        "reconciled": reconciled,
+        "reconciled_from_status": "active" if reconciled else None,
+        "superseded": False,
+        "project_id": project_phone,
+        "project_phone": project_phone,
+        "git_context_key": context_key,
+        "pending_sprint": completed,
+        "claimed_sprint": deepcopy(claimed["pending_sprint"]),
+        "sprint": {
+            "id": activated_sprint_id,
+            "status": managed_response.get("status"),
+            "managed": True,
+        },
+        "import_result": managed_response,
+    }
+
+
+@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start")
+async def start_project_pending_sprint(
+    project_id: str,
+    sprint_id: str,
+    request: Request,
+) -> Any:
     project_phone, context_key, project = await project_pending_sprints_snapshot(
         project_id,
         sprint_id,
@@ -29940,33 +32874,23 @@ async def get_project_pending_sprint(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Pending sprint was not found for this project",
         )
-    summary = pending_sprint_summary(record)
-    summary.update(pending_sprint_urls(project_phone, sprint_id))
-    return {
-        "project_id": project_phone,
-        "project_phone": project_phone,
-        "git_context_key": context_key,
-        "pending_sprint": summary,
-        "import_payload": deepcopy(record.get("import_payload")),
-    }
-
-
-@app.post("/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start")
-async def start_project_pending_sprint(
-    project_id: str,
-    sprint_id: str,
-    request: Request,
-) -> dict[str, Any]:
-    project_phone, context_key, project = await project_pending_sprints_snapshot(
-        project_id,
-        sprint_id,
-    )
-    ensure_pending_sprints_access(request, project)
-    record = pending_sprint_record_from_project(project, sprint_id)
-    if record is None:
+    proposal = pending_proposal_resource(record)
+    if (
+        proposal is not None
+        and (proposal.get("candidate") or {}).get("kind") == "managed_git"
+    ):
+        return await start_managed_pending_proposal(
+            project_phone=project_phone,
+            context_key=context_key,
+            sprint_id=sprint_id,
+        )
+    if proposal is not None and not pending_sprint_summary(record).get("startable"):
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Pending sprint was not found for this project",
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "PROPOSAL_STATE_CONFLICT",
+                "message": "The proposal is not eligible for Start.",
+            },
         )
     if str(record.get("status") or "") == "activated":
         raise HTTPException(
@@ -29994,6 +32918,25 @@ async def start_project_pending_sprint(
         record.get("assignment_mode") or "sequential"
     ).strip().lower()
     payload = actor_payload_with_assignment_mode(payload, assignment_mode)
+    if (
+        proposal is not None
+        and ((proposal.get("candidate") or {}).get("kind") == "legacy_json")
+        and not any(
+            actor_import_reference_items(payload, key)
+            for key in (
+                "project_id",
+                "project_phone",
+                "git_address",
+                "git_context_key",
+            )
+        )
+    ):
+        # The project in this route was already resolved and authorized.  The
+        # producer contract therefore does not require a duplicate project
+        # reference inside a legacy candidate, while explicit references are
+        # still checked below for mismatch.
+        payload = deepcopy(payload)
+        payload["project_id"] = project_phone
     result: dict[str, Any] | None = None
     if int(record.get("activation_attempts") or 0) > 0:
         # Wait for any still-running attempt before deciding whether recovery
@@ -30364,6 +33307,121 @@ def managed_continuity_error_response(
     return JSONResponse(status_code=error.http_status, content=error.envelope)
 
 
+async def execute_managed_project_sprint_start(
+    project_id: str,
+    start_request: Any,
+    correlation_id: str,
+) -> Any:
+    """Run the canonical managed start operation after transport parsing."""
+
+    try:
+        config = await read_git_config()
+    except Exception:
+        raise ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            correlation_id,
+            phase="VALIDATE",
+        ) from None
+    try:
+        _, _, project_entry, context = project_for_group_api(config, project_id)
+    except HTTPException as exc:
+        code = (
+            "PROJECT_NOT_FOUND"
+            if exc.status_code == status.HTTP_404_NOT_FOUND
+            else "INVALID_MANAGED_SPRINT_REQUEST"
+        )
+        raise ManagedImportError(
+            code,
+            exc.status_code,
+            correlation_id,
+            phase="VALIDATE",
+            field="project_id",
+        ) from None
+    project_phone = normalize_project_phone(project_entry.get("project_phone"))
+    if not project_phone:
+        raise ManagedImportError(
+            "INVALID_MANAGED_SPRINT_REQUEST",
+            status.HTTP_400_BAD_REQUEST,
+            correlation_id,
+            phase="VALIDATE",
+            field="project_id",
+        )
+    repository_registry = managed_repository_registry_for_project(
+        project_entry, context
+    )
+    try:
+        runtime_config = load_managed_runtime_config()
+    except (TypeError, ValueError):
+        raise ManagedImportError(
+            "SPRINT_PREFLIGHT_FAILED",
+            status.HTTP_409_CONFLICT,
+            correlation_id,
+            phase="VALIDATE",
+            issues=[
+                {
+                    "code": "RUNTIME_ROOT_NOT_ISOLATED",
+                    "path": "runtime_config",
+                    "message": "Managed runtime configuration is unavailable",
+                }
+            ],
+        ) from None
+
+    def run_import() -> Any:
+        importer = managed_sprint_importer_factory(
+            runtime_config, repository_registry
+        )
+        try:
+            result = importer.start(project_phone, start_request)
+        except ManagedImportError as exc:
+            receipt_status: str | None = None
+            receipt: dict[str, Any] | None = None
+            try:
+                raw_receipt = importer.store.lookup(
+                    project_phone,
+                    start_request.idempotency_key,
+                )
+                receipt = raw_receipt if isinstance(raw_receipt, dict) else None
+                expected_fingerprint = start_request.request_fingerprint(
+                    project_phone
+                )
+                receipt_fingerprint = (
+                    str(receipt.get("request_fingerprint") or "")
+                    if receipt is not None
+                    else ""
+                )
+                if (
+                    receipt is not None
+                    and receipt_fingerprint
+                    and hmac.compare_digest(
+                        receipt_fingerprint,
+                        expected_fingerprint,
+                    )
+                ):
+                    receipt_status = str(receipt.get("status") or "") or None
+            except Exception:
+                pass
+            if (
+                receipt_status == "FAILED"
+                and receipt is not None
+                and isinstance(receipt.get("error"), dict)
+                and isinstance(receipt.get("http_status"), int)
+            ):
+                stored_error = ManagedImportError.from_stored(
+                    receipt["error"],
+                    receipt["http_status"],
+                )
+                stored_error.managed_receipt_status = "FAILED"
+                raise stored_error
+            exc.managed_receipt_status = receipt_status
+            raise
+        if isinstance(importer, TransactionalSprintImporter):
+            activate_managed_processes(runtime_config, importer, result)
+        return result
+
+    return await asyncio.to_thread(run_import)
+
+
 @app.post("/api/v1/projects/{project_id}/sprints/start-from-git")
 async def start_managed_project_sprint_from_git(
     project_id: str,
@@ -30411,77 +33469,11 @@ async def start_managed_project_sprint_from_git(
         return managed_start_error_response(exc)
 
     try:
-        config = await read_git_config()
-    except Exception:
-        return managed_start_error_response(
-            ManagedImportError(
-                "SPRINT_PREFLIGHT_FAILED",
-                status.HTTP_500_INTERNAL_SERVER_ERROR,
-                correlation_id,
-                phase="VALIDATE",
-            )
+        result = await execute_managed_project_sprint_start(
+            project_id,
+            start_request,
+            correlation_id,
         )
-    try:
-        _, _, project_entry, context = project_for_group_api(config, project_id)
-    except HTTPException as exc:
-        code = (
-            "PROJECT_NOT_FOUND"
-            if exc.status_code == status.HTTP_404_NOT_FOUND
-            else "INVALID_MANAGED_SPRINT_REQUEST"
-        )
-        return managed_start_error_response(
-            ManagedImportError(
-                code,
-                exc.status_code,
-                correlation_id,
-                phase="VALIDATE",
-                field="project_id",
-            )
-        )
-    project_phone = normalize_project_phone(project_entry.get("project_phone"))
-    if not project_phone:
-        return managed_start_error_response(
-            ManagedImportError(
-                "INVALID_MANAGED_SPRINT_REQUEST",
-                status.HTTP_400_BAD_REQUEST,
-                correlation_id,
-                phase="VALIDATE",
-                field="project_id",
-            )
-        )
-    repository_registry = managed_repository_registry_for_project(
-        project_entry, context
-    )
-    try:
-        runtime_config = load_managed_runtime_config()
-    except (TypeError, ValueError):
-        return managed_start_error_response(
-            ManagedImportError(
-                "SPRINT_PREFLIGHT_FAILED",
-                status.HTTP_409_CONFLICT,
-                correlation_id,
-                phase="VALIDATE",
-                issues=[
-                    {
-                        "code": "RUNTIME_ROOT_NOT_ISOLATED",
-                        "path": "runtime_config",
-                        "message": "Managed runtime configuration is unavailable",
-                    }
-                ],
-            )
-        )
-
-    def run_import() -> Any:
-        importer = managed_sprint_importer_factory(
-            runtime_config, repository_registry
-        )
-        result = importer.start(project_phone, start_request)
-        if isinstance(importer, TransactionalSprintImporter):
-            activate_managed_processes(runtime_config, importer, result)
-        return result
-
-    try:
-        result = await asyncio.to_thread(run_import)
     except ManagedImportError as exc:
         return managed_start_error_response(exc)
     except Exception:

@@ -67,6 +67,14 @@ WORKSPACE_1_ROOT = (
     f"{SPRINT_PATH_SEGMENT}/nodes/build/assignment-1"
 )
 EXPECTED_SCHEMA_FILES = {
+    "decision-notification-config-v1.schema.json",
+    "inbound-api-error-v1.schema.json",
+    "inbound-pending-proposal-action-v1.schema.json",
+    "inbound-pending-proposal-create-v1.schema.json",
+    "inbound-pending-proposal-response-v1.schema.json",
+    "inbound-pending-proposal-status-response-v1.schema.json",
+    "inbound-pending-proposal-v1.schema.json",
+    "inbound-producer-registry-v1.schema.json",
     "legacy-scope-ack-v1.schema.json",
     "legacy-scope-amendment-v1.schema.json",
     "legacy-scope-amendment-v2.schema.json",
@@ -2269,9 +2277,96 @@ class SprintSchemaContractTests(unittest.TestCase):
         result_key = managed_result_key("assignment-1", "DONE", COMMIT)
         runtime_v2 = active_runtime_fixture()
         runtime_v2["schema_version"] = 2
+        inbound_create = {
+            "schema_version": 1,
+            "proposal_id": "api-proposal-1",
+            "idempotency_key": "create:api-proposal-1:v1",
+            "source": {"source_type": "api", "message_id": "message-1"},
+            "summary": "Review the supplied legacy sprint.",
+            "candidate": {
+                "kind": "legacy_json",
+                "payload": {"sprint_type": "legacy_v1", "actors": {}},
+            },
+        }
+        inbound_proposal = {
+            "schema_version": 1,
+            "proposal_id": inbound_create["proposal_id"],
+            "pending_sprint_id": "pending-example-1",
+            "project_id": "project-id",
+            "revision": 0,
+            "proposal_status": "created",
+            "activation_state": "not_started",
+            "source_metadata": copy.deepcopy(inbound_create["source"]),
+            "summary": inbound_create["summary"],
+            "candidate": copy.deepcopy(inbound_create["candidate"]),
+            "validation": {"status": "not_run", "checked_at": None, "issues": []},
+            "comments": [],
+            "regenerate_requested": False,
+            "submitted_by": {"producer_id": "inbound-hub"},
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+            "started_sprint_id": None,
+        }
+        inbound_status_fields = (
+            "schema_version",
+            "proposal_id",
+            "pending_sprint_id",
+            "project_id",
+            "revision",
+            "proposal_status",
+            "activation_state",
+            "source_metadata",
+            "summary",
+            "validation",
+            "regenerate_requested",
+            "created_at",
+            "updated_at",
+            "started_sprint_id",
+        )
         cases = {
             "managed-api-error-v1.schema.json": {
                 "detail": {"error": "SPRINT_PREFLIGHT_FAILED", "correlation_id": "corr-1"}
+            },
+            "inbound-api-error-v1.schema.json": {
+                "detail": {
+                    "error": "PROPOSAL_REQUEST_INVALID",
+                    "correlation_id": "corr-inbound-1",
+                    "retryable": False,
+                }
+            },
+            "inbound-pending-proposal-action-v1.schema.json": {
+                "schema_version": 1,
+                "action": "comment",
+                "expected_revision": 0,
+                "idempotency_key": "comment:api-proposal-1:v1",
+                "comment": "Please verify the candidate.",
+            },
+            "inbound-pending-proposal-create-v1.schema.json": inbound_create,
+            "inbound-pending-proposal-response-v1.schema.json": {
+                "schema_version": 1,
+                "correlation_id": "corr-inbound-1",
+                "deduplicated": False,
+                "proposal": inbound_proposal,
+            },
+            "inbound-pending-proposal-status-response-v1.schema.json": {
+                "schema_version": 1,
+                "correlation_id": "corr-inbound-status-1",
+                "status": {
+                    field: copy.deepcopy(inbound_proposal[field])
+                    for field in inbound_status_fields
+                },
+            },
+            "inbound-pending-proposal-v1.schema.json": inbound_proposal,
+            "inbound-producer-registry-v1.schema.json": {
+                "schema_version": 1,
+                "producers": [
+                    {
+                        "producer_id": "inbound-hub",
+                        "token_sha256": "a" * 64,
+                        "project_ids": ["project-id"],
+                        "actions": ["create", "read", "preview"],
+                    }
+                ],
             },
             "managed-assignment-result-v1.schema.json": {
                 "assignment_id": "assignment-1",
@@ -2404,6 +2499,10 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "expected_execution_revision": 74,
                 "expected_scope_revision": 1,
                 "idempotency_key": "scope-decision-example",
+            },
+            "decision-notification-config-v1.schema.json": {
+                "schema_version": 1,
+                "notifications": {"email": {"enabled": False}},
             },
             "sprint-preflight-report-v1.schema.json": preflight_fixture(),
             "start-sprint-from-git-v1.schema.json": {

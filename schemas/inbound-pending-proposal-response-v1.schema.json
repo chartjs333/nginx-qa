@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/inbound-pending-proposal-response-v1.schema.json",
+  "title": "Inbound pending proposal response v1",
+  "type": "object",
+  "required": ["schema_version", "correlation_id", "deduplicated", "proposal"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "correlation_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "deduplicated": {"type": "boolean"},
+    "proposal": {"$ref": "inbound-pending-proposal-v1.schema.json"}
+  },
+  "additionalProperties": false
+}
