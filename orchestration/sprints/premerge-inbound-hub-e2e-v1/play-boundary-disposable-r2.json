@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git": {
+    "source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e-r2",
+    "expected_source_commit": "980809b30d18496fa30e7136d38029b499790011",
+    "assigned_branch": "agent/ie2e-05-disposable-activation-r2",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "activation-probe",
+    "required_approvals": 2,
+    "reviewers": [
+      {
+        "id": "activation-probe-reviewer-a-r2",
+        "name": "Activation Probe Reviewer A R2",
+        "phone": "2991",
+        "git_branch": "review/ie2e-05-activation-a-r2"
+      },
+      {
+        "id": "activation-probe-reviewer-b-r2",
+        "name": "Activation Probe Reviewer B R2",
+        "phone": "2992",
+        "git_branch": "review/ie2e-05-activation-b-r2"
+      }
+    ],
+    "max_rework_cycles": 0
+  },
+  "nodes": [
+    {
+      "id": "activation-probe",
+      "agent": {
+        "id": "activation-probe-agent-r2",
+        "name": "Activation Boundary Probe R2",
+        "phone": "2993"
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-005-DISPOSABLE-R2",
+          "queue": "tester-all",
+          "message": "Confirm this disposable managed assignment is active. Do not modify files or launch processes. Return DONE at the pinned source commit."
+        }
+      ],
+      "workspace": {
+        "access": "read"
+      },
+      "transitions": {
+        "DONE": "completed",
+        "NEED_DECISION": "activation-probe-coordinator",
+        "STOP": "activation-probe-coordinator"
+      }
+    },
+    {
+      "id": "activation-probe-coordinator",
+      "agent": {
+        "id": "activation-probe-coordinator-agent-r2",
+        "name": "Activation Probe Coordinator R2",
+        "phone": "2994"
+      },
+      "tasks": [
+        {
+          "task_id": "IE2E-005-DISPOSABLE-COORD-R2",
+          "queue": "consultant-all",
+          "message": "Keep this disposable activation probe isolated; do not resume production work."
+        }
+      ],
+      "workspace": {
+        "access": "read"
+      },
+      "activation_policy": "any_parent",
+      "transitions": {
+        "RESUME": "activation-probe",
+        "BLOCKED_EXTERNAL": "blocked"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Disposable activation-boundary probe completed."
+    },
+    {
+      "id": "blocked",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Disposable activation-boundary probe blocked."
+    }
+  ],
+  "coordinator": {
+    "node_id": "activation-probe-coordinator",
+    "routes": {
+      "STOP": "activation-probe-coordinator",
+      "NEED_DECISION": "activation-probe-coordinator"
+    }
+  },
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    }
+  ]
+}
