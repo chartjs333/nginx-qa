@@ -916,9 +916,14 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(preview["proposal"]["revision"], 1)
             return str(pending_id)
 
-        activated_id = await create_ready("activated")
-        activating_id = await create_ready("activating")
-        failed_id = await create_ready("failed")
+        with patch.object(
+            main,
+            "utc_now",
+            return_value="2026-10-08T10:00:00+00:00",
+        ):
+            activated_id = await create_ready("activated")
+            activating_id = await create_ready("activating")
+            failed_id = await create_ready("failed")
         activated_at = "2026-10-08T10:01:00+00:00"
         activating_at = "2026-10-08T10:02:00+00:00"
         failed_at = "2026-10-08T10:03:00+00:00"
