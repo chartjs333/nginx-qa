@@ -20,6 +20,13 @@ from nginx_qa.sprint_types import (
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 ENVIRONMENT_EXAMPLE = REPOSITORY_ROOT / ".env.staging.example"
+PREMERGE_R2_ENVIRONMENT_EXAMPLE = (
+    REPOSITORY_ROOT
+    / "orchestration"
+    / "sprints"
+    / "premerge-inbound-hub-e2e-v1"
+    / "staging-18029-r2.env.example"
+)
 LAUNCHER = REPOSITORY_ROOT / "run_staging.ps1"
 E2E_MANIFEST = (
     REPOSITORY_ROOT
@@ -41,9 +48,9 @@ STAGING_PYTHON = (
 POWERSHELL = shutil.which("powershell.exe")
 
 
-def parse_environment_example() -> dict[str, str]:
+def parse_environment_file(path: Path) -> dict[str, str]:
     result: dict[str, str] = {}
-    for raw_line in ENVIRONMENT_EXAMPLE.read_text(encoding="utf-8").splitlines():
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
             continue
@@ -54,6 +61,10 @@ def parse_environment_example() -> dict[str, str]:
             raise AssertionError(f"duplicate environment variable: {name}")
         result[name] = value
     return result
+
+
+def parse_environment_example() -> dict[str, str]:
+    return parse_environment_file(ENVIRONMENT_EXAMPLE)
 
 
 def launcher_testable_functions() -> str:
@@ -170,6 +181,50 @@ class StagingIsolationTests(unittest.TestCase):
         self.assertTrue(config["disable_telegram"])
         self.assertTrue(config["disable_tunnel"])
         self.assertEqual(120, config["git_fetch_timeout_seconds"])
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_premerge_inbound_hub_r2_profile_is_isolated_and_valid(self) -> None:
+        completed = run_powershell(
+            r"""
+            Get-ExpectedStagingEnvironment `
+                -Profile "premerge-inbound-hub-e2e-v1-r2" |
+                ConvertTo-Json -Compress
+            """
+        )
+        assert_powershell_success(self, completed)
+        environment = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(
+            parse_environment_file(PREMERGE_R2_ENVIRONMENT_EXAMPLE),
+            environment,
+        )
+        config = normalize_managed_runtime_config(environment)
+
+        self.assertEqual((), managed_runtime_config_invariant_issues(config))
+        self.assertEqual(18029, config["http_port"])
+        self.assertEqual(18500, config["child_port_start"])
+        self.assertEqual(18599, config["child_port_end"])
+        self.assertEqual(
+            "premerge-inbound-hub-e2e-v1-r2-staging-18029",
+            config["instance_id"],
+        )
+        self.assertEqual(Path("D:/nq-e2e-r2/svc"), Path(config["service_root"]))
+        state_base = Path(environment["NGINX_QA_STAGING_STATE_BASE"])
+        for name in (
+            "NGINX_QA_STAGING_VENV_ROOT",
+            "NGINX_QA_RUNTIME_ROOT",
+            "NGINX_QA_PROMPT_ROOT",
+            "NGINX_QA_MANAGED_ROOT",
+        ):
+            self.assertEqual(state_base, Path(environment[name]).parent)
+        protected = json.loads(environment["NGINX_QA_PROTECTED_ROOTS"])
+        self.assertIn("C:/nginx-qa-staging-secrets", protected)
+        for protected_root in protected:
+            self.assertFalse(
+                windows_paths_overlap(config["service_root"], protected_root)
+            )
+            self.assertFalse(
+                windows_paths_overlap(str(state_base), protected_root)
+            )
 
     @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
     def test_launcher_rejects_each_mutable_boundary_override(self) -> None:

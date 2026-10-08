@@ -343,11 +343,25 @@ def _registry_acl_is_protected(path: Path) -> bool:
 
     script = r"""
 $ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+Import-Module (
+  Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1'
+) -Force
 $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$cursor = Get-Item -LiteralPath $args[0] -Force
+$encodedPath = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($encodedPath)) {
+  throw 'Inbound producer registry path was not provided'
+}
+$registryPath = [System.Text.Encoding]::UTF8.GetString(
+  [System.Convert]::FromBase64String($encodedPath)
+)
+if ([string]::IsNullOrWhiteSpace($registryPath)) {
+  throw 'Inbound producer registry path was empty'
+}
+$cursor = Get-Item -LiteralPath $registryPath -Force
 $items = @()
 while ($null -ne $cursor) {
-  $acl = Get-Acl -LiteralPath $cursor.FullName
+  $acl = Microsoft.PowerShell.Security\Get-Acl -LiteralPath $cursor.FullName
   $access = @($acl.Access | ForEach-Object {
     [pscustomobject]@{
       sid = $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value
@@ -362,13 +376,19 @@ while ($null -ne $cursor) {
     owner = $acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
     access = $access
   }
-  $cursor = $cursor.Parent
+  if ($cursor.PSIsContainer) {
+    $cursor = $cursor.Parent
+  }
+  else {
+    $cursor = $cursor.Directory
+  }
 }
 [pscustomobject]@{current_sid = $currentSid; items = $items} |
   ConvertTo-Json -Depth 6 -Compress
 """
     creation_flags = int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     try:
+        encoded_path = base64.b64encode(str(path).encode("utf-8")).decode("ascii")
         completed = subprocess.run(
             [
                 "powershell.exe",
@@ -377,16 +397,23 @@ while ($null -ne $cursor) {
                 "-NonInteractive",
                 "-Command",
                 script,
-                str(path),
             ],
             check=True,
             capture_output=True,
+            encoding="utf-8",
+            input=encoded_path,
             text=True,
             timeout=10,
             creationflags=creation_flags,
         )
         acl = json.loads(completed.stdout)
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError, TypeError):
+    except (
+        OSError,
+        subprocess.SubprocessError,
+        UnicodeError,
+        json.JSONDecodeError,
+        TypeError,
+    ):
         return False
     return _windows_registry_acl_is_protected(acl)
 

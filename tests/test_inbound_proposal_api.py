@@ -3,6 +3,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 import urllib.parse
@@ -2759,6 +2760,40 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    @unittest.skipUnless(os.name == "nt", "Windows ACL probe is Windows-specific")
+    def test_windows_acl_probe_passes_registry_path_via_stdin(self) -> None:
+        current_sid = "S-1-5-21-current"
+        protected = {
+            "current_sid": current_sid,
+            "items": [
+                {"owner": current_sid, "access": []},
+                {"owner": "S-1-5-18", "access": []},
+            ],
+        }
+        completed = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout=json.dumps(protected),
+            stderr="",
+        )
+        registry_path = Path(r"C:\protected\producer-registry.json")
+
+        with patch.object(
+            inbound_proposals.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            self.assertTrue(
+                self.registry_acl_patcher.temp_original(registry_path)
+            )
+
+        command = run.call_args.args[0]
+        self.assertNotIn(str(registry_path), command)
+        self.assertEqual(
+            str(registry_path),
+            base64.b64decode(run.call_args.kwargs["input"]).decode("utf-8"),
+        )
+
     async def test_legacy_pending_read_is_additive_and_registry_absence_isolated(self) -> None:
         legacy = main.stage_project_sprint_file(
             context_key=self.PROJECT_CONTEXT,
@@ -2818,6 +2853,39 @@ class InboundProposalApiTests(unittest.IsolatedAsyncioTestCase):
                 )
             with self.assertRaisesRegex(RuntimeError, "ACL is unsafe"):
                 main.configured_producer_registry()
+
+
+class InboundProducerRegistryAclProbeTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows ACL probe is Windows-specific")
+    def test_real_windows_acl_probe_handles_unicode_path_and_walks_ancestors(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(prefix="nginx-qa-acl-") as raw_temp:
+            registry_path = Path(raw_temp) / "producer registry 'тест ü'.json"
+            registry_path.write_bytes(b"inert sentinel")
+            captured: list[dict[str, object]] = []
+
+            def accept_snapshot(snapshot: dict[str, object]) -> bool:
+                captured.append(snapshot)
+                return True
+
+            with patch.object(
+                inbound_proposals,
+                "_windows_registry_acl_is_protected",
+                side_effect=accept_snapshot,
+            ):
+                self.assertTrue(
+                    inbound_proposals._registry_acl_is_protected(registry_path)
+                )
+
+        self.assertEqual(1, len(captured))
+        items = captured[0]["items"]
+        self.assertIsInstance(items, list)
+        self.assertGreaterEqual(len(items), 2)
+        self.assertEqual(
+            os.path.normcase(str(registry_path.resolve())),
+            os.path.normcase(str(items[0]["path"])),
+        )
 
 
 if __name__ == "__main__":

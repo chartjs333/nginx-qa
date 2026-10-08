@@ -3,6 +3,9 @@ param(
     [ValidateSet("Check", "Setup", "Start")]
     [string]$Action = "Start",
 
+    [ValidateSet("umse-007", "premerge-inbound-hub-e2e-v1-r2")]
+    [string]$Profile = "umse-007",
+
     [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9A-Fa-f]{40}$")]
     [string]$ExpectedCommit
@@ -644,6 +647,31 @@ function Assert-PortPool {
 }
 
 function Get-ExpectedStagingEnvironment {
+    param(
+        [ValidateSet("umse-007", "premerge-inbound-hub-e2e-v1-r2")]
+        [string]$Profile = "umse-007"
+    )
+
+    if ($Profile -eq "premerge-inbound-hub-e2e-v1-r2") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18029"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-e2e-r2/svc"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging","D:/nq","C:/Prompt","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state","C:/nq","C:/nginx-qa-staging-secrets"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nq-e2e-r2"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nq-e2e-r2/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nq-e2e-r2/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nq-e2e-r2/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nq-e2e-r2/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18500-18599"
+            NGINX_QA_INSTANCE_ID = "premerge-inbound-hub-e2e-v1-r2-staging-18029"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
+
     return [ordered]@{
         NGINX_QA_HTTP_HOST = "127.0.0.1"
         NGINX_QA_HTTP_PORT = "18025"
@@ -701,6 +729,10 @@ $serviceRoot = Resolve-NormalizedPath $PSScriptRoot
 $expectedServiceRoot = "D:\nginx-qa-staging\universal-managed-sprint-engine"
 $expectedBranch = "agent/umse-07-staging-qualification"
 $expectedOrigin = "https://github.com/chartjs333/nginx-qa.git"
+if ($Profile -eq "premerge-inbound-hub-e2e-v1-r2") {
+    $expectedServiceRoot = "D:\nq-e2e-r2\svc"
+    $expectedBranch = "agent/ie2e-03-staging-runtime-r2"
+}
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
 
@@ -749,8 +781,24 @@ function Import-StagingEnvironment {
 
 Import-StagingEnvironment
 
-$expectedValues = Get-ExpectedStagingEnvironment
+$expectedValues = Get-ExpectedStagingEnvironment -Profile $Profile
 Assert-ExactStagingEnvironment -ExpectedValues $expectedValues
+
+if ($Profile -eq "premerge-inbound-hub-e2e-v1-r2") {
+    $registryValue = [System.Environment]::GetEnvironmentVariable(
+        "NGINX_QA_INBOUND_PRODUCER_REGISTRY",
+        [System.EnvironmentVariableTarget]::Process
+    )
+    if (-not [string]::IsNullOrWhiteSpace($registryValue)) {
+        $expectedRegistry = Resolve-NormalizedPath `
+            "C:\nginx-qa-staging-secrets\premerge-inbound-hub-e2e-v1-r2-18029\producer-registry.json"
+        $actualRegistry = Assert-CanonicalNonReparsePath `
+            -Path $registryValue -PathKind Leaf -Label "inbound producer registry"
+        if ($actualRegistry -ine $expectedRegistry) {
+            throw "NGINX_QA_INBOUND_PRODUCER_REGISTRY must be exactly $expectedRegistry."
+        }
+    }
+}
 
 try {
     $protectedDecoded = (Get-RequiredEnvironmentValue "NGINX_QA_PROTECTED_ROOTS") | ConvertFrom-Json
