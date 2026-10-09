@@ -6,7 +6,8 @@ param(
     [ValidateSet(
         "umse-007",
         "premerge-inbound-hub-e2e-v1",
-        "premerge-inbound-hub-e2e-v1-short"
+        "premerge-inbound-hub-e2e-v1-short",
+        "premerge-inbound-hub-e2e-v1-short-r2"
     )]
     [string]$Profile = "umse-007",
 
@@ -655,7 +656,8 @@ function Get-ExpectedStagingEnvironment {
         [ValidateSet(
             "umse-007",
             "premerge-inbound-hub-e2e-v1",
-            "premerge-inbound-hub-e2e-v1-short"
+            "premerge-inbound-hub-e2e-v1-short",
+            "premerge-inbound-hub-e2e-v1-short-r2"
         )]
         [string]$Profile = "umse-007"
     )
@@ -675,6 +677,26 @@ function Get-ExpectedStagingEnvironment {
             NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
             NGINX_QA_CHILD_PORT_RANGE = "18400-18499"
             NGINX_QA_INSTANCE_ID = "premerge-inbound-hub-e2e-v1-short-18030-01"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
+
+    if ($Profile -eq "premerge-inbound-hub-e2e-v1-short-r2") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18031"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-e2e-18031"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging","D:/nq","D:/nq-e2e-r2","D:/nq-e2e-18027","C:/Prompt","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state","C:/nginx-qa-staging-secrets","C:/nq","C:/nq-e2e-r2","C:/nq-e2e-18027","C:/nq-e2e-18027-secrets","C:/nq-e2e-18031-secrets"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nq-e2e-18031"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nq-e2e-18031/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nq-e2e-18031/runtime"
+            NGINX_QA_PROMPT_ROOT = "C:/nq-e2e-18031/prompt"
+            NGINX_QA_MANAGED_ROOT = "C:/nq-e2e-18031/managed"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18500-18599"
+            NGINX_QA_INSTANCE_ID = "premerge-inbound-hub-e2e-v1-short-18031-02"
             NGINX_QA_DISABLE_TELEGRAM = "1"
             NGINX_QA_DISABLE_TUNNEL = "1"
         }
@@ -765,6 +787,10 @@ elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
     $expectedServiceRoot = "D:\nq-e2e-18027"
     $expectedBranch = "agent/ie2e-05-play-boundary"
 }
+elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short-r2") {
+    $expectedServiceRoot = "D:\nq-e2e-18031"
+    $expectedBranch = "agent/ie2e-05-play-boundary"
+}
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
 
@@ -824,6 +850,21 @@ if ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
     if (-not [string]::IsNullOrWhiteSpace($registryValue)) {
         $expectedRegistry = Resolve-NormalizedPath `
             "C:\nq-e2e-18027-secrets\producer-registry.json"
+        $actualRegistry = Assert-CanonicalNonReparsePath `
+            -Path $registryValue -PathKind Leaf -Label "inbound producer registry"
+        if ($actualRegistry -ine $expectedRegistry) {
+            throw "NGINX_QA_INBOUND_PRODUCER_REGISTRY must be exactly $expectedRegistry."
+        }
+    }
+}
+elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short-r2") {
+    $registryValue = [System.Environment]::GetEnvironmentVariable(
+        "NGINX_QA_INBOUND_PRODUCER_REGISTRY",
+        [System.EnvironmentVariableTarget]::Process
+    )
+    if (-not [string]::IsNullOrWhiteSpace($registryValue)) {
+        $expectedRegistry = Resolve-NormalizedPath `
+            "C:\nq-e2e-18031-secrets\producer-registry.json"
         $actualRegistry = Assert-CanonicalNonReparsePath `
             -Path $registryValue -PathKind Leaf -Label "inbound producer registry"
         if ($actualRegistry -ine $expectedRegistry) {

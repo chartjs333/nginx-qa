@@ -4,7 +4,7 @@
   "git": {
     "source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e",
     "expected_source_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
-    "assigned_branch": "agent/ie2e-05-disposable-aa9b",
+    "assigned_branch": "agent/ie2e-05-disposable-f7bb",
     "existing_branch_policy": "create"
   },
   "execution": {
@@ -16,13 +16,13 @@
         "id": "activation-probe-reviewer-a",
         "name": "Activation Probe Reviewer A",
         "phone": "2991",
-        "git_branch": "review/ie2e-05-activation-a-aa9b"
+        "git_branch": "review/ie2e-05-activation-a-f7bb"
       },
       {
         "id": "activation-probe-reviewer-b",
         "name": "Activation Probe Reviewer B",
         "phone": "2992",
-        "git_branch": "review/ie2e-05-activation-b-aa9b"
+        "git_branch": "review/ie2e-05-activation-b-f7bb"
       }
     ],
     "max_rework_cycles": 0

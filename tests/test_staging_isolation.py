@@ -34,6 +34,13 @@ SHORT_PREMERGE_ENVIRONMENT_EXAMPLE = (
     / "premerge-inbound-hub-e2e-v1"
     / "staging-18030-short.env.example"
 )
+SHORT_PREMERGE_R2_ENVIRONMENT_EXAMPLE = (
+    REPOSITORY_ROOT
+    / "orchestration"
+    / "sprints"
+    / "premerge-inbound-hub-e2e-v1"
+    / "staging-18031-short.env.example"
+)
 LAUNCHER = REPOSITORY_ROOT / "run_staging.ps1"
 E2E_MANIFEST = (
     REPOSITORY_ROOT
@@ -260,6 +267,48 @@ class StagingIsolationTests(unittest.TestCase):
             config["instance_id"],
         )
         self.assertEqual(Path("D:/nq-e2e-18027"), Path(config["service_root"]))
+        state_base = Path(environment["NGINX_QA_STAGING_STATE_BASE"])
+        for name in (
+            "NGINX_QA_STAGING_VENV_ROOT",
+            "NGINX_QA_RUNTIME_ROOT",
+            "NGINX_QA_PROMPT_ROOT",
+            "NGINX_QA_MANAGED_ROOT",
+        ):
+            self.assertEqual(state_base, Path(environment[name]).parent)
+        for protected_root in json.loads(environment["NGINX_QA_PROTECTED_ROOTS"]):
+            self.assertFalse(
+                windows_paths_overlap(config["service_root"], protected_root)
+            )
+            self.assertFalse(
+                windows_paths_overlap(str(state_base), protected_root)
+            )
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_short_premerge_r2_profile_is_isolated_and_valid(self) -> None:
+        completed = run_powershell(
+            r"""
+            Get-ExpectedStagingEnvironment `
+                -Profile "premerge-inbound-hub-e2e-v1-short-r2" |
+                ConvertTo-Json -Compress
+            """
+        )
+        assert_powershell_success(self, completed)
+        environment = json.loads(completed.stdout.strip().splitlines()[-1])
+        self.assertEqual(
+            parse_environment_file(SHORT_PREMERGE_R2_ENVIRONMENT_EXAMPLE),
+            environment,
+        )
+        config = normalize_managed_runtime_config(environment)
+
+        self.assertEqual((), managed_runtime_config_invariant_issues(config))
+        self.assertEqual(18031, config["http_port"])
+        self.assertEqual(18500, config["child_port_start"])
+        self.assertEqual(18599, config["child_port_end"])
+        self.assertEqual(
+            "premerge-inbound-hub-e2e-v1-short-18031-02",
+            config["instance_id"],
+        )
+        self.assertEqual(Path("D:/nq-e2e-18031"), Path(config["service_root"]))
         state_base = Path(environment["NGINX_QA_STAGING_STATE_BASE"])
         for name in (
             "NGINX_QA_STAGING_VENV_ROOT",
