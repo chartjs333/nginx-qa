@@ -74,6 +74,17 @@ _RESERVED_GIT_ENVIRONMENT = frozenset(
 )
 
 
+def deterministic_branch_publication_id(
+    mirror_key: str, branch: str, assignment_id: str
+) -> str:
+    """Bind one branch-publication identity to its durable assignment lease."""
+
+    digest = hashlib.sha256(
+        f"{mirror_key}\0{branch.casefold()}\0{assignment_id}".encode("utf-8")
+    ).hexdigest()
+    return f"branch-lease-{digest}"
+
+
 class ManagedGitError(RuntimeError):
     """A transport-neutral, redacted Git provider failure."""
 
@@ -2173,6 +2184,230 @@ class ManagedGitProvider:
             )
         return value
 
+    def _read_internal_blob(
+        self,
+        repository: ManagedRepository,
+        object_id: str,
+        *,
+        error_code: str,
+        max_bytes: int = 16 * 1024,
+    ) -> bytes:
+        """Read a small provider-owned blob without accepting a tree path."""
+
+        if not _commit_matches_object_format(object_id, repository.object_format):
+            raise ManagedGitError(error_code, "internal Git object ID is invalid")
+        size_result = self.runner.run(
+            (
+                "--git-dir",
+                str(repository.mirror_path),
+                "cat-file",
+                "-s",
+                object_id,
+            ),
+            error_code=error_code,
+        )
+        try:
+            size = int(size_result.stdout.strip())
+        except ValueError:
+            raise ManagedGitError(
+                error_code, "internal Git blob size is invalid"
+            ) from None
+        if size < 1 or size > max_bytes:
+            raise ManagedGitError(error_code, "internal Git blob size is invalid")
+        raw = self.runner.run_raw_stdout(
+            (
+                "--git-dir",
+                str(repository.mirror_path),
+                "cat-file",
+                "blob",
+                object_id,
+            ),
+            max_stdout_bytes=size,
+            error_code=error_code,
+        )
+        if len(raw) != size:
+            raise ManagedGitError(
+                error_code, "internal Git blob size changed while reading"
+            )
+        return raw
+
+    def _write_internal_blob(
+        self,
+        repository: ManagedRepository,
+        raw: bytes,
+        *,
+        error_code: str,
+    ) -> str:
+        """Write bounded canonical provider metadata as an immutable Git blob."""
+
+        if not raw or len(raw) > 16 * 1024:
+            raise ManagedGitError(error_code, "internal Git blob size is invalid")
+        try:
+            text = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            raise ManagedGitError(
+                error_code, "internal Git blob encoding is invalid"
+            ) from None
+        object_id = self.runner.run(
+            (
+                "--git-dir",
+                str(repository.mirror_path),
+                "hash-object",
+                "-w",
+                "--stdin",
+            ),
+            stdin_text=text,
+            error_code=error_code,
+        ).stdout.strip().lower()
+        if not _commit_matches_object_format(object_id, repository.object_format):
+            raise ManagedGitError(error_code, "internal Git blob was not created")
+        return object_id
+
+    def _reclaim_expected_ref_lock(
+        self,
+        repository: ManagedRepository,
+        ref: str,
+        expected_object_id: str,
+        *,
+        error_code: str,
+    ) -> bool:
+        """Remove only a provenance-bound lock left by a dead Git child.
+
+        Callers hold the repository's managed mutation lock.  The exact custom
+        ref and exact object ID are both fixed before this method is reached;
+        arbitrary Git locks are never scanned or removed.
+        """
+
+        if not (
+            ref.startswith("refs/nginx-qa/") or ref.startswith("refs/heads/")
+        ) or not _commit_matches_object_format(
+            expected_object_id, repository.object_format
+        ):
+            raise ManagedGitError(
+                error_code, "internal Git ref lock identity is invalid"
+            )
+        ref_path = repository.mirror_path.joinpath(*ref.split("/"))
+        lock_path = ref_path.with_name(f"{ref_path.name}.lock")
+        self._assert_internal_path(lock_path)
+        if not os.path.lexists(lock_path):
+            return False
+        if (
+            not lock_path.is_file()
+            or lock_path.is_symlink()
+            or _path_is_junction(lock_path)
+            or not _path_resolves_to_itself(lock_path)
+        ):
+            raise ManagedGitError(error_code, "internal Git ref lock is redirected")
+        try:
+            with lock_path.open("rb") as handle:
+                raw = handle.read(len(expected_object_id) + 2)
+        except OSError as exc:
+            raise ManagedGitError(
+                error_code, "internal Git ref lock is unreadable"
+            ) from exc
+        if raw != f"{expected_object_id}\n".encode("ascii"):
+            raise ManagedGitError(
+                error_code, "internal Git ref lock does not match publication intent"
+            )
+        try:
+            lock_path.unlink()
+        except OSError as exc:
+            raise ManagedGitError(
+                error_code, "stale internal Git ref lock remains"
+            ) from exc
+        return True
+
+    def _create_internal_ref(
+        self,
+        repository: ManagedRepository,
+        ref: str,
+        object_id: str,
+        *,
+        error_code: str,
+    ) -> None:
+        """CAS-create one custom ref and recover only its exact stale lock."""
+
+        existing = self._read_ref(repository, ref)
+        if existing is not None:
+            if existing != object_id:
+                raise ManagedGitError(error_code, "internal Git ref disagrees with intent")
+            return
+        zero = "0" * _OBJECT_FORMAT_LENGTHS[repository.object_format]
+        for attempt in range(2):
+            try:
+                self.runner.run(
+                    (
+                        "--git-dir",
+                        str(repository.mirror_path),
+                        "update-ref",
+                        ref,
+                        object_id,
+                        zero,
+                    ),
+                    error_code=error_code,
+                )
+            except ManagedGitError:
+                existing = self._read_ref(repository, ref)
+                if existing == object_id:
+                    return
+                if attempt == 0 and self._reclaim_expected_ref_lock(
+                    repository,
+                    ref,
+                    object_id,
+                    error_code=error_code,
+                ):
+                    continue
+                raise
+            if self._read_ref(repository, ref) != object_id:
+                raise ManagedGitError(error_code, "internal Git ref was not committed")
+            return
+        raise ManagedGitError(error_code, "internal Git ref could not be committed")
+
+    def _update_publication_branch(
+        self,
+        repository: ManagedRepository,
+        branch_ref: str,
+        selected_head: str,
+        expected_old_head: str | None,
+    ) -> None:
+        """CAS one intent-backed branch and recover only its exact stale lock."""
+
+        zero = "0" * _OBJECT_FORMAT_LENGTHS[repository.object_format]
+        expected = expected_old_head if expected_old_head is not None else zero
+        for attempt in range(2):
+            try:
+                self.runner.run(
+                    (
+                        "--git-dir",
+                        str(repository.mirror_path),
+                        "update-ref",
+                        branch_ref,
+                        selected_head,
+                        expected,
+                    ),
+                    error_code="BRANCH_DIVERGED",
+                )
+            except ManagedGitError:
+                current = self._read_ref(repository, branch_ref)
+                if current == selected_head:
+                    return
+                if current != expected_old_head:
+                    raise
+                if attempt == 0 and self._reclaim_expected_ref_lock(
+                    repository,
+                    branch_ref,
+                    selected_head,
+                    error_code="BRANCH_DIVERGED",
+                ):
+                    continue
+                raise
+            if self._read_ref(repository, branch_ref) != selected_head:
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED", "branch publication was not committed"
+                )
+            return
+        raise ManagedGitError("BRANCH_DIVERGED", "branch publication failed")
+
     def is_ancestor(
         self, repository: ManagedRepository, ancestor: str, descendant: str
     ) -> bool:
@@ -2323,15 +2558,18 @@ class ManagedGitProvider:
         *,
         selected_head: str,
         publication_id: str,
+        assignment_id: str,
         policy: str,
         source_commit: str,
         expected_branch_head: str | None,
     ) -> str:
-        """Atomically publish a branch and immutable publication receipt.
+        """Publish a branch from a lease-bound intent, then record completion.
 
-        Once the receipt exists, a worker may legitimately advance the branch.
-        Before it exists, an already-divergent branch is never mistaken for a
-        completed post-commit publication.
+        Git's files ref backend commits the refs in a multi-ref transaction one
+        at a time.  A process or I/O failure can therefore leave the branch
+        visible without the old completion receipt.  The immutable intent is
+        committed first and freezes the exact predecessor observations.  Only
+        an intent-backed retry may finish a branch-only partial publication.
         """
 
         self.assert_branch_name(branch)
@@ -2348,21 +2586,201 @@ class ManagedGitProvider:
             raise ManagedGitError(
                 "GIT_REF_INVALID", "branch publication identity is invalid"
             )
+        if not assignment_id or len(assignment_id) > 200:
+            raise ManagedGitError(
+                "GIT_REF_INVALID", "branch publication assignment is invalid"
+            )
+        expected_publication_id = deterministic_branch_publication_id(
+            repository.mirror_storage_key, branch, assignment_id
+        )
+        if publication_id != expected_publication_id:
+            raise ManagedGitError(
+                "GIT_REF_INVALID",
+                "branch publication identity is not bound to the assignment",
+            )
         publication_digest = hashlib.sha256(
             f"{repository.canonical_remote}\0{publication_id}".encode("utf-8")
         ).hexdigest()
         publication_ref = f"refs/nginx-qa/publications/{publication_digest}"
+        intent_ref = f"refs/nginx-qa/intents/{publication_digest}"
         branch_ref = f"refs/heads/{branch}"
         lock_path = self.locks_root / f"{repository.mirror_storage_key}.lock"
         self._assert_internal_path(self.locks_root)
         self._assert_internal_path(lock_path)
+
+        stable_ownership = {
+            "assignment_id": assignment_id,
+            "branch": branch,
+            "branch_key": branch.casefold(),
+            "mirror_storage_key": repository.mirror_storage_key,
+            "publication_id": publication_id,
+            "repository_id": repository.repository_id,
+            "repository_key": repository.canonical_remote,
+            "schema_version": 1,
+            "selected_head": selected_head,
+            "source_commit": source_commit,
+        }
+        requested_intent = {
+            **stable_ownership,
+            "expected_branch_head": expected_branch_head,
+            "policy": policy,
+        }
+
+        def serialize_intent(
+            observed_local_head: str | None,
+            observed_remote_head: str | None,
+        ) -> bytes:
+            payload = {
+                **requested_intent,
+                "observed_local_head": observed_local_head,
+                "observed_remote_head": observed_remote_head,
+            }
+            return json.dumps(
+                payload,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+
+        def read_intent(object_id: str) -> Mapping[str, object]:
+            raw = self._read_internal_blob(
+                repository,
+                object_id,
+                error_code="REPOSITORY_MIRROR_INVALID",
+            )
+
+            def reject_nonfinite_constant(value: str) -> None:
+                raise ValueError(f"non-finite JSON constant: {value}")
+
+            try:
+                payload = json.loads(
+                    raw.decode("utf-8", errors="strict"),
+                    parse_constant=reject_nonfinite_constant,
+                )
+                canonical = json.dumps(
+                    payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            except (
+                UnicodeDecodeError,
+                UnicodeEncodeError,
+                json.JSONDecodeError,
+                RecursionError,
+                ValueError,
+            ) as exc:
+                raise ManagedGitError(
+                    "REPOSITORY_MIRROR_INVALID",
+                    "branch publication intent is malformed",
+                ) from exc
+            expected_keys = set(requested_intent) | {
+                "observed_local_head",
+                "observed_remote_head",
+            }
+            if (
+                raw != canonical
+                or not isinstance(payload, dict)
+                or set(payload) != expected_keys
+            ):
+                raise ManagedGitError(
+                    "REPOSITORY_MIRROR_INVALID",
+                    "branch publication intent is not canonical",
+                )
+            if any(
+                payload.get(key) != value
+                for key, value in stable_ownership.items()
+            ):
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "branch publication intent disagrees with durable ownership",
+                )
+            stored_policy = payload.get("policy")
+            stored_expected_head = payload.get("expected_branch_head")
+            if stored_policy not in {
+                "create",
+                "resume",
+                "reject_if_exists",
+                "require_exact_head",
+            } or (
+                stored_expected_head is not None
+                and not isinstance(stored_expected_head, str)
+            ):
+                raise ManagedGitError(
+                    "REPOSITORY_MIRROR_INVALID",
+                    "branch publication intent policy is invalid",
+                )
+            if isinstance(stored_expected_head, str):
+                self.assert_commit(repository, stored_expected_head)
+            for key in ("observed_local_head", "observed_remote_head"):
+                observed = payload.get(key)
+                if observed is not None:
+                    if not isinstance(observed, str):
+                        raise ManagedGitError(
+                            "REPOSITORY_MIRROR_INVALID",
+                            "branch publication predecessor is invalid",
+                        )
+                    self.assert_commit(repository, observed)
+            return payload
+
+        def validate_frozen_policy(
+            local_head: str | None,
+            remote_head: str | None,
+            *,
+            frozen_policy: str,
+            frozen_expected_branch_head: str | None,
+        ) -> None:
+            if frozen_policy in {"create", "reject_if_exists"} and (
+                local_head is not None or remote_head is not None
+            ):
+                raise ManagedGitError(
+                    "BRANCH_ALREADY_EXISTS",
+                    "branch appeared before publication intent was committed",
+                )
+            if local_head is not None and local_head != selected_head:
+                if frozen_policy != "resume" or not self.is_ancestor(
+                    repository, local_head, selected_head
+                ):
+                    raise ManagedGitError(
+                        "BRANCH_DIVERGED",
+                        "branch changed before publication intent was committed",
+                    )
+            if frozen_policy == "resume" and (
+                (
+                    remote_head is not None
+                    and remote_head != selected_head
+                    and not self.is_ancestor(repository, remote_head, selected_head)
+                )
+                or (
+                    local_head is None
+                    and remote_head is None
+                    and selected_head != source_commit
+                )
+            ):
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "resumed branch changed before publication intent was committed",
+                )
+            if frozen_policy == "require_exact_head" and (
+                frozen_expected_branch_head != selected_head
+                or (local_head is None and remote_head is None)
+                or (remote_head is not None and remote_head != selected_head)
+            ):
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "exact branch head changed before publication intent was committed",
+                )
+
         try:
             with ManagedFileLock(lock_path, timeout=self.lock_timeout):
                 receipt = self._read_ref(repository, publication_ref)
+                intent_object_id = self._read_ref(repository, intent_ref)
                 heads = self.branch_heads(repository, branch)
                 current = heads.get(branch_ref)
                 remote = heads.get(f"refs/remotes/origin/{branch}")
                 if receipt is not None:
+                    if intent_object_id is not None:
+                        read_intent(intent_object_id)
                     if (
                         receipt != selected_head
                         or current is None
@@ -2375,82 +2793,75 @@ class ManagedGitProvider:
                             "branch publication receipt disagrees with durable state",
                     )
                     return publication_ref
-                if policy in {"create", "reject_if_exists"} and (
-                    current is not None or remote is not None
-                ):
-                    raise ManagedGitError(
-                        "BRANCH_ALREADY_EXISTS",
-                        "branch appeared before publication was receipted",
+
+                if intent_object_id is None:
+                    validate_frozen_policy(
+                        current,
+                        remote,
+                        frozen_policy=policy,
+                        frozen_expected_branch_head=expected_branch_head,
                     )
-                fast_forward_from: str | None = None
-                if current is not None and current != selected_head:
-                    if policy != "resume" or not self.is_ancestor(
-                        repository, current, selected_head
-                    ):
-                        raise ManagedGitError(
-                            "BRANCH_DIVERGED",
-                            "branch changed before publication was receipted",
-                        )
-                    # A later occurrence may reuse its logical branch while
-                    # starting from a newer accepted commit.  Publish that
-                    # monotonic continuation together with its receipt so a
-                    # crash can expose neither side effect on its own.
-                    fast_forward_from = current
-                if policy == "resume" and (
-                    (
-                        remote is not None
-                        and remote != selected_head
-                        and not self.is_ancestor(repository, remote, selected_head)
+                    intent_raw = serialize_intent(current, remote)
+                    intent_object_id = self._write_internal_blob(
+                        repository,
+                        intent_raw,
+                        error_code="REPOSITORY_MIRROR_INVALID",
                     )
-                    or (
-                        current is None
-                        and remote is None
-                        and selected_head != source_commit
+                    self._create_internal_ref(
+                        repository,
+                        intent_ref,
+                        intent_object_id,
+                        error_code="BRANCH_DIVERGED",
                     )
-                ):
+                    intent = read_intent(intent_object_id)
+                else:
+                    intent = read_intent(intent_object_id)
+
+                observed_local = intent.get("observed_local_head")
+                observed_remote = intent.get("observed_remote_head")
+                frozen_policy = intent.get("policy")
+                frozen_expected_head = intent.get("expected_branch_head")
+                assert observed_local is None or isinstance(observed_local, str)
+                assert observed_remote is None or isinstance(observed_remote, str)
+                assert isinstance(frozen_policy, str)
+                assert frozen_expected_head is None or isinstance(
+                    frozen_expected_head, str
+                )
+                validate_frozen_policy(
+                    observed_local,
+                    observed_remote,
+                    frozen_policy=frozen_policy,
+                    frozen_expected_branch_head=frozen_expected_head,
+                )
+
+                if remote != observed_remote:
                     raise ManagedGitError(
                         "BRANCH_DIVERGED",
-                        "resumed branch changed before publication was receipted",
+                        "remote branch changed after publication intent",
                     )
-                if policy == "require_exact_head" and (
-                    expected_branch_head != selected_head
-                    or (current is None and remote is None)
-                    or (remote is not None and remote != selected_head)
-                ):
-                    raise ManagedGitError(
-                        "BRANCH_DIVERGED",
-                        "exact branch head changed before publication was receipted",
-                    )
-                if current is None:
-                    branch_operation = (f"create {branch_ref}", selected_head)
-                elif fast_forward_from is not None:
-                    branch_operation = (
-                        f"update {branch_ref}",
+                if current == selected_head:
+                    pass
+                elif current == observed_local:
+                    self._update_publication_branch(
+                        repository,
+                        branch_ref,
                         selected_head,
-                        fast_forward_from,
+                        observed_local,
                     )
                 else:
-                    branch_operation = (f"verify {branch_ref}", selected_head)
-                transaction = "\0".join(
-                    (
-                        "start",
-                        *branch_operation,
-                        f"create {publication_ref}",
-                        selected_head,
-                        "prepare",
-                        "commit",
-                        "",
+                    raise ManagedGitError(
+                        "BRANCH_DIVERGED",
+                        "branch changed after publication intent",
                     )
-                )
-                self.runner.run(
-                    (
-                        "--git-dir",
-                        str(repository.mirror_path),
-                        "update-ref",
-                        "--stdin",
-                        "-z",
-                    ),
-                    stdin_text=transaction,
+
+                if self._read_ref(repository, branch_ref) != selected_head:
+                    raise ManagedGitError(
+                        "BRANCH_DIVERGED", "branch publication was not committed"
+                    )
+                self._create_internal_ref(
+                    repository,
+                    publication_ref,
+                    selected_head,
                     error_code="BRANCH_DIVERGED",
                 )
                 if self._read_ref(repository, publication_ref) != selected_head:
@@ -2773,4 +3184,5 @@ __all__ = [
     "ManagedRepository",
     "RepositorySpec",
     "canonical_remote_from_address",
+    "deterministic_branch_publication_id",
 ]

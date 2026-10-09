@@ -1,9 +1,15 @@
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from pathlib import Path
 import subprocess
 import unittest
+from unittest.mock import patch
 
-from nginx_qa.branch_leases import BranchLeaseError, BranchLeaseStore
+from nginx_qa.branch_leases import (
+    BranchLeaseError,
+    BranchLeaseStore,
+    deterministic_branch_lease_id,
+)
 from nginx_qa.git_provider import ManagedGitError, ManagedGitProvider, RepositorySpec
 from nginx_qa.sprint_types import mirror_storage_key
 from nginx_qa.workspace_manager import (
@@ -14,7 +20,33 @@ from nginx_qa.workspace_manager import (
 from tests.managed_workspace_support import ManagedWorkspaceFixture
 
 
+class SimulatedPublicationCrash(BaseException):
+    pass
+
+
 class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestCase):
+    @staticmethod
+    def publication_refs(repository, publication_id: str) -> tuple[str, str]:
+        digest = hashlib.sha256(
+            f"{repository.canonical_remote}\0{publication_id}".encode("utf-8")
+        ).hexdigest()
+        return (
+            f"refs/nginx-qa/intents/{digest}",
+            f"refs/nginx-qa/publications/{digest}",
+        )
+
+    @staticmethod
+    def update_ref_mentions(
+        arguments: tuple[str, ...] | list[str], kwargs: dict[str, object], ref: str
+    ) -> bool:
+        if "update-ref" not in arguments:
+            return False
+        material = "\0".join(str(argument) for argument in arguments)
+        stdin_text = kwargs.get("stdin_text")
+        if isinstance(stdin_text, str):
+            material = f"{material}\0{stdin_text}"
+        return ref in material
+
     def read_request(self, assignment_id: str, *, repository_id: str = "primary"):
         return WorkspaceRequest(
             project_id="project-1",
@@ -46,6 +78,20 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
             existing_branch_policy=policy,
             expected_branch_head=expected_head,
         )
+
+    def test_publication_intent_lock_path_fits_receipt_lock_path_budget(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key,
+            "agent/publication-path-budget",
+            "assignment-publication-path-budget",
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        intent_lock = mirror.mirror_path / f"{intent_ref}.lock"
+        receipt_lock = mirror.mirror_path / f"{receipt_ref}.lock"
+
+        self.assertTrue(intent_ref.startswith("refs/nginx-qa/intents/"))
+        self.assertLessEqual(len(str(intent_lock)), len(str(receipt_lock)))
 
     def test_aliases_share_one_bare_mirror_with_separate_remote_namespace(self) -> None:
         primary = self.provider.ensure_mirror("primary")
@@ -143,6 +189,90 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
             "sha256",
         )
         self.assertEqual(workspace.head_commit, source_commit)
+
+    def test_sha256_publication_creates_and_replays_intent_and_receipt(self) -> None:
+        source = self.base / "sha256-publication-source"
+        source.mkdir()
+        self.git(
+            "init",
+            "--object-format=sha256",
+            "--initial-branch=main",
+            cwd=source,
+        )
+        self.git("config", "user.name", "Managed Test", cwd=source)
+        self.git("config", "user.email", "managed@example.invalid", cwd=source)
+        (source / "tracked.txt").write_text("sha256 publication\n", encoding="utf-8")
+        self.git("add", "tracked.txt", cwd=source)
+        self.git("commit", "-m", "sha256 publication initial", cwd=source)
+        source_commit = self.git("rev-parse", "HEAD", cwd=source)
+
+        remote = self.base / "sha256-publication-upstream.git"
+        self.git("clone", "--bare", str(source), str(remote))
+        managed_root = self.base / "sha256-publication-managed"
+        spec = RepositorySpec(
+            "sha256-publication",
+            "example.invalid/acme/sha256-publication-repository",
+            str(remote),
+        )
+        provider = ManagedGitProvider(
+            managed_root,
+            {"sha256-publication": spec},
+            allow_local_transport=True,
+        )
+        mirror = provider.ensure_mirror("sha256-publication")
+        branch = "agent/sha256-publication"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-sha256-publication"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+
+        first_result = provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=source_commit,
+            publication_id=publication_id,
+            assignment_id=assignment_id,
+            policy="create",
+            source_commit=source_commit,
+            expected_branch_head=None,
+        )
+        intent_object = provider._read_ref(mirror, intent_ref)
+
+        self.assertEqual(mirror.object_format, "sha256")
+        self.assertEqual(len(source_commit), 64)
+        self.assertEqual(first_result, receipt_ref)
+        self.assertIsNotNone(intent_object)
+        self.assertEqual(len(str(intent_object)), 64)
+        self.assertEqual(provider._read_ref(mirror, branch_ref), source_commit)
+        self.assertEqual(provider._read_ref(mirror, receipt_ref), source_commit)
+        self.assertEqual(
+            self.git(
+                "--git-dir",
+                str(mirror.mirror_path),
+                "cat-file",
+                "-t",
+                str(intent_object),
+            ),
+            "blob",
+        )
+
+        replay_result = provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=source_commit,
+            publication_id=publication_id,
+            assignment_id=assignment_id,
+            policy="create",
+            source_commit=source_commit,
+            expected_branch_head=None,
+        )
+
+        self.assertEqual(replay_result, receipt_ref)
+        self.assertEqual(provider._read_ref(mirror, intent_ref), intent_object)
+        self.assertEqual(provider._read_ref(mirror, branch_ref), source_commit)
+        self.assertEqual(provider._read_ref(mirror, receipt_ref), source_commit)
 
     def test_prepare_uses_one_frozen_registry_snapshot(self) -> None:
         calls = 0
@@ -473,6 +603,7 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
 
     def test_resume_publication_fast_forwards_reused_branch_with_receipt(self) -> None:
         branch = "agent/reused"
+        assignment_id = "assignment-reused-generation-2"
         self.git(
             "push",
             "upstream",
@@ -490,12 +621,16 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
         descendant = self.commit("two\n", "accepted continuation")
         self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
         mirror = self.provider.ensure_mirror("primary")
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
 
         publication_ref = self.provider.ensure_local_branch_publication(
             mirror,
             branch,
             selected_head=descendant,
-            publication_id="lease-generation-2",
+            publication_id=publication_id,
+            assignment_id=assignment_id,
             policy="resume",
             source_commit=descendant,
             expected_branch_head=None,
@@ -533,7 +668,8 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
                 mirror,
                 branch,
                 selected_head=descendant,
-                publication_id="lease-generation-2",
+                publication_id=publication_id,
+                assignment_id=assignment_id,
                 policy="resume",
                 source_commit=descendant,
                 expected_branch_head=None,
@@ -558,6 +694,10 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
         )
         mirror = self.provider.ensure_mirror("primary")
         branch = "agent/diverged-publication"
+        assignment_id = "assignment-diverged-generation-2"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
         self.git(
             "--git-dir",
             str(mirror.mirror_path),
@@ -571,7 +711,8 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
                 mirror,
                 branch,
                 selected_head=descendant,
-                publication_id="lease-diverged-generation-2",
+                publication_id=publication_id,
+                assignment_id=assignment_id,
                 policy="resume",
                 source_commit=descendant,
                 expected_branch_head=None,
@@ -587,6 +728,477 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
             ),
             unrelated,
         )
+
+    def test_publication_retry_completes_after_branch_write_without_receipt(
+        self,
+    ) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/publication-retry"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-publication-retry"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        original_run = self.provider.runner.run
+        injected = False
+
+        def fail_after_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            nonlocal injected
+            result = original_run(arguments, **kwargs)
+            if not injected and self.update_ref_mentions(arguments, kwargs, branch_ref):
+                injected = True
+                raise SimulatedPublicationCrash(
+                    "injected crash after branch write and before receipt"
+                )
+            return result
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_after_branch):
+            with self.assertRaises(SimulatedPublicationCrash):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=publication_id,
+                    assignment_id=assignment_id,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        self.assertTrue(injected)
+        intent_object = self.provider._read_ref(mirror, intent_ref)
+        self.assertIsNotNone(intent_object)
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+        replay_ref = self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=self.source_commit,
+            publication_id=publication_id,
+            assignment_id=assignment_id,
+            policy="create",
+            source_commit=self.source_commit,
+            expected_branch_head=None,
+        )
+
+        self.assertEqual(replay_ref, receipt_ref)
+        self.assertEqual(self.provider._read_ref(mirror, intent_ref), intent_object)
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, receipt_ref), self.source_commit
+        )
+
+    def test_publication_retry_reclaims_only_matching_receipt_lock(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/publication-lock-retry"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-publication-lock-retry"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        original_run = self.provider.runner.run
+
+        def fail_after_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            result = original_run(arguments, **kwargs)
+            if self.update_ref_mentions(arguments, kwargs, branch_ref):
+                raise SimulatedPublicationCrash("injected crash after branch write")
+            return result
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_after_branch):
+            with self.assertRaises(SimulatedPublicationCrash):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=publication_id,
+                    assignment_id=assignment_id,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        self.assertIsNotNone(self.provider._read_ref(mirror, intent_ref))
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+        receipt_lock = mirror.mirror_path / f"{receipt_ref}.lock"
+        receipt_lock.parent.mkdir(parents=True, exist_ok=True)
+        receipt_lock.write_bytes(f"{self.source_commit}\n".encode("ascii"))
+        unrelated_lock = (
+            mirror.mirror_path
+            / "refs/nginx-qa/publications"
+            / f"{'f' * 64}.lock"
+        )
+        unrelated_lock.write_bytes(b"unrelated lock must survive")
+
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            ),
+            receipt_ref,
+        )
+        self.assertFalse(receipt_lock.exists())
+        self.assertEqual(unrelated_lock.read_bytes(), b"unrelated lock must survive")
+        self.assertEqual(
+            self.provider._read_ref(mirror, receipt_ref), self.source_commit
+        )
+
+    def test_publication_retry_rejects_mismatched_receipt_lock_unchanged(
+        self,
+    ) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/publication-mismatched-receipt-lock"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-publication-mismatched-receipt-lock"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        original_run = self.provider.runner.run
+
+        def fail_after_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            result = original_run(arguments, **kwargs)
+            if self.update_ref_mentions(arguments, kwargs, branch_ref):
+                raise SimulatedPublicationCrash("injected crash after branch write")
+            return result
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_after_branch):
+            with self.assertRaises(SimulatedPublicationCrash):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=publication_id,
+                    assignment_id=assignment_id,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        intent_object = self.provider._read_ref(mirror, intent_ref)
+        self.assertIsNotNone(intent_object)
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+        different_valid_oid = self.commit(
+            "different receipt lock owner\n", "different receipt lock owner"
+        )
+        self.assertNotEqual(different_valid_oid, self.source_commit)
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "fetch",
+            str(self.source),
+            different_valid_oid,
+        )
+        receipt_lock = mirror.mirror_path / f"{receipt_ref}.lock"
+        receipt_lock.parent.mkdir(parents=True, exist_ok=True)
+        lock_contents = f"{different_valid_oid}\n".encode("ascii")
+        receipt_lock.write_bytes(lock_contents)
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertTrue(receipt_lock.is_file())
+        self.assertEqual(receipt_lock.read_bytes(), lock_contents)
+        self.assertEqual(self.provider._read_ref(mirror, intent_ref), intent_object)
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+    def test_same_sha_branch_without_publication_intent_fails_closed(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/unowned-same-sha"
+        assignment_id = "assignment-unowned-same-sha"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            f"refs/heads/{branch}",
+            self.source_commit,
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_ALREADY_EXISTS")
+        self.assertIsNone(self.provider._read_ref(mirror, intent_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+    def test_publication_intent_from_another_assignment_fails_closed(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/mismatched-intent"
+        branch_ref = f"refs/heads/{branch}"
+        first_assignment = "assignment-intent-owner"
+        first_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, first_assignment
+        )
+        first_intent_ref, _ = self.publication_refs(mirror, first_publication_id)
+        second_assignment = "assignment-intent-impostor"
+        second_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, second_assignment
+        )
+        second_intent_ref, second_receipt_ref = self.publication_refs(
+            mirror, second_publication_id
+        )
+        original_run = self.provider.runner.run
+
+        def fail_before_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            if self.update_ref_mentions(arguments, kwargs, branch_ref):
+                raise ManagedGitError(
+                    "GIT_COMMAND_TIMEOUT", "injected failure before branch write"
+                )
+            return original_run(arguments, **kwargs)
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_before_branch):
+            with self.assertRaises(ManagedGitError):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=first_publication_id,
+                    assignment_id=first_assignment,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        intent_object = self.provider._read_ref(mirror, first_intent_ref)
+        self.assertIsNotNone(intent_object)
+        self.assertIsNone(self.provider._read_ref(mirror, branch_ref))
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            second_intent_ref,
+            str(intent_object),
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=second_publication_id,
+                assignment_id=second_assignment,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertIsNone(self.provider._read_ref(mirror, branch_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, second_receipt_ref))
+
+    def test_publication_intent_without_branch_resumes(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/intent-only-retry"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-intent-only-retry"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        original_run = self.provider.runner.run
+
+        def fail_before_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            if self.update_ref_mentions(arguments, kwargs, branch_ref):
+                raise ManagedGitError(
+                    "GIT_COMMAND_TIMEOUT", "injected failure before branch write"
+                )
+            return original_run(arguments, **kwargs)
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_before_branch):
+            with self.assertRaises(ManagedGitError):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=publication_id,
+                    assignment_id=assignment_id,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        self.assertIsNotNone(self.provider._read_ref(mirror, intent_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, branch_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            ),
+            receipt_ref,
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, receipt_ref), self.source_commit
+        )
+
+    def test_publication_intent_retry_reclaims_matching_branch_lock(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/intent-branch-lock-retry"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-intent-branch-lock-retry"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        original_run = self.provider.runner.run
+
+        def fail_before_branch(arguments, **kwargs):  # type: ignore[no-untyped-def]
+            if self.update_ref_mentions(arguments, kwargs, branch_ref):
+                raise ManagedGitError(
+                    "GIT_COMMAND_TIMEOUT", "injected failure before branch write"
+                )
+            return original_run(arguments, **kwargs)
+
+        with patch.object(self.provider.runner, "run", side_effect=fail_before_branch):
+            with self.assertRaises(ManagedGitError):
+                self.provider.ensure_local_branch_publication(
+                    mirror,
+                    branch,
+                    selected_head=self.source_commit,
+                    publication_id=publication_id,
+                    assignment_id=assignment_id,
+                    policy="create",
+                    source_commit=self.source_commit,
+                    expected_branch_head=None,
+                )
+        intent_object = self.provider._read_ref(mirror, intent_ref)
+        self.assertIsNotNone(intent_object)
+        self.assertIsNone(self.provider._read_ref(mirror, branch_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+
+        branch_lock = mirror.mirror_path / f"{branch_ref}.lock"
+        branch_lock.parent.mkdir(parents=True, exist_ok=True)
+        branch_lock.write_bytes(f"{self.source_commit}\n".encode("ascii"))
+
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            ),
+            receipt_ref,
+        )
+        self.assertFalse(branch_lock.exists())
+        self.assertEqual(self.provider._read_ref(mirror, intent_ref), intent_object)
+        self.assertEqual(
+            self.provider._read_ref(mirror, branch_ref), self.source_commit
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, receipt_ref), self.source_commit
+        )
+
+    def test_legacy_publication_receipt_replay_accepts_descendant_branch(self) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/publication-descendant-replay"
+        branch_ref = f"refs/heads/{branch}"
+        assignment_id = "assignment-publication-descendant-replay"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            branch_ref,
+            self.source_commit,
+        )
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            receipt_ref,
+            self.source_commit,
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, intent_ref))
+        descendant = self.commit("two\n", "publication descendant")
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "fetch",
+            str(self.source),
+            descendant,
+        )
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            branch_ref,
+            descendant,
+            self.source_commit,
+        )
+
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="create",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            ),
+            receipt_ref,
+        )
+        self.assertIsNone(self.provider._read_ref(mirror, intent_ref))
+        self.assertEqual(self.provider._read_ref(mirror, branch_ref), descendant)
 
     def test_create_rejects_an_existing_remote_branch(self) -> None:
         self.git(

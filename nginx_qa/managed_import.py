@@ -6948,6 +6948,7 @@ class TransactionalSprintImporter:
                     str(raw_lease["branch"]),
                     selected_head=str(raw_lease["initial_head_commit"]),
                     publication_id=str(raw_lease["lease_id"]),
+                    assignment_id=str(raw_lease["assignment_id"]),
                     policy=str(git_policy["existing_branch_policy"]),
                     source_commit=str(raw_lease["source_commit"]),
                     expected_branch_head=(

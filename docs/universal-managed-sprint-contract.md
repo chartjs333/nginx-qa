@@ -1428,13 +1428,28 @@ VALIDATE -> PREPARE -> ACTIVATE
   never makes a still-live durable endpoint available to another service
   instance.
 
-Service-owned branch refs are published only after the SQLite commit. The
-branch and an immutable `refs/nginx-qa/publications/*` receipt are created in
-one Git ref transaction. Without that receipt, recovery accepts only the exact
-frozen initial head and rechecks the frozen existing-branch policy; with the
-receipt, later compare-and-swap worker advances are legitimate. Startup
-reconciles missing receipts/refs, so completion never depends on the client
+Service-owned branch refs are published only after the SQLite commit. Before
+mutating a branch, the service writes an immutable, lease- and
+assignment-bound `refs/nginx-qa/intents/*` record containing the
+exact local and remote predecessor observations. It then compare-and-swap
+publishes the branch and creates the corresponding immutable
+`refs/nginx-qa/publications/*` completion receipt as separate ref operations.
+Only a matching intent may recover a branch that is visible without its
+receipt; a same-SHA branch without that intent still fails the frozen
+existing-branch policy. Exact provenance-bound stale locks may be reclaimed,
+but arbitrary Git lock files are never removed. With a completion receipt,
+later compare-and-swap worker advances are legitimate. Startup reconciles
+intent-backed missing receipts/refs, so completion never depends on the client
 retrying the original idempotency key.
+
+The managed bare mirror is a service-owned single-writer boundary. Unmanaged
+Git processes must not mutate it. Stale-lock reconciliation runs only while the
+service holds that mirror's mutation lock and only for the exact intent-bound
+ref and object ID; this rule is not a general Git lock cleanup facility.
+
+An ambiguous branch-only state created by an older build has no intent and
+continues to fail closed; upgrading does not infer provenance from a matching
+commit alone. Such legacy evidence requires an explicit operator recovery.
 
 A durable sprint record whose status is `preparing` has `workflow=null` and no
 assignments, reviews, integrations, integration workspaces, leases, processes,

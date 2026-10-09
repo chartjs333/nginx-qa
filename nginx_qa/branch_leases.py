@@ -5,7 +5,6 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import hashlib
 import os
 from pathlib import Path
 import re
@@ -13,7 +12,7 @@ import sqlite3
 import threading
 from typing import Callable
 
-from .git_provider import ManagedFileLock
+from .git_provider import ManagedFileLock, deterministic_branch_publication_id
 from .sprint_types import git_ref_format_valid, mirror_storage_key
 
 
@@ -76,10 +75,7 @@ class BranchLease:
 def deterministic_branch_lease_id(
     mirror_key: str, branch: str, assignment_id: str
 ) -> str:
-    digest = hashlib.sha256(
-        f"{mirror_key}\0{branch.casefold()}\0{assignment_id}".encode("utf-8")
-    ).hexdigest()
-    return f"branch-lease-{digest}"
+    return deterministic_branch_publication_id(mirror_key, branch, assignment_id)
 
 
 def select_initial_head(
