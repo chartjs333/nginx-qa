@@ -2494,6 +2494,201 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(recovered["assignments"][1]["status"], "active")
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
 
+    def test_terminal_after_failed_continue_node_source_is_idempotent(
+        self,
+    ) -> None:
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        definition = state["graph_revisions"][0]["definition"]
+        definition["execution"]["start_node"] = "merge-plan"
+        definition["nodes"][0]["id"] = "merge-plan"
+        definition["nodes"][0]["tasks"][0].update(
+            {"task_id": "IE2E-007", "message": "Produce final merge plan"}
+        )
+        definition["nodes"][1]["transitions"]["RESUME"] = "merge-plan"
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+        previous_occurrence_id = state["assignments"][0]["occurrence_id"]
+        occurrence_id = managed_occurrence_id(
+            SPRINT_ID, 1, "merge-plan", 1, []
+        )
+        state["workflow"]["entry_node_ids"] = ["merge-plan"]
+        state["workflow"]["entry_occurrence_ids"] = [occurrence_id]
+        occurrence = state["workflow"]["occurrences"][0]
+        occurrence.update(
+            {"occurrence_id": occurrence_id, "node_id": "merge-plan"}
+        )
+        assignment = state["assignments"][0]
+        assignment.update(
+            {"occurrence_id": occurrence_id, "node_id": "merge-plan"}
+        )
+        workspace = state["workspaces"][0]
+        workspace["node_id"] = "merge-plan"
+        for path_field in (
+            "expected_root",
+            "actual_git_toplevel",
+            "actual_git_dir",
+        ):
+            workspace[path_field] = workspace[path_field].replace(
+                "/nodes/build/", "/nodes/merge-plan/"
+            )
+        state["outbox"][0]["payload"]["node_id"] = "merge-plan"
+        self.assertNotEqual(previous_occurrence_id, occurrence_id)
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+
+        class DirtyVerification:
+            def __enter__(self):
+                raise ManagedContinuityError(
+                    "WORKSPACE_DIRTY", 409, "result-verification"
+                )
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        self.runtime.result_verifier = lambda *_args: DirtyVerification()
+        with self.assertRaises(ManagedContinuityError) as caught:
+            self.submit_result()
+        self.assertEqual(caught.exception.code, "WORKSPACE_DIRTY")
+        self.runtime.result_verifier = lambda *_args: nullcontext()
+
+        staged = self.store.runtime_state("project-id", SPRINT_ID)
+        context = staged["coordinator_contexts"][0]
+        prepared = self.prepared_continuation(
+            staged,
+            assignment_id="assignment-dirty-terminal-continue",
+            source_commit=COMMIT,
+        )
+        provider = Mock(unsafe=True)
+        provider.ensure_mirror.return_value = object()
+        workspace_manager = Mock(unsafe=True)
+        workspace_manager.publish_write_workspace.return_value = (
+            prepared.verified_workspace
+        )
+        continue_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "continue-dirty-terminal-1",
+            "action": "CONTINUE_NODE",
+            "parameters": {"node_id": "merge-plan", "source_commit": COMMIT},
+        }
+        with (
+            patch.object(self.runtime, "_prepare_assignment", return_value=prepared),
+            patch.object(self.runtime, "_publish_prepared_assignment"),
+            patch.object(
+                self.runtime, "_recover_assignment_publications", return_value=0
+            ),
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            patch.object(
+                self.importer,
+                "_workspace_manager",
+                workspace_manager,
+            ),
+        ):
+            continued = self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(continue_request),
+                "continue-dirty-terminal",
+            )
+        self.assertEqual(continued.response["status"], "RECOVERY_COMPLETED")
+
+        result_request = self.result_request()
+        result_request["assignment_id"] = prepared.assignment["assignment_id"]
+        accepted = self.runtime.submit_if_managed(
+            "project-id",
+            str(prepared.assignment["agent_phone"]),
+            canonical_json_bytes(result_request),
+            "continued-result",
+        )
+        self.assertEqual(accepted.response["status"], "REVIEWS_PENDING")
+
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        reviews = list(pending["review_assignments"])
+        self.assertEqual(len(reviews), 2)
+        first = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[0]["reviewer_phone"],
+            canonical_json_bytes(
+                {"assignment_id": reviews[0]["assignment_id"], "status": "APPROVE"}
+            ),
+            "continued-review-first",
+        )
+        self.assertEqual(first.response["status"], "REVIEW_ACCEPTED")
+        second_request = {
+            "assignment_id": reviews[1]["assignment_id"],
+            "status": "APPROVE",
+        }
+        second = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[1]["reviewer_phone"],
+            canonical_json_bytes(second_request),
+            "continued-review-second",
+        )
+        self.assertEqual(second.response["status"], "REVIEW_ACCEPTED")
+
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        source, successor = terminal["assignments"]
+        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(source["status"], "failed")
+        self.assertEqual(successor["status"], "completed")
+        self.assertEqual(terminal["workflow"]["occurrences"][0]["state"], "completed")
+        terminal_tokens = [
+            token
+            for token in terminal["workflow"]["transition_tokens"]
+            if token["status"] == "terminal"
+        ]
+        self.assertEqual(len(terminal_tokens), 1)
+        self.assertEqual(
+            terminal["transition_journal"][0]["state"], "TRANSITION_COMMITTED"
+        )
+        self.assertEqual(terminal["active_assignment_ids"], [])
+        self.assertEqual(terminal["allowed_outcomes_by_assignment"], {})
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+        record_ids_before = {
+            "assignments": [item["assignment_id"] for item in terminal["assignments"]],
+            "reviews": [item["assignment_id"] for item in terminal["reviews"]],
+            "tokens": [
+                item["token_id"]
+                for item in terminal["workflow"]["transition_tokens"]
+            ],
+            "occurrences": [
+                item["occurrence_id"]
+                for item in terminal["workflow"]["occurrences"]
+            ],
+        }
+        replay = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[1]["reviewer_phone"],
+            canonical_json_bytes(second_request),
+            "continued-review-second-replay",
+        )
+        self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
+        self.assertTrue(replay.response["deduplicated"])
+        replayed = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(
+            record_ids_before,
+            {
+                "assignments": [
+                    item["assignment_id"] for item in replayed["assignments"]
+                ],
+                "reviews": [item["assignment_id"] for item in replayed["reviews"]],
+                "tokens": [
+                    item["token_id"]
+                    for item in replayed["workflow"]["transition_tokens"]
+                ],
+                "occurrences": [
+                    item["occurrence_id"]
+                    for item in replayed["workflow"]["occurrences"]
+                ],
+            },
+        )
+        self.assertEqual(managed_activation_invariant_issues(replayed), ())
+
     def test_invalid_block_external_does_not_stop_live_assignment_processes(
         self,
     ) -> None:
