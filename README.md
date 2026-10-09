@@ -9,6 +9,12 @@ FastAPI service for coordinating QA and development queues between project roles
 - `run.bat` - Windows launcher for port `8025`.
 - `run_8026.bat` - Windows launcher for port `8026`.
 - `prompts/` - sanitized role prompt templates.
+- `group_templates.json` - declarative agent specs, group templates, queue links, cross-group topologies, and customer reporting rules.
+- [Project Manager 0001 agent contract](prompts/project_management_client_0001.md) - resolves or creates a project by Git address and returns its assigned project phone.
+- [Declarative Groups and Development Cycles API agent contract](prompts/group_management_api.md) - creates idempotent project groups, routes tasks through declared connections, and exposes the cycle audit trail and lineage graph.
+- [Sequential sprint team JSON architect contract](prompts/architect_sequential_team_json.md) - defines the once-per-sprint team file and queue-driven identity transitions.
+- [Universal managed sprint architecture contract](docs/universal-managed-sprint-contract.md) - freezes optional `sprint_type` dispatch, provenance, schemas, migration, preflight, and activation boundaries; machine-readable v1 contracts are in `schemas/`.
+- [Inbound Pending Proposal API v1](docs/INBOUND_PROPOSAL_API_V1.md) - freezes the external proposal schema, source metadata, idempotency, authentication, correlation, error, and explicit activation boundaries over the existing Pending Sprints resource.
 - helper scripts for posting and polling queue messages.
 
 Runtime files such as queue history, agent state, email routes, screenshots,
@@ -37,6 +43,396 @@ The default app URL is:
 ```text
 http://localhost:8025
 ```
+
+## Project agents JSON import
+
+Agents and their initial task lists can be imported for a project by its
+canonical four-digit project phone:
+
+```text
+POST /api/v1/projects/{project_phone}/agents/import
+```
+
+This direct API route, and the matching JSON upload control in the Agents tab,
+perform the import immediately. They are intentionally different from the
+Telegram workflow described below, which first saves a sprint for explicit
+confirmation.
+
+Use `agents.overwrite: true` to replace the project's existing non-group
+agents before importing. Set `agents.include_managed: true` as well only when
+group-managed agents should be removed and their active groups archived.
+Every imported task is stored with its agent. In parallel mode all tasks are
+immediately queued to their agents' phones; in sequential mode the entry node
+is queued first and later nodes are reached through graph handoffs. See
+[`examples/project_agents_import.json`](examples/project_agents_import.json).
+
+Every successful import also creates a persistent project sprint record. When
+the next JSON is imported, the previous record is archived together with its
+latest execution graph, agents, pending queues, and up to 10,000 project
+history events. The original import payload is retained as well. The first
+import after upgrading preserves any already existing project state as a
+legacy archive before creating the new current sprint. List and download these
+records with:
+
+```text
+GET /api/v1/projects/{project_phone}/sprints
+GET /api/v1/projects/{project_phone}/sprints/{sprint_id}/download
+```
+
+The Agents tab shows the same project-specific history and provides a
+`Скачать JSON` button for every current or archived sprint. Every imported
+JSON must identify its project with `project_id`/`project_phone`, an exact
+`git_context_key`, or `git_address`. Every reference found at the top level or
+inside `agents`/`actors` is validated against the project selected in the
+import URL. Missing, conflicting, or foreign-project references are rejected
+before `overwrite` can change agents or queues. A repository shared by several
+project contexts additionally requires the exact project phone or
+`git_context_key`.
+
+Downloaded archives also contain `code_history`. It follows the UI's
+`Скопировать сообщения + патчи` semantics: messages stay in chronological
+order, a Git patch is inserted before the first message with a changed commit,
+and the same commit transition is never repeated. Unavailable patches are kept
+in the timeline with their error reason instead of failing the sprint import.
+
+Pending queue items and scheduled messages are durable. Every queue mutation is
+written atomically under `runtime_state/queues/`, and delayed/PASS-triggered
+messages are stored in `runtime_state/scheduled_tasks.json`. The service restores
+both before accepting work after startup. A failed disk write rolls the in-memory
+queue mutation back, and invalid runtime-state JSON fails startup instead of
+silently discarding tasks. Queue records retain `git_context_key`, so restored
+messages remain isolated between Git projects.
+
+Each item may set `git_branch`, for example `agent/backend-developer`. When it
+is omitted, the server creates a stable `agent/<agent-id>` branch name. The
+branch is stored both as `agent.git_branch` and in `agent.parameters.git_branch`.
+
+At import time the server appends a generated communication section to every
+imported profile. It contains the agent's own phone and branch, all three
+receive/send endpoints, a ready JSON message body, and the names, phones, IDs,
+and branches of the other imported project agents. Re-importing replaces this
+generated section instead of duplicating it. An agent can retrieve its current
+complete card with:
+
+```text
+GET /api/v1/projects/{project_phone}/agents/{agent_phone}
+```
+
+### Dynamic identity and presence
+
+At startup an agent can ask who it is and mark itself alive:
+
+```text
+POST /api/v1/projects/{project_phone}/agents/{agent_phone}/whoami
+Content-Type: application/json
+
+{"message":"Кто я?"}
+```
+
+The response contains the current agent card and profile, assigned Git branch,
+all stored tasks, the project agent directory, and the complete matching work
+history since the agent was created. It also includes counts by direction and
+event type. The heartbeat stores `first_seen_at`, `last_seen_at`, `alive_until`,
+and `heartbeat_count` while keeping the operational agent status unchanged.
+
+Agents should repeat the heartbeat every five minutes. Presence remains
+`alive` for 15 minutes after the most recent heartbeat and is then reported as
+`offline` until the agent checks in again. The generated communication section
+in every imported profile includes this endpoint and instruction.
+
+If an agent has not sent an outgoing progress/result message for at least one
+hour, its next resolved `whoami` response includes `communication_reminder`
+and appends a reminder to `answer`. Identity heartbeats themselves do not reset
+this timer. The common sequential `/api/v1/agents/whoami` repository flow uses
+the same rule after it has resolved the current agent.
+
+For a strictly non-parallel project, set this inside the `agents` object:
+
+```json
+"assignment_mode": "sequential"
+```
+
+This is a queue-driven graph, not a permanent assignment of several executors.
+The first item in `agents.items` is only the entry node. The single executor
+starts discovery at the common URL:
+
+```text
+GET or POST /api/v1/agents/whoami
+```
+
+The response asks for the Git repository and supplies an absolute `reply_url`.
+Send the answer to that URL:
+
+```json
+{"git_address":"https://github.com/owner/repository.git"}
+```
+
+The service takes the oldest project item from `worker-all`, `tester-all`, or
+`consultant-all`. The item's `to_agent_id` or `to_phone` selects the current
+agent. The response contains `agent`, `profile`, `git_branch`, `active_task`,
+`team`, `communication`, and `graph_position`. The executor therefore becomes
+the addressed agent only for this graph node. A successful response also sets
+`execution_authorized: true` and `requires_additional_confirmation: false`:
+show the requested identity summary and start immediately without pausing for
+another approval.
+
+The same response includes the complete `project_state`. Its
+`activity_with_patches` array follows the UI's `Скопировать сообщения + патчи`
+ordering: a `patch` entry is inserted immediately before the first `activity`
+entry whose commit differs from the previous known commit, and the same commit
+transition is emitted only once. `code_patches` contains the patch entries on
+their own and `code_patch_summary` reports available and unavailable patch
+counts. `history_with_patches.text` contains the same copy-ready text as the UI.
+Patch lookup errors are returned as `status: "unavailable"` and do not prevent
+the agent from receiving its task. The state endpoint accepts `history_limit`
+when a larger history window is needed.
+
+The repository reply is idempotent while that node remains active. Repeating
+the request before a handoff returns the same identity and `active_task` with
+`identity_reused: true`; it does not consume another queue item. Deployments
+from older versions can recover the active task from project history and set
+`active_task_recovered_from_history: true`.
+
+After the current assignment result is accepted, start identity discovery again
+with `GET` or `POST /api/v1/agents/whoami`, then send the Git address to the new
+`reply_url`. Do this for every graph transition, including both reviewer steps;
+do not reuse an old `reply_url` or switch roles directly. The response and queue
+item expose `identity_request_required`/`next_identity_request` so an executor
+can follow this contract mechanically. The next queue item can select any role,
+including a previous one, so cycles and conditional graph paths are supported.
+JSON order does not control later transitions.
+
+The `Промпт запуска` UI tab stores the complete UTF-8 launch request and full
+diagnostic identity/transition archives on local disk. The default archive
+directory is `D:\Prompt\{repository}`. In addition, every agent gets a stable
+compact latest-response file named
+`D:\Prompt\{repository}_{agent_phone}-latest.prompt`; both templates can be
+changed on that tab. The compact HTTP response and per-agent file keep the full
+`active_task.message` and required control fields while intentionally omitting
+duplicated metadata and the large `project_state`. Current state remains
+available through `project_state_url`.
+Configured paths must be absolute local paths; UNC/device paths and `..`
+segments are rejected, and the per-agent filename must retain `{agent_phone}`
+and the `.prompt` suffix.
+
+An architect can also declare the complete graph with top-level `execution`
+and `nodes`; see
+[`examples/project_sequential_graph_import.json`](examples/project_sequential_graph_import.json).
+Every declared transition is checked by the two reviewers from
+`execution.reviewers`. With `execution.initialize_reviewers: true`, the common
+identity queue first returns both persistent reviewer cards and then the graph
+entry node. Omit the flag (or set it to `false`) to start directly from the
+entry node and activate reviewers only when a transition needs approval.
+
+### Sequential graph with two transition reviewers
+
+For a declared conditional graph use `execution` and `nodes` instead of
+`agents.items`. See
+[`examples/project_sequential_graph_import.json`](examples/project_sequential_graph_import.json).
+`agents.overwrite: true` still controls replacement of the project's existing
+agents.
+
+`execution.reviewers` must contain exactly two different reviewers. Both are
+created during import with normal agent cards, project Git context, the complete
+team directory, and a profile containing the full graph. The live, restart-safe
+project snapshot is also available to them at:
+
+```text
+GET /api/v1/projects/{project_phone}/state.json
+```
+
+The same logical worker may own several graph nodes. Give every node a unique
+`agent.id` and `git_branch`, but repeat the worker's `name` and four-digit
+`phone`. The importer preserves that logical identity in workflow metadata and
+creates unique internal role names and phones, so every node keeps its own task
+list, branch, endpoint, and work history. Reviewers must still be two distinct
+agents and cannot use this reuse rule.
+
+When a graph-node agent submits an outcome, the requested transition does not
+happen immediately. The common identity queue first returns reviewer 1 and then
+reviewer 2. Both must independently send `APPROVE`. A single `REJECT` cancels
+the proposed transition and returns the source node for rework with the review
+feedback. This gate also applies to transitions into terminal nodes.
+
+Every sequential identity and transition produces a compact HTTP response and
+matching per-agent `.prompt`, plus a full diagnostic UTF-8 JSON archive. The
+response starts with `latest_agent_prompt_file_path` for the caller's stable
+compact file, `response_file_path` for the full exact-step archive, and
+`latest_response_file_path` for the full project-wide latest step. The compact
+payload is marked with `response_compact=true`; absence of `project_state` is
+intentional and must not be reported as truncation. A transition result is
+written under the phone from the request URL, not under the phone of the next
+reviewer returned in the response. The per-agent file is attempted before
+either archive target, so an archive failure does not remove the primary
+recovery copy.
+
+Submit a node result to the `whoami_endpoint` from the active queue item:
+
+```json
+{
+  "assignment_id": "value-from-active-task-metadata",
+  "status": "DONE",
+  "result": "Implementation and verification evidence",
+  "from_commit": "commit checked out when work started",
+  "git_commit": "commit containing the completed work",
+  "git_branch": "agent/backend-developer"
+}
+```
+
+The allowed status values are the keys from that node's `transitions`, for
+example `DONE`, `PASS`, or `FAIL`. When the two commit hashes are supplied, the
+service inserts their Git diff into the stored transition context and into the
+task sent to both reviewers. The branch is stored with both history records and
+shown next to the commit in copied history and patch headers. A diff itself only
+requires the two commit hashes; the branch records provenance and helps locate
+commits that have not been pushed. For a repository configured as a local path,
+the final HEAD and branch can be detected automatically. Supplying all three
+fields is recommended for a remote repository. Each reviewer uses the same
+endpoint shape:
+
+That optional/detected behavior describes the existing legacy sequential
+engine. Managed-workspace assignments require the commit/branch members and
+apply the stricter ancestry/HEAD rules in the
+[managed sprint architecture contract](docs/universal-managed-sprint-contract.md#45-durable-assignment-result-and-review).
+
+```json
+{
+  "assignment_id": "value-from-active-task-metadata",
+  "status": "APPROVE",
+  "feedback": "Transition checked"
+}
+```
+
+The other decision is `REJECT`; it requires non-empty `feedback` so the source
+agent receives an actionable rework instruction. A confirmed backward/`FAIL`
+transition increments `rework_cycle_count`. When `max_rework_cycles` is
+exceeded, the run ends with status `blocked` instead of looping forever.
+
+All project agents and their pending phone-addressed tasks can be removed with:
+
+```text
+DELETE /api/v1/projects/{project_phone}/agents?include_managed=true
+```
+
+The previous `/actors` routes and `actors` JSON key remain accepted for
+backward compatibility. The UI exposes both operations in the Agents tab.
+
+### Telegram webhook
+
+There are two fixed Telegram import URLs. The URL determines the execution
+model; an `assignment_mode` value inside the JSON cannot switch it.
+
+Sequential graph traversal with one executor that changes identity at each
+node after the pending sprint is started:
+
+```text
+POST /api/v1/telegram/agents/sequential
+```
+
+Uploading JSON to this endpoint does not immediately replace agents or enqueue
+the first graph node. The service first stores it as a pending sprint. After a
+user starts that sprint in the UI, use the common `/api/v1/agents/whoami` flow
+above to receive the first node together with the resolved identity and team
+JSON. The legacy shared queue URL
+`/worker/all/{project_phone}?to_phone={project_phone}` remains available for a
+low-level client, but it does not enrich arbitrary handoffs with the full agent
+card.
+
+Parallel execution with permanent roles and no identity switching:
+
+```text
+POST /api/v1/telegram/agents/parallel
+```
+
+After the pending sprint is started, all agents' tasks are queued to their own
+phones. The legacy `/api/v1/telegram/agents` and
+`/api/v1/telegram/actors` endpoints remain parallel aliases for compatibility;
+they also stage the received sprint instead of activating it immediately.
+JSON that defines a sequential graph must be sent to the sequential endpoint;
+the parallel endpoint rejects it instead of silently changing execution mode.
+
+Send the same JSON either as message text or as a `.json` document. The JSON
+should include `git_address`; the service finds the already registered project
+and its internal project phone automatically. If several registered project
+contexts use the same repository, also include the exact `git_context_key`
+returned by Project Manager 0001. The legacy `project_id`/`project_phone`
+fields remain accepted when no Git reference is supplied. Unknown repositories
+are rejected and are not created by the Telegram import.
+
+A valid Telegram JSON is written durably to `pending_project_sprints.json`
+without changing the project's agents or queues. The bot replies with a public
+deep-link to the **Pending sprints** (`Ожидающие спринты`) tab. That tab shows
+only records for the currently selected project. Press **Start** (`Запустить`)
+to perform the real agent import and enqueue its work; until
+that confirmation, agents cannot receive anything from the uploaded sprint.
+The public link contains a random project-scoped `pending_token`. Remote list,
+detail, and start requests must send it in the `X-Pending-Sprints-Token`
+header; localhost access remains available without the token. Treat the link
+as an administrative access link and do not forward it to untrusted users.
+Pending records can also be inspected and started through:
+
+```text
+GET  /api/v1/projects/{project_phone}/pending-sprints
+GET  /api/v1/projects/{project_phone}/pending-sprints/{pending_sprint_id}
+POST /api/v1/projects/{project_phone}/pending-sprints/{pending_sprint_id}/start
+```
+
+The pending store is partitioned by the project's exact `git_context_key`, so
+sprints from another selected project are neither listed nor startable through
+the current project. Re-delivery of the same Telegram update reuses its existing
+pending record rather than creating a second sprint. The repository identity is
+also fixed when the sprint is received; if that project's Git repository later
+changes, the old pending sprint is rejected and must be sent again. Only one
+sprint per project may be activating at a time. If a process stops during
+activation, the UI offers an explicit retry after the 15-minute activation
+lease expires.
+
+The programmer can therefore send a file shaped like
+[`examples/project_agents_import.json`](examples/project_agents_import.json)
+without knowing the project's internal phone. Copy `.env.example` to `.env`
+and configure the local file; `.env` is intentionally ignored by Git.
+
+- `TELEGRAM_BOT_TOKEN` downloads documents and sends import confirmations.
+- `TELEGRAM_WEBHOOK_SECRET` protects the webhook request header.
+- `TELEGRAM_WEBHOOK_URL` is one of the two public HTTPS URLs above. A Telegram
+  bot can have only one active webhook, so choose one mode per bot; use a second
+  bot when both modes must be active simultaneously.
+- `TELEGRAM_WEBHOOK_AUTO_REGISTER=1` makes `run.bat` call `setWebhook` before
+  starting the application.
+- `TELEGRAM_DROP_PENDING_UPDATES=1` discards old pending messages during
+  webhook registration; leave it disabled unless that is intentional.
+- `TELEGRAM_ALLOWED_CHAT_IDS` and `TELEGRAM_ALLOWED_USER_IDS` are optional
+  comma-separated allowlists. Configure at least one for a bot that can mutate
+  project data.
+- `TELEGRAM_HISTORY_CHAT_ID` is the channel/group/chat that receives history
+  copies when the project checkbox in the Agents tab is enabled. The setting is
+  stored per project and exact `git_context_key`, so projects do not share it.
+- `TELEGRAM_HISTORY_MESSAGE_THREAD_ID` optionally directs those copies to one
+  forum topic. The bot must be allowed to post to the selected destination.
+
+`run.bat` and `run_8026.bat` load `.env` without printing its values. Never put
+a real bot token directly in either tracked launcher. If a token has appeared
+in chat or Git history, revoke it with BotFather before saving its replacement
+in `.env`.
+
+`run.bat` also monitors the FastAPI process. A non-zero exit is printed, appended
+to `runtime_state/server-monitor.log`, and restarted after five seconds. Set
+`NGINX_QA_AUTO_RESTART=0` to stop after an error, or override
+`NGINX_QA_RESTART_DELAY_SECONDS` and `NGINX_QA_RUNTIME_LOG` in `.env`.
+
+For local Telegram testing, set `CLOUDFLARED_QUICK_TUNNEL=1` in `.env`.
+`run.bat` then installs `cloudflared` through `winget` when necessary, starts a
+temporary `trycloudflare.com` tunnel, registers the generated sequential webhook,
+and stops the managed tunnel when the server exits. The launcher waits for the
+new hostname to appear in public DNS and retries Telegram registration for up to
+`TELEGRAM_WEBHOOK_REGISTER_RETRY_SECONDS` (120 seconds by default). Set
+`TELEGRAM_WEBHOOK_MODE=parallel` only when parallel dispatch is intended. A real
+public deployment should set `CLOUDFLARED_QUICK_TUNNEL=0` and use a stable HTTPS
+address in `TELEGRAM_WEBHOOK_URL`.
+
+Run one application process per runtime directory. `run_8026.bat` is an
+alternative port launcher, not a second concurrent worker for the same local
+queue state.
 
 ## Notes
 

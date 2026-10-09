@@ -1,0 +1,344 @@
+{
+  "schema_version": 1,
+  "kind": "pr11_publication_intent_recovery_qualification",
+  "recorded_at": "2026-10-09T17:27:06+02:00",
+  "review_finding": {
+    "disposition": "CONFIRMED_AND_FIXED",
+    "affected_function": "nginx_qa.git_provider.ManagedGitProvider.ensure_local_branch_publication",
+    "finding": "A multi-ref Git transaction can leave the managed branch visible while the publication receipt is absent; the former create/reject_if_exists replay guard then rejected the service's own partial publication as BRANCH_ALREADY_EXISTS.",
+    "git_documentation": "https://git-scm.com/docs/git-update-ref",
+    "operator_supplied_evidence": {
+      "reproducer_sha256": "11b4576beddc6a68274a86789496ce1db754319ea0957dddeba80d764201b258",
+      "results_sha256": "019be3dc63c67c78bf2131fa20901b7f1ba1e2e1967a410c252e9fceaf8df3ba",
+      "git_version": "2.47.3",
+      "scope": "standalone isolated bare-repository Git mechanism test",
+      "observed_faults": [
+        {
+          "fault": "receipt rename EIO",
+          "git_exit_code": 128,
+          "branch_present": true,
+          "receipt_present": false,
+          "former_replay_result": "BRANCH_ALREADY_EXISTS"
+        },
+        {
+          "fault": "receipt rename process exit",
+          "git_exit_code": 99,
+          "branch_present": true,
+          "receipt_present": false,
+          "former_replay_result": "BRANCH_ALREADY_EXISTS"
+        }
+      ]
+    }
+  },
+  "candidate_provenance": {
+    "repository": "https://github.com/chartjs333/nginx-qa.git",
+    "pull_request": 11,
+    "branch": "codex/premerge-inbound-hub-e2e-final-candidate-20261009-v1",
+    "previous_pr_head": "5bfe4053a941912807b1863765ed59ae40236af3",
+    "exact_tested_code_commit": "3d4a05901056a1d47f2287f2bb2f66807624a7aa",
+    "exact_tested_tree": "71b3381617bd9aa981da95b348ea8150646468fc",
+    "tested_commit_parent": "5bfe4053a941912807b1863765ed59ae40236af3",
+    "pinned_main": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "accepted_completed_sprint_result": "3c479521292ccc184bea289d5105164c5ff19912",
+    "managed_sprint": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "python_version": "3.12.1",
+    "windows_git_version": "2.49.0.windows.1",
+    "worktree_clean_before": true,
+    "diff_check_passed": true,
+    "compileall_passed": true,
+    "git_fsck_strict_passed": true
+  },
+  "ancestry": {
+    "history_rewritten": false,
+    "previous_pr_head_is_ancestor": true,
+    "accepted_completed_sprint_result_is_ancestor": true,
+    "runtime_fixes_are_ancestors": [
+      "bb5095ab76cef6c8921d69a45dbc066b01187798",
+      "9fe9d3b2e11ba35491df180f702474ade21c4cab",
+      "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd",
+      "49395c6a584d014f569a7df8b42226a2601d886c"
+    ]
+  },
+  "fix": {
+    "commit": "3d4a05901056a1d47f2287f2bb2f66807624a7aa",
+    "subject": "fix: recover partial managed branch publication",
+    "files_changed": 6,
+    "insertions": 1124,
+    "deletions": 86,
+    "paths": [
+      "docs/universal-managed-sprint-contract.md",
+      "nginx_qa/branch_leases.py",
+      "nginx_qa/git_provider.py",
+      "nginx_qa/managed_continuity.py",
+      "nginx_qa/managed_import.py",
+      "tests/test_managed_workspaces.py"
+    ],
+    "protocol": [
+      "Derive publication identity from mirror key, case-folded branch, and assignment ID; reject mismatched publication/lease identity.",
+      "Commit a canonical immutable Git-blob intent ref before mutating the branch.",
+      "Bind the intent to repository, mirror, branch, assignment, publication ID, source/selected commits, frozen policy, expected head, and observed local/remote predecessors.",
+      "CAS-publish the branch, then CAS-create the completion receipt as separate ref operations.",
+      "Allow branch-only recovery only when the exact durable intent matches; same-SHA without intent remains BRANCH_ALREADY_EXISTS.",
+      "Reclaim only an exact intent-bound lock with the exact expected object ID while holding the service-owned mirror mutation lock.",
+      "Retain compatibility with successful legacy receipts that predate intent records.",
+      "Leave ambiguous legacy branch-only states fail-closed for explicit operator recovery."
+    ],
+    "ownership_boundary": "The managed bare mirror is documented as service-owned and single-writer; unmanaged Git mutation is unsupported.",
+    "runtime_state_migration": false,
+    "sqlite_or_runtime_json_edit": false
+  },
+  "qualification_runs": [
+    {
+      "name": "existing_four_runtime_fix_focused_regressions",
+      "command_summary": "12 exact unittest selectors retained from the prior four-runtime-fix qualification",
+      "runner": "python -m unittest -v",
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 98.195,
+      "wall_seconds": 100.861,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "publication_intent_recovery_focused_regressions",
+      "command_summary": "10 exact ManagedRepositoryAndWorkspaceTests selectors added by the publication-intent fix",
+      "runner": "python -m unittest -v",
+      "tests": 10,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 60.674,
+      "wall_seconds": 61.279,
+      "exit_code": 0,
+      "status": "PASS",
+      "coverage": [
+        "branch committed without receipt then exact retry",
+        "matching receipt lock recovery without removing an unrelated lock",
+        "mismatched receipt lock fail-closed and unchanged",
+        "matching branch lock recovery",
+        "same-SHA branch without intent rejection",
+        "intent copied from another assignment rejection",
+        "intent-only missing-branch recovery",
+        "legacy receipt replay after descendant worker advance",
+        "SHA-256 object format intent/receipt/replay",
+        "Windows publication-intent lock path budget"
+      ]
+    },
+    {
+      "name": "affected_and_legacy_compatibility",
+      "command": "python -m unittest tests.test_legacy_scope_control tests.test_project_actor_import tests.test_queue_persistence tests.test_groups tests.test_sequential_prompt_ui tests.test_sprint_type_contract.SprintSchemaContractTests.test_exact_schema_set_meta_validates_and_refs_resolve_offline tests.test_sprint_type_contract.SprintSchemaContractTests.test_every_public_api_schema_has_a_positive_instance -v",
+      "tests": 118,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 130.187,
+      "wall_seconds": 136.553,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "managed_continuity_import_git_scope_workspace",
+      "command": "python -m unittest tests.test_managed_continuity tests.test_managed_continuity_import_recovery tests.test_managed_continuity_merge_git tests.test_managed_import tests.test_managed_scope_secret_boundary tests.test_managed_workspaces -v",
+      "tests": 233,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 1735.464,
+      "wall_seconds": 1738.113,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "full_sprint_type_contract",
+      "command": "python -m unittest -v tests.test_sprint_type_contract",
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 7.116,
+      "wall_seconds": 7.911,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "isolated_actor_import_rerun",
+      "command": "python -m unittest tests.test_project_actor_import -v",
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 56.554,
+      "wall_seconds": 59.057,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "inbound_contract_and_proposal_api",
+      "command": "python -m unittest -v tests.test_inbound_coordinator_contract tests.test_inbound_proposal_api",
+      "tests": 43,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 10.801,
+      "wall_seconds": 16.963,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "pending_sprints_ui",
+      "command": "python -m unittest -v tests.test_pending_sprints_ui",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 0.757,
+      "wall_seconds": 2.922,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "telegram_pending_compatibility",
+      "command_summary": "16 exact ProjectActorImportTests selectors whose method names contain telegram, retained from the prior qualification",
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 3.954,
+      "wall_seconds": 6.302,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "three_used_staging_profiles",
+      "command_summary": "three exact StagingIsolationTests profile selectors used by the premerge flow",
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 3.348,
+      "wall_seconds": 3.975,
+      "exit_code": 0,
+      "status": "PASS"
+    }
+  ],
+  "actual_provider_linux_fault_validation": {
+    "status": "PASS",
+    "docker_image": "alpine:3.21",
+    "image_digest": "sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507",
+    "docker_engine": "28.0.4",
+    "git_version": "2.47.3",
+    "python_version": "3.12.15",
+    "object_format": "sha1",
+    "ref_backend": "files",
+    "subject": "actual patched ManagedGitProvider from a read-only bind mount",
+    "selected_commit": "21c4156d1f8969dffc111111d8d93da09c404ee1",
+    "fault_injection": "LD_PRELOAD intercepted rename only for refs/nginx-qa/publications receipt destinations",
+    "scenarios": [
+      {
+        "fault": "EIO",
+        "first_git_exit": 128,
+        "partial_state": "exact intent and branch present; receipt absent",
+        "fresh_provider_retry": "receipt completed at selected commit"
+      },
+      {
+        "fault": "_exit(99)",
+        "first_git_exit": 99,
+        "partial_state": "exact intent and branch present; receipt absent; exact receipt lock present",
+        "fresh_provider_retry": "matching stale receipt lock reclaimed and receipt completed"
+      }
+    ],
+    "negative_controls": [
+      "unrelated publication lock survived byte-for-byte",
+      "same-SHA branch without durable intent returned BRANCH_ALREADY_EXISTS and created neither intent nor receipt"
+    ],
+    "cleanup": "ephemeral container removed and Docker restored to stopped state"
+  },
+  "qualification_counts": {
+    "required_unique_tests": 455,
+    "required_test_executions_including_reruns": 552,
+    "required_failures": 0,
+    "required_errors": 0,
+    "required_skips": 0,
+    "diagnostic_executions": 18,
+    "all_recorded_test_executions": 570
+  },
+  "staging_diagnostic": {
+    "command": "python -m unittest -v tests.test_staging_isolation",
+    "tests": 18,
+    "passed": 16,
+    "failures": 0,
+    "errors": 2,
+    "skips": 0,
+    "seconds": 27.528,
+    "wall_seconds": 28.016,
+    "exit_code": 1,
+    "status": "KNOWN_HOST_DIAGNOSTIC",
+    "error_tests": [
+      "test_environment_example_normalizes_to_the_frozen_staging_config",
+      "test_mutable_roots_are_dedicated_state_base_children"
+    ],
+    "error": "ValueError: managed path contains a filesystem alias",
+    "classification": "same disclosed generic host-alias diagnostic; the three profiles used by premerge passed 3/3 and the result is not represented as a full staging PASS"
+  },
+  "non_test_checks": {
+    "python_compileall": "PASS",
+    "git_diff_check": "PASS",
+    "git_fsck_strict": "PASS",
+    "committed_evidence_json_files_parsed_at_tested_commit": 10,
+    "evidence_json_files_parsed_including_this_carrier_before_commit": 11,
+    "diff_security_scan": {
+      "scope": "5bfe4053a941912807b1863765ed59ae40236af3..3d4a05901056a1d47f2287f2bb2f66807624a7aa",
+      "paths_scanned": 6,
+      "forbidden_path_hits": 0,
+      "high_signal_content_hits": 0,
+      "status": "PASS",
+      "scope_limit": "diff-only high-signal patterns; not a full-repository secret scan, SAST, or SCA"
+    },
+    "code_plus_evidence_precommit_security_scan": {
+      "scope": "previous PR head through the tested code and this evidence file",
+      "paths_scanned": 7,
+      "forbidden_path_hits": 0,
+      "high_signal_content_hits": 0,
+      "status": "PASS",
+      "scope_limit": "diff-only high-signal patterns; not a full-repository secret scan, SAST, or SCA"
+    }
+  },
+  "preliminary_runs_not_counted": [
+    {
+      "name": "first_full_managed_wrapper_attempt",
+      "status": "STOPPED_BEFORE_WRAPPER_TIMEOUT",
+      "reason": "The prior baseline showed this suite can exceed the original 600-second wrapper ceiling; it was restarted cleanly with a 30-minute ceiling before any buffered result was available.",
+      "counted_in_qualification": false
+    }
+  ],
+  "scope_boundaries": {
+    "live_18025_touched": false,
+    "live_18026_touched": false,
+    "merge_to_main": false,
+    "deploy": false,
+    "live_promotion": false,
+    "new_managed_sprint": false,
+    "start_from_git": false,
+    "manual_runtime_or_sqlite_edit": false
+  },
+  "limitations": [
+    "No fresh disposable managed E2E flow was started because the operator constraints prohibit a new sprint and start-from-git; historical IE2E evidence remains lineage evidence, not exact-fixed-head runtime proof.",
+    "The actual-provider fault test covers Alpine Linux, Git files refs, and receipt-rename EIO/process-exit faults; it is not a Windows crash matrix and does not claim host power-loss durability.",
+    "The stale-lock protocol relies on the documented service-owned single-writer mirror boundary.",
+    "A legacy branch-only partial publication without an intent remains intentionally fail-closed and requires explicit operator recovery.",
+    "The generic staging diagnostic remains 16/18 with two disclosed filesystem-alias errors.",
+    "Protected PR approvals and repository checks are not supplied by local qualification."
+  ],
+  "release_gate": {
+    "selected_offline_qualification": "PASS",
+    "publication_review_finding": "FIXED_AND_REGRESSION_QUALIFIED",
+    "protected_pr_approvals": 0,
+    "ci_checks": 0,
+    "recommendation": "NO_GO",
+    "merge_authorized": false,
+    "deploy_authorized": false,
+    "live_promotion": "NOT_AUTHORIZED"
+  }
+}

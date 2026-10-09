@@ -1,0 +1,385 @@
+{
+  "schema_version": 1,
+  "kind": "premerge_runtime_fix_combined_qualification",
+  "qualification_started_at": "2026-10-09T14:48:15+02:00",
+  "recorded_at": "2026-10-09T15:18:35+02:00",
+  "candidate_provenance": {
+    "repository": "https://github.com/chartjs333/nginx-qa.git",
+    "branch": "codex/premerge-inbound-hub-e2e-final-candidate-20261009-v1",
+    "tested_commit": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "tested_tree": "aec12ecbc5d8a081db173dad9fd8687c976184e4",
+    "remote_head_at_start": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "merge_parents": [
+      "3c479521292ccc184bea289d5105164c5ff19912",
+      "49395c6a584d014f569a7df8b42226a2601d886c"
+    ],
+    "accepted_candidate_ancestor": "3c479521292ccc184bea289d5105164c5ff19912",
+    "pinned_main": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "python_executable": "C:/Python312/python.exe",
+    "python_version": "3.12.1",
+    "worktree_clean_before": true,
+    "diff_check_passed": true,
+    "head_after_tests": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "tree_after_tests": "aec12ecbc5d8a081db173dad9fd8687c976184e4",
+    "worktree_clean_after_tests_before_evidence_creation": true,
+    "remote_head_after_tests": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "remote_main_at_start": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "remote_main_after_tests": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "commit_signature_status": "N"
+  },
+  "published_refs": {
+    "runtime_fix_stack": {
+      "branch": "codex/managed-runtime-fixes-20261009",
+      "tip": "49395c6a584d014f569a7df8b42226a2601d886c",
+      "github_branch_protection": {
+        "enforce_admins": true,
+        "required_linear_history": true,
+        "allow_force_pushes": false,
+        "allow_deletions": false,
+        "lock_branch": true,
+        "allow_fork_syncing": false
+      }
+    },
+    "combined_candidate_at_test_time": {
+      "branch": "codex/premerge-inbound-hub-e2e-final-candidate-20261009-v1",
+      "tip": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+      "open_pull_request": false
+    }
+  },
+  "runtime_fix_stack": [
+    {
+      "commit": "bb5095ab76cef6c8921d69a45dbc066b01187798",
+      "parent": "6b4b4cc4877eff46725f86614bafd3229fa3d9b8",
+      "subject": "feat: expose managed workspace in identity",
+      "ancestor_of_tested_commit": true,
+      "signature_status": "N"
+    },
+    {
+      "commit": "9fe9d3b2e11ba35491df180f702474ade21c4cab",
+      "parent": "bb5095ab76cef6c8921d69a45dbc066b01187798",
+      "subject": "fix: recover reused managed branch publication",
+      "ancestor_of_tested_commit": true,
+      "signature_status": "N"
+    },
+    {
+      "commit": "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd",
+      "parent": "9fe9d3b2e11ba35491df180f702474ade21c4cab",
+      "subject": "fix: schedule repeated any-parent review successor atomically",
+      "ancestor_of_tested_commit": true,
+      "signature_status": "N"
+    },
+    {
+      "commit": "49395c6a584d014f569a7df8b42226a2601d886c",
+      "parent": "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd",
+      "subject": "Fix terminal proof after continued assignment",
+      "ancestor_of_tested_commit": true,
+      "signature_status": "N"
+    }
+  ],
+  "candidate_delta": {
+    "base": "3c479521292ccc184bea289d5105164c5ff19912",
+    "files_changed": 10,
+    "insertions": 1386,
+    "deletions": 137,
+    "paths": [
+      "docs/universal-managed-sprint-contract.md",
+      "main.py",
+      "nginx_qa/git_provider.py",
+      "nginx_qa/managed_continuity.py",
+      "nginx_qa/sprint_types.py",
+      "schemas/managed-current-identity-response-v1.schema.json",
+      "tests/test_managed_continuity.py",
+      "tests/test_managed_continuity_import_recovery.py",
+      "tests/test_managed_workspaces.py",
+      "tests/test_sprint_type_contract.py"
+    ],
+    "merge_conflicts": 0,
+    "history_rewritten": false
+  },
+  "qualification_runs": [
+    {
+      "name": "four_runtime_fix_focused_regressions",
+      "command_summary": "12 exact unittest selectors covering managed identity workspace/OpenAPI, reused-branch recovery, repeated any_parent transition, and terminal continuation proof",
+      "runner": "python -m unittest -v",
+      "selectors": [
+        "tests.test_managed_continuity.ManagedContinuityTests.test_current_identity_projects_workspace_without_scope_control",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_current_identity_selects_workspace_by_assignment_reference",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_review_identity_does_not_inherit_source_workspace",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_workspace_projection_rejects_mismatched_ownership",
+        "tests.test_managed_continuity.ManagedContinuityRouteTests.test_managed_whoami_returns_durable_workspace_without_scope",
+        "tests.test_managed_continuity.ManagedContinuityRouteTests.test_managed_whoami_openapi_contract_includes_workspace",
+        "tests.test_sprint_type_contract.SprintSchemaContractTests.test_managed_current_identity_workspace_projection_is_strict",
+        "tests.test_managed_continuity_import_recovery.ManagedContinuityImportRecoveryTests.test_current_identity_recovers_pending_reused_branch_fast_forward",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_resume_publication_fast_forwards_reused_branch_with_receipt",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_resume_publication_still_rejects_divergent_reused_branch",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_second_review_approval_creates_repeated_any_parent_successor_atomically",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_terminal_after_failed_continue_node_source_is_idempotent"
+      ],
+      "tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 53.299,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "affected_and_legacy_compatibility",
+      "command": "python -m unittest tests.test_legacy_scope_control tests.test_project_actor_import tests.test_queue_persistence tests.test_groups tests.test_sequential_prompt_ui tests.test_sprint_type_contract.SprintSchemaContractTests.test_exact_schema_set_meta_validates_and_refs_resolve_offline tests.test_sprint_type_contract.SprintSchemaContractTests.test_every_public_api_schema_has_a_positive_instance -v",
+      "tests": 118,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 84.416,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "managed_continuity_import_git_scope_workspace",
+      "command": "python -m unittest tests.test_managed_continuity tests.test_managed_continuity_import_recovery tests.test_managed_continuity_merge_git tests.test_managed_import tests.test_managed_scope_secret_boundary tests.test_managed_workspaces -v",
+      "tests": 223,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 1255.693,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "full_sprint_type_contract",
+      "command": "python -m unittest -v tests.test_sprint_type_contract",
+      "tests": 46,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 3.610,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "isolated_actor_import_rerun",
+      "command": "python -m unittest tests.test_project_actor_import -v",
+      "tests": 57,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 38.177,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "inbound_contract_and_proposal_api",
+      "command": "python -m unittest -v tests.test_inbound_coordinator_contract tests.test_inbound_proposal_api",
+      "tests": 43,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 8.422,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "pending_sprints_ui",
+      "command": "python -m unittest -v tests.test_pending_sprints_ui",
+      "tests": 14,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 0.409,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "telegram_pending_compatibility",
+      "command_summary": "16 exact ProjectActorImportTests selectors whose method names contain telegram",
+      "runner": "python -m unittest -v",
+      "selectors": [
+        "tests.test_project_actor_import.ProjectActorImportTests.test_sequential_telegram_url_stages_then_starts_first_graph_node",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_parallel_telegram_url_never_switches_roles",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_text_json_imports_actors_and_tasks",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_agents_json_resolves_project_from_git_address",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_pending_telegram_sprint_survives_storage_reload",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_pending_telegram_sprints_are_isolated_by_project",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_update_id_is_deduplicated_without_mutation",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_update_id_cannot_move_to_another_project",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_stage_reply_contains_public_pending_sprint_url",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_parallel_telegram_endpoint_rejects_sequential_graph",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_unknown_git_repository_does_not_mutate_agents",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_validation_error_is_replied_to_and_acknowledged",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_ambiguous_repository_uses_git_context_key",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_webhook_enforces_secret_and_chat_allowlist",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_dispatch_acks_unknown_and_managed_without_staging",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_explicit_legacy_telegram_pending_round_trip_and_activation"
+      ],
+      "tests": 16,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 3.685,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "three_used_staging_profiles",
+      "command_summary": "three exact StagingIsolationTests profile selectors used by the premerge flow",
+      "runner": "python -m unittest -v",
+      "selectors": [
+        "tests.test_staging_isolation.StagingIsolationTests.test_premerge_inbound_hub_profile_is_isolated_and_valid",
+        "tests.test_staging_isolation.StagingIsolationTests.test_short_premerge_profile_is_isolated_and_valid",
+        "tests.test_staging_isolation.StagingIsolationTests.test_short_premerge_r2_profile_is_isolated_and_valid"
+      ],
+      "tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 3.138,
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "python_compile",
+      "command": "python -m compileall -q main.py nginx_qa staging_host_app.py configure_telegram.py",
+      "exit_code": 0,
+      "status": "PASS"
+    },
+    {
+      "name": "committed_evidence_json_parse",
+      "command_summary": "Python glob plus json.load for every tracked docs/evidence/premerge-inbound-hub-e2e-v1/*.json present at the tested commit",
+      "command": "python -c \"import glob,json; paths=glob.glob('docs/evidence/premerge-inbound-hub-e2e-v1/*.json'); [json.load(open(path, encoding='utf-8')) for path in paths]; print(len(paths))\"",
+      "files": 9,
+      "errors": 0,
+      "exit_code": 0,
+      "status": "PASS"
+    }
+  ],
+  "additional_runs": [
+    {
+      "name": "preliminary_eight_regression_smoke",
+      "runner": "python -m unittest -v",
+      "selectors": [
+        "tests.test_managed_continuity.ManagedContinuityTests.test_current_identity_projects_workspace_without_scope_control",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_current_identity_selects_workspace_by_assignment_reference",
+        "tests.test_sprint_type_contract.SprintSchemaContractTests.test_managed_current_identity_workspace_projection_is_strict",
+        "tests.test_managed_continuity_import_recovery.ManagedContinuityImportRecoveryTests.test_current_identity_recovers_pending_reused_branch_fast_forward",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_resume_publication_fast_forwards_reused_branch_with_receipt",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_resume_publication_still_rejects_divergent_reused_branch",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_second_review_approval_creates_repeated_any_parent_successor_atomically",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_terminal_after_failed_continue_node_source_is_idempotent"
+      ],
+      "tests": 8,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "seconds": 56.118,
+      "exit_code": 0,
+      "status": "PASS",
+      "classification": "overlaps the canonical twelve-test focused run and is excluded from required_unique_tests"
+    }
+  ],
+  "qualification_counts": {
+    "required_unique_tests": 445,
+    "required_test_executions_including_reruns": 532,
+    "required_failures": 0,
+    "required_errors": 0,
+    "required_skips": 0,
+    "preliminary_overlapping_focused_executions": 8,
+    "diagnostic_executions": 18,
+    "all_recorded_test_executions": 558
+  },
+  "staging_diagnostic": {
+    "command": "python -m unittest -v tests.test_staging_isolation",
+    "tests": 18,
+    "passed": 16,
+    "failures": 0,
+    "errors": 2,
+    "skips": 0,
+    "seconds": 20.687,
+    "exit_code": 1,
+    "status": "KNOWN_HOST_DIAGNOSTIC",
+    "error_tests": [
+      "test_environment_example_normalizes_to_the_frozen_staging_config",
+      "test_mutable_roots_are_dedicated_state_base_children"
+    ],
+    "error": "ValueError: managed path contains a filesystem alias",
+    "classification": "matches the generic .env.staging.example filesystem-alias symptom disclosed by the accepted IE2E-006 qualification",
+    "used_profiles_passed": "3/3"
+  },
+  "diff_security_scan": {
+    "scope": "git diff 3c479521292ccc184bea289d5105164c5ff19912..bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "implementation": "PowerShell regex matching over git diff --no-ext-diff --unified=0 plus git diff --name-only",
+    "forbidden_path_regex": "(?i)(^|/)(\\.env($|\\.)|.*\\.(dpapi|sqlite|sqlite3|db|wal|shm|pid|log)$|.*credential.*|.*secret.*)",
+    "forbidden_path_hits": 0,
+    "content_patterns": [
+      {
+        "name": "pem_private_key",
+        "regex": "-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----",
+        "hits": 0
+      },
+      {
+        "name": "github_token",
+        "regex": "gh[pousr]_[A-Za-z0-9]{20,}",
+        "hits": 0
+      },
+      {
+        "name": "openai_key",
+        "regex": "sk-(proj-)?[A-Za-z0-9_-]{20,}",
+        "hits": 0
+      },
+      {
+        "name": "slack_token",
+        "regex": "xox[baprs]-[A-Za-z0-9-]{20,}",
+        "hits": 0
+      },
+      {
+        "name": "aws_access_key",
+        "regex": "AKIA[0-9A-Z]{16}",
+        "hits": 0
+      },
+      {
+        "name": "google_api_key",
+        "regex": "AIza[0-9A-Za-z_-]{20,}",
+        "hits": 0
+      },
+      {
+        "name": "jwt",
+        "regex": "eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}",
+        "hits": 0
+      }
+    ],
+    "content_hits": 0,
+    "exit_code": 0,
+    "status": "PASS",
+    "scope_limit": "limited diff-only high-signal pattern scan; not a full-repository secret scan, SAST, or SCA"
+  },
+  "scope_boundaries": {
+    "qualification_invoked_live_18025_action": false,
+    "qualification_invoked_live_18026_action": false,
+    "live_process_state_independently_observed": false,
+    "merge_to_main": false,
+    "deploy": false,
+    "live_promotion": false,
+    "new_managed_sprint": false,
+    "start_from_git": false,
+    "manual_runtime_or_sqlite_edit": false
+  },
+  "limitations": [
+    "No fresh disposable managed flow was started on the combined head because the operator constraints prohibit a new sprint and start-from-git.",
+    "Historical IE2E-004 and IE2E-005 staging artifacts remain lineage evidence and are not represented as exact-combined-head runtime proof.",
+    "The completed managed sprint cannot accept new API/evidence review receipts; existing reviews are immutable and tied to their original result keys and commits.",
+    "No protected PR was opened because the requested new approvals do not yet exist."
+  ],
+  "qualification": {
+    "selected_offline_required_suites": "PASS",
+    "exact_tested_commit": "bf5b4bcd06e6f444ac199135ba1cf18a7d5c3eda",
+    "release_gate": "NO_GO",
+    "approval_status": "NOT_OBTAINED",
+    "approval_constraint": "The source managed sprint is completed and immutable; no supported post-terminal API can attach new review receipts, while a new managed sprint/start-from-git is prohibited by the operator constraints.",
+    "fresh_managed_flow_status": "NOT_RUN_PROHIBITED",
+    "live_promotion": "NOT_AUTHORIZED"
+  },
+  "required_next_decision": {
+    "managed_receipt_path": "Authorize a new managed sprint/activation dedicated to exact-head qualification and dual managed reviews.",
+    "repository_governance_path": "Alternatively authorize an explicit gate substitution or waiver using protected PR/operator review, and bind named API/evidence reviewer approvals to the exact candidate commit and tree; this is not automatically equivalent to managed review receipts.",
+    "manual_post_terminal_review_attachment": "FORBIDDEN_AND_UNSUPPORTED"
+  }
+}

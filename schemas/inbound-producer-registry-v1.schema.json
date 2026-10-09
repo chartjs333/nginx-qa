@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/inbound-producer-registry-v1.schema.json",
+  "title": "Inbound producer authentication registry v1",
+  "type": "object",
+  "required": ["schema_version", "producers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "producers": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["producer_id", "token_sha256", "project_ids", "actions"],
+        "properties": {
+          "producer_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$"
+          },
+          "token_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "project_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9_-])?$"
+            }
+          },
+          "actions": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "enum": [
+                "create",
+                "read",
+                "preview",
+                "comment",
+                "reject",
+                "request_regeneration"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false,
+  "x-nginx-qa-uniqueness": ["producer_id", "token_sha256"]
+}

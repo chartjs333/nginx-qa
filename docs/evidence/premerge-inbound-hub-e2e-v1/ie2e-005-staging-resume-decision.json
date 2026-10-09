@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "kind": "premerge_e2e_continuity_decision",
+  "source_assignment_id": "assignment-c12032e4da63e2a2efe53520",
+  "source_result_commit": "f628596c3052368d5a8c687c8265720a820b308a",
+  "observed_outcome": "NEED_DECISION",
+  "decision": "RESUME_STAGING",
+  "reason": {
+    "error": "SPRINT_PREFLIGHT_FAILED",
+    "phase": "VALIDATE",
+    "issue_code": "REPOSITORY_BINDING_INVALID",
+    "classification": "windows_managed_root_path_budget",
+    "current_managed_root_length": 70,
+    "request_binding_ref_lock_path_length": 260,
+    "short_root_control_length": 42,
+    "short_root_control_succeeded": true
+  },
+  "required_recovery": {
+    "service": "isolated staging only",
+    "http_port": 18027,
+    "child_port_range": "18300-18399",
+    "fresh_state_base": true,
+    "short_state_base": true,
+    "runtime_prompt_managed_and_venv_roots_disjoint": true,
+    "new_unique_instance_id": true,
+    "old_staging_state_preserved_read_only": true,
+    "old_staging_state_added_to_protected_roots": true,
+    "existing_18025_and_18026_code_and_state_roots_added_to_protected_roots": true,
+    "manual_state_or_sqlite_copy": false,
+    "fresh_project_9000_bootstrap": true,
+    "fresh_protected_synthetic_producer_credential": true,
+    "fresh_disposable_proposals_and_idempotency_keys": true
+  },
+  "restart_rules": {
+    "stop_only_port_18027": true,
+    "verify_18027_free_before_start": true,
+    "recheck_child_port_range_before_start": true,
+    "use_reviewed_launcher_profile_change": true,
+    "environment_override_forbidden": true,
+    "preserve_18025_and_18026_listener_pids": true
+  },
+  "resume_acceptance": [
+    "GET / returns HTTP 200 on the replacement staging instance",
+    "GET /git-config exposes only project 9000 on port 18027",
+    "managed inventory is empty before the resumed Play test",
+    "proposal API readiness and protected producer authentication succeed",
+    "the durable repository request binding succeeds under the short path budget",
+    "IE2E-005 restarts with new disposable proposal identities"
+  ],
+  "forbidden": [
+    "retrying the failed proposal",
+    "editing the old staging runtime or SQLite state",
+    "copying the old producer registry or credential",
+    "changing or restarting ports 18025 or 18026",
+    "bypassing managed start-from-git",
+    "merging or pushing main"
+  ]
+}

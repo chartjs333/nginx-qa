@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-assignment-result-v1.schema.json",
+  "title": "Managed assignment result request v1",
+  "type": "object",
+  "required": ["assignment_id", "status", "result", "from_commit", "git_commit", "git_branch"],
+  "properties": {
+    "assignment_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "pattern": "^[A-Z][A-Z0-9_-]{0,31}$"},
+    "result": {"type": "string", "minLength": 1},
+    "from_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "git_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "git_branch": {"type": ["string", "null"], "minLength": 1, "maxLength": 240},
+    "scope_context": {"type": "object", "description": "Exact effective scope context, required by governed assignments and checked against the durable ACK."}
+  },
+  "additionalProperties": false
+}

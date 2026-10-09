@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-review-decision-v1.schema.json",
+  "title": "Managed transition review decision v1",
+  "type": "object",
+  "required": ["assignment_id", "status"],
+  "properties": {
+    "assignment_id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The reviewer's current queue assignment"
+    },
+    "status": {"enum": ["APPROVE", "REJECT"]},
+    "feedback": {"type": "string"},
+    "scope_context": {"type": "object", "description": "Exact reviewer-assignment scope context; an ACK on the source task is not a reviewer ACK."}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"status": {"const": "REJECT"}},
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["feedback"],
+        "properties": {"feedback": {"minLength": 1}}
+      }
+    }
+  ],
+  "additionalProperties": false
+}

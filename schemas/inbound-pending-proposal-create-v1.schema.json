@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/inbound-pending-proposal-create-v1.schema.json",
+  "title": "Inbound pending proposal create request v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "proposal_id",
+    "idempotency_key",
+    "source",
+    "summary",
+    "candidate"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "proposal_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,199}$"
+    },
+    "idempotency_key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "source": {"$ref": "#/$defs/source"},
+    "summary": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4000,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "candidate": {"$ref": "#/$defs/candidate"}
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "source": {
+      "type": "object",
+      "required": ["source_type"],
+      "properties": {
+        "source_type": {
+          "enum": ["email", "telegram", "folder", "api", "other"]
+        },
+        "conversation_id": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "thread_id": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "message_id": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "sender_label": {
+          "type": "string", "minLength": 1, "maxLength": 256,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "title": {
+          "type": "string", "minLength": 1, "maxLength": 512,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "observed_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "oneOf": [
+        {"$ref": "#/$defs/legacy_candidate"},
+        {"$ref": "#/$defs/managed_git_candidate"}
+      ]
+    },
+    "legacy_candidate": {
+      "type": "object",
+      "required": ["kind", "payload"],
+      "properties": {
+        "kind": {"const": "legacy_json"},
+        "payload": {
+          "type": "object",
+          "minProperties": 1,
+          "properties": {
+            "sprint_type": {"const": "legacy_v1"}
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "managed_git_candidate": {
+      "type": "object",
+      "required": ["kind", "request"],
+      "properties": {
+        "kind": {"const": "managed_git"},
+        "request": {"$ref": "start-sprint-from-git-v1.schema.json"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "x-nginx-qa-idempotency": {
+    "scope": ["canonical_project_id", "authenticated_producer_id", "idempotency_key"],
+    "fingerprint": [
+      "schema_version",
+      "canonical_project_id",
+      "proposal_id",
+      "source",
+      "summary",
+      "candidate"
+    ],
+    "excluded": ["idempotency_key", "authorization", "correlation_id"]
+  },
+  "x-nginx-qa-secret-policy": "Reject recognized credentials in source and summary values before persistence; never echo rejected values."
+}

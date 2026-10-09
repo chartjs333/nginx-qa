@@ -1,0 +1,79 @@
+{
+  "git_address": "https://github.com/example/project.git",
+  "agents": {
+    "overwrite": true,
+    "include_managed": false
+  },
+  "execution": {
+    "mode": "sequential",
+    "initialize_reviewers": true,
+    "start_node": "development",
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "architecture-reviewer",
+        "name": "Architecture Reviewer",
+        "phone": "2023",
+        "git_branch": "agent/architecture-reviewer",
+        "profile": "Review every proposed transition for correctness, scope, and architecture."
+      },
+      {
+        "id": "quality-reviewer",
+        "name": "Quality Reviewer",
+        "phone": "2024",
+        "git_branch": "agent/quality-reviewer",
+        "profile": "Review every proposed transition for tests, evidence, and regressions."
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "development",
+      "agent": {
+        "id": "programmer",
+        "name": "Programmer",
+        "phone": "2021",
+        "git_branch": "agent/programmer",
+        "profile": "Implement the requested change and report the tests that were run."
+      },
+      "tasks": [
+        {
+          "task_id": "DEV-001",
+          "queue": "worker-all",
+          "message": "Implement the requested feature and add automated tests."
+        }
+      ],
+      "transitions": {
+        "DONE": "verification"
+      }
+    },
+    {
+      "id": "verification",
+      "agent": {
+        "id": "tester",
+        "name": "Tester",
+        "phone": "2022",
+        "git_branch": "agent/tester",
+        "profile": "Independently verify acceptance criteria and regressions."
+      },
+      "tasks": [
+        {
+          "task_id": "QA-001",
+          "queue": "tester-all",
+          "message": "Run acceptance and regression tests. Return PASS or FAIL with evidence."
+        }
+      ],
+      "transitions": {
+        "PASS": "completed",
+        "FAIL": "development"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Implementation passed testing and both transition reviews."
+    }
+  ]
+}

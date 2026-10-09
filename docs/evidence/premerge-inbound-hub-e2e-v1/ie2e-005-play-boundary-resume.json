@@ -1,0 +1,400 @@
+{
+  "schema_version": 1,
+  "kind": "inbound_proposal_play_boundary_e2e_resume",
+  "generated_at": "2026-10-09T02:02:39.4041174Z",
+  "assignment": {
+    "sprint_id": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "assignment_id": "assignment-aa9bdb793d4cd1d77f636868",
+    "node_id": "play-boundary",
+    "agent_phone": "2965",
+    "task_id": "IE2E-005",
+    "branch": "agent/ie2e-05-play-boundary",
+    "from_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+    "tested_commit": "2bbf5622438f896c67d6f1d59996c0a273d61282"
+  },
+  "continuity": {
+    "operator_decision": "fresh_isolated_short_root_staging",
+    "previous_attempt_artifact": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary.json",
+    "previous_attempt_commit": "f628596c3052368d5a8c687c8265720a820b308a",
+    "resume_decision_artifact": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-staging-resume-decision.json",
+    "resume_decision_commit": "172f0c23e985c337f180cc84de1f1a2ec70d503e",
+    "fresh_state": true,
+    "fresh_proposals": true,
+    "previous_failed_evidence_reused_as_success_proof": false
+  },
+  "target": {
+    "runtime": "isolated_loopback_staging",
+    "service_root": "D:/nq-e2e-18027",
+    "state_root": "C:/nq-e2e-18027",
+    "runtime_root": "C:/nq-e2e-18027/runtime",
+    "managed_root": "C:/nq-e2e-18027/managed",
+    "prompt_root": "C:/nq-e2e-18027/prompt",
+    "project_registry": "C:/nq-e2e-18027/legacy/port_git_map.json",
+    "instance_id": "premerge-inbound-hub-e2e-v1-short-18030-01",
+    "http_host": "127.0.0.1",
+    "http_port": 18030,
+    "staging_pid": 18624,
+    "child_port_range": "18400-18499",
+    "project_id": "9000",
+    "port_selection": "18027 was already occupied; the operator-authorized free loopback alternative 18030 was used",
+    "profile": "premerge-inbound-hub-e2e-v1-short"
+  },
+  "staging_readiness": {
+    "launcher_check": "passed",
+    "launcher_setup": "passed",
+    "root_http_status": 200,
+    "git_config_http_status": 200,
+    "openapi_http_status": 200,
+    "openapi_version": "3.1.0",
+    "authenticated_pending_collection_http_status": 200,
+    "configured_projects": [
+      "9000"
+    ],
+    "baseline_managed_inventory": {
+      "sprint_count": 0,
+      "current_sprint_id": null
+    },
+    "proposal_routes": [
+      "/api/v1/projects/{project_id}/pending-sprints",
+      "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/comments",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/preview",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/reject",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start"
+    ],
+    "project_bootstrap": {
+      "method": "supported_http_api",
+      "routes": [
+        "POST /git-config",
+        "POST /project-manager/0001"
+      ],
+      "manual_registry_or_state_edit": false
+    }
+  },
+  "producer_security": {
+    "registry_path": "C:/nq-e2e-18027-secrets/producer-registry.json",
+    "credential_storage": "Windows DPAPI CurrentUser",
+    "credential_acl_limited_to_current_user_and_system": true,
+    "plaintext_credential_recorded": false,
+    "credential_verifier_recorded": false,
+    "registry_contents_recorded": false
+  },
+  "fixture": {
+    "manifest_path": "orchestration/sprints/premerge-inbound-hub-e2e-v1/play-boundary-disposable.json",
+    "manifest_ref": "refs/heads/agent/ie2e-05-play-boundary",
+    "manifest_ref_commit": "2bbf5622438f896c67d6f1d59996c0a273d61282",
+    "manifest_sha256": "c0d96198570b42df7247ed180c3b803cabc5487fab2dd09699e34a7e6a00a285",
+    "workspace_source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e",
+    "workspace_source_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+    "disposable_workspace_branch": "agent/ie2e-05-disposable-aa9b",
+    "disposable_reviewer_branches": [
+      "review/ie2e-05-activation-a-aa9b",
+      "review/ie2e-05-activation-b-aa9b"
+    ],
+    "all_workspaces_read_only": true,
+    "process_blocks": 0,
+    "schema_errors": 0,
+    "semantic_issues": [],
+    "activation_proposal": {
+      "proposal_id": "ie2e-005-play-aa9b-20261009015945",
+      "pending_sprint_id": "pending-9cf3632172a54ecabfceceee4997493a"
+    },
+    "reject_control": {
+      "proposal_id": "ie2e-005-reject-aa9b-20261009015945",
+      "pending_sprint_id": "pending-9f1067dcb8b64b49b1fbaf086679ee28"
+    }
+  },
+  "non_activation_checks": [
+    {
+      "step": "baseline",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null
+    },
+    {
+      "step": "create_activation_proposal",
+      "method": "POST",
+      "http_status": 201,
+      "deduplicated": false,
+      "revision": 0,
+      "proposal_status": "created",
+      "validation_status": "not_run",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_activation_proposal",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "source_provenance_present": true,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_activation_proposal",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "preview_validate_activation_proposal",
+      "method": "POST",
+      "http_status": 200,
+      "deduplicated": false,
+      "revision": 1,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_activation_proposal",
+      "method": "POST",
+      "http_status": 200,
+      "deduplicated": false,
+      "revision": 2,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "comment_count": 1,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "create_reject_control",
+      "method": "POST",
+      "http_status": 201,
+      "deduplicated": false,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "detail_read_reject_control",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "source_provenance_present": true,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_reject_control",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 0,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "comment_reject_control",
+      "method": "POST",
+      "http_status": 200,
+      "revision": 1,
+      "proposal_status": "created",
+      "activation_state": "not_started",
+      "comment_count": 1,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "reject_control",
+      "method": "POST",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "comment_count": 2,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "status_read_rejected_control",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "rejected",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    },
+    {
+      "step": "activation_status_immediately_before_play",
+      "method": "GET",
+      "http_status": 200,
+      "revision": 2,
+      "proposal_status": "ready",
+      "validation_status": "valid",
+      "activation_state": "not_started",
+      "started_sprint_id": null,
+      "managed_sprint_count": 0,
+      "current_sprint_id": null,
+      "correlation_header_body_match": true
+    }
+  ],
+  "activation_guard": {
+    "all_pre_play_managed_sprint_counts_zero": true,
+    "all_pre_play_current_sprint_ids_null": true,
+    "all_pre_play_activation_states_not_started": true,
+    "create_activated": false,
+    "read_activated": false,
+    "status_activated": false,
+    "comment_activated": false,
+    "reject_activated": false,
+    "preview_activated": false
+  },
+  "explicit_play": {
+    "request": {
+      "method": "POST",
+      "route": "/api/v1/projects/9000/pending-sprints/pending-9cf3632172a54ecabfceceee4997493a/start",
+      "bodyless": true,
+      "producer_authorization_sent": false,
+      "operator_boundary": "loopback",
+      "request_count": 1,
+      "direct_start_from_git_request_count": 0
+    },
+    "response": {
+      "http_status": 200,
+      "started": true,
+      "managed": true,
+      "reconciled": false,
+      "superseded": false,
+      "pending_status": "activated",
+      "activation_attempts": 1,
+      "proposal_revision": 4,
+      "proposal_status": "started",
+      "activation_state": "started",
+      "started_sprint_id": "msv1-1e33949deab71b3cb5a103073f28bdb9072d2605fa4b077444d5b8c374b55fdc",
+      "sprint_status": "active",
+      "import_status": "active",
+      "import_phase": "ACTIVATE",
+      "import_deduplicated": false,
+      "manifest_identity_commit": "2bbf5622438f896c67d6f1d59996c0a273d61282",
+      "workspace_source_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+      "initial_assignment_id": "assignment-9dadea7fe563c20636264ed2",
+      "correlation_header_body_match": false
+    },
+    "proposal_after": {
+      "http_status": 200,
+      "revision": 4,
+      "proposal_status": "started",
+      "activation_state": "started",
+      "validation_status": "valid",
+      "activation_attempts": 1,
+      "started_sprint_id": "msv1-1e33949deab71b3cb5a103073f28bdb9072d2605fa4b077444d5b8c374b55fdc",
+      "last_failure": null
+    },
+    "managed_observability_after": {
+      "http_status": 200,
+      "runtime_type": "managed",
+      "sprint_id": "msv1-1e33949deab71b3cb5a103073f28bdb9072d2605fa4b077444d5b8c374b55fdc",
+      "execution_status": "active",
+      "revision": 1,
+      "active_assignment_id": "assignment-9dadea7fe563c20636264ed2",
+      "active_node_id": "activation-probe",
+      "active_agent_phone": "2993"
+    },
+    "inventory_projection_note": {
+      "route": "GET /api/v1/projects/9000/sprints",
+      "post_play_sprint_count": 0,
+      "post_play_current_sprint_id": null,
+      "classification": "inventory_projection_does_not_surface_managed_continuity_sprint",
+      "activation_proof_sources": [
+        "Play response",
+        "authenticated proposal status",
+        "managed sprint observability"
+      ]
+    }
+  },
+  "isolation": {
+    "listener_samples": {
+      "18025": {
+        "pid_before": 23840,
+        "pid_after": 23840,
+        "still_listening": true
+      },
+      "18026": {
+        "pid_before": 35872,
+        "pid_after": 35872,
+        "still_listening": true
+      },
+      "18030": {
+        "pid_after": 18624,
+        "loopback_only": true
+      }
+    },
+    "child_port_range_listener_count": 0,
+    "production_or_managed_coordinator_instances_restarted": false,
+    "production_proposal_used": false,
+    "production_main_or_live_mutation": false,
+    "manual_runtime_sqlite_or_state_edits": false,
+    "direct_start_from_git_outside_play": false,
+    "tunnel_enabled": false,
+    "webhook_enabled": false,
+    "public_exposure": false,
+    "credentials_or_verifiers_recorded": false
+  },
+  "validation": {
+    "targeted_staging_profile_tests": {
+      "result": "passed",
+      "test_count": 2
+    },
+    "full_staging_isolation_suite": {
+      "passed": 15,
+      "failed": 2,
+      "failures": "pre-existing generic staging .env alias checks unrelated to the new short-root profile"
+    },
+    "disposable_manifest_json_schema_errors": 0,
+    "disposable_manifest_semantic_issues": 0,
+    "git_diff_check": "passed",
+    "assigned_workspace_clean_after_test_preparation_commit": true,
+    "staging_clone_clean": true,
+    "secret_material_scan": "no credential, verifier, Authorization value, cookie, or registry content recorded"
+  },
+  "outcome": {
+    "status": "PASS",
+    "official_assignment_result": "DONE",
+    "completed_assertions": [
+      "create_does_not_activate",
+      "read_does_not_activate",
+      "status_read_does_not_activate",
+      "preview_validate_does_not_activate",
+      "comment_does_not_activate",
+      "reject_does_not_activate",
+      "only_explicit_play_enters_managed_start_from_git",
+      "explicit_play_creates_one_disposable_managed_sprint",
+      "activation_is_tied_to_the_disposable_proposal",
+      "production_and_coordinator_instances_remain_untouched"
+    ],
+    "blockers": []
+  }
+}

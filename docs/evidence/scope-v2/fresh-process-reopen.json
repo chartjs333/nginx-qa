@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "kind": "fresh_interpreter_persisted_lineage_reopen",
+  "started_at": "2026-10-05T14:17:20.162154+00:00",
+  "finished_at": "2026-10-05T14:18:33.441426+00:00",
+  "source_base": "d28726bbcbb552dd21f8cda1042f39f2ee2a21ec",
+  "requirements_commit": "e72e6f88abf81037a2afec408f8d023980607d66",
+  "source_fingerprint_sha256": "491573540364f3e26e0aadbf5ec7bf0ef0ba6743d9ca328f36f40af1524c0c22",
+  "source_unchanged_during_run": true,
+  "python": "3.12.1 (tags/v3.12.1:2305ca5, Dec  7 2023, 22:03:25) [MSC v.1937 64 bit (AMD64)]",
+  "existing_e2e": "tests.test_scope_revisions.ScopeRevisionTests.test_versioned_round_trip_new_reviews_formal_no_go_reentry_and_next_amendment",
+  "tests_run": 1,
+  "passed": true,
+  "scope": "Isolated existing E2E then two new interpreter processes reopen its exact temporary persisted state before fixture teardown.",
+  "not_claimed": [
+    "Full service restart",
+    "Live deployment or migration",
+    "Production crash recovery"
+  ],
+  "live_reads": 0,
+  "live_mutations": 0,
+  "prestart": {
+    "acknowledgement_count": 7,
+    "assignment_binding_count": 7,
+    "compatible": true,
+    "controlled_project_count": 1,
+    "project_count": 1,
+    "require_scope_control": "present",
+    "required_project": "github.com/example/scope-control",
+    "supported_capability": "versioned_scope_control_v2",
+    "supported_schema_version": 2,
+    "supported_schema_versions": [
+      1,
+      2
+    ]
+  },
+  "reopened_state": {
+    "acknowledgement_history_hashes": {
+      "scope-ack-32d3ce88d56c1d84b8d5ace46238c434": "bdf005c53886e2e3c24a4bc24c9db0ff9d56ef4225cbbd2ddc2f5bdee584c2df",
+      "scope-ack-440ce798703b1f22eb40a48f27484161": "ef7063976e692fc007828a0647c78bc14d28a68fc532ab1b7ffe68e5d1b0744a",
+      "scope-ack-494357bf6a5a1a915bfc10fe161d8612": "98a6477d9771ae38e939940dacc5d2df50c9887e8032f2c590c689abcdde8e39",
+      "scope-ack-4e507dee3c3fa74050661efbd850eca3": "12dcfec5d59aaf1837d1d1c8b3b361e5685c465ef715fae59bd71aaf7021c53e",
+      "scope-ack-66ba0ea7299fa005cfe2f434d4862eaa": "6456d36e78060bf7d43e3d2c996c9247f036a8d2d9c2813a4062d7d3ce8f1766",
+      "scope-ack-6f204341edab7e03c728c274ba7a84db": "329c69e774319cefff2ca5bee3e0cb1c4af951903c5c8f9b5a7a22fdc239b64a",
+      "scope-ack-93fc5a9df069a176fec0cf5afa6e377a": "7a5652aed3d2115c99248c9d7cb54f84fc464ccd04cf4550990b681a34a46ac0",
+      "scope-ack-986f442ebc4ce534303b37098909016b": "b9ea57d2f0d3de783cd28a7f9fd49d6fcc1e53a4803f010af7353bc9a4f32753",
+      "scope-ack-b870902a6f1e8b4652754f01391e79f3": "fef0d39a43c72190da4a7a26d72efc7252fc57461637ed9d6f293d6065c2c1dc",
+      "scope-ack-f8ba16236ad8b4864c7a192b7cafa2d0": "11a986f9fb9b1c51b8e75edc39fc3e4c3f52d5c26461e062522ba9d79ea20125"
+    },
+    "amendment_hashes": [
+      "3286e6a3a27473cef723a7f89832586ed520451caed3aa773d4fec2099baefe5",
+      "a04440f90d8ca32a919a7eca24d4de3bf0dee563a8666eed8f2df9a5efeae3d6",
+      "05352c6a20785df4dd8a4047c64da42b2b35a862a66706e5438d85f4d01689a4",
+      "7d34927915741ea05acb47cfa739d927082f21e698dc1d6004e0ffc65cc54604"
+    ],
+    "assignment_count": 13,
+    "assignments_sha256": "87fefe56d51499494e91b803a0bfef5f6f1e5eb15d37d11bf08869d5479231ea",
+    "binding_history_hashes": {
+      "1235f0f1-ba45-45e9-b870-1576399d3f95": [
+        "c7652bf8104b1c3ba517bd08129df6067646b37dab81a80da23c78886fd0dacf"
+      ],
+      "33b941ab-8481-4b9e-852a-8d3e5960e3d0": [
+        "91de5670abb6cc17f95023415d8e1b890aa4279f422098f428c2a9d801f91cc6"
+      ],
+      "402d8a8d-b89e-4e2e-b6cb-23d4a085bb9c": [
+        "50c75d512d645211a43f7b13ff01925fa7b00368edcdddf967b39816d93da76b",
+        "0da425714a8eec9017e7f35455e72d87b356499c0a3a5083e72a2c9b489cdbe4",
+        "e2e6cd9989af6eb5325db9f01011396e64e721e18cb3d0a4daea3e03706c908b"
+      ],
+      "54126c31-5ca1-4611-bcf2-e0b6a7c07239": [
+        "89d99a27d04ffcb63077c0f1f7881dd551224fa9287c796b33f4fe30eaf5b9d2",
+        "14c8e87e72bbc9dde7c019399beec0ac7de5fa341ddcadc9f5696746d3b1b2f3"
+      ],
+      "7deb892d-d1bc-4a1e-90da-fae8a4f290f0": [
+        "660fcc56f78f5ff6cc206f95b96aa8d0f6b5072f5cda8ba69761365d409f018a"
+      ],
+      "ac686e17-498e-45c6-8215-8f61e77c5663": [
+        "76b6609ea25255abf1d32988aaecfbeda6964fd2074c0bfe0093e26cdfe849b9"
+      ],
+      "d6f56f54-d36c-4877-b1b0-12b9080a52a1": [
+        "62b175cfba0a65440c8394060900171db521a7a7a6ffb1ccbfa9a7ec34357019"
+      ]
+    },
+    "current_ack_sha256": "12dcfec5d59aaf1837d1d1c8b3b361e5685c465ef715fae59bd71aaf7021c53e",
+    "current_assignment_id": "402d8a8d-b89e-4e2e-b6cb-23d4a085bb9c",
+    "current_effective_revision": 4,
+    "current_scope_context_sha256": "b4fd9d04d3bdf3f1d649eefc012d0eebafe6002d1bdf9080d5f1e9a6a7d10c9f",
+    "historical_assignments_sha256": "22ac7237cf6025e485f2112bc750a64b88d8d2ef7a2d4e50ae4548495c2a3e6d",
+    "persisted_document_sha256": "5a3f3740de9a4403da780dc4de61c30e0793d212c31c9bc2df7db09c21b8d6e5",
+    "scope_control_sha256": "cd5ef73a674f6440dac68743a5326e7f2e9dd748f2629734de3377bb00e2417c",
+    "scope_workflow_sha256": "f06ef56a64a61e1aaa82bb047f95fcb5d02e3e707311ed13d8f4a59d116a3658",
+    "state_file_sha256": "6c896115893f93b2ec5008861bb2c5acd35881bd98b7a31df92790e80258e3e9"
+  },
+  "checks": {
+    "isolated_existing_e2e_passed": true,
+    "fresh_process_prestart_passed": true,
+    "fresh_process_assignment_bindings_validated": true,
+    "fresh_process_immutable_ack_history_validated": true,
+    "scope_revision_four_and_exact_current_ack_preserved": true,
+    "all_amendment_binding_ack_and_execution_hashes_equal": true,
+    "persisted_state_bytes_unchanged": true,
+    "scope_credentials_not_inherited_by_children": true
+  }
+}

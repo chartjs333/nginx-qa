@@ -1,0 +1,275 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/inbound-pending-proposal-status-response-v1.schema.json",
+  "title": "Inbound pending proposal status response v1",
+  "type": "object",
+  "required": ["schema_version", "correlation_id", "status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "correlation_id": {
+      "$ref": "inbound-pending-proposal-response-v1.schema.json#/properties/correlation_id"
+    },
+    "status": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "proposal_id",
+        "pending_sprint_id",
+        "project_id",
+        "revision",
+        "proposal_status",
+        "activation_state",
+        "source_metadata",
+        "summary",
+        "validation",
+        "regenerate_requested",
+        "created_at",
+        "updated_at",
+        "started_sprint_id"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/schema_version"
+        },
+        "proposal_id": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/proposal_id"
+        },
+        "pending_sprint_id": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/pending_sprint_id"
+        },
+        "project_id": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/project_id"
+        },
+        "revision": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/revision"
+        },
+        "proposal_status": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/proposal_status"
+        },
+        "activation_state": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/activation_state"
+        },
+        "source_metadata": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/source_metadata"
+        },
+        "summary": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/summary"
+        },
+        "validation": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/validation"
+        },
+        "regenerate_requested": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/regenerate_requested"
+        },
+        "created_at": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/created_at"
+        },
+        "updated_at": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/updated_at"
+        },
+        "started_sprint_id": {
+          "$ref": "inbound-pending-proposal-v1.schema.json#/properties/started_sprint_id"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"proposal_status": {"const": "created"}},
+            "required": ["proposal_status"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {
+                  "status": {"const": "not_run"},
+                  "checked_at": {"const": null},
+                  "issues": {"maxItems": 0}
+                },
+                "required": ["status"]
+              },
+              "activation_state": {"const": "not_started"},
+              "started_sprint_id": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"proposal_status": {"const": "ready"}},
+            "required": ["proposal_status"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {
+                  "status": {"const": "valid"},
+                  "issues": {"maxItems": 0}
+                },
+                "required": ["status"]
+              },
+              "activation_state": {"enum": ["not_started", "starting"]},
+              "started_sprint_id": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"proposal_status": {"const": "started"}},
+            "required": ["proposal_status"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {"status": {"const": "valid"}},
+                "required": ["status"]
+              },
+              "activation_state": {"const": "started"},
+              "started_sprint_id": {"type": "string", "minLength": 1}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"proposal_status": {"const": "rejected"}},
+            "required": ["proposal_status"]
+          },
+          "then": {
+            "properties": {
+              "activation_state": {"const": "not_started"},
+              "started_sprint_id": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"proposal_status": {"const": "failed"}},
+            "required": ["proposal_status"]
+          },
+          "then": {
+            "properties": {"started_sprint_id": {"const": null}},
+            "oneOf": [
+              {
+                "properties": {
+                  "validation": {
+                    "properties": {"status": {"const": "invalid"}},
+                    "required": ["status"]
+                  },
+                  "activation_state": {"const": "not_started"}
+                }
+              },
+              {
+                "properties": {
+                  "validation": {
+                    "properties": {"status": {"const": "valid"}},
+                    "required": ["status"]
+                  },
+                  "activation_state": {"const": "failed"}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {"activation_state": {"const": "starting"}},
+            "required": ["activation_state"]
+          },
+          "then": {"properties": {"proposal_status": {"const": "ready"}}}
+        },
+        {
+          "if": {
+            "properties": {"activation_state": {"const": "started"}},
+            "required": ["activation_state"]
+          },
+          "then": {"properties": {"proposal_status": {"const": "started"}}}
+        },
+        {
+          "if": {
+            "properties": {"activation_state": {"const": "failed"}},
+            "required": ["activation_state"]
+          },
+          "then": {"properties": {"proposal_status": {"const": "failed"}}}
+        },
+        {
+          "if": {
+            "properties": {
+              "validation": {
+                "properties": {"status": {"const": "not_run"}},
+                "required": ["status"]
+              }
+            },
+            "required": ["validation"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {
+                  "checked_at": {"const": null},
+                  "issues": {"maxItems": 0}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "validation": {
+                "properties": {"status": {"const": "valid"}},
+                "required": ["status"]
+              }
+            },
+            "required": ["validation"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {
+                  "checked_at": {"type": "string", "format": "date-time"},
+                  "issues": {"maxItems": 0}
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "validation": {
+                "properties": {"status": {"const": "invalid"}},
+                "required": ["status"]
+              }
+            },
+            "required": ["validation"]
+          },
+          "then": {
+            "properties": {
+              "validation": {
+                "properties": {
+                  "checked_at": {"type": "string", "format": "date-time"},
+                  "issues": {"minItems": 1}
+                }
+              },
+              "proposal_status": {"enum": ["failed", "rejected"]},
+              "activation_state": {"const": "not_started"},
+              "started_sprint_id": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"started_sprint_id": {"type": "string"}},
+            "required": ["started_sprint_id"]
+          },
+          "then": {
+            "properties": {
+              "proposal_status": {"const": "started"},
+              "activation_state": {"const": "started"}
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

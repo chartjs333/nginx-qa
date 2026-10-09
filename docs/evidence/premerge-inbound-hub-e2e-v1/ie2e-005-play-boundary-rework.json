@@ -1,0 +1,505 @@
+{
+  "schema_version": 1,
+  "kind": "inbound_proposal_play_boundary_e2e_rework",
+  "generated_at": "2026-10-09T07:14:51.9943253Z",
+  "assignment": {
+    "sprint_id": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "assignment_id": "assignment-f7bb9d6e3330b206a37d0e23",
+    "node_id": "play-boundary",
+    "agent_phone": "2965",
+    "task_id": "IE2E-005",
+    "rework_cycle": 1,
+    "branch": "agent/ie2e-05-play-boundary",
+    "from_commit": "0f3c9d3c1f313bacf67126a2aed208f95ab3e371",
+    "tested_commit": "676a50ff1529e5b91d0d28f3899798b16d5db964"
+  },
+  "review_rework": {
+    "rejected_result_key": "result-25d592a30f9837bdfe9707e1989c38fe20a9deaf9983124b4edc251096419cb5",
+    "api_review_id": "review-a3b0ed7c57e8ab2a9711fadf",
+    "api_review_decision": "REJECT",
+    "evidence_review_id": "review-cf2960a75d0a71a2f309f3a0",
+    "evidence_review_decision": "APPROVE",
+    "defect": "The previous artifact used the legacy /sprints history projection as managed non-activation evidence.",
+    "correction": "This rework uses the combined /api/v1/execution-catalog immediately before and after Play and treats the legacy projection as non-authoritative.",
+    "previous_resume_artifact": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary-resume.json",
+    "previous_resume_artifact_used_as_managed_inventory_proof": false
+  },
+  "target": {
+    "runtime": "fresh_isolated_loopback_staging",
+    "profile": "premerge-inbound-hub-e2e-v1-short-r2",
+    "service_root": "D:/nq-e2e-18031",
+    "state_root": "C:/nq-e2e-18031",
+    "runtime_root": "C:/nq-e2e-18031/runtime",
+    "managed_root": "C:/nq-e2e-18031/managed",
+    "prompt_root": "C:/nq-e2e-18031/prompt",
+    "project_registry": "C:/nq-e2e-18031/legacy/port_git_map.json",
+    "instance_id": "premerge-inbound-hub-e2e-v1-short-18031-02",
+    "http_host": "127.0.0.1",
+    "http_port": 18031,
+    "staging_pid": 52152,
+    "child_port_range": "18500-18599",
+    "project_id": "9000",
+    "fresh_roots_confirmed_absent_before_setup": true
+  },
+  "staging_readiness": {
+    "launcher_check": "passed",
+    "launcher_setup": "passed",
+    "service_checkout_branch": "agent/ie2e-05-play-boundary",
+    "service_checkout_commit": "676a50ff1529e5b91d0d28f3899798b16d5db964",
+    "service_checkout_clean": true,
+    "root_http_status": 200,
+    "git_config_http_status": 200,
+    "openapi_http_status": 200,
+    "authenticated_pending_collection_http_status": 200,
+    "configured_context_count": 1,
+    "configured_project_phone": "9000",
+    "project_bootstrap_routes": [
+      "POST /git-config",
+      "POST /project-manager/0001"
+    ],
+    "project_bootstrap_used_supported_http_api": true,
+    "manual_registry_or_runtime_state_edit": false,
+    "proposal_routes": [
+      "/api/v1/projects/{project_id}/pending-sprints",
+      "/api/v1/projects/{project_id}/pending-sprints/{pending_sprint_id}/status",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/comments",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/preview",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/reject",
+      "/api/v1/projects/{project_id}/pending-sprints/{sprint_id}/start"
+    ]
+  },
+  "producer_security": {
+    "producer_id": "ie2e-005-f7bb-test-producer",
+    "registry_path": "C:/nq-e2e-18031-secrets/producer-registry.json",
+    "credential_storage": "Windows DPAPI CurrentUser",
+    "credential_acl_principals": [
+      "current_user",
+      "SYSTEM"
+    ],
+    "credential_acl_inheritance_disabled": true,
+    "application_registry_validation": "passed",
+    "plaintext_credential_recorded": false,
+    "credential_verifier_recorded": false,
+    "registry_contents_recorded": false
+  },
+  "fixture": {
+    "run_tag": "f7bb-20261009042000",
+    "manifest_path": "orchestration/sprints/premerge-inbound-hub-e2e-v1/play-boundary-disposable.json",
+    "manifest_ref": "refs/heads/agent/ie2e-05-play-boundary",
+    "manifest_ref_commit": "676a50ff1529e5b91d0d28f3899798b16d5db964",
+    "manifest_sha256": "99e53c6caac9a0032bfb4af4cc6433b86bd3a6bfaa0a5212062c54eb7bb4f189",
+    "workspace_source_ref": "refs/heads/agent/ie2e-04-inbound-hub-e2e",
+    "workspace_source_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+    "disposable_workspace_branch": "agent/ie2e-05-disposable-f7bb",
+    "disposable_reviewer_branches": [
+      "review/ie2e-05-activation-a-f7bb",
+      "review/ie2e-05-activation-b-f7bb"
+    ],
+    "fresh_branches_absent_before_play": true,
+    "all_workspaces_read_only": true,
+    "schema_errors": [],
+    "semantic_issues": [],
+    "activation_proposal": {
+      "proposal_id": "ie2e-005-play-f7bb-20261009042000",
+      "pending_sprint_id": "pending-1353d87a2e1649178b4a730aad12ae23"
+    },
+    "reject_control": {
+      "proposal_id": "ie2e-005-reject-f7bb-20261009042000",
+      "pending_sprint_id": "pending-48c0de3380614f44b341680b14560f0a"
+    }
+  },
+  "non_activation_exchanges": [
+    {
+      "step": "create_activation_proposal",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints",
+        "proposal_id": "ie2e-005-play-f7bb-20261009042000",
+        "idempotency_key": "create:ie2e-005-play-f7bb-20261009042000:v1",
+        "source_type": "api",
+        "correlation_id": "corr-f7bb-create-play"
+      },
+      "response": {
+        "http_status": 201,
+        "correlation_match": true,
+        "revision": 0,
+        "proposal_status": "created",
+        "validation_status": "not_run",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "detail_activation_proposal",
+      "request": {
+        "method": "GET",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23",
+        "correlation_id": "corr-f7bb-detail-play"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 0,
+        "proposal_status": "created",
+        "activation_state": "not_started",
+        "source_provenance_present": true,
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "status_activation_proposal",
+      "request": {
+        "method": "GET",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23/status",
+        "correlation_id": "corr-f7bb-status-play"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 0,
+        "proposal_status": "created",
+        "validation_status": "not_run",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "preview_activation_proposal",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23/preview",
+        "action": "preview",
+        "expected_revision": 0,
+        "idempotency_key": "preview:ie2e-005-play-f7bb-20261009042000:v1",
+        "correlation_id": "corr-f7bb-preview-play"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 1,
+        "proposal_status": "ready",
+        "validation_status": "valid",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "comment_activation_proposal",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23/comments",
+        "action": "comment",
+        "expected_revision": 1,
+        "idempotency_key": "comment:ie2e-005-play-f7bb-20261009042000:v1",
+        "correlation_id": "corr-f7bb-comment-play"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 2,
+        "proposal_status": "ready",
+        "validation_status": "valid",
+        "activation_state": "not_started",
+        "comment_count": 1,
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "create_reject_control",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints",
+        "proposal_id": "ie2e-005-reject-f7bb-20261009042000",
+        "idempotency_key": "create:ie2e-005-reject-f7bb-20261009042000:v1",
+        "source_type": "api",
+        "correlation_id": "corr-f7bb-create-reject"
+      },
+      "response": {
+        "http_status": 201,
+        "correlation_match": true,
+        "revision": 0,
+        "proposal_status": "created",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "detail_and_status_reject_control",
+      "requests": [
+        {
+          "method": "GET",
+          "route": "/api/v1/projects/9000/pending-sprints/pending-48c0de3380614f44b341680b14560f0a",
+          "correlation_id": "corr-f7bb-detail-reject"
+        },
+        {
+          "method": "GET",
+          "route": "/api/v1/projects/9000/pending-sprints/pending-48c0de3380614f44b341680b14560f0a/status",
+          "correlation_id": "corr-f7bb-status-reject"
+        }
+      ],
+      "response": {
+        "http_statuses": [
+          200,
+          200
+        ],
+        "correlation_matches": [
+          true,
+          true
+        ],
+        "revision": 0,
+        "proposal_status": "created",
+        "activation_state": "not_started",
+        "source_provenance_present": true,
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "comment_reject_control",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-48c0de3380614f44b341680b14560f0a/comments",
+        "action": "comment",
+        "expected_revision": 0,
+        "idempotency_key": "comment:ie2e-005-reject-f7bb-20261009042000:v1",
+        "correlation_id": "corr-f7bb-comment-reject"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 1,
+        "proposal_status": "created",
+        "activation_state": "not_started",
+        "comment_count": 1,
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "reject_control",
+      "request": {
+        "method": "POST",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-48c0de3380614f44b341680b14560f0a/reject",
+        "action": "reject",
+        "expected_revision": 1,
+        "idempotency_key": "reject:ie2e-005-reject-f7bb-20261009042000:v1",
+        "correlation_id": "corr-f7bb-reject"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 2,
+        "proposal_status": "rejected",
+        "activation_state": "not_started",
+        "comment_count": 2,
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "status_rejected_control",
+      "request": {
+        "method": "GET",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-48c0de3380614f44b341680b14560f0a/status",
+        "correlation_id": "corr-f7bb-status-rejected"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 2,
+        "proposal_status": "rejected",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    },
+    {
+      "step": "activation_status_immediately_before_play",
+      "request": {
+        "method": "GET",
+        "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23/status",
+        "correlation_id": "corr-f7bb-authoritative-preplay"
+      },
+      "response": {
+        "http_status": 200,
+        "correlation_match": true,
+        "revision": 2,
+        "proposal_status": "ready",
+        "validation_status": "valid",
+        "activation_state": "not_started",
+        "started_sprint_id": null
+      }
+    }
+  ],
+  "authoritative_catalog_proof": {
+    "endpoint": "GET /api/v1/execution-catalog",
+    "combines_legacy_and_managed_runtimes": true,
+    "initial_helper_projection": {
+      "used_as_evidence": false,
+      "reason": "PowerShell wrapped an empty sprints array as one null sentinel; the raw endpoint remained sprints=[]."
+    },
+    "immediately_before_play": {
+      "captured_at": "2026-10-09T07:13:53.2140789Z",
+      "project_id": "9000",
+      "sprint_count": 0,
+      "sprints": []
+    },
+    "immediately_after_play": {
+      "captured_at": "2026-10-09T07:14:25.8506097Z",
+      "project_id": "9000",
+      "sprint_count": 1,
+      "sprints": [
+        {
+          "sprint_id": "msv1-634625cc4caa0b9653cf03746361c4db221ceef52cc4cdedae1ea8aa1f88841f",
+          "status": "active"
+        }
+      ]
+    },
+    "conclusion": "All non-activation operations completed before the authoritative zero-sprint snapshot; the catalog changed to exactly one active managed sprint only after explicit Play."
+  },
+  "explicit_play": {
+    "request": {
+      "method": "POST",
+      "route": "/api/v1/projects/9000/pending-sprints/pending-1353d87a2e1649178b4a730aad12ae23/start",
+      "bodyless": true,
+      "producer_authorization_sent": false,
+      "loopback_only": true,
+      "request_count": 1,
+      "direct_start_from_git_request_count": 0
+    },
+    "response": {
+      "http_status": 200,
+      "started": true,
+      "managed": true,
+      "reconciled": false,
+      "superseded": false,
+      "pending_status": "activated",
+      "proposal_revision": 4,
+      "proposal_status": "started",
+      "activation_state": "started",
+      "activation_attempts": 1,
+      "started_sprint_id": "msv1-634625cc4caa0b9653cf03746361c4db221ceef52cc4cdedae1ea8aa1f88841f",
+      "sprint_status": "active",
+      "import_status": "active",
+      "import_phase": "ACTIVATE",
+      "import_deduplicated": false,
+      "execution_mode": "sequential",
+      "identity": {
+        "project_id": "9000",
+        "repository_id": "main",
+        "commit": "676a50ff1529e5b91d0d28f3899798b16d5db964",
+        "manifest_path": "orchestration/sprints/premerge-inbound-hub-e2e-v1/play-boundary-disposable.json",
+        "manifest_sha256": "99e53c6caac9a0032bfb4af4cc6433b86bd3a6bfaa0a5212062c54eb7bb4f189"
+      },
+      "initial_assignment_ids": [
+        "assignment-418b7dfaa652b4b032042c7a"
+      ],
+      "correlation": {
+        "applicability": "not_applicable",
+        "reason": "The operator Play/Start route is outside the producer correlation response contract and returns neither a response header nor body correlation field."
+      }
+    }
+  },
+  "post_play_verification": {
+    "proposal_status_http": 200,
+    "proposal_status_correlation_match": true,
+    "proposal_revision": 4,
+    "proposal_status": "started",
+    "activation_state": "started",
+    "validation_status": "valid",
+    "activation_attempts": 1,
+    "last_activation_error": null,
+    "managed_observability_http": 200,
+    "runtime_type": "managed",
+    "execution_status": "active",
+    "execution_revision": 1,
+    "active_assignment": {
+      "assignment_id": "assignment-418b7dfaa652b4b032042c7a",
+      "node_id": "activation-probe",
+      "agent_phone": "2993",
+      "status": "active",
+      "source_commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b"
+    }
+  },
+  "legacy_history_projection": {
+    "endpoint": "GET /api/v1/projects/9000/sprints",
+    "used_as_managed_activation_evidence": false,
+    "reason": "This endpoint does not enumerate managed continuity sprints in this version."
+  },
+  "isolation": {
+    "listeners_after": [
+      {
+        "port": 18025,
+        "pid": 23840,
+        "unchanged": true
+      },
+      {
+        "port": 18026,
+        "pid": 35872,
+        "unchanged": true
+      },
+      {
+        "port": 18030,
+        "pid": 18624,
+        "prior_attempt_left_read_only": true
+      },
+      {
+        "port": 18031,
+        "pid": 52152,
+        "fresh_rework_staging": true
+      }
+    ],
+    "all_listeners_loopback_only": true,
+    "child_port_range_listener_count": 0,
+    "production_or_coordinator_instances_restarted": false,
+    "production_proposal_used": false,
+    "production_main_or_live_mutation": false,
+    "manual_runtime_sqlite_or_state_edits": false,
+    "direct_start_from_git_outside_play": false,
+    "tunnel_enabled": false,
+    "webhook_enabled": false,
+    "public_exposure": false,
+    "credentials_or_verifiers_recorded": false
+  },
+  "validation": {
+    "targeted_profile_tests": {
+      "passed": 3,
+      "failed": 0,
+      "tests": [
+        "test_premerge_inbound_hub_profile_is_isolated_and_valid",
+        "test_short_premerge_profile_is_isolated_and_valid",
+        "test_short_premerge_r2_profile_is_isolated_and_valid"
+      ]
+    },
+    "full_staging_isolation_suite": {
+      "total": 18,
+      "passed": 16,
+      "errors": 2,
+      "error_tests": [
+        "test_environment_example_normalizes_to_the_frozen_staging_config",
+        "test_mutable_roots_are_dedicated_state_base_children"
+      ],
+      "exact_error": "ValueError: managed path contains a filesystem alias",
+      "classification": "pre-existing generic .env.staging.example alias failure; neither failing test reads the new R2 profile"
+    },
+    "disposable_manifest_schema_errors": [],
+    "disposable_manifest_semantic_issues": [],
+    "git_diff_check": "passed",
+    "secret_material_scan": "no credential, verifier, Authorization value, cookie, or registry content recorded"
+  },
+  "outcome": {
+    "status": "PASS",
+    "official_assignment_result": "DONE",
+    "completed_assertions": [
+      "authoritative_catalog_empty_after_all_non_activation_operations",
+      "create_does_not_activate",
+      "read_does_not_activate",
+      "status_read_does_not_activate",
+      "preview_validate_does_not_activate",
+      "comment_does_not_activate",
+      "reject_does_not_activate",
+      "only_explicit_play_enters_managed_start_from_git",
+      "explicit_play_creates_exactly_one_disposable_managed_sprint",
+      "activation_is_tied_to_the_disposable_proposal",
+      "production_and_coordinator_instances_remain_untouched"
+    ],
+    "blockers": []
+  }
+}

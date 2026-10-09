@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/inbound-pending-proposal-action-v1.schema.json",
+  "title": "Inbound pending proposal non-activation action request v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "action",
+    "expected_revision",
+    "idempotency_key"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "action": {
+      "enum": ["preview", "reject", "comment", "request_regeneration"]
+    },
+    "expected_revision": {"type": "integer", "minimum": 0},
+    "idempotency_key": {
+      "type": "string", "minLength": 1, "maxLength": 200,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "comment": {
+      "type": "string", "minLength": 1, "maxLength": 4000,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"action": {"const": "preview"}},
+        "required": ["action"]
+      },
+      "then": {"not": {"required": ["comment"]}},
+      "else": {"required": ["comment"]}
+    }
+  ],
+  "x-nginx-qa-idempotency": {
+    "scope": [
+      "canonical_project_id",
+      "pending_sprint_id",
+      "authenticated_actor_id",
+      "idempotency_key"
+    ],
+    "fingerprint": [
+      "schema_version",
+      "canonical_project_id",
+      "pending_sprint_id",
+      "action",
+      "expected_revision",
+      "comment"
+    ],
+    "excluded": ["idempotency_key", "authorization", "correlation_id"]
+  },
+  "x-nginx-qa-secret-policy": "Reject recognized credentials in comment before persistence; never echo rejected values."
+}

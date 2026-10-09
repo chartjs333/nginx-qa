@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/repair-sprint-response-v1.schema.json",
+  "title": "Managed sprint repair response v1",
+  "type": "object",
+  "required": [
+    "sprint_id",
+    "from_revision",
+    "graph_revision",
+    "repair_source_commit",
+    "deduplicated"
+  ],
+  "properties": {
+    "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+    "from_revision": {"type": "integer", "minimum": 1},
+    "graph_revision": {"type": "integer", "minimum": 2},
+    "repair_source_commit": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "deduplicated": {"type": "boolean"}
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,277 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/inbound-coordinator-sprint-spec",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/nginx-qa-inbound-integration-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "contract",
+    "required_approvals": 2,
+    "max_rework_cycles": 20,
+    "reviewers": [
+      {
+        "id": "inbound-api-reviewer",
+        "name": "Inbound API Architecture Reviewer",
+        "phone": "2951",
+        "git_branch": "review/inbound-api-architecture",
+        "profile": "Проверяй API boundary, pending-sprints reuse, idempotency, compatibility and no source-adapter leakage into nginx-qa."
+      },
+      {
+        "id": "inbound-ui-evidence-reviewer",
+        "name": "Inbound UI and Evidence Reviewer",
+        "phone": "2952",
+        "git_branch": "review/inbound-ui-evidence",
+        "profile": "Проверяй UI flow, Play activation boundary, Telegram regressions, tests and evidence."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "files": [
+    {
+      "path": "orchestration/sprints/inbound-coordinator-v1/.manifest-anchor",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "contract",
+      "agent": {
+        "id": "inbound-contract-engineer",
+        "name": "Inbound Integration Contract Engineer",
+        "phone": "2953",
+        "profile": "Владелец внешнего proposal API contract и compatibility boundary."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-001",
+          "queue": "worker-all",
+          "message": "Прочитай docs/INBOUND_COORDINATOR_V1_SPEC.md, существующий pending-sprints UI/tests, Telegram pending flow и managed start-from-git contract. Зафиксируй versioned proposal API, idempotency binding, source metadata model, auth/error/correlation semantics. Не добавляй email/folder adapters в nginx-qa."
+        }
+      ],
+      "transitions": {
+        "DONE": "proposal-api",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-01-contract",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "proposal-api",
+      "agent": {
+        "id": "proposal-api-engineer",
+        "name": "Pending Proposal API Engineer",
+        "phone": "2954",
+        "profile": "Владелец API поверх существующего pending-sprints persistence."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-002",
+          "queue": "worker-all",
+          "message": "Расширь существующий pending-sprints backend стабильным versioned API для внешнего producer: idempotent create, read, reject/comment metadata и source provenance. Переиспользуй существующее pending storage; duplicate idempotency key не создаёт второй proposal. Не активируй sprint на create/read/reject/comment."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "DONE": "managed-git-bridge",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-02-proposal-api",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "managed-git-bridge",
+      "agent": {
+        "id": "managed-git-bridge-engineer",
+        "name": "Managed Git Proposal Bridge Engineer",
+        "phone": "2955",
+        "profile": "Владелец bridge pending proposal -> managed start-from-git."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-003",
+          "queue": "worker-all",
+          "message": "Добавь поддержку pending proposal, содержащего repository_id/ref/manifest_path/idempotency key. Preview/validation не активирует; Play вызывает существующий managed start-from-git contract ровно один раз. Ошибки preflight показываются без active-state mutation."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "DONE": "pending-ui",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-03-managed-git-bridge",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "pending-ui",
+      "agent": {
+        "id": "pending-ui-engineer",
+        "name": "Pending Sprints UI Engineer",
+        "phone": "2956",
+        "profile": "Владелец расширения существующего Pending Sprints UI, без параллельного proposal UI."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-004",
+          "queue": "worker-all",
+          "message": "Расширь существующую Pending Sprints view: source type/summary, proposal status, JSON or Git manifest reference, validation/preflight, operator comment, Preview, Play/Start, Reject и Regenerate-request marker. Play — единственный activation action. Сохрани существующие Telegram deep links и pending UI behavior."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "DONE": "telegram-observability",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-04-pending-ui",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "telegram-observability",
+      "agent": {
+        "id": "telegram-observability-engineer",
+        "name": "Telegram Observability Engineer",
+        "phone": "2957",
+        "profile": "Владелец совместимости существующего Telegram pending flow и notification-ready status."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-005",
+          "queue": "worker-all",
+          "message": "Сохрани существующий Telegram JSON->pending sprint flow без регрессий. Добавь нейтральный status/read contract, пригодный внешнему Hub для Telegram уведомлений о proposal created/ready/started/rejected/failed. Telegram не делай обязательным transport между сервисами."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "DONE": "qualification",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-05-telegram-observability",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "qualification",
+      "agent": {
+        "id": "inbound-integration-qa",
+        "name": "Inbound Integration QA Engineer",
+        "phone": "2958",
+        "profile": "Независимый QA API/UI/pending/Telegram/managed activation boundary."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-006",
+          "queue": "tester-all",
+          "message": "Проведи isolated qualification: external API idempotent create; duplicate no duplicate proposal; existing Telegram pending flow preserved; proposal appears in existing Pending Sprints UI; preview/reject/comment no active mutation; source metadata visible and secrets absent; managed Git Play invokes start-from-git once; invalid/preflight failure no mutation; direct legacy pending/UI tests and managed/legacy regressions pass. Верни PASS, FAIL, NEED_DECISION или STOP."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "PASS": "completed",
+        "FAIL": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "STOP": "continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-06-qualification",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "agent": {
+        "id": "nqii-continuity-coordinator",
+        "name": "Inbound Integration Continuity Coordinator",
+        "phone": "2950",
+        "profile": "Исправляет только future sprint-owned plan; не bypass reviewer/preflight and no live deployment."
+      },
+      "tasks": [
+        {
+          "task_id": "NQII-COORD",
+          "queue": "consultant-all",
+          "message": "Проанализируй blocker и верни RESUME_CONTRACT, RESUME_API, RESUME_GIT_BRIDGE, RESUME_UI, RESUME_TELEGRAM, RESUME_QA или BLOCKED_EXTERNAL. Не добавляй source adapters/autonomous correspondence в nginx-qa."
+        }
+      ],
+      "activation_policy": "any_parent",
+      "transitions": {
+        "RESUME_CONTRACT": "contract",
+        "RESUME_API": "proposal-api",
+        "RESUME_GIT_BRIDGE": "managed-git-bridge",
+        "RESUME_UI": "pending-ui",
+        "RESUME_TELEGRAM": "telegram-observability",
+        "RESUME_QA": "qualification",
+        "BLOCKED_EXTERNAL": "blocked-external"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/nqii-continuity-coordinator",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "nginx-qa inbound integration API/UI passed qualification. External Inbound Hub remains a separate project."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "External decision/dependency required. Live nginx-qa remains unchanged."
+    }
+  ]
+}

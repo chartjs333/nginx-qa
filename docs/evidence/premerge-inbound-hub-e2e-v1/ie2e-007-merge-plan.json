@@ -1,0 +1,332 @@
+{
+  "schema_version": 1,
+  "kind": "premerge_inbound_hub_e2e_merge_plan",
+  "generated_at": "2026-10-09T08:17:16.5430727Z",
+  "assignment": {
+    "sprint_id": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "assignment_id": "assignment-284b16da41de6d38a6c6b464",
+    "node_id": "merge-plan",
+    "agent_id": "merge-plan-engineer",
+    "agent_phone": "2967",
+    "task_id": "IE2E-007",
+    "branch": "agent/ie2e-07-merge-plan",
+    "from_commit": "b9b44072f576d06b0e571b86a4b6746d96f65a01"
+  },
+  "decision": {
+    "plan_complete": true,
+    "current_candidate_merge_readiness": "NO_GO_PENDING_RUNTIME_FIX_INTEGRATION_AND_REQUALIFICATION",
+    "main_merge_authorized": false,
+    "deployment_authorized": false,
+    "reason": "The qualified candidate does not contain three local-only runtime recovery commits required by the live orchestrator that produced the managed evidence."
+  },
+  "candidate": {
+    "repository": "https://github.com/chartjs333/nginx-qa.git",
+    "pinned_origin_main": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "manifest_source_commit": "a5dec1213a0d4530928ad7e9763a4d0d044348db",
+    "qualified_inbound_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "lineage_merge_commit": "89573ff445cef784ec91d43b7d12be17c6fb23ee",
+    "lineage_merge_parents": [
+      "556a0442b0e4666f6456cd94f773de51decf21c9",
+      "02d16fdf2e2220a0dfd9854721e89da73d7fe545"
+    ],
+    "integration_branch": "integration/inbound-coordinator-e2e-20261007",
+    "integration_commit": "2abb11c0a869ab924934d7d471741aed036e63da",
+    "play_boundary_commit": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211",
+    "qualification_commit": "b9b44072f576d06b0e571b86a4b6746d96f65a01",
+    "qualification_tree": "f0a53e9d25f115a0bd1e0fcf9e91d0c56dd3e2eb",
+    "main_is_ancestor": true,
+    "divergence_from_main": {
+      "behind": 0,
+      "ahead": 110
+    },
+    "diff_from_main": {
+      "files": 190,
+      "insertions": 147787,
+      "deletions": 5886,
+      "added_files": 184,
+      "modified_files": 6
+    },
+    "ancestry_must_be_preserved": true,
+    "squash_rebase_or_force_push_allowed": false
+  },
+  "runtime_fix_prerequisite": {
+    "live_service_commit": "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd",
+    "base_commit": "6b4b4cc4877eff46725f86614bafd3229fa3d9b8",
+    "commits": [
+      {
+        "commit": "bb5095ab76cef6c8921d69a45dbc066b01187798",
+        "purpose": "managed phone identity publishes a validated workspace block and response schema"
+      },
+      {
+        "commit": "9fe9d3b2e11ba35491df180f702474ade21c4cab",
+        "purpose": "reused managed branch publication recovers after an ordinary fast-forward"
+      },
+      {
+        "commit": "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd",
+        "purpose": "repeated any_parent review successor is planned atomically"
+      }
+    ],
+    "linear": true,
+    "git_signature_status": {
+      "bb5095ab76cef6c8921d69a45dbc066b01187798": "N",
+      "9fe9d3b2e11ba35491df180f702474ade21c4cab": "N",
+      "569e0bfe4af1596f3992a2c5b0566aca2f35c2bd": "N"
+    },
+    "signature_policy_note": "Record the unsigned status and apply repository policy explicitly; do not imply signatures exist or rewrite exact commits silently.",
+    "advertised_by_canonical_github_origin": false,
+    "retained_by_local_service_and_fix_repositories": true,
+    "candidate_contains_commits": false,
+    "candidate_contains_equivalent_behavior": false,
+    "net_diff": {
+      "files": 9,
+      "insertions": 1176,
+      "deletions": 137
+    },
+    "read_only_apply_check_against_qualification_commit": "passed",
+    "synthetic_three_way_conflict_markers": 0,
+    "preferred_integration": "publish exact fix series, then merge its tip into a new branch descending from the accepted IE2E-007 head",
+    "required_post_integration_validation": [
+      "managed identity workspace and OpenAPI/schema regressions",
+      "reused branch publication and recovery regressions",
+      "repeated any_parent second-review successor regression",
+      "full IE2E-006 qualification selection",
+      "fresh disposable managed staging flow on the exact combined head",
+      "new dual-reviewed exact-head qualification record"
+    ]
+  },
+  "accepted_results": [
+    {
+      "task_id": "IE2E-001",
+      "assignment_id": "assignment-2a84f7d0389181f8a41926c3",
+      "outcome": "DONE",
+      "commit": "556a0442b0e4666f6456cd94f773de51decf21c9",
+      "result_key": "result-f8e86ca4091c497fc7f4a22b91d6b9644c5a67a75df065822860d5ae28d80a13",
+      "reviews": [
+        "review-8e1626170cf1965e0e28274e",
+        "review-d993fab16c8293c86473abc5"
+      ]
+    },
+    {
+      "task_id": "IE2E-002",
+      "assignment_id": "assignment-0c98f585c0338bf0089bdc1e",
+      "outcome": "DONE",
+      "commit": "2abb11c0a869ab924934d7d471741aed036e63da",
+      "result_key": "result-3cf9b6feacab8114a339a9f473e706d0b83473c1293c92514e9d1c4b4602d3bb",
+      "reviews": [
+        "review-97b2d2f091383c23f58b3720",
+        "review-340db7332e7075134505ebec"
+      ]
+    },
+    {
+      "task_id": "IE2E-003",
+      "assignment_id": "assignment-aa4d660cbb4ad8b3cc44b9ff",
+      "outcome": "DONE",
+      "commit": "172f0c23e985c337f180cc84de1f1a2ec70d503e",
+      "result_key": "result-bdcee768468df0fcdefb5ffd188d94be5e8bd1ea5494cee0651470aae9a26e62",
+      "reviews": [
+        "review-dfa5dfd1c1e15cc52dd4c699",
+        "review-ed66b1bc840187e941a401c6"
+      ]
+    },
+    {
+      "task_id": "IE2E-004",
+      "assignment_id": "assignment-a47b8da98f92c09203cdf89c",
+      "outcome": "DONE",
+      "commit": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+      "result_key": "result-c40d9838116cf318b9328974a5dd5d6e701d3346bb7e1ad86836d9665950d399",
+      "reviews": [
+        "review-553738e560eca74817cd3a70",
+        "review-1c7851c4689784f560fdb74a"
+      ]
+    },
+    {
+      "task_id": "IE2E-005",
+      "assignment_id": "assignment-f7bb9d6e3330b206a37d0e23",
+      "outcome": "DONE",
+      "commit": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211",
+      "result_key": "result-cf577e452c971e77c9f01bf513a74bd942c982aba242f9a62d2057a12f67515b",
+      "reviews": [
+        "review-d2b249470eff6eebff0ca6d2",
+        "review-fe56a514f20c43caf374b1c7"
+      ]
+    },
+    {
+      "task_id": "IE2E-006",
+      "assignment_id": "assignment-7ed1b11e1efb53eb4e2d5e19",
+      "outcome": "PASS",
+      "commit": "b9b44072f576d06b0e571b86a4b6746d96f65a01",
+      "result_key": "result-c0b105fa5ebc6f6a3d29b5d034a9b5267f9b4c4dd8bdfbadb8a28e2ad6b149a4",
+      "reviews": [
+        "review-a189f94e8b3ae42001b1e3b3",
+        "review-737f70a17a55a98363e164a5"
+      ]
+    }
+  ],
+  "qualification": {
+    "counts_are_non_additive": true,
+    "managed_legacy_unique_tests": 330,
+    "managed_legacy_executions_with_rerun": 387,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "suites": [
+      {
+        "name": "affected regression and legacy compatibility",
+        "passed": 118,
+        "total": 118
+      },
+      {
+        "name": "managed continuity/import/Git/scope-secret/workspaces",
+        "passed": 212,
+        "total": 212
+      },
+      {
+        "name": "isolated actor-import rerun",
+        "passed": 57,
+        "total": 57,
+        "overlaps_affected_regression": true
+      },
+      {
+        "name": "contract and proposal API",
+        "passed": 43,
+        "total": 43
+      },
+      {
+        "name": "Pending Sprints UI",
+        "passed": 14,
+        "total": 14
+      },
+      {
+        "name": "focused Telegram pending compatibility",
+        "passed": 16,
+        "total": 16
+      },
+      {
+        "name": "used staging profiles",
+        "passed": 3,
+        "total": 3
+      }
+    ],
+    "compileall": "passed"
+  },
+  "evidence_artifacts": [
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-001-completed-sprint-baseline.json",
+      "introduced_by": "556a0442b0e4666f6456cd94f773de51decf21c9",
+      "blob": "11953fce30b7f36893d8ced2704d0dfb4dccb76f",
+      "role": "authoritative completed-sprint baseline"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-004-inbound-hub-e2e.json",
+      "introduced_by": "11bb6aadb2bf33de8f16484f70e01a4c1c018605",
+      "blob": "8c288e02dd18e13dbac575a5acbcf538acc152ea",
+      "role": "historical initial IE2E-004 evidence"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-004-inbound-hub-e2e-resume.json",
+      "introduced_by": "74fe1016d2eacd6e73e141c262f5ef2b2a323f1b",
+      "blob": "4ac7cac0990924f9b6e592a1bbeec6102dccbac3",
+      "role": "authoritative final IE2E-004 evidence"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary.json",
+      "introduced_by": "f628596c3052368d5a8c687c8265720a820b308a",
+      "blob": "3a724957683c1907611391b104289f78bf599e8f",
+      "role": "historical NEED_DECISION evidence"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-staging-resume-decision.json",
+      "introduced_by": "172f0c23e985c337f180cc84de1f1a2ec70d503e",
+      "blob": "7488bda3867ff27a77e06f795f836688579496be",
+      "role": "accepted staging resume decision"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary-resume.json",
+      "introduced_by": "0f3c9d3c1f313bacf67126a2aed208f95ab3e371",
+      "blob": "e4f487c7caa3de743c5f9566bb9c47f599fc0094",
+      "role": "superseded evidence rejected for legacy managed-inventory proof"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary-rework.json",
+      "introduced_by": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211",
+      "blob": "489a2009df2e687a649f5df081fc0e3e492f779e",
+      "role": "authoritative final Play-boundary evidence"
+    },
+    {
+      "path": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-006-qualification.json",
+      "introduced_by": "b9b44072f576d06b0e571b86a4b6746d96f65a01",
+      "blob": "74ff08e6016dcabf69da9af136677b2f318b5df2",
+      "role": "accepted qualification record"
+    }
+  ],
+  "play_boundary": {
+    "authoritative_inventory_endpoint": "/api/v1/execution-catalog",
+    "sprints_immediately_before_play": 0,
+    "sprints_immediately_after_play": 1,
+    "direct_start_from_git_requests": 0,
+    "explicit_proposal_start_requests": 1,
+    "disposable_sprint_id": "msv1-634625cc4caa0b9653cf03746361c4db221ceef52cc4cdedae1ea8aa1f88841f",
+    "staging_port": 18031,
+    "staging_pid_at_qualification": 52152,
+    "isolated": true
+  },
+  "risks": [
+    "large cumulative 110-commit, 190-file diff from pinned main",
+    "runtime-fix stack is local-only and absent from qualified candidate",
+    "movable manifest source_ref now resolves to an unqualified R2 tip",
+    "parallel R2 branches are divergent and must not be merged silently",
+    "generic staging example suite is 16/18 because of two documented host filesystem-alias errors",
+    "18500-18599 is also named by an inactive older profile although no listener collision exists",
+    "staging evidence is loopback-only and authorizes no public or production exposure",
+    "high-signal secret scan is not a substitute for policy-required full-repository security tooling"
+  ],
+  "stale_review_maintenance": {
+    "title": "Managed observability reports superseded sibling review as active/current after REJECT",
+    "sprint_id": "msv1-73283eef635f07783771ac13564a74ec55bd191a97a7095bf7cb5b5412e8b6d3",
+    "review_id": "review-ac278d22d5bcf84267deb398",
+    "rejected_result_key": "result-17557e1a742ee66f1170b4a1723e2d06f1a237b80d7517dfd91ab9d3620154ee",
+    "rejected_assignment_id": "assignment-1855d5fb357db908a1823954",
+    "replacement_assignment_id": "assignment-2409927cf5f23eb92e2d2ba9",
+    "blocking": false,
+    "manual_state_repair_allowed": false,
+    "minimal_fix": "atomically supersede sibling reviews on REJECT, retain audit linkage, settle outbox safely, and derive observability currentness from live journal bindings",
+    "required_tests": [
+      "sibling review terminalization",
+      "no stale phone binding or current projection",
+      "audit retention",
+      "exactly one rework assignment",
+      "stable late and replayed sibling response",
+      "restart idempotency",
+      "completed sprint has no active current review"
+    ]
+  },
+  "operator_gate": {
+    "require_ie2e_007_accepted_and_sprint_completed": true,
+    "require_runtime_fix_series_integrated": true,
+    "require_exact_combined_head_requalified": true,
+    "require_origin_main_unchanged_or_reintegration": true,
+    "require_clean_full_diff_review": true,
+    "require_branch_protection_and_named_approvals": true,
+    "direct_push_to_main": false,
+    "allowed_merge_method": "ancestry-preserving non-squash merge commit only",
+    "source_merge_includes_deployment": false
+  },
+  "rollback": {
+    "before_merge": "abort on any SHA, ancestry, diff, CI, review, or policy mismatch",
+    "after_source_merge_before_deployment": "use a reviewed revert PR for the merge commit and rerun qualification; never reset or force-push",
+    "deployment_rollback": "out of scope and requires a separate cold backup, drain, health, and lossless reconciliation plan",
+    "manual_runtime_or_sqlite_edits": false
+  },
+  "validation": {
+    "json_parse": "passed",
+    "markdown_diff_check": "passed",
+    "secret_scan": {
+      "patterns": 5,
+      "hits": 0,
+      "status": "passed"
+    },
+    "main_mutated": false,
+    "services_restarted": false,
+    "runtime_state_mutated": false
+  }
+}

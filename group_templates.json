@@ -1,0 +1,270 @@
+{
+  "schema_version": 1,
+  "agent_specs": {
+    "analytic_v2": {
+      "name": "System Analyst",
+      "profile_path": "prompts/analitic.md",
+      "parameters": {
+        "role": "system_analyst"
+      },
+      "status": "active"
+    },
+    "programmer_backend_v1": {
+      "name": "Backend Developer",
+      "profile_path": "prompts/programmer_backend.md",
+      "parameters": {
+        "role": "backend_developer"
+      },
+      "status": "active"
+    },
+    "qa_tester_v1": {
+      "name": "QA Engineer",
+      "profile": "Ты QA Engineer группы проекта. Получай адресованные тебе задания через указанный queue endpoint, проверяй результат по требованиям задачи и возвращай воспроизводимый PASS/FAIL отчёт отправителю. Не меняй код, если задача явно не требует реализации.",
+      "parameters": {
+        "role": "qa_engineer"
+      },
+      "status": "active"
+    },
+    "designer_v1": {
+      "name": "UX/UI Designer",
+      "profile_path": "prompts/designer.md",
+      "parameters": {
+        "role": "ux_designer"
+      },
+      "status": "active"
+    },
+    "programmer_frontend_v1": {
+      "name": "Frontend Developer",
+      "profile_path": "prompts/programmer_frontend.md",
+      "parameters": {
+        "role": "frontend_developer"
+      },
+      "status": "active"
+    },
+    "project_coordinator_v1": {
+      "name": "Project Coordinator",
+      "profile": "Ты координатор группы проекта. Принимай внешнюю задачу, передавай её входным агентам по декларативным связям группы, отслеживай блокировки и по завершении собирай единый отчёт заказчику в формате RESULT, CHANGES, VERIFICATION, RISKS и NEXT STEPS.",
+      "parameters": {
+        "role": "project_coordinator"
+      },
+      "status": "active"
+    }
+  },
+  "group_templates": {
+    "backend_dev_team_v1": {
+      "template_id": "backend_dev_team_v1",
+      "name": "Backend Development Team",
+      "description": "Команда для проектирования, реализации и проверки backend/API задач.",
+      "agent_templates": [
+        {
+          "role": "system_analyst",
+          "spec": "analytic_v2",
+          "is_entrypoint": true
+        },
+        {
+          "role": "backend_developer",
+          "spec": "programmer_backend_v1"
+        },
+        {
+          "role": "qa_engineer",
+          "spec": "qa_tester_v1"
+        }
+      ],
+      "internal_connections": [
+        {
+          "id": "analyst-to-backend",
+          "from": "system_analyst",
+          "to": "backend_developer",
+          "channel_type": "queue",
+          "queue": "worker-all",
+          "event": "spec_approved"
+        },
+        {
+          "id": "backend-to-qa",
+          "from": "backend_developer",
+          "to": "qa_engineer",
+          "channel_type": "queue",
+          "queue": "tester-all",
+          "event": "code_ready"
+        },
+        {
+          "id": "qa-to-backend",
+          "from": "qa_engineer",
+          "to": "backend_developer",
+          "channel_type": "queue",
+          "queue": "worker-all",
+          "event": "bug_found"
+        },
+        {
+          "id": "qa-to-analyst",
+          "from": "qa_engineer",
+          "to": "system_analyst",
+          "channel_type": "queue",
+          "queue": "worker-all",
+          "event": "verification_complete"
+        }
+      ],
+      "reporting_rule": {
+        "report_from": "system_analyst",
+        "report_to": "project_manager",
+        "trigger": "all_tasks_completed",
+        "output_queue": "worker-all",
+        "required_sections": [
+          "RESULT",
+          "CHANGES",
+          "VERIFICATION",
+          "RISKS",
+          "NEXT_STEPS"
+        ]
+      }
+    },
+    "frontend_dev_team_v1": {
+      "template_id": "frontend_dev_team_v1",
+      "name": "Frontend Development Team",
+      "description": "Команда для проектирования, реализации и проверки интерфейса.",
+      "agent_templates": [
+        {
+          "role": "ux_designer",
+          "spec": "designer_v1",
+          "is_entrypoint": true
+        },
+        {
+          "role": "frontend_developer",
+          "spec": "programmer_frontend_v1"
+        },
+        {
+          "role": "qa_engineer",
+          "spec": "qa_tester_v1"
+        }
+      ],
+      "internal_connections": [
+        {
+          "id": "designer-to-frontend",
+          "from": "ux_designer",
+          "to": "frontend_developer",
+          "channel_type": "queue",
+          "queue": "worker-all",
+          "event": "design_ready"
+        },
+        {
+          "id": "frontend-to-qa",
+          "from": "frontend_developer",
+          "to": "qa_engineer",
+          "channel_type": "queue",
+          "queue": "tester-all",
+          "event": "ui_ready"
+        },
+        {
+          "id": "qa-to-frontend",
+          "from": "qa_engineer",
+          "to": "frontend_developer",
+          "channel_type": "queue",
+          "queue": "worker-all",
+          "event": "ui_bug_found"
+        }
+      ],
+      "reporting_rule": {
+        "report_from": "ux_designer",
+        "report_to": "project_manager",
+        "trigger": "all_tasks_completed",
+        "output_queue": "worker-all",
+        "required_sections": [
+          "RESULT",
+          "CHANGES",
+          "VERIFICATION",
+          "RISKS",
+          "NEXT_STEPS"
+        ]
+      }
+    },
+    "project_coordination_v1": {
+      "template_id": "project_coordination_v1",
+      "name": "Project Coordination",
+      "description": "Координация нескольких рабочих групп и отчёт заказчику.",
+      "agent_templates": [
+        {
+          "role": "project_coordinator",
+          "spec": "project_coordinator_v1",
+          "is_entrypoint": true
+        }
+      ],
+      "internal_connections": [],
+      "reporting_rule": {
+        "report_from": "project_coordinator",
+        "report_to": "customer",
+        "trigger": "project_milestone_or_completion",
+        "output_queue": "worker-all",
+        "required_sections": [
+          "RESULT",
+          "GROUP_STATUS",
+          "VERIFICATION",
+          "RISKS",
+          "NEXT_STEPS"
+        ]
+      }
+    }
+  },
+  "group_topologies": {
+    "full_delivery_v1": {
+      "topology_id": "full_delivery_v1",
+      "name": "Full Delivery Topology",
+      "groups": [
+        "project_coordination_v1",
+        "backend_dev_team_v1",
+        "frontend_dev_team_v1"
+      ],
+      "connections": [
+        {
+          "id": "coordination-to-backend",
+          "from_group": "project_coordination_v1",
+          "from_role": "project_coordinator",
+          "to_group": "backend_dev_team_v1",
+          "to_role": "system_analyst",
+          "queue": "worker-all",
+          "event": "backend_task_assigned"
+        },
+        {
+          "id": "coordination-to-frontend",
+          "from_group": "project_coordination_v1",
+          "from_role": "project_coordinator",
+          "to_group": "frontend_dev_team_v1",
+          "to_role": "ux_designer",
+          "queue": "worker-all",
+          "event": "frontend_task_assigned"
+        },
+        {
+          "id": "backend-to-coordination",
+          "from_group": "backend_dev_team_v1",
+          "from_role": "system_analyst",
+          "to_group": "project_coordination_v1",
+          "to_role": "project_coordinator",
+          "queue": "worker-all",
+          "event": "backend_report_ready"
+        },
+        {
+          "id": "frontend-to-coordination",
+          "from_group": "frontend_dev_team_v1",
+          "from_role": "ux_designer",
+          "to_group": "project_coordination_v1",
+          "to_role": "project_coordinator",
+          "queue": "worker-all",
+          "event": "frontend_report_ready"
+        }
+      ],
+      "customer_reporting": {
+        "reporter_group": "project_coordination_v1",
+        "reporter_role": "project_coordinator",
+        "recipient": "customer",
+        "trigger": "all_required_groups_completed",
+        "delivery": "return_to_requester",
+        "required_sections": [
+          "RESULT",
+          "GROUP_STATUS",
+          "VERIFICATION",
+          "RISKS",
+          "NEXT_STEPS"
+        ]
+      }
+    }
+  }
+}
