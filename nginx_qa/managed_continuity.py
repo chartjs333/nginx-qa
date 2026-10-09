@@ -5754,12 +5754,30 @@ class ManagedContinuityRuntime:
         graph_revision = int(prospective["graph_revision"])
         target_node_id = str(token["target_node_id"])
         target_node = _node(prospective, graph_revision, target_node_id)
-        if target_node.get("activation_policy", "all_parents") != "all_parents":
+        activation_policy = str(
+            target_node.get("activation_policy") or "all_parents"
+        )
+        if activation_policy == "any_parent":
+            # The first occurrence can be scheduled after acknowledgement.
+            # Once history exists, however, a newly selected token must create
+            # its next occurrence in this transaction or it can retroactively
+            # invalidate the earlier deterministic trigger.
+            if not any(
+                isinstance(occurrence, Mapping)
+                and occurrence.get("node_id") == target_node_id
+                for occurrence in prospective["workflow"]["occurrences"]
+            ):
+                return None
+        elif activation_policy != "all_parents":
             return None
         selected = self._ready_tokens(prospective, target_node_id)
-        if len(selected) < 2 or token["token_id"] not in {
-            item["token_id"] for item in selected
-        }:
+        if (
+            not selected
+            or (activation_policy == "all_parents" and len(selected) < 2)
+            or token["token_id"] not in {
+                item["token_id"] for item in selected
+            }
+        ):
             return None
         trigger_ids = tuple(str(item["token_id"]) for item in selected)
         result_keys = tuple(str(item["result_key"]) for item in selected)

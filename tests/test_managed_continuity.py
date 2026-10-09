@@ -165,6 +165,204 @@ class ManagedContinuityTests(unittest.TestCase):
             )
             connection.commit()
 
+    @staticmethod
+    def prepare_fixture_read_assignment(
+        project_id: str,
+        candidate: dict,
+        *,
+        occurrence_id: str,
+        node_id: str,
+        graph_revision: int,
+        source_kind: str,
+        source_result_keys: list[str],
+        source_commit: str,
+        rework_cycle: int = 0,
+        integration_id: str | None = None,
+        identity_salt: str | None = None,
+    ) -> _PreparedAssignment:
+        identity_parts: list[object] = [
+            SPRINT_ID,
+            occurrence_id,
+            node_id,
+            graph_revision,
+            source_kind,
+            rework_cycle,
+            ",".join(source_result_keys),
+        ]
+        if identity_salt is not None:
+            identity_parts.append(identity_salt)
+        assignment_id = _stable_id(
+            "assignment", *identity_parts, compact=True
+        )
+        workspace_id = _stable_id(
+            "workspace", project_id, SPRINT_ID, node_id, assignment_id
+        )
+        workspace_base = candidate["workspaces"][0]["expected_root"].split(
+            "/nodes/", 1
+        )[0]
+        expected_root = f"{workspace_base}/nodes/{node_id}/{assignment_id}"
+        repository = candidate["repository"]
+        assignment = {
+            "assignment_id": assignment_id,
+            "occurrence_id": occurrence_id,
+            "node_id": node_id,
+            "agent_id": "joiner",
+            "agent_phone": "2863",
+            "graph_revision": graph_revision,
+            "source_kind": source_kind,
+            "source_result_keys": list(source_result_keys),
+            "source_commit": source_commit,
+            "initial_head_commit": source_commit,
+            "integration_id": integration_id,
+            "rework_cycle": rework_cycle,
+            "result_commit": None,
+            "outcome": None,
+            "status": "active",
+            "workspace_id": workspace_id,
+            "branch_lease_id": None,
+            "allowed_outcomes": ["DONE", "STOP", "NEED_DECISION"],
+            "created_at": TIMESTAMP,
+            "completed_at": None,
+        }
+        workspace = {
+            "workspace_id": workspace_id,
+            "project_id": project_id,
+            "sprint_id": SPRINT_ID,
+            "node_id": node_id,
+            "assignment_id": assignment_id,
+            "expected_root": expected_root,
+            "actual_git_toplevel": expected_root,
+            "actual_git_dir": f"{expected_root}/.git",
+            "repository_id": repository["repository_id"],
+            "repository_remote": repository["canonical_remote"],
+            "source_commit": source_commit,
+            "initial_head_commit": source_commit,
+            "assigned_branch": None,
+            "working_tree_state": "clean",
+        }
+        request = WorkspaceRequest(
+            project_id=project_id,
+            sprint_id=SPRINT_ID,
+            node_id=node_id,
+            assignment_id=assignment_id,
+            repository_id=repository["repository_id"],
+            source_commit=source_commit,
+            access="read",
+            assigned_branch=None,
+            existing_branch_policy=None,
+        )
+        verified = ManagedWorkspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            sprint_id=SPRINT_ID,
+            node_id=node_id,
+            assignment_id=assignment_id,
+            repository_id=repository["repository_id"],
+            repository_remote=repository["canonical_remote"],
+            mirror_storage_key=repository["mirror_storage_key"],
+            expected_root=Path(expected_root),
+            actual_git_toplevel=Path(expected_root),
+            actual_git_dir=Path(f"{expected_root}/.git"),
+            source_commit=source_commit,
+            initial_head_commit=source_commit,
+            head_commit=source_commit,
+            assigned_branch=None,
+            access="read",
+            working_tree_state="clean",
+            branch_lease_id=None,
+        )
+        return _PreparedAssignment(
+            assignment=assignment,
+            workspace=workspace,
+            workspace_request=request,
+            verified_workspace=verified,
+            branch_request=None,
+            branch_lease=None,
+            port_leases=(),
+            processes=(),
+        )
+
+    def configure_deferred_any_parent_second_review(
+        self,
+    ) -> tuple[dict, dict, dict]:
+        state, _trigger_ids = prepared_integration_runtime_fixture()
+        definition = state["graph_revisions"][0]["definition"]
+        join = next(node for node in definition["nodes"] if node["id"] == "join")
+        join["activation_policy"] = "any_parent"
+        join.pop("join_parent_order")
+        join["workspace"].pop("join_strategy")
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+        state["integrations"] = []
+        state["integration_workspaces"] = []
+
+        build_token = next(
+            token
+            for token in state["workflow"]["transition_tokens"]
+            if token["source_node_id"] == "build"
+        )
+        lint_token = next(
+            token
+            for token in state["workflow"]["transition_tokens"]
+            if token["source_node_id"] == "lint"
+        )
+        self.assertLess(lint_token["result_key"], build_token["result_key"])
+        state["workflow"]["transition_tokens"] = [build_token]
+        lint_assignment = next(
+            assignment
+            for assignment in state["assignments"]
+            if assignment["assignment_id"] == "lint-assignment"
+        )
+        lint_assignment.update({"status": "reviews_pending", "completed_at": None})
+        lint_occurrence = next(
+            occurrence
+            for occurrence in state["workflow"]["occurrences"]
+            if occurrence["occurrence_id"] == lint_assignment["occurrence_id"]
+        )
+        lint_occurrence.update({"state": "reviews_pending", "completed_at": None})
+        state["active_assignment_ids"] = ["lint-assignment"]
+        state["allowed_outcomes_by_assignment"] = {
+            "lint-assignment": list(lint_assignment["allowed_outcomes"])
+        }
+        lint_journal = next(
+            journal
+            for journal in state["transition_journal"]
+            if journal["assignment_id"] == "lint-assignment"
+        )
+        lint_journal.update(
+            {
+                "state": "REVIEWS_PENDING",
+                "disposition": "open",
+                "transition_token_ids": [],
+                "target_occurrence_ids": [],
+                "outbox_event_ids": [],
+            }
+        )
+        second_review = next(
+            review
+            for review in state["review_assignments"]
+            if review["source_assignment_id"] == "lint-assignment"
+            and review["reviewer_index"] == 2
+        )
+        second_review.update(
+            {
+                "status": "active",
+                "decision": None,
+                "request_fingerprint": None,
+                "response": None,
+                "decided_at": None,
+            }
+        )
+        state["reviews"] = [
+            review
+            for review in state["reviews"]
+            if review["assignment_id"] != second_review["assignment_id"]
+        ]
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+        return build_token, lint_token, second_review
+
     def configure_parallel_active_sibling(
         self, *, maximum: int = 0
     ) -> None:
@@ -954,129 +1152,11 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(managed_activation_invariant_issues(state), ())
         self.replace_state(state)
 
-        def prepare_read_assignment(
-            project_id: str,
-            candidate: dict,
-            *,
-            occurrence_id: str,
-            node_id: str,
-            graph_revision: int,
-            source_kind: str,
-            source_result_keys: list[str],
-            source_commit: str,
-            rework_cycle: int = 0,
-            integration_id: str | None = None,
-            identity_salt: str | None = None,
-        ) -> _PreparedAssignment:
-            identity_parts: list[object] = [
-                SPRINT_ID,
-                occurrence_id,
-                node_id,
-                graph_revision,
-                source_kind,
-                rework_cycle,
-                ",".join(source_result_keys),
-            ]
-            if identity_salt is not None:
-                identity_parts.append(identity_salt)
-            assignment_id = _stable_id(
-                "assignment", *identity_parts, compact=True
-            )
-            workspace_id = _stable_id(
-                "workspace", project_id, SPRINT_ID, node_id, assignment_id
-            )
-            workspace_base = candidate["workspaces"][0]["expected_root"].split(
-                "/nodes/", 1
-            )[0]
-            expected_root = (
-                f"{workspace_base}/nodes/{node_id}/{assignment_id}"
-            )
-            repository = candidate["repository"]
-            assignment = {
-                "assignment_id": assignment_id,
-                "occurrence_id": occurrence_id,
-                "node_id": node_id,
-                "agent_id": "joiner",
-                "agent_phone": "2863",
-                "graph_revision": graph_revision,
-                "source_kind": source_kind,
-                "source_result_keys": list(source_result_keys),
-                "source_commit": source_commit,
-                "initial_head_commit": source_commit,
-                "integration_id": integration_id,
-                "rework_cycle": rework_cycle,
-                "result_commit": None,
-                "outcome": None,
-                "status": "active",
-                "workspace_id": workspace_id,
-                "branch_lease_id": None,
-                "allowed_outcomes": ["DONE", "STOP", "NEED_DECISION"],
-                "created_at": TIMESTAMP,
-                "completed_at": None,
-            }
-            workspace = {
-                "workspace_id": workspace_id,
-                "project_id": project_id,
-                "sprint_id": SPRINT_ID,
-                "node_id": node_id,
-                "assignment_id": assignment_id,
-                "expected_root": expected_root,
-                "actual_git_toplevel": expected_root,
-                "actual_git_dir": f"{expected_root}/.git",
-                "repository_id": repository["repository_id"],
-                "repository_remote": repository["canonical_remote"],
-                "source_commit": source_commit,
-                "initial_head_commit": source_commit,
-                "assigned_branch": None,
-                "working_tree_state": "clean",
-            }
-            request = WorkspaceRequest(
-                project_id=project_id,
-                sprint_id=SPRINT_ID,
-                node_id=node_id,
-                assignment_id=assignment_id,
-                repository_id=repository["repository_id"],
-                source_commit=source_commit,
-                access="read",
-                assigned_branch=None,
-                existing_branch_policy=None,
-            )
-            verified = ManagedWorkspace(
-                workspace_id=workspace_id,
-                project_id=project_id,
-                sprint_id=SPRINT_ID,
-                node_id=node_id,
-                assignment_id=assignment_id,
-                repository_id=repository["repository_id"],
-                repository_remote=repository["canonical_remote"],
-                mirror_storage_key=repository["mirror_storage_key"],
-                expected_root=Path(expected_root),
-                actual_git_toplevel=Path(expected_root),
-                actual_git_dir=Path(f"{expected_root}/.git"),
-                source_commit=source_commit,
-                initial_head_commit=source_commit,
-                head_commit=source_commit,
-                assigned_branch=None,
-                access="read",
-                working_tree_state="clean",
-                branch_lease_id=None,
-            )
-            return _PreparedAssignment(
-                assignment=assignment,
-                workspace=workspace,
-                workspace_request=request,
-                verified_workspace=verified,
-                branch_request=None,
-                branch_lease=None,
-                port_leases=(),
-                processes=(),
-            )
-
         with (
             patch.object(
                 self.runtime,
                 "_prepare_assignment",
-                side_effect=prepare_read_assignment,
+                side_effect=self.prepare_fixture_read_assignment,
             ),
             patch.object(self.runtime, "_publish_prepared_assignment"),
         ):
@@ -1112,6 +1192,121 @@ class ManagedContinuityTests(unittest.TestCase):
             identity.response["assignment"]["assignment_id"],
             min(item["assignment_id"] for item in live),
         )
+
+    def test_second_review_approval_creates_repeated_any_parent_successor_atomically(
+        self,
+    ) -> None:
+        build_token, lint_token, second_review = (
+            self.configure_deferred_any_parent_second_review()
+        )
+
+        payload = canonical_json_bytes(
+            {
+                "assignment_id": second_review["assignment_id"],
+                "status": "APPROVE",
+            }
+        )
+        with (
+            patch.object(
+                self.runtime,
+                "_prepare_assignment",
+                side_effect=self.prepare_fixture_read_assignment,
+            ),
+            patch.object(self.runtime, "_publish_prepared_assignment"),
+        ):
+            first = self.store.runtime_state("project-id", SPRINT_ID)
+            self.assertTrue(
+                self.runtime._schedule_one("project-id", SPRINT_ID, first)
+            )
+            with patch.object(
+                self.runtime, "_resume_after_durable_ack", return_value=None
+            ):
+                accepted = self.runtime.submit_if_managed(
+                    "project-id",
+                    second_review["reviewer_phone"],
+                    payload,
+                    "second-any-parent-review",
+                )
+                replay = self.runtime.submit_if_managed(
+                    "project-id",
+                    second_review["reviewer_phone"],
+                    payload,
+                    "second-any-parent-review-replay",
+                )
+
+        self.assertEqual(accepted.response["status"], "REVIEW_ACCEPTED")
+        self.assertFalse(accepted.response["deduplicated"])
+        self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
+        self.assertTrue(replay.response["deduplicated"])
+        scheduled = self.store.runtime_state("project-id", SPRINT_ID)
+        join_occurrences = sorted(
+            (
+                occurrence
+                for occurrence in scheduled["workflow"]["occurrences"]
+                if occurrence["node_id"] == "join"
+            ),
+            key=lambda occurrence: occurrence["generation"],
+        )
+        self.assertEqual([item["generation"] for item in join_occurrences], [1, 2])
+        self.assertEqual(
+            join_occurrences[0]["trigger_token_ids"], [build_token["token_id"]]
+        )
+        self.assertEqual(
+            join_occurrences[1]["trigger_token_ids"], [lint_token["token_id"]]
+        )
+        current_lint_token = next(
+            token
+            for token in scheduled["workflow"]["transition_tokens"]
+            if token["token_id"] == lint_token["token_id"]
+        )
+        self.assertEqual(current_lint_token["status"], "consumed")
+        self.assertEqual(
+            current_lint_token["consumed_by_occurrence_id"],
+            join_occurrences[1]["occurrence_id"],
+        )
+        successor = next(
+            assignment
+            for assignment in scheduled["assignments"]
+            if assignment["occurrence_id"] == join_occurrences[1]["occurrence_id"]
+        )
+        self.assertEqual(
+            len(
+                [
+                    assignment
+                    for assignment in scheduled["assignments"]
+                    if assignment["node_id"] == "join"
+                ]
+            ),
+            2,
+        )
+        self.assertEqual(
+            successor["source_result_keys"], [lint_token["result_key"]]
+        )
+        self.assertTrue(
+            any(
+                event["event_type"] == "ASSIGNMENT_ENQUEUE"
+                and event["payload"]["assignment_id"] == successor["assignment_id"]
+                for event in scheduled["outbox"]
+            )
+        )
+        current_lint_journal = next(
+            journal
+            for journal in scheduled["transition_journal"]
+            if journal["assignment_id"] == "lint-assignment"
+        )
+        self.assertEqual(current_lint_journal["state"], "NEXT_ASSIGNMENT_ENQUEUED")
+        self.assertEqual(
+            current_lint_journal["target_occurrence_ids"],
+            [join_occurrences[1]["occurrence_id"]],
+        )
+        current_second_review = next(
+            review
+            for review in scheduled["review_assignments"]
+            if review["assignment_id"] == second_review["assignment_id"]
+        )
+        self.assertEqual(current_second_review["status"], "decided")
+        self.assertEqual(current_second_review["decision"], "APPROVE")
+        self.assertEqual(managed_activation_invariant_issues(scheduled), ())
 
     def test_identity_rediscovery_selects_remaining_same_phone_binding(
         self,
