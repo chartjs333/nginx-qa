@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "kind": "premerge_inbound_hub_e2e_qualification",
+  "generated_at": "2026-10-09T07:52:07.7224473Z",
+  "assignment": {
+    "sprint_id": "msv1-ba2bf6954904bb266557273aae5b085292dea4802abadc4f398ba61f20e719bf",
+    "assignment_id": "assignment-7ed1b11e1efb53eb4e2d5e19",
+    "node_id": "qualification",
+    "agent_id": "premerge-e2e-qa",
+    "agent_phone": "2966",
+    "task_id": "IE2E-006",
+    "branch": "agent/ie2e-06-qualification",
+    "from_commit": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211",
+    "tested_commit": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211"
+  },
+  "candidate_provenance": {
+    "origin_main": "70524c8aba60e6f8b9ebc3b3374f5992be520fc1",
+    "origin_main_unchanged": true,
+    "origin_main_is_ancestor": true,
+    "origin_main_candidate_divergence": {
+      "behind": 0,
+      "ahead": 109
+    },
+    "accepted_inbound_qualification_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "premerge_manifest_commit": "a5dec1213a0d4530928ad7e9763a4d0d044348db",
+    "integration_branch": "integration/inbound-coordinator-e2e-20261007",
+    "integration_commit": "2abb11c0a869ab924934d7d471741aed036e63da",
+    "accepted_play_boundary_commit": "a1bf2426abe3aa1b56c891d9674e0ad8c61b9211",
+    "all_named_commits_resolve": true
+  },
+  "test_execution": {
+    "counts_are_non_additive": true,
+    "managed_and_legacy_selection": {
+      "unique_tests": 330,
+      "total_executions_including_actor_import_rerun": 387,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "suites": [
+      {
+        "name": "affected regression and legacy compatibility",
+        "command": "python -m unittest tests.test_legacy_scope_control tests.test_project_actor_import tests.test_queue_persistence tests.test_groups tests.test_sequential_prompt_ui tests.test_sprint_type_contract.SprintSchemaContractTests.test_exact_schema_set_meta_validates_and_refs_resolve_offline tests.test_sprint_type_contract.SprintSchemaContractTests.test_every_public_api_schema_has_a_positive_instance -v",
+        "passed": 118,
+        "total": 118,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 78.801,
+        "wall_seconds": 80.512
+      },
+      {
+        "name": "managed continuity, import, Git, scope-secret, and workspace regressions",
+        "command": "python -m unittest tests.test_managed_continuity tests.test_managed_continuity_import_recovery tests.test_managed_continuity_merge_git tests.test_managed_import tests.test_managed_scope_secret_boundary tests.test_managed_workspaces -v",
+        "passed": 212,
+        "total": 212,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 1349.055,
+        "wall_seconds": 1350.86
+      },
+      {
+        "name": "legacy actor import isolated rerun",
+        "command": "python -m unittest tests.test_project_actor_import -v",
+        "passed": 57,
+        "total": 57,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 30.22,
+        "wall_seconds": 32.015,
+        "overlaps_affected_regression": true
+      },
+      {
+        "name": "inbound coordinator contract and proposal API",
+        "command": "python -m unittest -v tests.test_inbound_coordinator_contract tests.test_inbound_proposal_api",
+        "passed": 43,
+        "total": 43,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 7.827
+      },
+      {
+        "name": "pending sprints UI",
+        "command": "python -m unittest -v tests.test_pending_sprints_ui",
+        "passed": 14,
+        "total": 14,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 0.481
+      },
+      {
+        "name": "focused Telegram pending compatibility",
+        "selection": "16 exact project_actor_import Telegram flow tests",
+        "passed": 16,
+        "total": 16,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "unittest_seconds": 3.125,
+        "expected_negative_path_diagnostics_only": true
+      },
+      {
+        "name": "Python compilation",
+        "command": "python -m compileall -q main.py nginx_qa staging_host_app.py configure_telegram.py",
+        "status": "passed"
+      },
+      {
+        "name": "staging profiles used by this premerge flow",
+        "selection": [
+          "test_premerge_inbound_hub_profile_is_isolated_and_valid",
+          "test_short_premerge_profile_is_isolated_and_valid",
+          "test_short_premerge_r2_profile_is_isolated_and_valid"
+        ],
+        "passed": 3,
+        "total": 3,
+        "failures": 0,
+        "errors": 0
+      }
+    ]
+  },
+  "contract_assertions": {
+    "idempotent_create_and_read": "covered and passed",
+    "create_read_comment_reject_preview_do_not_activate": "covered by tests and fresh staging evidence",
+    "only_explicit_play_activates": "covered by fresh staging evidence",
+    "source_provenance_is_returned": "covered and passed",
+    "source_metadata_not_forwarded_as_executor_adapter": "test_create_replay_and_read_are_durable_without_activation passed and asserts source metadata is absent from the import payload",
+    "pending_ui_compatibility": "covered and passed",
+    "telegram_pending_compatibility": "covered by full actor-import suite and focused rerun",
+    "managed_identity_and_workspace_recovery": "covered by managed-focused suite"
+  },
+  "staging_e2e": {
+    "primary_flow_evidence": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-004-inbound-hub-e2e-resume.json",
+    "play_boundary_evidence": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-005-play-boundary-rework.json",
+    "all_evidence_documents_parse": true,
+    "all_referenced_git_objects_resolve": true,
+    "fresh_play_staging": {
+      "service_root": "D:/nq-e2e-18031",
+      "state_root": "C:/nq-e2e-18031",
+      "runtime_root": "C:/nq-e2e-18031/runtime",
+      "managed_root": "C:/nq-e2e-18031/managed",
+      "prompt_root": "C:/nq-e2e-18031/prompt",
+      "project_registry": "C:/nq-e2e-18031/legacy/port_git_map.json",
+      "http_port": 18031,
+      "pid": 52152,
+      "child_port_range": "18500-18599",
+      "root_http_status": 200,
+      "git_config_http_status": 200,
+      "openapi_http_status": 200,
+      "execution_catalog_http_status": 200,
+      "managed_observability_http_status": 200,
+      "activated_disposable_sprint_id": "msv1-634625cc4caa0b9653cf03746361c4db221ceef52cc4cdedae1ea8aa1f88841f",
+      "activated_disposable_sprint_status": "active",
+      "active_assignment_id": "assignment-418b7dfaa652b4b032042c7a",
+      "active_node_id": "activation-probe",
+      "active_agent_phone": "2993"
+    },
+    "play_boundary_conclusion": "The authoritative execution catalog contained zero sprints after create/read/status/comment/reject/preview and exactly one disposable managed sprint only after one explicit proposal Play request. No direct start-from-git request was made."
+  },
+  "completed_sprint_evidence": {
+    "artifact": "docs/evidence/premerge-inbound-hub-e2e-v1/ie2e-001-completed-sprint-baseline.json",
+    "completed_sprint_id": "msv1-73283eef635f07783771ac13564a74ec55bd191a97a7095bf7cb5b5412e8b6d3",
+    "execution_revision": 46,
+    "qualification_outcome": "PASS",
+    "qualified_commit": "02d16fdf2e2220a0dfd9854721e89da73d7fe545",
+    "accepted_results_have_two_approvals": true,
+    "rejected_result_excluded": true,
+    "stale_superseded_review_recorded": true
+  },
+  "security_and_isolation": {
+    "evidence_artifact_secret_scan": {
+      "artifacts": 7,
+      "high_signal_rules_per_artifact": 10,
+      "checks": 70,
+      "hits": 0
+    },
+    "structured_sensitive_key_scan": "passed",
+    "credential_or_verifier_material_recorded": false,
+    "email_or_folder_adapter_configuration_present": false,
+    "source_adapter_leak_detected": false,
+    "manual_runtime_sqlite_or_state_edits": false,
+    "production_proposal_used": false,
+    "tunnel_webhook_or_public_exposure": false,
+    "direct_start_from_git_outside_play": false,
+    "listeners": [
+      {
+        "port": 18025,
+        "pid": 23840,
+        "address": "127.0.0.1",
+        "http_status": 200,
+        "unchanged": true
+      },
+      {
+        "port": 18026,
+        "pid": 35872,
+        "address": "127.0.0.1",
+        "http_status": 200,
+        "unchanged": true
+      },
+      {
+        "port": 18031,
+        "pid": 52152,
+        "address": "127.0.0.1",
+        "http_status": 200,
+        "fresh_disposable_staging": true
+      }
+    ],
+    "staging_child_range_listener_count": 0
+  },
+  "known_non_blocking_diagnostics": [
+    {
+      "area": "generic staging isolation example",
+      "full_suite_result": {
+        "total": 18,
+        "passed": 16,
+        "errors": 2
+      },
+      "error_tests": [
+        "test_environment_example_normalizes_to_the_frozen_staging_config",
+        "test_mutable_roots_are_dedicated_state_base_children"
+      ],
+      "exact_error": "ValueError: managed path contains a filesystem alias",
+      "classification": "pre-existing host alias for the generic .env.staging.example; neither failing test reads the fresh short-root R2 profile",
+      "qualification_basis": "all three staging profiles used by this premerge flow passed, fresh staging E2E passed, and the generic alias diagnostic does not alter the tested candidate"
+    },
+    {
+      "area": "staging child port reservation",
+      "detail": "18500-18599 is also named by an older inactive 18029 profile, but no listener or process collision exists",
+      "future_recommendation": "use 18600 or above for the next disposable profile"
+    },
+    {
+      "area": "completed sprint observability maintenance",
+      "detail": "a stale review of a rejected and superseded result remains observable but is absent from current queues and gates",
+      "blocking": false
+    }
+  ],
+  "validation": {
+    "worktree_clean_before_evidence": true,
+    "git_diff_check": "passed",
+    "artifact_json_parse": "passed",
+    "artifact_secret_scan": {
+      "patterns": 5,
+      "hits": 0,
+      "status": "passed"
+    }
+  },
+  "outcome": {
+    "status": "PASS",
+    "blockers": [],
+    "main_merged_or_pushed": false,
+    "promotion_authorized": false,
+    "summary": "Regression, managed-focused, legacy actor-import, inbound proposal API, pending UI, Telegram compatibility, staging E2E, Play boundary, no-secret, and no-adapter-leak gates passed. main and 18025 remained untouched."
+  }
+}
