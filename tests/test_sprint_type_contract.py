@@ -81,6 +81,7 @@ EXPECTED_SCHEMA_FILES = {
     "managed-api-error-v1.schema.json",
     "managed-assignment-result-response-v1.schema.json",
     "managed-assignment-result-v1.schema.json",
+    "managed-current-identity-response-v1.schema.json",
     "managed-project-control-v1.schema.json",
     "managed-review-decision-response-v1.schema.json",
     "managed-review-decision-v1.schema.json",
@@ -413,6 +414,26 @@ def active_runtime_fixture(*, include_process_definition: bool = False) -> dict:
         "coordinator_contexts": [],
         "blocker_observations": [],
         "recovery_records": [],
+    }
+
+
+def managed_current_identity_response_fixture() -> dict:
+    state = active_runtime_fixture()
+    workspace = state["workspaces"][0]
+    return {
+        "managed": True,
+        "project_id": "project-id",
+        "sprint_id": SPRINT_ID,
+        "assignment_kind": "assignment",
+        "assignment": copy.deepcopy(state["assignments"][0]),
+        "workspace": {
+            "workspace_id": workspace["workspace_id"],
+            "actual_git_toplevel": workspace["actual_git_toplevel"],
+            "expected_root": workspace["expected_root"],
+            "assigned_branch": workspace["assigned_branch"],
+            "source_commit": workspace["source_commit"],
+            "initial_head_commit": workspace["initial_head_commit"],
+        },
     }
 
 
@@ -2384,6 +2405,9 @@ class SprintSchemaContractTests(unittest.TestCase):
                 "status": "REVIEWS_PENDING",
                 "deduplicated": False,
             },
+            "managed-current-identity-response-v1.schema.json": (
+                managed_current_identity_response_fixture()
+            ),
             "managed-project-control-v1.schema.json": project_control_fixture(),
             "managed-review-decision-v1.schema.json": {
                 "assignment_id": "review-assignment-1",
@@ -2522,6 +2546,37 @@ class SprintSchemaContractTests(unittest.TestCase):
         for filename, instance in cases.items():
             with self.subTest(schema=filename):
                 self.validator(filename).validate(instance)
+
+    def test_managed_current_identity_workspace_projection_is_strict(self) -> None:
+        validator = self.validator(
+            "managed-current-identity-response-v1.schema.json"
+        )
+        identity = managed_current_identity_response_fixture()
+        validator.validate(identity)
+
+        governed = copy.deepcopy(identity)
+        governed["effective_scope"] = {}
+        governed[
+            "instruction_precedence"
+        ] = "effective_scope_supersedes_conflicting_issued_scope"
+        validator.validate(governed)
+
+        missing_workspace = copy.deepcopy(identity)
+        missing_workspace.pop("workspace")
+        with self.assertRaises(ValidationError):
+            validator.validate(missing_workspace)
+
+        leaked_workspace = copy.deepcopy(identity)
+        leaked_workspace["workspace"]["actual_git_dir"] = "D:/internal/.git"
+        with self.assertRaises(ValidationError):
+            validator.validate(leaked_workspace)
+
+        review = copy.deepcopy(identity)
+        review["assignment_kind"] = "review"
+        with self.assertRaises(ValidationError):
+            validator.validate(review)
+        review.pop("workspace")
+        validator.validate(review)
 
     def test_review_result_and_response_conditionals_are_strict(self) -> None:
         review_validator = self.validator("managed-review-decision-v1.schema.json")

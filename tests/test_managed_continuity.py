@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 import main
+from jsonschema import Draft202012Validator
 
 from nginx_qa.branch_leases import BranchLeaseRequest, BranchLeaseStore
 from nginx_qa.managed_continuity import (
@@ -20,6 +21,7 @@ from nginx_qa.managed_continuity import (
     RESULT_CONFLICT,
     REVIEW_CONFLICT,
     _PreparedAssignment,
+    _managed_identity_workspace,
     _recovery_settles_context,
     _stable_id,
 )
@@ -37,6 +39,7 @@ from tests.test_sprint_type_contract import (
     COMMIT,
     SPRINT_ID,
     TIMESTAMP,
+    WORKSPACE_1_ROOT,
     active_runtime_fixture,
     completed_runtime_fixture,
     prepared_integration_runtime_fixture,
@@ -161,6 +164,204 @@ class ManagedContinuityTests(unittest.TestCase):
                 ),
             )
             connection.commit()
+
+    @staticmethod
+    def prepare_fixture_read_assignment(
+        project_id: str,
+        candidate: dict,
+        *,
+        occurrence_id: str,
+        node_id: str,
+        graph_revision: int,
+        source_kind: str,
+        source_result_keys: list[str],
+        source_commit: str,
+        rework_cycle: int = 0,
+        integration_id: str | None = None,
+        identity_salt: str | None = None,
+    ) -> _PreparedAssignment:
+        identity_parts: list[object] = [
+            SPRINT_ID,
+            occurrence_id,
+            node_id,
+            graph_revision,
+            source_kind,
+            rework_cycle,
+            ",".join(source_result_keys),
+        ]
+        if identity_salt is not None:
+            identity_parts.append(identity_salt)
+        assignment_id = _stable_id(
+            "assignment", *identity_parts, compact=True
+        )
+        workspace_id = _stable_id(
+            "workspace", project_id, SPRINT_ID, node_id, assignment_id
+        )
+        workspace_base = candidate["workspaces"][0]["expected_root"].split(
+            "/nodes/", 1
+        )[0]
+        expected_root = f"{workspace_base}/nodes/{node_id}/{assignment_id}"
+        repository = candidate["repository"]
+        assignment = {
+            "assignment_id": assignment_id,
+            "occurrence_id": occurrence_id,
+            "node_id": node_id,
+            "agent_id": "joiner",
+            "agent_phone": "2863",
+            "graph_revision": graph_revision,
+            "source_kind": source_kind,
+            "source_result_keys": list(source_result_keys),
+            "source_commit": source_commit,
+            "initial_head_commit": source_commit,
+            "integration_id": integration_id,
+            "rework_cycle": rework_cycle,
+            "result_commit": None,
+            "outcome": None,
+            "status": "active",
+            "workspace_id": workspace_id,
+            "branch_lease_id": None,
+            "allowed_outcomes": ["DONE", "STOP", "NEED_DECISION"],
+            "created_at": TIMESTAMP,
+            "completed_at": None,
+        }
+        workspace = {
+            "workspace_id": workspace_id,
+            "project_id": project_id,
+            "sprint_id": SPRINT_ID,
+            "node_id": node_id,
+            "assignment_id": assignment_id,
+            "expected_root": expected_root,
+            "actual_git_toplevel": expected_root,
+            "actual_git_dir": f"{expected_root}/.git",
+            "repository_id": repository["repository_id"],
+            "repository_remote": repository["canonical_remote"],
+            "source_commit": source_commit,
+            "initial_head_commit": source_commit,
+            "assigned_branch": None,
+            "working_tree_state": "clean",
+        }
+        request = WorkspaceRequest(
+            project_id=project_id,
+            sprint_id=SPRINT_ID,
+            node_id=node_id,
+            assignment_id=assignment_id,
+            repository_id=repository["repository_id"],
+            source_commit=source_commit,
+            access="read",
+            assigned_branch=None,
+            existing_branch_policy=None,
+        )
+        verified = ManagedWorkspace(
+            workspace_id=workspace_id,
+            project_id=project_id,
+            sprint_id=SPRINT_ID,
+            node_id=node_id,
+            assignment_id=assignment_id,
+            repository_id=repository["repository_id"],
+            repository_remote=repository["canonical_remote"],
+            mirror_storage_key=repository["mirror_storage_key"],
+            expected_root=Path(expected_root),
+            actual_git_toplevel=Path(expected_root),
+            actual_git_dir=Path(f"{expected_root}/.git"),
+            source_commit=source_commit,
+            initial_head_commit=source_commit,
+            head_commit=source_commit,
+            assigned_branch=None,
+            access="read",
+            working_tree_state="clean",
+            branch_lease_id=None,
+        )
+        return _PreparedAssignment(
+            assignment=assignment,
+            workspace=workspace,
+            workspace_request=request,
+            verified_workspace=verified,
+            branch_request=None,
+            branch_lease=None,
+            port_leases=(),
+            processes=(),
+        )
+
+    def configure_deferred_any_parent_second_review(
+        self,
+    ) -> tuple[dict, dict, dict]:
+        state, _trigger_ids = prepared_integration_runtime_fixture()
+        definition = state["graph_revisions"][0]["definition"]
+        join = next(node for node in definition["nodes"] if node["id"] == "join")
+        join["activation_policy"] = "any_parent"
+        join.pop("join_parent_order")
+        join["workspace"].pop("join_strategy")
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+        state["integrations"] = []
+        state["integration_workspaces"] = []
+
+        build_token = next(
+            token
+            for token in state["workflow"]["transition_tokens"]
+            if token["source_node_id"] == "build"
+        )
+        lint_token = next(
+            token
+            for token in state["workflow"]["transition_tokens"]
+            if token["source_node_id"] == "lint"
+        )
+        self.assertLess(lint_token["result_key"], build_token["result_key"])
+        state["workflow"]["transition_tokens"] = [build_token]
+        lint_assignment = next(
+            assignment
+            for assignment in state["assignments"]
+            if assignment["assignment_id"] == "lint-assignment"
+        )
+        lint_assignment.update({"status": "reviews_pending", "completed_at": None})
+        lint_occurrence = next(
+            occurrence
+            for occurrence in state["workflow"]["occurrences"]
+            if occurrence["occurrence_id"] == lint_assignment["occurrence_id"]
+        )
+        lint_occurrence.update({"state": "reviews_pending", "completed_at": None})
+        state["active_assignment_ids"] = ["lint-assignment"]
+        state["allowed_outcomes_by_assignment"] = {
+            "lint-assignment": list(lint_assignment["allowed_outcomes"])
+        }
+        lint_journal = next(
+            journal
+            for journal in state["transition_journal"]
+            if journal["assignment_id"] == "lint-assignment"
+        )
+        lint_journal.update(
+            {
+                "state": "REVIEWS_PENDING",
+                "disposition": "open",
+                "transition_token_ids": [],
+                "target_occurrence_ids": [],
+                "outbox_event_ids": [],
+            }
+        )
+        second_review = next(
+            review
+            for review in state["review_assignments"]
+            if review["source_assignment_id"] == "lint-assignment"
+            and review["reviewer_index"] == 2
+        )
+        second_review.update(
+            {
+                "status": "active",
+                "decision": None,
+                "request_fingerprint": None,
+                "response": None,
+                "decided_at": None,
+            }
+        )
+        state["reviews"] = [
+            review
+            for review in state["reviews"]
+            if review["assignment_id"] != second_review["assignment_id"]
+        ]
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+        return build_token, lint_token, second_review
 
     def configure_parallel_active_sibling(
         self, *, maximum: int = 0
@@ -810,6 +1011,107 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertLess(order.index("publish"), order.index("enqueue"))
         self.assertLess(order.index("enqueue"), order.index("expose"))
 
+    def test_current_identity_projects_workspace_without_scope_control(
+        self,
+    ) -> None:
+        self.assertNotIn("scope_control", self.initial_state)
+        with patch.dict(
+            os.environ,
+            {"NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_2861": ""},
+            clear=False,
+        ):
+            identity = self.runtime.current_identity("project-id", "2861")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        workspace = self.initial_state["workspaces"][0]
+        self.assertEqual(
+            identity["workspace"],
+            {
+                "workspace_id": workspace["workspace_id"],
+                "actual_git_toplevel": workspace["actual_git_toplevel"],
+                "expected_root": workspace["expected_root"],
+                "assigned_branch": workspace["assigned_branch"],
+                "source_commit": workspace["source_commit"],
+                "initial_head_commit": workspace["initial_head_commit"],
+            },
+        )
+        self.assertEqual(identity["workspace"]["actual_git_toplevel"], WORKSPACE_1_ROOT)
+        self.assertEqual(
+            identity["workspace"]["workspace_id"],
+            identity["assignment"]["workspace_id"],
+        )
+        self.assertNotIn("actual_git_dir", identity["workspace"])
+        self.assertNotIn("repository_remote", identity["workspace"])
+        self.assertNotIn("effective_scope", identity)
+        self.assertNotIn("instruction_precedence", identity)
+
+    def test_current_identity_selects_workspace_by_assignment_reference(
+        self,
+    ) -> None:
+        self.configure_parallel_active_sibling()
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        expected = next(
+            workspace
+            for workspace in state["workspaces"]
+            if workspace["workspace_id"] == "workspace-parallel"
+        )
+
+        identity = self.runtime.current_identity("project-id", "2862")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity["assignment"]["workspace_id"], "workspace-parallel")
+        self.assertEqual(identity["workspace"]["workspace_id"], "workspace-parallel")
+        self.assertEqual(
+            identity["workspace"]["actual_git_toplevel"],
+            expected["actual_git_toplevel"],
+        )
+        self.assertIsNone(identity["workspace"]["assigned_branch"])
+
+    def test_review_identity_does_not_inherit_source_workspace(self) -> None:
+        self.submit_result()
+
+        identity = self.runtime.current_identity("project-id", "2891")
+
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity["assignment_kind"], "review")
+        self.assertNotIn("workspace", identity)
+        Draft202012Validator(
+            main._MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA
+        ).validate(identity)
+
+    def test_workspace_projection_rejects_mismatched_ownership(self) -> None:
+        bindings, corrupt, project_wide = self.runtime._project_binding_discovery(
+            "project-id"
+        )
+        self.assertEqual(corrupt, ())
+        self.assertFalse(project_wide)
+        binding = next(
+            item
+            for item in bindings
+            if item.record.get("assignment_id") == "assignment-1"
+        )
+        for field, value in (
+            ("assignment_id", "assignment-other"),
+            ("project_id", "project-other"),
+            ("sprint_id", "msv1-" + "f" * 64),
+            ("node_id", "node-other"),
+        ):
+            with self.subTest(field=field):
+                state = deepcopy(binding.state)
+                state["workspaces"][0][field] = value
+                corrupt_binding = type(binding)(
+                    binding.project_id,
+                    binding.sprint_id,
+                    state,
+                    binding.kind,
+                    binding.record,
+                )
+                with self.assertRaisesRegex(RuntimeError, "ownership is corrupt"):
+                    _managed_identity_workspace(corrupt_binding, binding.record)
+
     def test_legacy_identity_message_body_returns_managed_assignment(self) -> None:
         for payload in ({"message": "Кто я?"}, {}):
             with self.subTest(payload=payload):
@@ -827,6 +1129,10 @@ class ManagedContinuityTests(unittest.TestCase):
                 self.assertEqual(
                     result.response["assignment"]["assignment_id"],
                     "assignment-1",
+                )
+                self.assertEqual(
+                    result.response["workspace"]["actual_git_toplevel"],
+                    WORKSPACE_1_ROOT,
                 )
 
     def test_any_parent_parallel_occurrences_share_phone_identity_deterministically(
@@ -846,129 +1152,11 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(managed_activation_invariant_issues(state), ())
         self.replace_state(state)
 
-        def prepare_read_assignment(
-            project_id: str,
-            candidate: dict,
-            *,
-            occurrence_id: str,
-            node_id: str,
-            graph_revision: int,
-            source_kind: str,
-            source_result_keys: list[str],
-            source_commit: str,
-            rework_cycle: int = 0,
-            integration_id: str | None = None,
-            identity_salt: str | None = None,
-        ) -> _PreparedAssignment:
-            identity_parts: list[object] = [
-                SPRINT_ID,
-                occurrence_id,
-                node_id,
-                graph_revision,
-                source_kind,
-                rework_cycle,
-                ",".join(source_result_keys),
-            ]
-            if identity_salt is not None:
-                identity_parts.append(identity_salt)
-            assignment_id = _stable_id(
-                "assignment", *identity_parts, compact=True
-            )
-            workspace_id = _stable_id(
-                "workspace", project_id, SPRINT_ID, node_id, assignment_id
-            )
-            workspace_base = candidate["workspaces"][0]["expected_root"].split(
-                "/nodes/", 1
-            )[0]
-            expected_root = (
-                f"{workspace_base}/nodes/{node_id}/{assignment_id}"
-            )
-            repository = candidate["repository"]
-            assignment = {
-                "assignment_id": assignment_id,
-                "occurrence_id": occurrence_id,
-                "node_id": node_id,
-                "agent_id": "joiner",
-                "agent_phone": "2863",
-                "graph_revision": graph_revision,
-                "source_kind": source_kind,
-                "source_result_keys": list(source_result_keys),
-                "source_commit": source_commit,
-                "initial_head_commit": source_commit,
-                "integration_id": integration_id,
-                "rework_cycle": rework_cycle,
-                "result_commit": None,
-                "outcome": None,
-                "status": "active",
-                "workspace_id": workspace_id,
-                "branch_lease_id": None,
-                "allowed_outcomes": ["DONE", "STOP", "NEED_DECISION"],
-                "created_at": TIMESTAMP,
-                "completed_at": None,
-            }
-            workspace = {
-                "workspace_id": workspace_id,
-                "project_id": project_id,
-                "sprint_id": SPRINT_ID,
-                "node_id": node_id,
-                "assignment_id": assignment_id,
-                "expected_root": expected_root,
-                "actual_git_toplevel": expected_root,
-                "actual_git_dir": f"{expected_root}/.git",
-                "repository_id": repository["repository_id"],
-                "repository_remote": repository["canonical_remote"],
-                "source_commit": source_commit,
-                "initial_head_commit": source_commit,
-                "assigned_branch": None,
-                "working_tree_state": "clean",
-            }
-            request = WorkspaceRequest(
-                project_id=project_id,
-                sprint_id=SPRINT_ID,
-                node_id=node_id,
-                assignment_id=assignment_id,
-                repository_id=repository["repository_id"],
-                source_commit=source_commit,
-                access="read",
-                assigned_branch=None,
-                existing_branch_policy=None,
-            )
-            verified = ManagedWorkspace(
-                workspace_id=workspace_id,
-                project_id=project_id,
-                sprint_id=SPRINT_ID,
-                node_id=node_id,
-                assignment_id=assignment_id,
-                repository_id=repository["repository_id"],
-                repository_remote=repository["canonical_remote"],
-                mirror_storage_key=repository["mirror_storage_key"],
-                expected_root=Path(expected_root),
-                actual_git_toplevel=Path(expected_root),
-                actual_git_dir=Path(f"{expected_root}/.git"),
-                source_commit=source_commit,
-                initial_head_commit=source_commit,
-                head_commit=source_commit,
-                assigned_branch=None,
-                access="read",
-                working_tree_state="clean",
-                branch_lease_id=None,
-            )
-            return _PreparedAssignment(
-                assignment=assignment,
-                workspace=workspace,
-                workspace_request=request,
-                verified_workspace=verified,
-                branch_request=None,
-                branch_lease=None,
-                port_leases=(),
-                processes=(),
-            )
-
         with (
             patch.object(
                 self.runtime,
                 "_prepare_assignment",
-                side_effect=prepare_read_assignment,
+                side_effect=self.prepare_fixture_read_assignment,
             ),
             patch.object(self.runtime, "_publish_prepared_assignment"),
         ):
@@ -1005,6 +1193,121 @@ class ManagedContinuityTests(unittest.TestCase):
             min(item["assignment_id"] for item in live),
         )
 
+    def test_second_review_approval_creates_repeated_any_parent_successor_atomically(
+        self,
+    ) -> None:
+        build_token, lint_token, second_review = (
+            self.configure_deferred_any_parent_second_review()
+        )
+
+        payload = canonical_json_bytes(
+            {
+                "assignment_id": second_review["assignment_id"],
+                "status": "APPROVE",
+            }
+        )
+        with (
+            patch.object(
+                self.runtime,
+                "_prepare_assignment",
+                side_effect=self.prepare_fixture_read_assignment,
+            ),
+            patch.object(self.runtime, "_publish_prepared_assignment"),
+        ):
+            first = self.store.runtime_state("project-id", SPRINT_ID)
+            self.assertTrue(
+                self.runtime._schedule_one("project-id", SPRINT_ID, first)
+            )
+            with patch.object(
+                self.runtime, "_resume_after_durable_ack", return_value=None
+            ):
+                accepted = self.runtime.submit_if_managed(
+                    "project-id",
+                    second_review["reviewer_phone"],
+                    payload,
+                    "second-any-parent-review",
+                )
+                replay = self.runtime.submit_if_managed(
+                    "project-id",
+                    second_review["reviewer_phone"],
+                    payload,
+                    "second-any-parent-review-replay",
+                )
+
+        self.assertEqual(accepted.response["status"], "REVIEW_ACCEPTED")
+        self.assertFalse(accepted.response["deduplicated"])
+        self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
+        self.assertTrue(replay.response["deduplicated"])
+        scheduled = self.store.runtime_state("project-id", SPRINT_ID)
+        join_occurrences = sorted(
+            (
+                occurrence
+                for occurrence in scheduled["workflow"]["occurrences"]
+                if occurrence["node_id"] == "join"
+            ),
+            key=lambda occurrence: occurrence["generation"],
+        )
+        self.assertEqual([item["generation"] for item in join_occurrences], [1, 2])
+        self.assertEqual(
+            join_occurrences[0]["trigger_token_ids"], [build_token["token_id"]]
+        )
+        self.assertEqual(
+            join_occurrences[1]["trigger_token_ids"], [lint_token["token_id"]]
+        )
+        current_lint_token = next(
+            token
+            for token in scheduled["workflow"]["transition_tokens"]
+            if token["token_id"] == lint_token["token_id"]
+        )
+        self.assertEqual(current_lint_token["status"], "consumed")
+        self.assertEqual(
+            current_lint_token["consumed_by_occurrence_id"],
+            join_occurrences[1]["occurrence_id"],
+        )
+        successor = next(
+            assignment
+            for assignment in scheduled["assignments"]
+            if assignment["occurrence_id"] == join_occurrences[1]["occurrence_id"]
+        )
+        self.assertEqual(
+            len(
+                [
+                    assignment
+                    for assignment in scheduled["assignments"]
+                    if assignment["node_id"] == "join"
+                ]
+            ),
+            2,
+        )
+        self.assertEqual(
+            successor["source_result_keys"], [lint_token["result_key"]]
+        )
+        self.assertTrue(
+            any(
+                event["event_type"] == "ASSIGNMENT_ENQUEUE"
+                and event["payload"]["assignment_id"] == successor["assignment_id"]
+                for event in scheduled["outbox"]
+            )
+        )
+        current_lint_journal = next(
+            journal
+            for journal in scheduled["transition_journal"]
+            if journal["assignment_id"] == "lint-assignment"
+        )
+        self.assertEqual(current_lint_journal["state"], "NEXT_ASSIGNMENT_ENQUEUED")
+        self.assertEqual(
+            current_lint_journal["target_occurrence_ids"],
+            [join_occurrences[1]["occurrence_id"]],
+        )
+        current_second_review = next(
+            review
+            for review in scheduled["review_assignments"]
+            if review["assignment_id"] == second_review["assignment_id"]
+        )
+        self.assertEqual(current_second_review["status"], "decided")
+        self.assertEqual(current_second_review["decision"], "APPROVE")
+        self.assertEqual(managed_activation_invariant_issues(scheduled), ())
+
     def test_identity_rediscovery_selects_remaining_same_phone_binding(
         self,
     ) -> None:
@@ -1023,12 +1326,24 @@ class ManagedContinuityTests(unittest.TestCase):
             {
                 "assignment_id": "assignment-2",
                 "created_at": "2999-01-01T00:00:00+00:00",
+                "workspace_id": "workspace-2",
             }
         )
+        second_state = deepcopy(first.state)
+        second_workspace = deepcopy(second_state["workspaces"][0])
+        second_workspace.update(
+            {
+                "workspace_id": "workspace-2",
+                "assignment_id": "assignment-2",
+                "expected_root": second_workspace["expected_root"] + "-2",
+                "actual_git_toplevel": second_workspace["actual_git_toplevel"] + "-2",
+            }
+        )
+        second_state["workspaces"].append(second_workspace)
         second = type(first)(
             first.project_id,
             first.sprint_id,
-            deepcopy(first.state),
+            second_state,
             first.kind,
             second_record,
         )
@@ -1062,6 +1377,7 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertIsNotNone(identity)
         assert identity is not None
         self.assertEqual(identity["assignment"]["assignment_id"], "assignment-2")
+        self.assertEqual(identity["workspace"]["workspace_id"], "workspace-2")
         self.assertEqual(publish.call_count, 2)
 
     def test_unmatched_legacy_identity_does_not_drain_managed_outbox(self) -> None:
@@ -2177,6 +2493,201 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(recovered["assignments"][0]["status"], "failed")
         self.assertEqual(recovered["assignments"][1]["status"], "active")
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_terminal_after_failed_continue_node_source_is_idempotent(
+        self,
+    ) -> None:
+        state = self.store.runtime_state("project-id", SPRINT_ID)
+        definition = state["graph_revisions"][0]["definition"]
+        definition["execution"]["start_node"] = "merge-plan"
+        definition["nodes"][0]["id"] = "merge-plan"
+        definition["nodes"][0]["tasks"][0].update(
+            {"task_id": "IE2E-007", "message": "Produce final merge plan"}
+        )
+        definition["nodes"][1]["transitions"]["RESUME"] = "merge-plan"
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
+        previous_occurrence_id = state["assignments"][0]["occurrence_id"]
+        occurrence_id = managed_occurrence_id(
+            SPRINT_ID, 1, "merge-plan", 1, []
+        )
+        state["workflow"]["entry_node_ids"] = ["merge-plan"]
+        state["workflow"]["entry_occurrence_ids"] = [occurrence_id]
+        occurrence = state["workflow"]["occurrences"][0]
+        occurrence.update(
+            {"occurrence_id": occurrence_id, "node_id": "merge-plan"}
+        )
+        assignment = state["assignments"][0]
+        assignment.update(
+            {"occurrence_id": occurrence_id, "node_id": "merge-plan"}
+        )
+        workspace = state["workspaces"][0]
+        workspace["node_id"] = "merge-plan"
+        for path_field in (
+            "expected_root",
+            "actual_git_toplevel",
+            "actual_git_dir",
+        ):
+            workspace[path_field] = workspace[path_field].replace(
+                "/nodes/build/", "/nodes/merge-plan/"
+            )
+        state["outbox"][0]["payload"]["node_id"] = "merge-plan"
+        self.assertNotEqual(previous_occurrence_id, occurrence_id)
+        self.assertEqual(managed_activation_invariant_issues(state), ())
+        self.replace_state(state)
+
+        class DirtyVerification:
+            def __enter__(self):
+                raise ManagedContinuityError(
+                    "WORKSPACE_DIRTY", 409, "result-verification"
+                )
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        self.runtime.result_verifier = lambda *_args: DirtyVerification()
+        with self.assertRaises(ManagedContinuityError) as caught:
+            self.submit_result()
+        self.assertEqual(caught.exception.code, "WORKSPACE_DIRTY")
+        self.runtime.result_verifier = lambda *_args: nullcontext()
+
+        staged = self.store.runtime_state("project-id", SPRINT_ID)
+        context = staged["coordinator_contexts"][0]
+        prepared = self.prepared_continuation(
+            staged,
+            assignment_id="assignment-dirty-terminal-continue",
+            source_commit=COMMIT,
+        )
+        provider = Mock(unsafe=True)
+        provider.ensure_mirror.return_value = object()
+        workspace_manager = Mock(unsafe=True)
+        workspace_manager.publish_write_workspace.return_value = (
+            prepared.verified_workspace
+        )
+        continue_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "continue-dirty-terminal-1",
+            "action": "CONTINUE_NODE",
+            "parameters": {"node_id": "merge-plan", "source_commit": COMMIT},
+        }
+        with (
+            patch.object(self.runtime, "_prepare_assignment", return_value=prepared),
+            patch.object(self.runtime, "_publish_prepared_assignment"),
+            patch.object(
+                self.runtime, "_recover_assignment_publications", return_value=0
+            ),
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            patch.object(
+                self.importer,
+                "_workspace_manager",
+                workspace_manager,
+            ),
+        ):
+            continued = self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(continue_request),
+                "continue-dirty-terminal",
+            )
+        self.assertEqual(continued.response["status"], "RECOVERY_COMPLETED")
+
+        result_request = self.result_request()
+        result_request["assignment_id"] = prepared.assignment["assignment_id"]
+        accepted = self.runtime.submit_if_managed(
+            "project-id",
+            str(prepared.assignment["agent_phone"]),
+            canonical_json_bytes(result_request),
+            "continued-result",
+        )
+        self.assertEqual(accepted.response["status"], "REVIEWS_PENDING")
+
+        pending = self.store.runtime_state("project-id", SPRINT_ID)
+        reviews = list(pending["review_assignments"])
+        self.assertEqual(len(reviews), 2)
+        first = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[0]["reviewer_phone"],
+            canonical_json_bytes(
+                {"assignment_id": reviews[0]["assignment_id"], "status": "APPROVE"}
+            ),
+            "continued-review-first",
+        )
+        self.assertEqual(first.response["status"], "REVIEW_ACCEPTED")
+        second_request = {
+            "assignment_id": reviews[1]["assignment_id"],
+            "status": "APPROVE",
+        }
+        second = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[1]["reviewer_phone"],
+            canonical_json_bytes(second_request),
+            "continued-review-second",
+        )
+        self.assertEqual(second.response["status"], "REVIEW_ACCEPTED")
+
+        terminal = self.store.runtime_state("project-id", SPRINT_ID)
+        source, successor = terminal["assignments"]
+        self.assertEqual(terminal["status"], "completed")
+        self.assertEqual(source["status"], "failed")
+        self.assertEqual(successor["status"], "completed")
+        self.assertEqual(terminal["workflow"]["occurrences"][0]["state"], "completed")
+        terminal_tokens = [
+            token
+            for token in terminal["workflow"]["transition_tokens"]
+            if token["status"] == "terminal"
+        ]
+        self.assertEqual(len(terminal_tokens), 1)
+        self.assertEqual(
+            terminal["transition_journal"][0]["state"], "TRANSITION_COMMITTED"
+        )
+        self.assertEqual(terminal["active_assignment_ids"], [])
+        self.assertEqual(terminal["allowed_outcomes_by_assignment"], {})
+        self.assertEqual(managed_activation_invariant_issues(terminal), ())
+
+        record_ids_before = {
+            "assignments": [item["assignment_id"] for item in terminal["assignments"]],
+            "reviews": [item["assignment_id"] for item in terminal["reviews"]],
+            "tokens": [
+                item["token_id"]
+                for item in terminal["workflow"]["transition_tokens"]
+            ],
+            "occurrences": [
+                item["occurrence_id"]
+                for item in terminal["workflow"]["occurrences"]
+            ],
+        }
+        replay = self.runtime.submit_if_managed(
+            "project-id",
+            reviews[1]["reviewer_phone"],
+            canonical_json_bytes(second_request),
+            "continued-review-second-replay",
+        )
+        self.assertEqual(replay.response["status"], "ALREADY_ACCEPTED")
+        self.assertTrue(replay.response["deduplicated"])
+        replayed = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(
+            record_ids_before,
+            {
+                "assignments": [
+                    item["assignment_id"] for item in replayed["assignments"]
+                ],
+                "reviews": [item["assignment_id"] for item in replayed["reviews"]],
+                "tokens": [
+                    item["token_id"]
+                    for item in replayed["workflow"]["transition_tokens"]
+                ],
+                "occurrences": [
+                    item["occurrence_id"]
+                    for item in replayed["workflow"]["occurrences"]
+                ],
+            },
+        )
+        self.assertEqual(managed_activation_invariant_issues(replayed), ())
 
     def test_invalid_block_external_does_not_stop_live_assignment_processes(
         self,
@@ -4840,6 +5351,93 @@ async def asgi_request(
 
 
 class ManagedContinuityRouteTests(unittest.IsolatedAsyncioTestCase):
+    async def test_managed_whoami_returns_durable_workspace_without_scope(
+        self,
+    ) -> None:
+        harness = ManagedContinuityTests()
+        harness.setUp()
+        self.addCleanup(harness.tearDown)
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "NGINX_QA_MANAGED_ROOT": "C:/managed-test-root",
+                    "NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_2861": "",
+                },
+                clear=False,
+            ),
+            patch.object(main, "read_git_config", AsyncMock(return_value={})),
+            patch.object(
+                main,
+                "managed_continuity_runtime_for_requests",
+                return_value=harness.runtime,
+            ),
+            patch.object(
+                main,
+                "run_group_write_transaction",
+                side_effect=AssertionError("legacy state must not be touched"),
+            ),
+        ):
+            status_code, payload, _ = await asgi_request(
+                "/api/v1/projects/project-id/agents/2861/whoami",
+                b'{"message":"who am I?"}',
+            )
+
+        self.assertEqual(status_code, 200)
+        self.assertTrue(payload["managed"])
+        self.assertEqual(payload["assignment_kind"], "assignment")
+        self.assertEqual(payload["workspace"]["actual_git_toplevel"], WORKSPACE_1_ROOT)
+        self.assertEqual(
+            set(payload["workspace"]),
+            {
+                "workspace_id",
+                "actual_git_toplevel",
+                "expected_root",
+                "assigned_branch",
+                "source_commit",
+                "initial_head_commit",
+            },
+        )
+        self.assertNotIn("effective_scope", payload)
+        Draft202012Validator(
+            main._MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA
+        ).validate(payload)
+
+    def test_managed_whoami_openapi_contract_includes_workspace(self) -> None:
+        response_schema = main.app.openapi()["paths"][
+            "/api/v1/projects/{project_id}/agents/{agent_phone}/whoami"
+        ]["post"]["responses"]["200"]["content"]["application/json"]["schema"]
+        managed_schema = next(
+            option
+            for option in response_schema["oneOf"]
+            if option.get("$id", "").endswith(
+                "/managed-current-identity-response-v1.schema.json"
+            )
+        )
+        workspace_schema = managed_schema["properties"]["workspace"]
+        self.assertEqual(
+            set(workspace_schema["required"]),
+            {
+                "workspace_id",
+                "actual_git_toplevel",
+                "expected_root",
+                "assigned_branch",
+                "source_commit",
+                "initial_head_commit",
+            },
+        )
+        self.assertFalse(workspace_schema["additionalProperties"])
+        Draft202012Validator(response_schema).validate(
+            {
+                "assignment_id": "assignment-1",
+                "outcome": "DONE",
+                "result_commit": "a" * 40,
+                "result_key": "result-" + "b" * 64,
+                "status": "REVIEWS_PENDING",
+                "deduplicated": False,
+            }
+        )
+
     async def test_managed_whoami_bypasses_legacy_snapshot(self) -> None:
         runtime = Mock()
         runtime.submit_if_managed.return_value = Mock(

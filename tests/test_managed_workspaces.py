@@ -471,6 +471,123 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
         self.assertEqual(workspace.initial_head_commit, descendant)
         self.assertEqual(workspace.head_commit, descendant)
 
+    def test_resume_publication_fast_forwards_reused_branch_with_receipt(self) -> None:
+        branch = "agent/reused"
+        self.git(
+            "push",
+            "upstream",
+            f"{self.source_commit}:refs/heads/{branch}",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            f"refs/heads/{branch}",
+            self.source_commit,
+        )
+        descendant = self.commit("two\n", "accepted continuation")
+        self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
+        mirror = self.provider.ensure_mirror("primary")
+
+        publication_ref = self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=descendant,
+            publication_id="lease-generation-2",
+            policy="resume",
+            source_commit=descendant,
+            expected_branch_head=None,
+        )
+
+        self.assertEqual(
+            self.git(
+                "--git-dir",
+                str(mirror.mirror_path),
+                "rev-parse",
+                f"refs/heads/{branch}",
+            ),
+            descendant,
+        )
+        self.assertEqual(
+            self.git(
+                "--git-dir",
+                str(mirror.mirror_path),
+                "rev-parse",
+                f"refs/remotes/origin/{branch}",
+            ),
+            self.source_commit,
+        )
+        self.assertEqual(
+            self.git(
+                "--git-dir",
+                str(mirror.mirror_path),
+                "rev-parse",
+                publication_ref,
+            ),
+            descendant,
+        )
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=descendant,
+                publication_id="lease-generation-2",
+                policy="resume",
+                source_commit=descendant,
+                expected_branch_head=None,
+            ),
+            publication_ref,
+        )
+
+    def test_resume_publication_still_rejects_divergent_reused_branch(self) -> None:
+        descendant = self.commit("two\n", "accepted continuation")
+        self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
+        self.git("checkout", "--orphan", "unrelated", cwd=self.source)
+        self.git("rm", "-rf", ".", cwd=self.source)
+        (self.source / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        self.git("add", "unrelated.txt", cwd=self.source)
+        self.git("commit", "-m", "unrelated publication", cwd=self.source)
+        unrelated = self.git("rev-parse", "HEAD", cwd=self.source)
+        self.git(
+            "push",
+            "upstream",
+            "HEAD:refs/heads/unrelated-publication",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/diverged-publication"
+        self.git(
+            "--git-dir",
+            str(mirror.mirror_path),
+            "update-ref",
+            f"refs/heads/{branch}",
+            unrelated,
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=descendant,
+                publication_id="lease-diverged-generation-2",
+                policy="resume",
+                source_commit=descendant,
+                expected_branch_head=None,
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertEqual(
+            self.git(
+                "--git-dir",
+                str(mirror.mirror_path),
+                "rev-parse",
+                f"refs/heads/{branch}",
+            ),
+            unrelated,
+        )
+
     def test_create_rejects_an_existing_remote_branch(self) -> None:
         self.git(
             "push",

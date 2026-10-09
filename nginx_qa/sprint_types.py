@@ -1647,6 +1647,19 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         else:
             completed_continue_by_assignment[continuation_id] = recovery
 
+    # A no-receipt CONTINUE_NODE deliberately preserves its failed or blocked
+    # source as audit evidence while the replacement completes the occurrence.
+    continued_failed_or_blocked_assignment_ids = {
+        source_assignment_id
+        for recovery in completed_continue_by_assignment.values()
+        if isinstance(
+            source_assignment_id := recovery.get("assignment_id"), str
+        )
+        and isinstance(assignment_by_id.get(source_assignment_id), Mapping)
+        and assignment_by_id[source_assignment_id].get("status")
+        in {"failed", "blocked"}
+    }
+
     raw_revisions = state.get("graph_revisions")
     revision_by_number: dict[int, Mapping[str, Any]] = {}
     ordered_revision_numbers: list[int] = []
@@ -6148,6 +6161,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 or any(
                     assignment.get("status") != "completed"
                     and assignment_id not in rework_limit_assignment_ids
+                    and assignment_id
+                    not in continued_failed_or_blocked_assignment_ids
                     for assignment_id, assignment in assignment_by_id.items()
                 )
                 or not completed_occurrence_ids.issubset(emitted_by_occurrence)

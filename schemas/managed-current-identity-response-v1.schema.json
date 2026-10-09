@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/managed-current-identity-response-v1.schema.json",
+  "title": "Managed current identity response v1",
+  "type": "object",
+  "required": [
+    "managed",
+    "project_id",
+    "sprint_id",
+    "assignment_kind",
+    "assignment"
+  ],
+  "properties": {
+    "managed": {"const": true},
+    "project_id": {"type": "string", "minLength": 1},
+    "sprint_id": {"type": "string", "pattern": "^msv1-[0-9a-f]{64}$"},
+    "assignment_kind": {"enum": ["assignment", "review", "coordinator"]},
+    "assignment": {
+      "type": "object",
+      "required": ["assignment_id"],
+      "properties": {
+        "assignment_id": {"type": "string", "minLength": 1},
+        "node_id": {"type": "string", "minLength": 1},
+        "workspace_id": {"type": "string", "minLength": 1},
+        "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "initial_head_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+      },
+      "additionalProperties": true
+    },
+    "workspace": {
+      "type": "object",
+      "required": [
+        "workspace_id",
+        "actual_git_toplevel",
+        "expected_root",
+        "assigned_branch",
+        "source_commit",
+        "initial_head_commit"
+      ],
+      "properties": {
+        "workspace_id": {"type": "string", "minLength": 1},
+        "actual_git_toplevel": {"type": "string", "minLength": 1},
+        "expected_root": {"type": "string", "minLength": 1},
+        "assigned_branch": {
+          "oneOf": [
+            {"type": "string", "minLength": 1},
+            {"type": "null"}
+          ]
+        },
+        "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "initial_head_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+      },
+      "additionalProperties": false
+    },
+    "effective_scope": {"type": "object"},
+    "instruction_precedence": {
+      "const": "effective_scope_supersedes_conflicting_issued_scope"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"assignment_kind": {"const": "assignment"}},
+        "required": ["assignment_kind"]
+      },
+      "then": {
+        "required": ["workspace"],
+        "properties": {
+          "assignment": {
+            "required": [
+              "assignment_id",
+              "node_id",
+              "workspace_id",
+              "source_commit",
+              "initial_head_commit"
+            ]
+          }
+        }
+      },
+      "else": {
+        "not": {"required": ["workspace"]}
+      }
+    },
+    {
+      "if": {"required": ["effective_scope"]},
+      "then": {"required": ["instruction_precedence"]},
+      "else": {"not": {"required": ["instruction_precedence"]}}
+    }
+  ],
+  "additionalProperties": false
+}

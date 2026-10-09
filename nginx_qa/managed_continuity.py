@@ -213,6 +213,63 @@ def _records_by(
     return result
 
 
+def _managed_identity_workspace(
+    binding: _AssignmentBinding, assignment: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Return the allowlisted workspace projection for one managed assignment."""
+
+    workspace_id = assignment.get("workspace_id")
+    if not isinstance(workspace_id, str) or not workspace_id:
+        raise RuntimeError("managed assignment workspace identity is corrupt")
+    workspace = _records_by(
+        binding.state, "workspaces", "workspace_id"
+    ).get(workspace_id)
+    if not isinstance(workspace, dict):
+        raise RuntimeError("managed assignment workspace is missing")
+    expected_ownership = {
+        "assignment_id": assignment.get("assignment_id"),
+        "project_id": binding.project_id,
+        "sprint_id": binding.sprint_id,
+        "node_id": assignment.get("node_id"),
+    }
+    if any(
+        workspace.get(field) != expected
+        for field, expected in expected_ownership.items()
+    ):
+        raise RuntimeError("managed assignment workspace ownership is corrupt")
+    if (
+        workspace.get("source_commit") != assignment.get("source_commit")
+        or workspace.get("initial_head_commit")
+        != assignment.get("initial_head_commit")
+    ):
+        raise RuntimeError("managed assignment workspace provenance is corrupt")
+    required_strings = (
+        "workspace_id",
+        "actual_git_toplevel",
+        "expected_root",
+        "source_commit",
+        "initial_head_commit",
+    )
+    if any(
+        not isinstance(workspace.get(field), str) or not workspace[field]
+        for field in required_strings
+    ):
+        raise RuntimeError("managed assignment workspace projection is corrupt")
+    assigned_branch = workspace.get("assigned_branch")
+    if assigned_branch is not None and (
+        not isinstance(assigned_branch, str) or not assigned_branch
+    ):
+        raise RuntimeError("managed assignment workspace projection is corrupt")
+    return {
+        "workspace_id": workspace["workspace_id"],
+        "actual_git_toplevel": workspace["actual_git_toplevel"],
+        "expected_root": workspace["expected_root"],
+        "assigned_branch": assigned_branch,
+        "source_commit": workspace["source_commit"],
+        "initial_head_commit": workspace["initial_head_commit"],
+    }
+
+
 def _recovery_settles_context(
     state: Mapping[str, Any], recovery: Mapping[str, Any]
 ) -> bool:
@@ -955,6 +1012,10 @@ class ManagedContinuityRuntime:
                 "assignment_kind": binding.kind,
                 "assignment": record,
             }
+            if binding.kind == "assignment":
+                response["workspace"] = _managed_identity_workspace(
+                    binding, record
+                )
             if governed is not None:
                 response["effective_scope"] = effective_scope_snapshot(binding.state, str(record["assignment_id"]))
                 response["instruction_precedence"] = "effective_scope_supersedes_conflicting_issued_scope"
@@ -5693,12 +5754,30 @@ class ManagedContinuityRuntime:
         graph_revision = int(prospective["graph_revision"])
         target_node_id = str(token["target_node_id"])
         target_node = _node(prospective, graph_revision, target_node_id)
-        if target_node.get("activation_policy", "all_parents") != "all_parents":
+        activation_policy = str(
+            target_node.get("activation_policy") or "all_parents"
+        )
+        if activation_policy == "any_parent":
+            # The first occurrence can be scheduled after acknowledgement.
+            # Once history exists, however, a newly selected token must create
+            # its next occurrence in this transaction or it can retroactively
+            # invalidate the earlier deterministic trigger.
+            if not any(
+                isinstance(occurrence, Mapping)
+                and occurrence.get("node_id") == target_node_id
+                for occurrence in prospective["workflow"]["occurrences"]
+            ):
+                return None
+        elif activation_policy != "all_parents":
             return None
         selected = self._ready_tokens(prospective, target_node_id)
-        if len(selected) < 2 or token["token_id"] not in {
-            item["token_id"] for item in selected
-        }:
+        if (
+            not selected
+            or (activation_policy == "all_parents" and len(selected) < 2)
+            or token["token_id"] not in {
+                item["token_id"] for item in selected
+            }
+        ):
             return None
         trigger_ids = tuple(str(item["token_id"]) for item in selected)
         result_keys = tuple(str(item["result_key"]) for item in selected)

@@ -116,6 +116,33 @@ from nginx_qa.sprint_types import (
 )
 
 
+_MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "schemas"
+        / "managed-current-identity-response-v1.schema.json"
+    ).read_text(encoding="utf-8")
+)
+_PROJECT_AGENT_IDENTITY_RESPONSE_SCHEMA = {
+    "oneOf": [
+        _MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA,
+        {
+            "title": "Existing non-current-identity response",
+            "description": (
+                "Existing managed result/review/recovery receipts and legacy "
+                "whoami responses are unchanged."
+            ),
+            "type": "object",
+            "not": {
+                "properties": {"managed": {"const": True}},
+                "required": ["managed"],
+            },
+            "additionalProperties": True,
+        },
+    ]
+}
+
+
 managed_port_reservation_registry = ManagedPortReservationRegistry()
 managed_process_supervisor: ManagedProcessSupervisor | None = None
 managed_process_supervisor_lock = threading.RLock()
@@ -34439,7 +34466,22 @@ async def get_project_agent(
     }
 
 
-@app.post("/api/v1/projects/{project_id}/agents/{agent_phone}/whoami")
+@app.post(
+    "/api/v1/projects/{project_id}/agents/{agent_phone}/whoami",
+    responses={
+        200: {
+            "description": (
+                "Managed current identity, existing managed submission receipt, "
+                "or existing legacy identity response."
+            ),
+            "content": {
+                "application/json": {
+                    "schema": _PROJECT_AGENT_IDENTITY_RESPONSE_SCHEMA
+                }
+            },
+        }
+    },
+)
 async def identify_project_agent(
     project_id: str,
     agent_phone: str,
