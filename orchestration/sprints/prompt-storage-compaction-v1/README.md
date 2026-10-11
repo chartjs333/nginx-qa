@@ -17,6 +17,8 @@ history array changes on every transition.
 - `acceptance-matrix.md` is the mandatory qualification matrix.
 - `prototype-audit.md` records what the supplied prototype does and does not
   prove.
+- `reference/prompt_storage_compactor_prototype.py` is an exact byte snapshot
+  of the supplied prototype for inspection only; do not execute it on live data.
 
 ## Managed graph
 

@@ -7,6 +7,11 @@ Its SHA-256 was:
 bdff8cac4a9acf581a236a032117c60309e436d5b92474e6eccc5fe49c3dabe7
 ```
 
+The exact bytes are preserved at
+`reference/prompt_storage_compactor_prototype.py` with Git text conversion
+disabled for that file.  It is reference-only and must not be executed against
+live paths.
+
 ## Useful evidence
 
 The prototype:
