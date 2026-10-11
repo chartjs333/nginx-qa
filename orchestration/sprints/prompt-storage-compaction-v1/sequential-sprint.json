@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/prompt-storage-compaction-sprint-v1",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/prompt-storage-compaction-root-v1",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "storage-contract",
+    "required_approvals": 2,
+    "max_rework_cycles": 12,
+    "reviewers": [
+      {
+        "id": "psc-runtime-storage-reviewer",
+        "name": "Prompt Storage Runtime Reviewer",
+        "phone": "2978",
+        "git_branch": "review/psc-runtime-storage-v1",
+        "profile": "Проверяй точность storage/runtime контракта, exact-byte claims, incremental growth, crash safety, concurrency, hot-path isolation и обратную совместимость. Не одобряй canonical equality как доказательство raw-byte equality."
+      },
+      {
+        "id": "psc-evidence-security-reviewer",
+        "name": "Prompt Storage Evidence and Security Reviewer",
+        "phone": "2979",
+        "git_branch": "review/psc-evidence-security-v1",
+        "profile": "Проверяй воспроизводимое exact-head evidence, path/reparse/decompression boundaries, authorization, отсутствие секретов, live-root invariance, disabled-by-default rollout и отсутствие delete/GC/deploy."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "psc-continuity-coordinator",
+    "routes": {
+      "STOP": "psc-continuity-coordinator",
+      "NEED_DECISION": "psc-continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "storage-contract",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-storage-contract-engineer",
+        "name": "Prompt Archive Contract Engineer",
+        "phone": "2971",
+        "profile": "Фиксирует versioned archive/CAS/API contract до изменения runtime-кода; различает structural, canonical и raw-byte integrity."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-001",
+          "queue": "consultant-all",
+          "message": "Работай только в managed workspace/branch. Прочитай orchestration/sprints/prompt-storage-compaction-v1/{README.md,requirements.md,acceptance-matrix.md,prototype-audit.md}, затем фактические main.py storage/read paths и существующие tests. Зафиксируй versioned manifest/blob/ref schema, exact raw-byte reconstruction contract, incremental event/chunk model, authorized hydration API, compatibility/feature-flag/rollback semantics, threat model и stable errors/OpenAPI plan. Canonical JSON equality не выдавай за byte-for-byte. Добавь contract/schema tests, но не переносись к runtime implementation, не читай D:\\Prompt и не меняй live state. DONE только с точными файлами, тестами, commit evidence и отсутствием blockers."
+        }
+      ],
+      "transitions": {
+        "DONE": "cas-core",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-01-storage-contract",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "cas-core",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-cas-core-engineer",
+        "name": "Crash-safe CAS Engineer",
+        "phone": "2972",
+        "profile": "Реализует immutable verified CAS и atomic publication/recovery без доверия к существующим blobs."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-002",
+          "queue": "worker-all",
+          "message": "Реализуй принятый PSC-001 core как новый изолированный production module и schemas: immutable content-addressed blobs, versioned closed refs, unique temp/exclusive race handling, flush/fsync/atomic publish, verify-before-reuse, bounded decompression/hydration, stable corruption errors и idempotent crash recovery. Не используй произвольный ref path; физический path выводится из validated digest внутри root. Добавь focused unit/fault/concurrency/security tests, включая user payload collision. Не интегрируй live writer сверх согласованного seam, не удаляй данные и не запускай ничего против D:\\Prompt."
+        }
+      ],
+      "transitions": {
+        "DONE": "incremental-archive",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-02-cas-core",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "incremental-archive",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-incremental-archive-engineer",
+        "name": "Incremental Prompt Archive Engineer",
+        "phone": "2973",
+        "profile": "Устраняет quadratic snapshot snowball через immutable event/patch/result records или bounded chunks."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-003",
+          "queue": "worker-all",
+          "message": "На принятом CAS core реализуй versioned incremental prompt archive: event/patch/result-level records или bounded append chunks с durable index/reachability, чтобы один новый transition не переписывал полные timeline/patches/text/project_state. Учти execution audit, review contexts, result/feedback и структурные duplicates. Сохрани exact raw-byte reconstruction legacy archive where claimed. Добавь long-sequence tests, cross-transition dedup и измерение O(delta) write amplification, включая manifests/index/filesystem accounting. Не меняй managed graph/state invariants, не делай GC/delete и не используй live prompt data."
+        }
+      ],
+      "transitions": {
+        "DONE": "runtime-integration",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-03-incremental-archive",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "runtime-integration",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-runtime-integration-engineer",
+        "name": "Prompt Runtime Integration Engineer",
+        "phone": "2974",
+        "profile": "Интегрирует новый archive writer/read API, сохраняя compact prompt и managed/legacy identity compatibility."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-004",
+          "queue": "worker-all",
+          "message": "Интегрируй принятый archive format в фактические sequential response storage seams. Default identity/active-task/.prompt path не должен строить full project_state/history и не должен hydrate blobs; сохрани полный active_task и result-control fields. Добавь explicit authorized bounded on-demand full archive/state hydration by project + response identity, OpenAPI/response schemas и legacy inline reader. Rollout должен быть disabled-by-default shadow/dual-write; archive failure не повреждает legacy authoritative response и не блокирует compact prompt. Managed phone-specific identity contract не менять. Добавь API/hot-path instrumentation tests, legacy/managed regressions и никакой live activation/deploy."
+        }
+      ],
+      "transitions": {
+        "DONE": "migration-recovery",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-04-runtime-integration",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "migration-recovery",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-migration-recovery-engineer",
+        "name": "Prompt Archive Migration and Recovery Engineer",
+        "phone": "2975",
+        "profile": "Создаёт fail-closed dry-run/shadow migration для isolated copies и проверяемый rollback без удаления originals."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-005",
+          "queue": "worker-all",
+          "message": "Создай production-safe analyzer/migration/reconstruction tooling вокруг принятого API. Только explicit isolated input/output roots; reject overlap с configured/live prompt/runtime/state roots, traversal, ADS, aliases и symlink/junction/reparse escape. Добавь durable journal, idempotent resume, full-file pre/post inventory, exact original raw SHA/length verification before manifest publication, non-zero fail-closed on mismatch/safety mutation, and rollback/read compatibility. Originals сохраняются; deletion/GC/live rewrite запрещены. Тестируй generated fixtures/isolated copies, не D:\\Prompt. Документируй commands и stable evidence format."
+        }
+      ],
+      "transitions": {
+        "DONE": "qualification",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-05-migration-recovery",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "qualification",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-qualification-engineer",
+        "name": "Prompt Storage Qualification Engineer",
+        "phone": "2976",
+        "profile": "Проверяет exact candidate по всей acceptance matrix на isolated fixtures и fresh isolated service only."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-006",
+          "queue": "tester-all",
+          "message": "Проведи exact-head qualification по каждому PSC-A01..PSC-A20. Обязательны raw-byte fixtures (format/order/numeric lexemes/duplicate keys), O(delta) long series, corrupt/missing/oversized blobs, concurrent writers/readers, fault injection на всех publication boundaries, idempotent recovery, legacy/shadow rollback, authorized scope, Windows path/reparse/decompression attacks, hot-path proof without full history builder, full regression sets и isolated benchmark с peak memory/all physical bytes. Полный pre/post inventory и full SHA должны доказать нулевые изменения live roots; live roots не читать как fixtures. PASS только при 0 mandatory failures/skips и evidence tied to exact commit/tree. Иначе FAIL/NEED_DECISION с actionable owner; не ослабляй acceptance."
+        }
+      ],
+      "transitions": {
+        "PASS": "release-plan",
+        "FAIL": "psc-continuity-coordinator",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-06-qualification",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "release-plan",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-release-plan-engineer",
+        "name": "Prompt Storage Release Plan Engineer",
+        "phone": "2977",
+        "profile": "Готовит ancestry-preserving candidate и operator rollout/rollback plan; не выполняет merge/deploy/live migration."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-007",
+          "queue": "consultant-all",
+          "message": "Собери final exact-head operator package: accepted node/result commits and approvals, candidate ancestry/tree, changed files, PSC-A01..A20 evidence, residual risks, configuration disabled-by-default, isolated shadow enable/observe/disable steps, rollback, storage compatibility and future separately gated GC/live-migration work. Подтверди отсутствие live reads/writes, delete/GC, service restart, deploy и main merge. Подготовь PR/merge plan, но не открывай/merge/deploy без отдельного operator authorization."
+        }
+      ],
+      "transitions": {
+        "DONE": "completed",
+        "NEED_DECISION": "psc-continuity-coordinator",
+        "STOP": "psc-continuity-coordinator"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-07-release-plan",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "psc-continuity-coordinator",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "psc-continuity-coordinator-agent",
+        "name": "Prompt Storage Continuity Coordinator",
+        "phone": "2970",
+        "profile": "Разрешает blockers только future managed transitions; не обходит reviews/acceptance и не делает manual state repair."
+      },
+      "tasks": [
+        {
+          "task_id": "PSC-COORD",
+          "queue": "consultant-all",
+          "message": "Проанализируй официальный blocker/evidence и выбери только RESUME_CONTRACT, RESUME_CAS, RESUME_ARCHIVE, RESUME_RUNTIME, RESUME_MIGRATION, RESUME_QA, RESUME_RELEASE или BLOCKED_EXTERNAL. Не обходи required reviews, exact-byte/O(delta)/safety acceptance, не редактируй state/SQLite вручную, не читай/мигрируй live D:\\Prompt, не делай merge/deploy. Если требуется operator authority или external dependency, верни BLOCKED_EXTERNAL с точным owner/action."
+        }
+      ],
+      "transitions": {
+        "RESUME_CONTRACT": "storage-contract",
+        "RESUME_CAS": "cas-core",
+        "RESUME_ARCHIVE": "incremental-archive",
+        "RESUME_RUNTIME": "runtime-integration",
+        "RESUME_MIGRATION": "migration-recovery",
+        "RESUME_QA": "qualification",
+        "RESUME_RELEASE": "release-plan",
+        "BLOCKED_EXTERNAL": "blocked-external"
+      },
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/psc-continuity-coordinator-v1",
+          "existing_branch_policy": "create"
+        }
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Prompt storage compaction candidate and exact-head qualification/rollout plan completed. No main merge, deploy, live compaction, legacy deletion, or garbage collection was performed."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Prompt storage work requires an external dependency or separate operator authority. Live prompt data and services remain unchanged."
+    }
+  ],
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "dcd5a24bbf06f6ade02f2dacb25fbb7dbc7bf6e3b26300059809a9e9294a0dab"
+    },
+    {
+      "path": "orchestration/sprints/prompt-storage-compaction-v1/README.md",
+      "sha256": "805c7e203fdbc17072e3c94910339c8576b5879b87d0863523be416c688f786c"
+    },
+    {
+      "path": "orchestration/sprints/prompt-storage-compaction-v1/requirements.md",
+      "sha256": "34ab2f400d463065751a8872609cdeaca66d0b6d4fa3b20382faac79248d59a3"
+    },
+    {
+      "path": "orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md",
+      "sha256": "ccae73531bb2b108e59ee2ea16220663beb6729ea52eafff7f0a93886b8a442d"
+    },
+    {
+      "path": "orchestration/sprints/prompt-storage-compaction-v1/prototype-audit.md",
+      "sha256": "b8ca6b247afdc3353345f1c01f298e278a95f8e31ee3214e8db366b8a45f5e31"
+    }
+  ]
+}
