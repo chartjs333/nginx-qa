@@ -67,6 +67,10 @@ _PENDING_GENERATION_FILE_RE: Final = re.compile(
     re.ASCII,
 )
 _SHARD_RE: Final = re.compile(r"^[0-9a-f]{2}$", re.ASCII)
+_STORAGE_TEMP_FILE_RE: Final = re.compile(
+    r"^\.(.+)\.([0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15})\.tmp$",
+    re.ASCII,
+)
 _REPARSE_POINT: Final = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 
 _REF_KEYS: Final = frozenset(
@@ -313,6 +317,21 @@ class _PromptArchiveCasWriteAccounting:
 
 def _error(code: str) -> PromptArchiveStorageError:
     return PromptArchiveStorageError(code)
+
+
+def _storage_temporary_name(target_name: str) -> str:
+    """Return the unique sibling name used by storage publication."""
+
+    return f".{target_name}.{uuid4().hex}.tmp"
+
+
+def _storage_temporary_target_name(name: str) -> str | None:
+    """Classify an exact storage-created UUIDv4 sibling temp name."""
+
+    if type(name) is not str:
+        return None
+    matched = _STORAGE_TEMP_FILE_RE.fullmatch(name)
+    return None if matched is None else matched.group(1)
 
 
 def _frame(value: str) -> bytes:
@@ -2054,7 +2073,7 @@ class PromptArchiveStorage:
         stored: bytes,
         ref: Mapping[str, Any],
     ) -> bool:
-        temporary_name = f".{target.name}.{uuid4().hex}.tmp"
+        temporary_name = _storage_temporary_name(target.name)
         created_final = False
         parent_identity = self._directory_identity(target.parent)
         with self._open_pinned_directory(target.parent) as pinned:
@@ -2853,7 +2872,7 @@ class PromptArchiveStorage:
         digest = hashlib.sha256(payload).hexdigest()
         target = self._mutable_path_from_validated(validated)
         self._ensure_directory(target.parent)
-        temporary_name = f".{target.name}.{uuid4().hex}.tmp"
+        temporary_name = _storage_temporary_name(target.name)
         descriptor = -1
         replaced = False
         with self._open_pinned_directory(target.parent) as parent:
@@ -2958,7 +2977,7 @@ class PromptArchiveStorage:
         return ImmutablePublicationReceipt(target, digest, len(payload), created)
 
     def _publish_immutable_no_replace(self, target: Path, payload: bytes) -> bool:
-        temporary_name = f".{target.name}.{uuid4().hex}.tmp"
+        temporary_name = _storage_temporary_name(target.name)
         created_final = False
         parent_identity = self._directory_identity(target.parent)
         with self._open_pinned_directory(target.parent) as pinned:

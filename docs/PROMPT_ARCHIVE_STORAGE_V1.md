@@ -729,6 +729,23 @@ Publication order is mandatory for archive-producing operations:
    exclusively (`CREATE_NEW`/`O_EXCL`). Flush userspace buffers, fsync or
    `FlushFileBuffers`, verify stored bytes, then publish by atomic same-volume
    rename. Never share a predictable temporary name.
+
+   The reserved storage temporary grammar is exactly
+   `.<target-name>.<uuid4-hex>.tmp`, where `uuid4-hex` is 32 lowercase
+   hexadecimal digits with the RFC 4122 version-4 and variant bits. A hard
+   process exit may leave this sibling at any byte length from zero through the
+   target's publication bound. It has no journal authority: it is never read,
+   adopted, promoted, or deleted by recovery. The offline migration
+   journal-generation scanner may classify one only when its embedded target
+   is an otherwise valid generation filename and the entry is regular,
+   single-link, non-symlink, non-reparse, free of NTFS named streams, and within
+   the immutable control-byte bound. It includes every such entry and its
+   metadata in both stable directory snapshots and in the finite
+   2,000,004-child scan bound, but excludes it from the retained journal chain.
+   Every unknown or near-match name and every unsafe, named-stream, or oversized
+   entry remains a fail-closed state conflict. This narrow non-authoritative
+   classification permits retry after death without cleanup racing a live
+   publisher or weakening final-generation fork detection.
 6. If the final blob already exists, verify stored digest, bounds,
    decompression, uncompressed size, and uncompressed digest before reuse.
    Mismatch is corruption, not a dedup hit.

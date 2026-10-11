@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import os
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -31,10 +32,46 @@ from nginx_qa.prompt_archive_storage import (
 PROJECT_ID = "9000"
 HANDLE_ID = "isolated-fixture-1"
 STAMP = "2026-10-11T12:00:00Z"
+HARD_EXIT_CODE = 77
 
 
 class InjectedCrash(RuntimeError):
     pass
+
+
+def process_crash_during_outer_journal_temp(
+    source: str,
+    archive: str,
+    private_evidence: str,
+    crash_stage: str,
+) -> None:
+    """Hard-exit after a durable outer-journal temp exists, before rename."""
+
+    archive_path = Path(archive)
+
+    def terminate(stage: str) -> None:
+        if stage != crash_stage:
+            return
+        for candidate in archive_path.rglob("*.tmp"):
+            relative = candidate.relative_to(archive_path).parts
+            if (
+                "migrations" in relative
+                and candidate.parent.name == "journal-generations"
+            ):
+                os._exit(HARD_EXIT_CODE)
+
+    PromptArchiveMigration(
+        input_root=Path(source),
+        archive_root=archive_path,
+        project_id=PROJECT_ID,
+        source_root_handle_id=HANDLE_ID,
+        operator_gate=OFFLINE_OPERATOR_GATE,
+        operator_principal_id="operator-psc-005",
+        private_evidence_file=Path(private_evidence),
+        protected_roots=(),
+        clock=lambda: STAMP,
+        fault_hook=terminate,
+    ).migrate()
 
 
 class PromptArchiveMigrationTests(unittest.TestCase):
@@ -199,6 +236,112 @@ class PromptArchiveMigrationTests(unittest.TestCase):
         evidence = self.migration().migrate()
         self.assertEqual(evidence["status"], "complete")
         self.assertEqual(len(evidence["archives"]), 2)
+
+    def test_hard_exit_outer_journal_temp_is_inert_but_lookalikes_fail(self) -> None:
+        (self.source / "latest-response.json").write_bytes(b'{"crash":true}\n')
+        context = multiprocessing.get_context("spawn")
+        for crash_stage in ("after_temp_create", "after_temp_fsync"):
+            with self.subTest(crash_stage=crash_stage):
+                archive = self.base / f"archive-{crash_stage}"
+                private_evidence = self.base / f"private-{crash_stage}.json"
+                process = context.Process(
+                    target=process_crash_during_outer_journal_temp,
+                    args=(
+                        str(self.source),
+                        str(archive),
+                        str(private_evidence),
+                        crash_stage,
+                    ),
+                )
+                process.start()
+                process.join(timeout=60)
+                if process.is_alive():
+                    process.terminate()
+                    process.join(timeout=5)
+                    self.fail(
+                        "journal temp crash-injection process did not terminate"
+                    )
+                self.assertEqual(process.exitcode, HARD_EXIT_CODE)
+
+                generation_directories = [
+                    path
+                    for path in archive.rglob("journal-generations")
+                    if "migrations" in path.relative_to(archive).parts
+                ]
+                self.assertEqual(len(generation_directories), 1)
+                generation_directory = generation_directories[0]
+                abandoned = list(generation_directory.glob("*.tmp"))
+                self.assertEqual(len(abandoned), 1)
+                self.assertEqual(list(generation_directory.glob("*.json")), [])
+
+                migration = PromptArchiveMigration(
+                    input_root=self.source,
+                    archive_root=archive,
+                    project_id=PROJECT_ID,
+                    source_root_handle_id=HANDLE_ID,
+                    operator_gate=OFFLINE_OPERATOR_GATE,
+                    operator_principal_id="operator-psc-005",
+                    private_evidence_file=private_evidence,
+                    protected_roots=(),
+                    clock=lambda: STAMP,
+                )
+                evidence = migration.migrate()
+
+                self.assertEqual(evidence["status"], "complete")
+                self.assertEqual(len(evidence["archives"]), 1)
+                self.assertTrue(abandoned[0].exists())
+                retained = migration._journal_generation_index()
+                self.assertEqual(
+                    retained,
+                    tuple(
+                        sorted(
+                            (
+                                int(path.name.split("-", 1)[0]),
+                                path.name.rsplit("-", 1)[1][:-5],
+                            )
+                            for path in generation_directory.glob("*.json")
+                        )
+                    ),
+                )
+                with mock.patch.object(
+                    migration_module,
+                    "_MAX_JOURNAL_GENERATION_CHILDREN",
+                    len(list(generation_directory.iterdir())) - 1,
+                ):
+                    self.assert_code(
+                        "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+                        migration._journal_generation_index,
+                    )
+
+                final = next(generation_directory.glob("*.json"))
+                lookalike = (
+                    generation_directory / f".{final.name}.{'0' * 32}.tmp"
+                )
+                lookalike.write_bytes(final.read_bytes())
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+                    migration.migrate,
+                )
+                lookalike.unlink()
+
+                valid_nonce = "00000000000040008000000000000000"
+                directory_temp = (
+                    generation_directory / f".{final.name}.{valid_nonce}.tmp"
+                )
+                directory_temp.mkdir()
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+                    migration._journal_generation_index,
+                )
+                directory_temp.rmdir()
+
+                if os.name == "nt":
+                    ads_path = Path(f"{abandoned[0]}:oversized-canary")
+                    ads_path.write_bytes(b"x" * (migration_module._MAX_CONTROL_BYTES + 1))
+                    self.assert_code(
+                        "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+                        migration._journal_generation_index,
+                    )
 
     def test_outer_journal_fork_and_corrupt_predecessor_fail_closed(self) -> None:
         self.write_fixture()

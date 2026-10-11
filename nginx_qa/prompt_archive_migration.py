@@ -36,6 +36,7 @@ from .prompt_archive_runtime import PromptArchiveRuntime, PromptArchiveRuntimeCo
 from .prompt_archive_storage import (
     _PinnedDirectory,
     _atomic_rename_pinned_no_replace,
+    _storage_temporary_target_name,
     _windows_mark_file_for_delete,
     _windows_open_or_create_relative_directory,
     _windows_open_pinned_directory,
@@ -91,6 +92,8 @@ _MAX_DIRECTORIES: Final = 100_000
 _MAX_DIRECTORY_DEPTH: Final = 256
 _MAX_FILE_BYTES: Final = 512 * 1024 * 1024
 _MAX_TOTAL_BYTES: Final = 64 * 1024 * 1024 * 1024
+# One final and one abandoned publication temp per possible journal generation.
+_MAX_JOURNAL_GENERATION_CHILDREN: Final = 2 * (_MAX_FILES + 2)
 OFFLINE_OPERATOR_GATE: Final = "prompt-archive-offline-migration-v1"
 TOOL_VERSION: Final = "prompt-archive-migration-v1"
 CONTRACT_VERSION: Final = "prompt-archive-offline-migration-contract-v1"
@@ -2005,18 +2008,42 @@ class PromptArchiveMigration:
         if not stat.S_ISDIR(metadata.st_mode) or _is_redirected(directory):
             raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
 
-        def snapshot(parent: _PinnedDirectory) -> tuple[tuple[int, str], ...]:
+        def snapshot(
+            parent: _PinnedDirectory,
+        ) -> tuple[
+            tuple[tuple[int, str], ...],
+            tuple[tuple[str, int, int, int, int], ...],
+        ]:
             try:
-                children = list(
-                    os.scandir(
+                children = []
+                with os.scandir(
                         directory if os.name == "nt" else parent.descriptor
-                    )
-                )
+                ) as entries:
+                    for child in entries:
+                        if len(children) >= _MAX_JOURNAL_GENERATION_CHILDREN:
+                            raise _error(
+                                "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT"
+                            )
+                        children.append(child)
+            except PromptArchiveMigrationError:
+                raise
             except OSError:
                 raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
             result: list[tuple[int, str]] = []
+            temporary: list[tuple[str, int, int, int, int]] = []
             for child in children:
                 match = re.fullmatch(r"(0|[1-9][0-9]*)-([0-9a-f]{64})\.json", child.name)
+                temporary_target = _storage_temporary_target_name(child.name)
+                temporary_match = (
+                    None
+                    if temporary_target is None
+                    else re.fullmatch(
+                        r"(0|[1-9][0-9]*)-([0-9a-f]{64})\.json",
+                        temporary_target,
+                    )
+                )
+                if match is None and temporary_match is None:
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
                 try:
                     child_metadata = (
                         (directory / child.name).lstat()
@@ -2026,8 +2053,7 @@ class PromptArchiveMigration:
                 except OSError:
                     raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED") from None
                 if (
-                    match is None
-                    or child.is_symlink()
+                    child.is_symlink()
                     or not stat.S_ISREG(child_metadata.st_mode)
                     or child_metadata.st_nlink != 1
                     or bool(
@@ -2037,20 +2063,39 @@ class PromptArchiveMigration:
                     )
                 ):
                     raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
-                generation = int(match.group(1))
+                try:
+                    _windows_reject_named_streams(directory / child.name)
+                except PromptArchiveMigrationError as exc:
+                    if exc.code == "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE":
+                        raise _error(
+                            "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT"
+                        ) from None
+                    raise
+                classified = match if match is not None else temporary_match
+                assert classified is not None
+                generation = int(classified.group(1))
                 if generation > 9_223_372_036_854_775_807:
                     raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+                if match is None:
+                    if child_metadata.st_size > _MAX_CONTROL_BYTES:
+                        raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+                    temporary.append(
+                        (child.name, *_file_snapshot(child_metadata))
+                    )
+                    continue
                 result.append((generation, match.group(2)))
             result.sort()
-            return tuple(result)
+            temporary.sort()
+            return tuple(result), tuple(temporary)
 
         with _open_pinned_mutation_directory(directory) as parent:
             before = snapshot(parent)
             after = snapshot(parent)
             _validate_pinned_mutation_directory(parent, directory)
-        if before != after or len(before) != len(set(before)):
+        retained = before[0]
+        if before != after or len(retained) != len(set(retained)):
             raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
-        return before
+        return retained
 
     def _read_journal(self, plan: Mapping[str, Any]) -> dict[str, Any] | None:
         try:
