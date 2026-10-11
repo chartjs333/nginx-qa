@@ -334,6 +334,39 @@ class PromptArchiveIncrementalTests(unittest.TestCase):
             )
         self.assertNotIn("manifest", written_kinds)
 
+    def test_legacy_builder_rejects_renderer_mismatch_before_manifest(self) -> None:
+        archive = self.archive(sprint_id=None)
+        raw = b'{"migration":"exact-original"}\r\n'
+        original_put = archive.storage.put_blob_with_outcome
+        written_kinds: list[str] = []
+
+        def recording_put(data, *, logical_kind, media_type):
+            written_kinds.append(logical_kind)
+            return original_put(
+                data,
+                logical_kind=logical_kind,
+                media_type=media_type,
+            )
+
+        with mock.patch.object(
+            archive.storage,
+            "put_blob_with_outcome",
+            side_effect=recording_put,
+        ), mock.patch.object(
+            archive,
+            "hydrate_byte_stream",
+            return_value=b'{"migration":"corrupt-render"}\r\n',
+        ):
+            self.assert_code(
+                "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+                lambda: archive.build_legacy_raw_archive(
+                    raw,
+                    self.migration_occurrence(),
+                ),
+            )
+
+        self.assertNotIn("manifest", written_kinds)
+
     def test_legacy_reader_final_render_does_not_reuse_count_cache(self) -> None:
         archive = self.archive(sprint_id=None)
         raw = b'{"migration":true}\r\n'

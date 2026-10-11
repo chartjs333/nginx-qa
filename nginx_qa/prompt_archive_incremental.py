@@ -4615,16 +4615,32 @@ class PromptArchiveIncremental:
         )
         if self.sprint_id is not None or occurrence.occurrence_kind != "migration":
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        stream = self.store_byte_stream(raw_bytes, sequence_kind="raw_bytes")
+        # Freeze the caller's exact original before any CAS write.  The raw
+        # chunk graph is permitted to leave unreachable objects on failure,
+        # but a manifest must never attest to renderer output unless that
+        # output independently matches the original byte length and digest.
+        frozen = self._native_source_bytes(
+            raw_bytes,
+            maximum=self.storage.limits.max_hydrated_bytes,
+        )
+        source_size = len(frozen)
+        source_sha256 = hashlib.sha256(frozen).hexdigest()
+        stream = self.store_byte_stream(frozen, sequence_kind="raw_bytes")
         # Re-render before the reachability artifact is admitted.
         rendered = self.hydrate_byte_stream(stream)
+        if (
+            len(rendered) != source_size
+            or hashlib.sha256(rendered).hexdigest() != source_sha256
+            or rendered != frozen
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         roots = {"raw_bytes": _copy_ref(stream.sequence.root_ref)}
         archive_id = self._archive_id(
             archive_format="legacy_raw_chunks_v1",
             scope=scope,
             roots=roots,
-            hydrated_size=len(rendered),
-            hydrated_sha256=hashlib.sha256(rendered).hexdigest(),
+            hydrated_size=source_size,
+            hydrated_sha256=source_sha256,
             envelope_sha256=None,
         )
         # A migration manifest must not rely on bytes cached by the initial
@@ -4646,8 +4662,8 @@ class PromptArchiveIncremental:
             "integrity": {
                 "semantics": "raw-byte-equality",
                 "hydrated_media_type": "application/json",
-                "hydrated_size": len(rendered),
-                "hydrated_sha256": hashlib.sha256(rendered).hexdigest(),
+                "hydrated_size": source_size,
+                "hydrated_sha256": source_sha256,
             },
             "counts": counts,
             "limits": self._limits_document(self.storage),
@@ -4678,8 +4694,8 @@ class PromptArchiveIncremental:
             manifest,
             manifest_ref,
             roots,
-            len(rendered),
-            hashlib.sha256(rendered).hexdigest(),
+            source_size,
+            source_sha256,
         )
 
     def hydrate_archive_bytes(

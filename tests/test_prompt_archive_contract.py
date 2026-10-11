@@ -1031,6 +1031,21 @@ def publication_plan_fixture() -> dict:
             "inventory_sha256": inventory["inventory_sha256"],
             "entry_count": inventory["entry_count"],
             "inventory_ref": inventory_ref,
+            "migration_binding": {
+                "batch_id": "parmb1-" + "1" * 64,
+                "batch_plan_sha256": "2" * 64,
+                "reservation": {
+                    "ordinal": 0,
+                    "entry_id": "parme1-" + "3" * 64,
+                    "path_sha256": "4" * 64,
+                    "source_byte_size": 1024,
+                    "source_sha256": "5" * 64,
+                    "operation_id": operation_id,
+                    "occurrence_id": "migration-" + "6" * 64,
+                    "response_id": RESPONSE_ID,
+                    "decision_occurrence_id": "decision-" + "7" * 64,
+                },
+            },
         },
         "intended_manifest": {
             "identity_version": "prompt-archive-intended-manifest-identity-v1",

@@ -445,7 +445,7 @@
       "additionalProperties": false
     },
     "inventorySourceLocator": {
-      "description": "A path-free locator for a frozen source inventory. inventory_ref identifies the exact typed inventory bytes reached through the stable logical key inventories/v1/<inventory_id>.json; inventory_id, format, digest, entry count, and ref must semantically match that document.",
+      "description": "A path-free locator for a frozen source inventory. inventory_ref identifies the exact typed inventory bytes reached through the stable logical key inventories/v1/<inventory_id>.json; inventory_id, format, digest, entry count, and ref must semantically match that document. migration_binding additionally commits the accepted per-entry plan to the immutable operator-gated outer batch-plan SHA and its exact reserved source entry.",
       "type": "object",
       "required": [
         "locator_kind",
@@ -454,7 +454,8 @@
         "inventory_format",
         "inventory_sha256",
         "entry_count",
-        "inventory_ref"
+        "inventory_ref",
+        "migration_binding"
       ],
       "properties": {
         "locator_kind": {"const": "isolated_inventory"},
@@ -474,7 +475,64 @@
           "minimum": 1,
           "maximum": 1000000
         },
-        "inventory_ref": {"$ref": "#/$defs/sourceInventoryRef"}
+        "inventory_ref": {"$ref": "#/$defs/sourceInventoryRef"},
+        "migration_binding": {
+          "type": "object",
+          "required": ["batch_id", "batch_plan_sha256", "reservation"],
+          "properties": {
+            "batch_id": {
+              "type": "string",
+              "pattern": "^parmb1-[0-9a-f]{64}$"
+            },
+            "batch_plan_sha256": {"$ref": "#/$defs/sha256"},
+            "reservation": {
+              "type": "object",
+              "required": [
+                "ordinal",
+                "entry_id",
+                "path_sha256",
+                "source_byte_size",
+                "source_sha256",
+                "operation_id",
+                "occurrence_id",
+                "response_id",
+                "decision_occurrence_id"
+              ],
+              "properties": {
+                "ordinal": {"type": "integer", "minimum": 0, "maximum": 999999},
+                "entry_id": {
+                  "type": "string",
+                  "pattern": "^parme1-[0-9a-f]{64}$"
+                },
+                "path_sha256": {"$ref": "#/$defs/sha256"},
+                "source_byte_size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 536870912
+                },
+                "source_sha256": {"$ref": "#/$defs/sha256"},
+                "operation_id": {
+                  "type": "string",
+                  "pattern": "^parop1-[0-9a-f]{32}$"
+                },
+                "occurrence_id": {
+                  "type": "string",
+                  "pattern": "^migration-[0-9a-f]{64}$"
+                },
+                "response_id": {
+                  "type": "string",
+                  "pattern": "^parresp1-[0-9a-f]{64}$"
+                },
+                "decision_occurrence_id": {
+                  "type": "string",
+                  "pattern": "^decision-[0-9a-f]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     },

@@ -978,12 +978,25 @@ runtime-occurrence locator (whose `runtime_occurrence_id` must equal the plan
 occurrence ID), or its isolated inventory locator for migration, and verifies
 the same planned set. An inventory locator includes the exact typed ref for the
 immutable descriptor at the stable `inventories/v1/<inventory_id>.json` path;
-it is never resolved by scanning. Offline resume must be supplied the same
+it is never resolved by scanning. Each accepted offline per-entry plan also
+stores a closed `migration_binding`: the derived outer batch ID, the canonical
+SHA-256 of that immutable operator-gated batch plan, and its complete reserved
+entry (ordinal, path digest, source length/digest, random operation ID, and
+occurrence/response/decision IDs). Runtime validation reopens the stable outer
+plan, requires the exact contract/tool/gate/principal/inventory semantics,
+re-derives every reservation identity, compares the canonical batch-plan SHA,
+and binds the manifest raw length/digest in both directions. An aggregate
+inventory or caller-constructed authorization alone therefore cannot publish
+null-sprint bytes. Offline resume must be supplied the same
 explicit isolated root handle, whose resolved filesystem-identity digest and
 full inventory digest must equal that descriptor before any source byte is
 read. Missing or different input aborts before pointer publication, and no raw
 path is persisted in a plan. At `blobs_verified` and later the plan/manifest
-graph is sufficient; source response construction is not repeated.
+graph is sufficient; source response construction is not repeated. Startup
+still validates the retained offline plan, journal chain, and registry
+lower-bound fence without source authority. It leaves a nonterminal operation
+pending for explicit operator resume, but may remove an exact terminal pending
+entry idempotently because no further source read or publication is required.
 
 `prompt-archive-isolated-inventory-v1` is a frozen binary digest grammar, not
 an implementation-defined directory listing. Only regular files below the

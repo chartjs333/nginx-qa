@@ -49,12 +49,17 @@ _OPERATION_ID_RE: Final = re.compile(r"^parop1-[0-9a-f]{32}$", re.ASCII)
 _SPRINT_STORAGE_KEY_RE: Final = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _ARCHIVE_ID_RE: Final = re.compile(r"^par1-[0-9a-f]{64}$", re.ASCII)
 _INVENTORY_ID_RE: Final = re.compile(r"^parinv1-[0-9a-f]{64}$", re.ASCII)
+_MIGRATION_BATCH_ID_RE: Final = re.compile(r"^parmb1-[0-9a-f]{64}$", re.ASCII)
 _PENDING_REGISTRY_ID_RE: Final = re.compile(
     r"^parpending1-[0-9a-f]{64}$",
     re.ASCII,
 )
 _JOURNAL_GENERATION_FILE_RE: Final = re.compile(
     r"^[0-6]-[0-9a-f]{64}\.json$",
+    re.ASCII,
+)
+_MIGRATION_JOURNAL_GENERATION_FILE_RE: Final = re.compile(
+    r"^(?:0|[1-9][0-9]{0,18})-[0-9a-f]{64}\.json$",
     re.ASCII,
 )
 _PENDING_GENERATION_FILE_RE: Final = re.compile(
@@ -109,6 +114,15 @@ _FIXED_MEDIA_TYPES: Final = {
     "descriptor_stub": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json",
     "latest_slot": "application/vnd.nginx-qa.prompt-archive-latest-slot-v1+json",
     "source_inventory": "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json",
+    "migration_batch_plan": (
+        "application/vnd.nginx-qa.prompt-archive-migration-batch-plan-v1+json"
+    ),
+    "migration_batch_journal": (
+        "application/vnd.nginx-qa.prompt-archive-migration-batch-journal-v1+json"
+    ),
+    "migration_evidence": (
+        "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+    ),
     "pending_operation_registry": (
         "application/vnd.nginx-qa.prompt-archive-pending-operation-registry-v1+json"
     ),
@@ -418,6 +432,66 @@ def resolved_path_from_open_descriptor(descriptor: int) -> Path | None:
     if type(descriptor) is not int or descriptor < 0:
         raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
     return _path_from_open_descriptor(descriptor)
+
+
+def _windows_lock_descriptor(descriptor: int, *, unlock: bool) -> None:
+    """Block on (or release) byte zero without CRT's ten-second retry cap."""
+
+    if os.name != "nt":
+        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+    import msvcrt
+    from ctypes import wintypes
+
+    # OVERLAPPED's anonymous union is represented by its offset fields.  This
+    # layout is identical on 32- and 64-bit Windows because ULONG_PTR/HANDLE
+    # follow pointer width while the file offsets remain DWORD pairs.
+    class Overlapped(ctypes.Structure):
+        _fields_ = (
+            ("Internal", ctypes.c_size_t),
+            ("InternalHigh", ctypes.c_size_t),
+            ("Offset", wintypes.DWORD),
+            ("OffsetHigh", wintypes.DWORD),
+            ("hEvent", wintypes.HANDLE),
+        )
+
+    handle = msvcrt.get_osfhandle(descriptor)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    overlapped = Overlapped()
+    if unlock:
+        operation = kernel32.UnlockFileEx
+        operation.argtypes = (
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(Overlapped),
+        )
+        operation.restype = wintypes.BOOL
+        accepted = operation(handle, 0, 1, 0, ctypes.byref(overlapped))
+    else:
+        operation = kernel32.LockFileEx
+        operation.argtypes = (
+            wintypes.HANDLE,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            ctypes.POINTER(Overlapped),
+        )
+        operation.restype = wintypes.BOOL
+        # LOCKFILE_EXCLUSIVE_LOCK without FAIL_IMMEDIATELY is a true blocking
+        # lock.  A process crash closes the handle and releases it in-kernel.
+        accepted = operation(
+            handle,
+            0x00000002,
+            0,
+            1,
+            0,
+            ctypes.byref(overlapped),
+        )
+    if not accepted:
+        code = ctypes.get_last_error()
+        raise OSError(code, "Windows byte-range lock failed")
 
 
 class _PinnedDirectory:
@@ -2427,6 +2501,29 @@ class PromptArchiveStorage:
             and _INVENTORY_ID_RE.fullmatch(components[2][:-5]) is not None
         ):
             return "source_inventory"
+        if (
+            len(components) == 4
+            and components[0:2] == ("migrations", "v1")
+            and _MIGRATION_BATCH_ID_RE.fullmatch(components[2]) is not None
+            and components[3] == "plan.json"
+        ):
+            return "migration_batch_plan"
+        if (
+            len(components) == 5
+            and components[0:2] == ("migrations", "v1")
+            and _MIGRATION_BATCH_ID_RE.fullmatch(components[2]) is not None
+            and components[3] == "journal-generations"
+            and _MIGRATION_JOURNAL_GENERATION_FILE_RE.fullmatch(components[4])
+            is not None
+        ):
+            return "migration_batch_journal"
+        if (
+            len(components) == 4
+            and components[0:2] == ("migrations", "v1")
+            and _MIGRATION_BATCH_ID_RE.fullmatch(components[2]) is not None
+            and components[3] == "evidence.json"
+        ):
+            return "migration_evidence"
         return None
 
     def _immutable_artifact_limit(self, components: tuple[str, ...]) -> int:
@@ -2483,7 +2580,13 @@ class PromptArchiveStorage:
             and result[3].endswith(".lock" if lock else ".json")
             and _SHARD_RE.fullmatch(result[3][:-5]) is not None
         )
-        if not (operation or shard):
+        migration = (
+            len(result) == 4
+            and result[0:2] == ("migrations", "v1")
+            and _MIGRATION_BATCH_ID_RE.fullmatch(result[2]) is not None
+            and result[3] == ("operation.lock" if lock else "journal.json")
+        )
+        if not (operation or shard or migration):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return result
 
@@ -2687,9 +2790,7 @@ class PromptArchiveStorage:
                     os.fsync(descriptor)
                 os.lseek(descriptor, 0, os.SEEK_SET)
                 if os.name == "nt":
-                    import msvcrt
-
-                    msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                    _windows_lock_descriptor(descriptor, unlock=False)
                 else:
                     import fcntl
 
@@ -2709,9 +2810,7 @@ class PromptArchiveStorage:
                 finally:
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     if os.name == "nt":
-                        import msvcrt
-
-                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                        _windows_lock_descriptor(descriptor, unlock=True)
                     else:
                         import fcntl
 

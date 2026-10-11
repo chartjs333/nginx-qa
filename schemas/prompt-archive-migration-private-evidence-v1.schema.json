@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-private-evidence-v1.schema.json",
+  "title": "Prompt archive offline migration private evidence v1",
+  "description": "Explicitly located private path-bearing pre/post inventory witness. This document is never stored in the public archive control tree.",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "batch_id", "project_id", "source_root_handle_id", "inventory_id", "pre", "post", "comparison", "observed_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_private_evidence"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-private-evidence-v1+json"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "source_root_handle_id": {"$ref": "#/$defs/safeId"},
+    "inventory_id": {"type": "string", "pattern": "^parinv1-[0-9a-f]{64}$"},
+    "pre": {"$ref": "#/$defs/inventory"},
+    "post": {"$ref": "#/$defs/inventory"},
+    "comparison": {
+      "type": "object",
+      "required": ["entry_count", "paths_sizes_mtimes_hashes_identities_equal", "originals_modified", "originals_deleted"],
+      "properties": {
+        "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "paths_sizes_mtimes_hashes_identities_equal": {"const": true},
+        "originals_modified": {"const": false},
+        "originals_deleted": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "observed_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "rootIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["identity_version", "platform", "st_dev", "st_ino"],
+          "properties": {"identity_version": {"const": "prompt-archive-root-identity-v1"}, "platform": {"const": "posix-dev-inode-v1"}, "st_dev": {"type": "string", "pattern": "^[0-9]+$"}, "st_ino": {"type": "string", "pattern": "^[0-9]+$"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["identity_version", "platform", "volume_serial_hex", "file_id_hex"],
+          "properties": {"identity_version": {"const": "prompt-archive-root-identity-v1"}, "platform": {"const": "windows-file-id-v1"}, "volume_serial_hex": {"type": "string", "pattern": "^[0-9a-f]{16}$"}, "file_id_hex": {"type": "string", "pattern": "^[0-9a-f]{32}$"}},
+          "additionalProperties": false
+        }
+      ]
+    },
+    "fileIdentity": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["identity_version", "platform", "st_dev", "st_ino"],
+          "properties": {"identity_version": {"const": "prompt-archive-file-identity-v1"}, "platform": {"const": "posix-dev-inode-v1"}, "st_dev": {"type": "string", "pattern": "^[0-9]+$"}, "st_ino": {"type": "string", "pattern": "^[0-9]+$"}},
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["identity_version", "platform", "st_dev_hex", "st_ino_hex"],
+          "properties": {"identity_version": {"const": "prompt-archive-file-identity-v1"}, "platform": {"const": "windows-stat-file-id-v1"}, "st_dev_hex": {"type": "string", "pattern": "^[0-9a-f]{16}$"}, "st_ino_hex": {"type": "string", "pattern": "^[0-9a-f]{32}$"}},
+          "additionalProperties": false
+        }
+      ]
+    },
+    "entry": {
+      "type": "object",
+      "required": ["relative_path", "path_sha256", "byte_size", "sha256", "mtime_ns", "file_identity", "identity_sha256", "link_count"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1, "maxLength": 32767},
+        "path_sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "mtime_ns": {"type": "integer", "minimum": -9223372036854775808, "maximum": 9223372036854775807},
+        "file_identity": {"$ref": "#/$defs/fileIdentity"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"},
+        "link_count": {"const": 1}
+      },
+      "additionalProperties": false
+    },
+    "inventory": {
+      "type": "object",
+      "required": ["source_root_identity", "source_root_identity_sha256", "inventory_sha256", "safety_snapshot_sha256", "total_bytes", "entries"],
+      "properties": {
+        "source_root_identity": {"$ref": "#/$defs/rootIdentity"},
+        "source_root_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "safety_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "total_bytes": {"type": "integer", "minimum": 0, "maximum": 68719476736},
+        "entries": {"type": "array", "minItems": 1, "maxItems": 1000000, "items": {"$ref": "#/$defs/entry"}}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

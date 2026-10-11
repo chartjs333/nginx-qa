@@ -15,6 +15,7 @@ FastAPI service for coordinating QA and development queues between project roles
 - [Sequential sprint team JSON architect contract](prompts/architect_sequential_team_json.md) - defines the once-per-sprint team file and queue-driven identity transitions.
 - [Universal managed sprint architecture contract](docs/universal-managed-sprint-contract.md) - freezes optional `sprint_type` dispatch, provenance, schemas, migration, preflight, and activation boundaries; machine-readable v1 contracts are in `schemas/`.
 - [Inbound Pending Proposal API v1](docs/INBOUND_PROPOSAL_API_V1.md) - freezes the external proposal schema, source metadata, idempotency, authentication, correlation, error, and explicit activation boundaries over the existing Pending Sprints resource.
+- [Prompt Archive V1 offline migration and recovery](docs/PROMPT_ARCHIVE_OFFLINE_MIGRATION.md) - operator-gated, lossless legacy archive migration, source-free entry recovery, reconstruction, rollback verification, and evidence contracts.
 - helper scripts for posting and polling queue messages.
 
 Runtime files such as queue history, agent state, email routes, screenshots,

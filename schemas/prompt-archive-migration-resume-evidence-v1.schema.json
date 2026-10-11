@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-resume-evidence-v1.schema.json",
+  "title": "Prompt archive source-free operation resume evidence v1",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "batch_id", "entry_id", "operation_id", "response_id", "archive_id", "pointer_id", "source_byte_size", "source_sha256", "batch_completion_deferred_until_post_inventory", "outer_journal_generation", "source_tree_opened"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_operation_resume_evidence"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"const": "resume-operation"},
+    "status": {"const": "completed"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "entry_id": {"type": "string", "pattern": "^parme1-[0-9a-f]{64}$"},
+    "operation_id": {"type": "string", "pattern": "^parop1-[0-9a-f]{32}$"},
+    "response_id": {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+    "archive_id": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
+    "pointer_id": {"type": "string", "pattern": "^parptr1-[0-9a-f]{64}$"},
+    "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "batch_completion_deferred_until_post_inventory": {"const": true},
+    "outer_journal_generation": {"type": "integer", "minimum": 0, "maximum": 1000001},
+    "source_tree_opened": {"const": false}
+  },
+  "additionalProperties": false
+}

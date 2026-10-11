@@ -37,6 +37,7 @@ from .prompt_archive_incremental import (
     ArchiveOccurrence,
     PromptArchiveIncremental,
     pas1_id_v1,
+    response_id_v1,
     sprint_storage_key_v1,
 )
 from .prompt_archive_occurrence_store import (
@@ -67,6 +68,9 @@ _RESPONSE_ID_RE: Final = re.compile(r"^parresp1-[0-9a-f]{64}$", re.ASCII)
 _ARCHIVE_ID_RE: Final = re.compile(r"^par1-[0-9a-f]{64}$", re.ASCII)
 _POINTER_ID_RE: Final = re.compile(r"^parptr1-[0-9a-f]{64}$", re.ASCII)
 _LOCATOR_ID_RE: Final = re.compile(r"^pararc1-[0-9a-f]{64}$", re.ASCII)
+_INVENTORY_ID_RE: Final = re.compile(r"^parinv1-[0-9a-f]{64}$", re.ASCII)
+_MIGRATION_BATCH_ID_RE: Final = re.compile(r"^parmb1-[0-9a-f]{64}$", re.ASCII)
+_MIGRATION_ENTRY_ID_RE: Final = re.compile(r"^parme1-[0-9a-f]{64}$", re.ASCII)
 _STUB_ID_RE: Final = re.compile(r"^parstub1-[0-9a-f]{64}$", re.ASCII)
 _OPERATION_ID_RE: Final = re.compile(r"^parop1-[0-9a-f]{32}$", re.ASCII)
 _RECOVERY_KEY_RE: Final = re.compile(r"^parloc1-[0-9a-f]{64}$", re.ASCII)
@@ -89,6 +93,15 @@ _PLAN_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-publication-plan-v
 _JOURNAL_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
 _PENDING_MEDIA: Final = (
     "application/vnd.nginx-qa.prompt-archive-pending-operation-registry-v1+json"
+)
+_INVENTORY_MEDIA: Final = (
+    "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
+)
+_OFFLINE_OPERATOR_GATE: Final = "prompt-archive-offline-migration-v1"
+_OFFLINE_MIGRATION_CONTRACT: Final = "prompt-archive-offline-migration-contract-v1"
+_OFFLINE_MIGRATION_TOOL: Final = "prompt-archive-migration-v1"
+_MIGRATION_BATCH_PLAN_MEDIA: Final = (
+    "application/vnd.nginx-qa.prompt-archive-migration-batch-plan-v1+json"
 )
 _JOURNAL_STATES: Final = (
     "intent",
@@ -353,7 +366,7 @@ class PromptArchiveRuntimeConfig:
 @dataclasses.dataclass(frozen=True, slots=True)
 class PromptArchiveRead:
     project_id: str
-    sprint_id: str
+    sprint_id: str | None
     archive_id: str
     locator: Mapping[str, Any]
     pointer: Mapping[str, Any]
@@ -379,7 +392,7 @@ class PromptArchiveRead:
 @dataclasses.dataclass(frozen=True, slots=True)
 class PromptArchivePublication:
     project_id: str
-    sprint_id: str
+    sprint_id: str | None
     archive_id: str
     archive_format: str
     scope: Mapping[str, Any]
@@ -417,6 +430,18 @@ class PromptArchiveOccurrenceProver(Protocol):
         project_id: str,
         locator: Mapping[str, Any],
     ) -> PromptArchiveOccurrenceProof | None: ...
+
+
+class PromptArchiveOfflineInventoryVerifier(Protocol):
+    """Re-prove one explicitly supplied isolated source at journal intent.
+
+    The verifier is deliberately process-local and path-free from the
+    runtime's perspective.  Offline recovery has no authority to discover or
+    scan an input root: the operator/tool must supply the exact root handle
+    represented by the immutable inventory locator on every resume.
+    """
+
+    def __call__(self, locator: Mapping[str, Any]) -> str: ...
 
 
 class PromptArchiveRuntime:
@@ -713,6 +738,458 @@ class PromptArchiveRuntime:
             return "source_changed"
         return None
 
+    def _validate_inventory_descriptor(
+        self,
+        descriptor: Any,
+    ) -> dict[str, Any]:
+        """Validate the closed, path-free source inventory descriptor."""
+
+        if type(descriptor) is not dict or set(descriptor) != {
+            "schema_version",
+            "kind",
+            "media_type",
+            "id_algorithm",
+            "inventory_id",
+            "inventory_format",
+            "project_id",
+            "source_root_handle_id",
+            "source_root_identity_sha256",
+            "inventory_sha256",
+            "entry_count",
+            "created_at",
+        } or (
+            descriptor.get("schema_version") != 1
+            or descriptor.get("kind") != "prompt_archive_source_inventory"
+            or descriptor.get("media_type") != _INVENTORY_MEDIA
+            or descriptor.get("id_algorithm") != "PAS1-ID-v1"
+            or type(descriptor.get("inventory_id")) is not str
+            or _INVENTORY_ID_RE.fullmatch(descriptor["inventory_id"]) is None
+            or descriptor.get("inventory_format")
+            != "prompt-archive-isolated-inventory-v1"
+            or descriptor.get("project_id") != self.project_id
+            or type(descriptor.get("source_root_handle_id")) is not str
+            or _SAFE_ID_RE.fullmatch(descriptor["source_root_handle_id"]) is None
+            or type(descriptor.get("source_root_identity_sha256")) is not str
+            or _SHA256_RE.fullmatch(descriptor["source_root_identity_sha256"])
+            is None
+            or type(descriptor.get("inventory_sha256")) is not str
+            or _SHA256_RE.fullmatch(descriptor["inventory_sha256"]) is None
+            or type(descriptor.get("entry_count")) is not int
+            or not 1 <= descriptor["entry_count"] <= 1_000_000
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        created_at = _require_rfc3339(descriptor.get("created_at"))
+        expected_id = "parinv1-" + pas1_id_v1(
+            "source-inventory-id",
+            (
+                ("project_id", self.project_id),
+                ("source_root_handle_id", descriptor["source_root_handle_id"]),
+                (
+                    "source_root_identity_sha256",
+                    descriptor["source_root_identity_sha256"],
+                ),
+                ("inventory_sha256", descriptor["inventory_sha256"]),
+                ("entry_count", str(descriptor["entry_count"])),
+                ("created_at", created_at),
+            ),
+        )
+        if descriptor["inventory_id"] != expected_id:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return copy.deepcopy(dict(descriptor))
+
+    def _load_offline_batch_plan(
+        self,
+        descriptor: Mapping[str, Any],
+        inventory_locator: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], str, dict[str, dict[str, Any]]]:
+        """Verify the durable operator gate and every reserved source entry.
+
+        The accepted per-entry PAS1 plan deliberately carries a compact
+        inventory locator.  Its authorization and exact source-entry binding
+        close through the immutable outer migration plan whose stable key is
+        derived from that inventory's project and source-root handle.  A
+        caller therefore cannot publish arbitrary null-sprint bytes merely by
+        manufacturing an ``ArchiveOccurrence`` or an aggregate descriptor.
+        """
+
+        source_handle = descriptor.get("source_root_handle_id")
+        if type(source_handle) is not str or _SAFE_ID_RE.fullmatch(source_handle) is None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        batch_id = "parmb1-" + pas1_id_v1(
+            "offline-migration-batch-id",
+            (
+                ("project_id", self.project_id),
+                ("source_root_handle_id", source_handle),
+            ),
+        )
+        if _MIGRATION_BATCH_ID_RE.fullmatch(batch_id) is None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        batch = self._require_storage().read_immutable_json(
+            ("migrations", "v1", batch_id, "plan.json")
+        )
+        required = {
+            "schema_version",
+            "kind",
+            "media_type",
+            "id_algorithm",
+            "batch_id",
+            "operation_kind",
+            "contract_version",
+            "tool_version",
+            "tool_source_sha256",
+            "project_id",
+            "sprint_id",
+            "source_root_handle_id",
+            "operator_authorization",
+            "source_inventory",
+            "source_safety",
+            "reservations",
+            "created_at",
+        }
+        if type(batch) is not dict or set(batch) != required or (
+            batch.get("schema_version") != 1
+            or batch.get("kind") != "prompt_archive_migration_batch_plan"
+            or batch.get("media_type") != _MIGRATION_BATCH_PLAN_MEDIA
+            or batch.get("id_algorithm") != "PAS1-ID-v1"
+            or batch.get("batch_id") != batch_id
+            or batch.get("operation_kind") != "offline_migration_batch"
+            or batch.get("contract_version") != _OFFLINE_MIGRATION_CONTRACT
+            or batch.get("tool_version") != _OFFLINE_MIGRATION_TOOL
+            or type(batch.get("tool_source_sha256")) is not str
+            or _SHA256_RE.fullmatch(batch["tool_source_sha256"]) is None
+            or batch.get("project_id") != self.project_id
+            or batch.get("sprint_id") is not None
+            or batch.get("source_root_handle_id") != source_handle
+            or _require_rfc3339(batch.get("created_at"))
+            != descriptor.get("created_at")
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        authorization = batch.get("operator_authorization")
+        if type(authorization) is not dict or set(authorization) != {
+            "gate",
+            "principal_kind",
+            "principal_id",
+            "scope_source",
+        } or (
+            authorization.get("gate") != _OFFLINE_OPERATOR_GATE
+            or authorization.get("principal_kind") != "offline_operator"
+            or type(authorization.get("principal_id")) is not str
+            or _SAFE_ID_RE.fullmatch(authorization["principal_id"]) is None
+            or authorization.get("scope_source") != "offline_operator_gate"
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        source_inventory = batch.get("source_inventory")
+        if source_inventory != inventory_locator:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        source_safety = batch.get("source_safety")
+        if type(source_safety) is not dict or set(source_safety) != {
+            "source_root_identity_sha256",
+            "safety_snapshot_sha256",
+            "total_bytes",
+        } or (
+            source_safety.get("source_root_identity_sha256")
+            != descriptor.get("source_root_identity_sha256")
+            or type(source_safety.get("safety_snapshot_sha256")) is not str
+            or _SHA256_RE.fullmatch(source_safety["safety_snapshot_sha256"])
+            is None
+            or type(source_safety.get("total_bytes")) is not int
+            or not 0 <= source_safety["total_bytes"] <= 9_223_372_036_854_775_807
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        reservations = batch.get("reservations")
+        if (
+            type(reservations) is not list
+            or not reservations
+            or len(reservations) > descriptor["entry_count"]
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        by_operation: dict[str, dict[str, Any]] = {}
+        seen_ordinals: set[int] = set()
+        seen_responses: set[str] = set()
+        reserved_bytes = 0
+        for raw_reservation in reservations:
+            if type(raw_reservation) is not dict or set(raw_reservation) != {
+                "ordinal",
+                "entry_id",
+                "path_sha256",
+                "source_byte_size",
+                "source_sha256",
+                "operation_id",
+                "occurrence_id",
+                "response_id",
+                "decision_occurrence_id",
+            }:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            reservation = copy.deepcopy(raw_reservation)
+            ordinal = reservation.get("ordinal")
+            byte_size = reservation.get("source_byte_size")
+            path_sha256 = reservation.get("path_sha256")
+            source_sha256 = reservation.get("source_sha256")
+            operation_id = reservation.get("operation_id")
+            if (
+                type(ordinal) is not int
+                or not 0 <= ordinal < descriptor["entry_count"]
+                or ordinal in seen_ordinals
+                or type(byte_size) is not int
+                or not 0 <= byte_size <= self.max_hydrated_bytes
+                or type(path_sha256) is not str
+                or _SHA256_RE.fullmatch(path_sha256) is None
+                or type(source_sha256) is not str
+                or _SHA256_RE.fullmatch(source_sha256) is None
+                or type(operation_id) is not str
+                or _OPERATION_ID_RE.fullmatch(operation_id) is None
+                or operation_id in by_operation
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            entry_id = "parme1-" + pas1_id_v1(
+                "offline-migration-entry-id",
+                (
+                    ("inventory_id", descriptor["inventory_id"]),
+                    ("ordinal", str(ordinal)),
+                    ("path_sha256", path_sha256),
+                    ("byte_size", str(byte_size)),
+                    ("sha256", source_sha256),
+                ),
+            )
+            occurrence_id = "migration-" + pas1_id_v1(
+                "offline-migration-occurrence",
+                (("batch_id", batch_id), ("entry_id", entry_id)),
+            )
+            expected_response_id = response_id_v1(
+                self.project_id,
+                None,
+                "migration-snapshot",
+                "migration",
+                occurrence_id,
+            )
+            if (
+                reservation.get("entry_id") != entry_id
+                or _MIGRATION_ENTRY_ID_RE.fullmatch(entry_id) is None
+                or reservation.get("occurrence_id") != occurrence_id
+                or reservation.get("response_id") != expected_response_id
+                or expected_response_id in seen_responses
+                or reservation.get("decision_occurrence_id")
+                != "decision-" + entry_id[-64:]
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            seen_ordinals.add(ordinal)
+            seen_responses.add(expected_response_id)
+            reserved_bytes += byte_size
+            if reserved_bytes > source_safety["total_bytes"]:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            by_operation[operation_id] = reservation
+        batch_raw = canonical_json_bytes_v1(batch, maximum=_PLAN_MAX_BYTES)
+        return copy.deepcopy(batch), hashlib.sha256(batch_raw).hexdigest(), by_operation
+
+    def _validate_offline_reservation(
+        self,
+        *,
+        descriptor: Mapping[str, Any],
+        inventory_locator: Mapping[str, Any],
+        operation_id: str,
+        occurrence: ArchiveOccurrence,
+        byte_size: int,
+        sha256: str,
+    ) -> dict[str, Any]:
+        batch, batch_plan_sha256, reservations = self._load_offline_batch_plan(
+            descriptor,
+            inventory_locator,
+        )
+        reservation = reservations.get(operation_id)
+        authorization = occurrence.authorization
+        if reservation is None or (
+            occurrence.project_id != self.project_id
+            or occurrence.sprint_id is not None
+            or occurrence.response_id != reservation["response_id"]
+            or occurrence.response_kind != "migration-snapshot"
+            or occurrence.occurrence_kind != "migration"
+            or occurrence.occurrence_id != reservation["occurrence_id"]
+            or occurrence.transition_id is not None
+            or occurrence.source != {"source_kind": "offline_migration"}
+            or occurrence.created_at != batch["created_at"]
+            or occurrence.verified_at != batch["created_at"]
+            or byte_size != reservation["source_byte_size"]
+            or sha256 != reservation["source_sha256"]
+            or type(authorization) is not dict
+            or authorization
+            != {
+                "auth_model_version": "prompt-archive-authorization-v1",
+                "principal_kind": "offline_operator",
+                "principal_id": batch["operator_authorization"]["principal_id"],
+                "binding_id": None,
+                "scope_source": "offline_operator_gate",
+                "effective_scope_revision": None,
+                "effective_scope_sha256": None,
+                "decision_occurrence_id": reservation["decision_occurrence_id"],
+            }
+        ):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        return {
+            "batch_id": batch["batch_id"],
+            "batch_plan_sha256": batch_plan_sha256,
+            "reservation": copy.deepcopy(reservation),
+        }
+
+    def _validate_inventory_locator(
+        self,
+        locator: Any,
+        *,
+        require_migration_binding: bool = False,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Validate one path-free isolated inventory and its stable binding."""
+
+        base_keys = {
+            "locator_kind",
+            "locator_version",
+            "inventory_id",
+            "inventory_format",
+            "inventory_sha256",
+            "entry_count",
+            "inventory_ref",
+        }
+        if type(locator) is not dict or frozenset(locator) not in {
+            frozenset(base_keys),
+            frozenset(base_keys | {"migration_binding"}),
+        } or (require_migration_binding and "migration_binding" not in locator):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        base_locator = {name: copy.deepcopy(locator[name]) for name in base_keys}
+        inventory_id = locator.get("inventory_id")
+        inventory_digest = locator.get("inventory_sha256")
+        entry_count = locator.get("entry_count")
+        if (
+            locator.get("locator_kind") != "isolated_inventory"
+            or locator.get("locator_version")
+            != "prompt-archive-isolated-inventory-locator-v1"
+            or type(inventory_id) is not str
+            or _INVENTORY_ID_RE.fullmatch(inventory_id) is None
+            or locator.get("inventory_format")
+            != "prompt-archive-isolated-inventory-v1"
+            or type(inventory_digest) is not str
+            or _SHA256_RE.fullmatch(inventory_digest) is None
+            or type(entry_count) is not int
+            or not 1 <= entry_count <= 1_000_000
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        inventory_ref = _closed_ref(
+            locator.get("inventory_ref"),
+            logical_kind="source_inventory",
+            media_type=_INVENTORY_MEDIA,
+        )
+        raw = self._require_storage().read_blob(
+            inventory_ref,
+            max_output_bytes=_CONTROL_MAX_BYTES,
+        )
+        descriptor = self._validate_inventory_descriptor(
+            parse_canonical_json_v1(raw, maximum=_CONTROL_MAX_BYTES)
+        )
+        if (
+            descriptor["inventory_id"] != inventory_id
+            or descriptor["inventory_format"] != locator["inventory_format"]
+            or descriptor["inventory_sha256"] != inventory_digest
+            or descriptor["entry_count"] != entry_count
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        stable = self._require_storage().read_immutable_json(
+            ("inventories", "v1", f"{inventory_id}.json")
+        )
+        if stable != descriptor:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        # The inventory is not an authority by itself.  Close it through the
+        # immutable, operator-gated batch plan before accepting any locator.
+        batch, batch_plan_sha256, reservations = self._load_offline_batch_plan(
+            descriptor,
+            base_locator,
+        )
+        binding = locator.get("migration_binding")
+        if binding is not None:
+            if type(binding) is not dict or set(binding) != {
+                "batch_id",
+                "batch_plan_sha256",
+                "reservation",
+            }:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            reservation = binding.get("reservation")
+            if (
+                binding.get("batch_id") != batch["batch_id"]
+                or binding.get("batch_plan_sha256") != batch_plan_sha256
+                or type(reservation) is not dict
+                or reservations.get(reservation.get("operation_id")) != reservation
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return copy.deepcopy(locator), descriptor
+
+    def publish_offline_inventory_descriptor(
+        self,
+        descriptor: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Create-or-verify one accepted path-free inventory binding.
+
+        This method never discovers an input root.  The caller owns the
+        explicit isolated-root inventory and must durably reserve its random
+        operation identity before invoking any per-entry publication.
+        """
+
+        validated = self._validate_inventory_descriptor(descriptor)
+        raw = canonical_json_bytes_v1(validated, maximum=_CONTROL_MAX_BYTES)
+        storage = self._require_storage()
+        described_ref = storage.describe_blob(
+            raw,
+            logical_kind="source_inventory",
+            media_type=_INVENTORY_MEDIA,
+        )
+        prospective_locator = {
+            "locator_kind": "isolated_inventory",
+            "locator_version": "prompt-archive-isolated-inventory-locator-v1",
+            "inventory_id": validated["inventory_id"],
+            "inventory_format": validated["inventory_format"],
+            "inventory_sha256": validated["inventory_sha256"],
+            "entry_count": validated["entry_count"],
+            "inventory_ref": copy.deepcopy(described_ref),
+        }
+        # Authorization precedes the first inventory CAS mutation.
+        self._load_offline_batch_plan(validated, prospective_locator)
+        inventory_ref = storage.put_blob(
+            raw,
+            logical_kind="source_inventory",
+            media_type=_INVENTORY_MEDIA,
+        )
+        storage.publish_immutable_bytes(
+            ("inventories", "v1", f"{validated['inventory_id']}.json"),
+            raw,
+            expected_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+        locator = copy.deepcopy(prospective_locator)
+        if locator["inventory_ref"] != inventory_ref:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        verified, _ = self._validate_inventory_locator(locator)
+        return verified
+
+    def _offline_inventory_abort_reason(
+        self,
+        plan: Mapping[str, Any],
+        verifier: PromptArchiveOfflineInventoryVerifier | None,
+    ) -> str | None:
+        if verifier is None:
+            return "source_unavailable"
+        locator, _descriptor = self._validate_inventory_locator(
+            plan.get("source_locator"),
+            require_migration_binding=True,
+        )
+        locator = {
+            name: copy.deepcopy(value)
+            for name, value in locator.items()
+            if name != "migration_binding"
+        }
+        try:
+            status = verifier(copy.deepcopy(locator))
+        except PromptArchiveStorageError:
+            return "source_unavailable"
+        if status == "verified":
+            return None
+        if status in {"source_unavailable", "source_changed"}:
+            return status
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
     @staticmethod
     def _pointer_id(pointer: Mapping[str, Any]) -> str:
         return "parptr1-" + pas1_id_v1(
@@ -977,6 +1454,315 @@ class PromptArchiveRuntime:
             locator=copy.deepcopy(verified.locator),
         )
 
+    def _load_offline_plan_identity(
+        self,
+        *,
+        response_id: str,
+        operation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        if (
+            type(response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(response_id) is None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        storage = self._require_storage()
+        plan = storage.read_immutable_json(
+            ("operations", "v1", response_id, operation_id, "plan.json")
+        )
+        raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.put_blob(
+            raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        validated = self._validate_plan(plan, plan_ref)
+        if (
+            validated.get("operation_kind") != "offline_migration"
+            or validated.get("operation_id") != operation_id
+            or validated.get("occurrence", {}).get("response_id") != response_id
+        ):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        return validated, plan_ref
+
+    @staticmethod
+    def _offline_occurrence_matches_plan(
+        plan: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        frozen: bytes,
+        inventory_locator: Mapping[str, Any],
+    ) -> bool:
+        manifest = plan.get("intended_manifest", {}).get("document")
+        if type(manifest) is not dict:
+            return False
+        integrity = manifest.get("integrity")
+        publication = manifest.get("publication")
+        expected_occurrence = {
+            "response_id": occurrence.response_id,
+            "response_kind": occurrence.response_kind,
+            "occurrence_kind": occurrence.occurrence_kind,
+            "occurrence_id": occurrence.occurrence_id,
+            "transition_id": occurrence.transition_id,
+        }
+        return bool(
+            plan.get("operation_kind") == "offline_migration"
+            and plan.get("scope")
+            == {"project_id": occurrence.project_id, "sprint_id": None}
+            and plan.get("occurrence") == expected_occurrence
+            and plan.get("source_locator") == inventory_locator
+            and manifest.get("source") == occurrence.source
+            and manifest.get("authorization") == occurrence.authorization
+            and manifest.get("created_at") == occurrence.created_at
+            and type(publication) is dict
+            and publication.get("verified_at") == occurrence.verified_at
+            and type(integrity) is dict
+            and integrity.get("hydrated_size") == len(frozen)
+            and integrity.get("hydrated_sha256")
+            == hashlib.sha256(frozen).hexdigest()
+        )
+
+    def _finish_offline_plan(
+        self,
+        plan: Mapping[str, Any],
+        plan_ref: Mapping[str, Any],
+        *,
+        inventory_verifier: PromptArchiveOfflineInventoryVerifier | None,
+    ) -> PromptArchivePublication:
+        storage = self._require_storage()
+        with storage.control_lock(self._operation_lock_path(plan)):
+            existing_journal = self._load_journal_chain_locked(plan, plan_ref)
+        if existing_journal is not None and existing_journal[0]["state"] in {
+            "complete",
+            "aborted",
+        }:
+            self._apply_pending_mutation(*existing_journal)
+            terminal_state = existing_journal[0]["state"]
+        else:
+            self._register_planned(plan, plan_ref)
+            storage._fault("after_pending_registration")
+            terminal_state = self._drive_operation(
+                plan,
+                plan_ref,
+                offline_inventory_verifier=inventory_verifier,
+            )
+        if terminal_state == "aborted":
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        verified = self.lookup_offline_archive_metadata(
+            archive_id=plan["intended_manifest"]["archive_id"]
+        )
+        return PromptArchivePublication(
+            project_id=self.project_id,
+            sprint_id=None,
+            archive_id=verified.archive_id,
+            archive_format=verified.archive_format,
+            scope=_copy_document(verified.scope, maximum=_CONTROL_MAX_BYTES),
+            integrity=_copy_document(verified.integrity, maximum=_CONTROL_MAX_BYTES),
+            created_at=verified.created_at,
+            pointer_id=verified.pointer["pointer_id"],
+            manifest_ref=copy.deepcopy(verified.pointer["manifest_ref"]),
+            locator=copy.deepcopy(verified.locator),
+        )
+
+    def publish_offline_migration(
+        self,
+        raw_bytes: bytes | bytearray | memoryview,
+        occurrence: ArchiveOccurrence,
+        *,
+        operation_id: str,
+        inventory_descriptor: Mapping[str, Any],
+        inventory_ref: Mapping[str, Any],
+        inventory_verifier: PromptArchiveOfflineInventoryVerifier,
+    ) -> PromptArchivePublication:
+        """Publish or resume one explicitly authorized offline migration.
+
+        ``operation_id`` is supplied by the migration controller because that
+        controller must reserve 128 cryptographically random bits durably
+        before this method may create per-entry graph objects.  This runtime
+        never derives an offline operation identity from source metadata.
+        """
+
+        if self.config.mode != "shadow":
+            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+        if (
+            not isinstance(occurrence, ArchiveOccurrence)
+            or occurrence.project_id != self.project_id
+            or occurrence.sprint_id is not None
+            or occurrence.response_kind != "migration-snapshot"
+            or occurrence.occurrence_kind != "migration"
+            or occurrence.transition_id is not None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+            or not callable(inventory_verifier)
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        storage = self._require_storage()
+        frozen = _freeze_bytes(raw_bytes, maximum=self.max_hydrated_bytes)
+        descriptor = self._validate_inventory_descriptor(inventory_descriptor)
+        expected_ref = _closed_ref(
+            inventory_ref,
+            logical_kind="source_inventory",
+            media_type=_INVENTORY_MEDIA,
+        )
+        descriptor_raw = canonical_json_bytes_v1(
+            descriptor,
+            maximum=_CONTROL_MAX_BYTES,
+        )
+        if storage.read_blob(
+            expected_ref,
+            max_output_bytes=_CONTROL_MAX_BYTES,
+        ) != descriptor_raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        inventory_locator = {
+            "locator_kind": "isolated_inventory",
+            "locator_version": "prompt-archive-isolated-inventory-locator-v1",
+            "inventory_id": descriptor["inventory_id"],
+            "inventory_format": descriptor["inventory_format"],
+            "inventory_sha256": descriptor["inventory_sha256"],
+            "entry_count": descriptor["entry_count"],
+            "inventory_ref": copy.deepcopy(expected_ref),
+        }
+        inventory_locator, _ = self._validate_inventory_locator(inventory_locator)
+        migration_binding = self._validate_offline_reservation(
+            descriptor=descriptor,
+            inventory_locator=inventory_locator,
+            operation_id=operation_id,
+            occurrence=occurrence,
+            byte_size=len(frozen),
+            sha256=hashlib.sha256(frozen).hexdigest(),
+        )
+        bound_inventory_locator = copy.deepcopy(inventory_locator)
+        bound_inventory_locator["migration_binding"] = migration_binding
+
+        plan_path = ("operations", "v1", occurrence.response_id, operation_id, "plan.json")
+        with self._stream_lock:
+            with storage.account_cas_writes() as cas_writes:
+                try:
+                    existing = storage.read_immutable_json(plan_path)
+                except PromptArchiveStorageError as exc:
+                    if exc.code != "PROMPT_ARCHIVE_NOT_FOUND":
+                        raise
+                    existing = None
+                if existing is not None:
+                    plan_raw = canonical_json_bytes_v1(
+                        existing,
+                        maximum=_PLAN_MAX_BYTES,
+                    )
+                    plan_ref = storage.put_blob(
+                        plan_raw,
+                        logical_kind="publication_plan",
+                        media_type=_PLAN_MEDIA,
+                    )
+                    plan = self._validate_plan(existing, plan_ref)
+                    if (
+                        plan.get("operation_id") != operation_id
+                        or not self._offline_occurrence_matches_plan(
+                            plan,
+                            occurrence,
+                            frozen,
+                            bound_inventory_locator,
+                        )
+                    ):
+                        raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+                else:
+                    try:
+                        inventory_status = inventory_verifier(
+                            copy.deepcopy(inventory_locator)
+                        )
+                    except PromptArchiveStorageError:
+                        inventory_status = "source_unavailable"
+                    if inventory_status != "verified":
+                        if inventory_status not in {
+                            "source_unavailable",
+                            "source_changed",
+                        }:
+                            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+                        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+                    incremental = PromptArchiveIncremental(
+                        storage,
+                        self.project_id,
+                        None,
+                    )
+                    built = incremental.build_legacy_raw_archive(frozen, occurrence)
+                    hydrated = incremental.hydrate_archive_bytes(
+                        built.manifest_ref,
+                        max_output_bytes=self.max_hydrated_bytes,
+                    )
+                    if hydrated != frozen:
+                        raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                    plan = self._build_offline_plan(
+                        incremental,
+                        built,
+                        occurrence,
+                        operation_id=operation_id,
+                        inventory_locator=bound_inventory_locator,
+                    )
+                    plan_raw = canonical_json_bytes_v1(
+                        plan,
+                        maximum=_PLAN_MAX_BYTES,
+                    )
+                    plan_ref = storage.put_blob(
+                        plan_raw,
+                        logical_kind="publication_plan",
+                        media_type=_PLAN_MEDIA,
+                    )
+                    storage.publish_immutable_bytes(
+                        self._plan_path(plan),
+                        plan_raw,
+                        expected_sha256=hashlib.sha256(plan_raw).hexdigest(),
+                    )
+                    storage._fault("after_publication_plan")
+                    plan = self._validate_plan(plan, plan_ref)
+                publication = self._finish_offline_plan(
+                    plan,
+                    plan_ref,
+                    inventory_verifier=inventory_verifier,
+                )
+            outcomes = cas_writes.snapshot()
+            self.metrics.record_publication(
+                logical_bytes=publication.integrity["hydrated_size"],
+                new_physical_bytes=outcomes.new_stored_bytes,
+                dedup_hits=outcomes.dedup_hits,
+            )
+            return publication
+
+    def resume_offline_migration(
+        self,
+        *,
+        response_id: str,
+        operation_id: str,
+        inventory_verifier: PromptArchiveOfflineInventoryVerifier | None,
+    ) -> PromptArchivePublication:
+        """Resume one exact offline plan without directory discovery.
+
+        An absent verifier is accepted only after the retained journal crossed
+        ``blobs_verified``; the intent state deterministically aborts instead.
+        """
+
+        if self.config.mode != "shadow":
+            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+        if inventory_verifier is not None and not callable(inventory_verifier):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        storage = self._require_storage()
+        with self._stream_lock:
+            with storage.account_cas_writes() as cas_writes:
+                plan, plan_ref = self._load_offline_plan_identity(
+                    response_id=response_id,
+                    operation_id=operation_id,
+                )
+                publication = self._finish_offline_plan(
+                    plan,
+                    plan_ref,
+                    inventory_verifier=inventory_verifier,
+                )
+            outcomes = cas_writes.snapshot()
+            self.metrics.record_publication(
+                logical_bytes=publication.integrity["hydrated_size"],
+                new_physical_bytes=outcomes.new_stored_bytes,
+                dedup_hits=outcomes.dedup_hits,
+            )
+            return publication
+
     def _resolve_predecessor(
         self,
         occurrence: ArchiveOccurrence,
@@ -1199,6 +1985,175 @@ class PromptArchiveRuntime:
                 "runtime_occurrence_id": occurrence.occurrence_id,
                 "state_revision": revision,
             },
+            "intended_manifest": {
+                "identity_version": "prompt-archive-intended-manifest-identity-v1",
+                "archive_id": built.archive_id,
+                "manifest_ref": manifest_ref,
+                "document": manifest,
+            },
+            "intended_pointer": {
+                "identity_version": "prompt-archive-intended-pointer-identity-v1",
+                "pointer_id": pointer["pointer_id"],
+                "pointer_ref": pointer_ref,
+                "document": pointer,
+            },
+            "intended_archive_locator": {
+                "identity_version": "prompt-archive-intended-locator-identity-v1",
+                "locator_id": locator["locator_id"],
+                "locator_ref": locator_ref,
+                "document": locator,
+            },
+            "planned_reachable_set": _reachable_set_document(
+                incremental.reachable_refs(manifest_ref)
+            ),
+            "pointer_precondition": {
+                "expected_generation": 0,
+                "previous_pointer_id": None,
+            },
+            "compatibility_publication": {"mode": "none"},
+            "frozen_timestamps": timestamps,
+        }
+
+    def _build_offline_plan(
+        self,
+        incremental: PromptArchiveIncremental,
+        built: Any,
+        occurrence: ArchiveOccurrence,
+        *,
+        operation_id: str,
+        inventory_locator: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        if (
+            type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+            or occurrence.sprint_id is not None
+            or occurrence.response_kind != "migration-snapshot"
+            or occurrence.occurrence_kind != "migration"
+            or occurrence.transition_id is not None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        planned_at = _require_rfc3339(occurrence.verified_at)
+        source_observed_at = _require_rfc3339(occurrence.created_at)
+        timestamps = {
+            "source_observed_at": source_observed_at,
+            "planned_at": planned_at,
+            "intent_at": planned_at,
+            "blobs_verified_at": planned_at,
+            "manifest_verified_at": planned_at,
+            "pointer_published_at": planned_at,
+            "locator_published_at": planned_at,
+            "compatibility_published_at": planned_at,
+            "completed_at": planned_at,
+            "aborted_at": planned_at,
+        }
+        manifest = _copy_document(built.manifest, maximum=_MANIFEST_MAX_BYTES)
+        manifest_ref = _closed_ref(
+            built.manifest_ref,
+            logical_kind="manifest",
+            media_type=_MANIFEST_MEDIA,
+        )
+        pointer: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "prompt_archive_pointer",
+            "id_algorithm": "PAS1-ID-v1",
+            "pointer_id": "",
+            "project_id": self.project_id,
+            "sprint_id": None,
+            "response_id": occurrence.response_id,
+            "archive_id": built.archive_id,
+            "generation": 1,
+            "previous_pointer_id": None,
+            "manifest_ref": copy.deepcopy(manifest_ref),
+            "published_at": timestamps["pointer_published_at"],
+        }
+        pointer["pointer_id"] = self._pointer_id(pointer)
+        pointer_raw = canonical_json_bytes_v1(pointer, maximum=_CONTROL_MAX_BYTES)
+        pointer_ref = self._require_storage().put_blob(
+            pointer_raw,
+            logical_kind="pointer",
+            media_type=_POINTER_MEDIA,
+        )
+        locator: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "prompt_archive_locator",
+            "media_type": _LOCATOR_MEDIA,
+            "id_algorithm": "PAS1-ID-v1",
+            "locator_id": "",
+            "scope_kind": "project",
+            "project_id": self.project_id,
+            "sprint_id": None,
+            "response_id": occurrence.response_id,
+            "archive_id": built.archive_id,
+            "pointer_id": pointer["pointer_id"],
+            "pointer_ref": copy.deepcopy(pointer_ref),
+            "manifest_ref": copy.deepcopy(manifest_ref),
+            "published_at": timestamps["locator_published_at"],
+        }
+        locator["locator_id"] = self._locator_id(locator)
+        locator_raw = canonical_json_bytes_v1(locator, maximum=_CONTROL_MAX_BYTES)
+        locator_ref = self._require_storage().put_blob(
+            locator_raw,
+            logical_kind="archive_locator",
+            media_type=_LOCATOR_MEDIA,
+        )
+        recovery_key = "parloc1-" + pas1_id_v1(
+            "publication-locator",
+            (
+                ("project_id", self.project_id),
+                ("sprint_id", None),
+                ("response_id", occurrence.response_id),
+                ("occurrence_id", occurrence.occurrence_id),
+                ("operation_id", operation_id),
+            ),
+        )
+        shard_id = hashlib.sha256(recovery_key.encode("utf-8")).hexdigest()[:2]
+        recovery_locator = {
+            "locator_version": "prompt-archive-publication-locator-v1",
+            "recovery_key": recovery_key,
+            "project_id": self.project_id,
+            "sprint_id": None,
+            "response_id": occurrence.response_id,
+            "occurrence_id": occurrence.occurrence_id,
+            "operation_id": operation_id,
+        }
+        return {
+            "schema_version": 1,
+            "kind": "prompt_archive_publication_plan",
+            "media_type": _PLAN_MEDIA,
+            "id_algorithm": "PAS1-ID-v1",
+            "operation_id": operation_id,
+            "operation_kind": "offline_migration",
+            "scope": {"project_id": self.project_id, "sprint_id": None},
+            "occurrence": {
+                "response_id": occurrence.response_id,
+                "response_kind": occurrence.response_kind,
+                "occurrence_kind": occurrence.occurrence_kind,
+                "occurrence_id": occurrence.occurrence_id,
+                "transition_id": None,
+            },
+            "recovery_locator": recovery_locator,
+            "pending_registry": {
+                "protocol": "prompt-archive-pending-registry-cas-v1",
+                "shard": {
+                    "project_id": self.project_id,
+                    "shard_algorithm": "sha256-recovery-key-prefix-2-v1",
+                    "shard_id": shard_id,
+                    "max_entries": 1024,
+                },
+                "entry_precondition": {"kind": "absent"},
+                "intended_mutation": {
+                    "mutation": "upsert_planned",
+                    "operation_id": operation_id,
+                    "recovery_key": recovery_key,
+                    "plan_ref_binding": "canonical_current_plan_ref",
+                    "state": "planned",
+                    "journal_ref": None,
+                    "created_at": planned_at,
+                    "updated_at": planned_at,
+                    "published_at": planned_at,
+                },
+            },
+            "source_locator": copy.deepcopy(dict(inventory_locator)),
             "intended_manifest": {
                 "identity_version": "prompt-archive-intended-manifest-identity-v1",
                 "archive_id": built.archive_id,
@@ -1620,7 +2575,7 @@ class PromptArchiveRuntime:
                 ),
             ),
             "operation_id": plan["operation_id"],
-            "operation_kind": "shadow_publish",
+            "operation_kind": plan["operation_kind"],
             "scope": copy.deepcopy(plan["scope"]),
             "occurrence": {
                 "response_id": plan["occurrence"]["response_id"],
@@ -1726,6 +2681,7 @@ class PromptArchiveRuntime:
         plan_ref: Mapping[str, Any],
     ) -> dict[str, Any]:
         plan = dict(value)
+        operation_kind = plan.get("operation_kind")
         if set(plan) != {
             "schema_version",
             "kind",
@@ -1750,7 +2706,7 @@ class PromptArchiveRuntime:
             or plan.get("kind") != "prompt_archive_publication_plan"
             or plan.get("media_type") != _PLAN_MEDIA
             or plan.get("id_algorithm") != "PAS1-ID-v1"
-            or plan.get("operation_kind") != "shadow_publish"
+            or operation_kind not in {"shadow_publish", "offline_migration"}
             or type(plan.get("operation_id")) is not str
             or _OPERATION_ID_RE.fullmatch(plan["operation_id"]) is None
             or plan.get("compatibility_publication") != {"mode": "none"}
@@ -1766,8 +2722,17 @@ class PromptArchiveRuntime:
             type(scope) is not dict
             or set(scope) != {"project_id", "sprint_id"}
             or scope.get("project_id") != self.project_id
-            or type(scope.get("sprint_id")) is not str
-            or _SAFE_ID_RE.fullmatch(scope["sprint_id"]) is None
+            or (
+                operation_kind == "shadow_publish"
+                and (
+                    type(scope.get("sprint_id")) is not str
+                    or _SAFE_ID_RE.fullmatch(scope["sprint_id"]) is None
+                )
+            )
+            or (
+                operation_kind == "offline_migration"
+                and scope.get("sprint_id") is not None
+            )
             or type(occurrence) is not dict
             or set(occurrence)
             != {
@@ -1800,6 +2765,17 @@ class PromptArchiveRuntime:
             or (
                 occurrence["occurrence_kind"] != "transition"
                 and occurrence.get("transition_id") is not None
+            )
+            or (
+                operation_kind == "offline_migration"
+                and (
+                    occurrence.get("response_kind") != "migration-snapshot"
+                    or occurrence.get("occurrence_kind") != "migration"
+                )
+            )
+            or (
+                operation_kind == "shadow_publish"
+                and occurrence.get("occurrence_kind") == "migration"
             )
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
@@ -1834,27 +2810,46 @@ class PromptArchiveRuntime:
         }
         if locator != expected_locator:
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
-        if (
-            type(source) is not dict
-            or set(source)
-            != {
-                "locator_kind",
-                "locator_version",
-                "runtime_instance_id",
-                "runtime_occurrence_id",
-                "state_revision",
+        offline_descriptor: dict[str, Any] | None = None
+        offline_base_locator: dict[str, Any] | None = None
+        offline_binding: dict[str, Any] | None = None
+        if operation_kind == "shadow_publish":
+            if (
+                type(source) is not dict
+                or set(source)
+                != {
+                    "locator_kind",
+                    "locator_version",
+                    "runtime_instance_id",
+                    "runtime_occurrence_id",
+                    "state_revision",
+                }
+                or source.get("locator_kind") != "runtime_occurrence"
+                or source.get("locator_version")
+                != "prompt-archive-runtime-occurrence-locator-v1"
+                or type(source.get("runtime_instance_id")) is not str
+                or _SAFE_ID_RE.fullmatch(source["runtime_instance_id"]) is None
+                or source.get("runtime_instance_id")
+                != self.config.runtime_instance_id
+                or source.get("runtime_occurrence_id")
+                != occurrence["occurrence_id"]
+                or type(source.get("state_revision")) is not int
+                or not 0
+                <= source["state_revision"]
+                <= 9_223_372_036_854_775_807
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        else:
+            validated_source, offline_descriptor = self._validate_inventory_locator(
+                source,
+                require_migration_binding=True,
+            )
+            offline_binding = copy.deepcopy(validated_source["migration_binding"])
+            offline_base_locator = {
+                name: copy.deepcopy(value)
+                for name, value in validated_source.items()
+                if name != "migration_binding"
             }
-            or source.get("locator_kind") != "runtime_occurrence"
-            or source.get("locator_version")
-            != "prompt-archive-runtime-occurrence-locator-v1"
-            or type(source.get("runtime_instance_id")) is not str
-            or _SAFE_ID_RE.fullmatch(source["runtime_instance_id"]) is None
-            or source.get("runtime_instance_id") != self.config.runtime_instance_id
-            or source.get("runtime_occurrence_id") != occurrence["occurrence_id"]
-            or type(source.get("state_revision")) is not int
-            or not 0 <= source["state_revision"] <= 9_223_372_036_854_775_807
-        ):
-            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         timestamps = plan.get("frozen_timestamps")
         expected_timestamp_keys = {
             "source_observed_at",
@@ -1940,6 +2935,57 @@ class PromptArchiveRuntime:
         for field in ("response_kind", "occurrence_kind", "transition_id"):
             if manifest.get("scope", {}).get(field) != occurrence[field]:
                 raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        publication = manifest.get("publication")
+        manifest_source = manifest.get("source")
+        if type(publication) is not dict or type(manifest_source) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if operation_kind == "offline_migration":
+            if (
+                manifest.get("archive_format") != "legacy_raw_chunks_v1"
+                or manifest_source.get("source_kind") != "offline_migration"
+                or publication.get("mode") != "migration"
+                or publication.get("legacy_authoritative") is not True
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            integrity = manifest.get("integrity")
+            if (
+                offline_descriptor is None
+                or offline_base_locator is None
+                or offline_binding is None
+                or type(integrity) is not dict
+                or type(integrity.get("hydrated_size")) is not int
+                or type(integrity.get("hydrated_sha256")) is not str
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            proven_binding = self._validate_offline_reservation(
+                descriptor=offline_descriptor,
+                inventory_locator=offline_base_locator,
+                operation_id=plan["operation_id"],
+                occurrence=ArchiveOccurrence(
+                    project_id=self.project_id,
+                    sprint_id=None,
+                    response_id=occurrence["response_id"],
+                    response_kind=occurrence["response_kind"],
+                    occurrence_kind=occurrence["occurrence_kind"],
+                    occurrence_id=occurrence["occurrence_id"],
+                    transition_id=occurrence["transition_id"],
+                    source=manifest_source,
+                    authorization=manifest.get("authorization"),
+                    created_at=manifest.get("created_at"),
+                    verified_at=publication.get("verified_at"),
+                ),
+                byte_size=integrity["hydrated_size"],
+                sha256=integrity["hydrated_sha256"],
+            )
+            if proven_binding != offline_binding:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        elif (
+            manifest.get("archive_format") != "incremental_transition_v1"
+            or manifest_source.get("source_kind") != "runtime_shadow"
+            or publication.get("mode") != "shadow"
+            or publication.get("legacy_authoritative") is not True
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         pointer = self._validate_pointer(
             intended_pointer["document"],
             project_id=self.project_id,
@@ -2371,12 +3417,17 @@ class PromptArchiveRuntime:
             or integrity.get("hydrated_size") != len(hydrated)
             or integrity.get("hydrated_sha256")
             != hashlib.sha256(hydrated).hexdigest()
-            or type(comparison) is not dict
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if plan.get("operation_kind") == "shadow_publish" and (
+            type(comparison) is not dict
             or comparison.get("matched") is not True
             or comparison.get("byte_size") != len(hydrated)
             or comparison.get("sha256") != hashlib.sha256(hydrated).hexdigest()
         ):
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if plan.get("operation_kind") == "offline_migration" and comparison is not None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
 
     def _intended_pointer_is_published(
         self,
@@ -2409,6 +3460,9 @@ class PromptArchiveRuntime:
         self,
         plan: Mapping[str, Any],
         journal: Mapping[str, Any],
+        *,
+        offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
+        | None = None,
     ) -> str | None:
         storage = self._require_storage()
         state = journal["state"]
@@ -2420,7 +3474,13 @@ class PromptArchiveRuntime:
         # the deterministic abort path; a later loss cannot relabel verified
         # durable work as an abort.
         if state == "intent" and not self._intended_pointer_is_published(plan):
-            abort_reason = self._runtime_occurrence_abort_reason(plan)
+            if plan.get("operation_kind") == "offline_migration":
+                abort_reason = self._offline_inventory_abort_reason(
+                    plan,
+                    offline_inventory_verifier,
+                )
+            else:
+                abort_reason = self._runtime_occurrence_abort_reason(plan)
             if abort_reason is not None:
                 return abort_reason
         if state == "intent":
@@ -2478,6 +3538,9 @@ class PromptArchiveRuntime:
         self,
         plan: Mapping[str, Any],
         plan_ref: Mapping[str, Any],
+        *,
+        offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
+        | None = None,
     ) -> str:
         storage = self._require_storage()
         while True:
@@ -2496,7 +3559,11 @@ class PromptArchiveRuntime:
             self._apply_pending_mutation(journal, journal_ref)
             if journal["state"] in {"complete", "aborted"}:
                 return journal["state"]
-            abort_reason = self._perform_state_action(plan, journal)
+            abort_reason = self._perform_state_action(
+                plan,
+                journal,
+                offline_inventory_verifier=offline_inventory_verifier,
+            )
             with storage.control_lock(self._operation_lock_path(plan)):
                 latest = self._load_journal_chain_locked(plan, plan_ref)
                 if latest is None:
@@ -2577,7 +3644,25 @@ class PromptArchiveRuntime:
                 with storage.control_lock(self._operation_lock_path(plan)):
                     current = self._load_journal_chain_locked(plan, plan_ref)
                     self._validate_recovery_lower_bound(entry, current)
-                terminal_state = self._drive_operation(plan, plan_ref)
+                # Offline operations require the operator to re-supply the
+                # exact isolated root handle.  Runtime startup has no such
+                # authority and must leave their registry entries pending.
+                # The retained plan, journal chain and registry lower bound
+                # are nevertheless verified above so startup never masks a
+                # fork or corrupt pending receipt.
+                if plan["operation_kind"] == "offline_migration":
+                    if current is None or current[0]["state"] not in {
+                        "complete",
+                        "aborted",
+                    }:
+                        continue
+                    # A terminal journal needs no source authority.  Finish
+                    # the exact retained registry mutation so a crash after
+                    # terminal publication cannot strand a pending entry.
+                    self._apply_pending_mutation(*current)
+                    terminal_state = current[0]["state"]
+                else:
+                    terminal_state = self._drive_operation(plan, plan_ref)
             if terminal_state == "complete":
                 outcomes = cas_writes.snapshot()
                 self.metrics.record_publication(
@@ -2595,7 +3680,7 @@ class PromptArchiveRuntime:
         value: Mapping[str, Any],
         *,
         project_id: str,
-        sprint_id: str,
+        sprint_id: str | None,
         response_id: str,
         archive_id: str,
     ) -> dict[str, Any]:
@@ -2643,7 +3728,7 @@ class PromptArchiveRuntime:
         value: Mapping[str, Any],
         *,
         project_id: str,
-        sprint_id: str,
+        sprint_id: str | None,
         archive_id: str,
     ) -> dict[str, Any]:
         locator = dict(value)
@@ -2667,7 +3752,8 @@ class PromptArchiveRuntime:
             or locator.get("kind") != "prompt_archive_locator"
             or locator.get("media_type") != _LOCATOR_MEDIA
             or locator.get("id_algorithm") != "PAS1-ID-v1"
-            or locator.get("scope_kind") != "sprint"
+            or locator.get("scope_kind")
+            != ("sprint" if sprint_id is not None else "project")
             or locator.get("project_id") != project_id
             or locator.get("sprint_id") != sprint_id
             or locator.get("archive_id") != archive_id
@@ -2696,18 +3782,19 @@ class PromptArchiveRuntime:
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         return locator
 
-    def lookup_archive_metadata(
+    def _lookup_archive_metadata_scoped(
         self,
         *,
-        sprint_id: str,
+        sprint_id: str | None,
         archive_id: str,
         cancellation: PromptArchiveCancellationToken | None = None,
     ) -> PromptArchiveRead:
-        """Verify bounded archive metadata without opening referenced leaves."""
+        """Verify one exact sprint or offline project archive binding."""
 
         if cancellation is not None:
             cancellation.check()
-        sprint_id = _require_safe_id(sprint_id)
+        if sprint_id is not None:
+            sprint_id = _require_safe_id(sprint_id)
         if type(archive_id) is not str or _ARCHIVE_ID_RE.fullmatch(archive_id) is None:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         storage = self._require_storage()
@@ -2788,6 +3875,20 @@ class PromptArchiveRuntime:
             or scope.get("response_id") != locator["response_id"]
         ):
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if sprint_id is None:
+            source = manifest.get("source")
+            publication = manifest.get("publication")
+            if (
+                manifest.get("archive_format") != "legacy_raw_chunks_v1"
+                or type(source) is not dict
+                or source.get("source_kind") != "offline_migration"
+                or scope.get("response_kind") != "migration-snapshot"
+                or scope.get("occurrence_kind") != "migration"
+                or type(publication) is not dict
+                or publication.get("mode") != "migration"
+                or publication.get("legacy_authoritative") is not True
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         return PromptArchiveRead(
             project_id=self.project_id,
             sprint_id=sprint_id,
@@ -2795,6 +3896,36 @@ class PromptArchiveRuntime:
             locator=_copy_document(locator, maximum=_CONTROL_MAX_BYTES),
             pointer=_copy_document(pointer, maximum=_CONTROL_MAX_BYTES),
             manifest=_copy_document(manifest, maximum=_MANIFEST_MAX_BYTES),
+        )
+
+    def lookup_archive_metadata(
+        self,
+        *,
+        sprint_id: str,
+        archive_id: str,
+        cancellation: PromptArchiveCancellationToken | None = None,
+    ) -> PromptArchiveRead:
+        """Verify sprint-scoped metadata without opening referenced leaves."""
+
+        sprint_id = _require_safe_id(sprint_id)
+        return self._lookup_archive_metadata_scoped(
+            sprint_id=sprint_id,
+            archive_id=archive_id,
+            cancellation=cancellation,
+        )
+
+    def lookup_offline_archive_metadata(
+        self,
+        *,
+        archive_id: str,
+        cancellation: PromptArchiveCancellationToken | None = None,
+    ) -> PromptArchiveRead:
+        """Internal migration lookup through locator -> pointer -> manifest."""
+
+        return self._lookup_archive_metadata_scoped(
+            sprint_id=None,
+            archive_id=archive_id,
+            cancellation=cancellation,
         )
 
     def lookup_archive(
@@ -2820,7 +3951,7 @@ class PromptArchiveRuntime:
     ) -> PromptArchiveRead:
         if not isinstance(selected, PromptArchiveRead) or selected.project_id != self.project_id:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
-        return self.lookup_archive_metadata(
+        return self._lookup_archive_metadata_scoped(
             sprint_id=selected.sprint_id,
             archive_id=selected.archive_id,
             cancellation=cancellation,

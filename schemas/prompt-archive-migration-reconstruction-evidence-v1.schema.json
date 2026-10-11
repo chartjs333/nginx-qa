@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-reconstruction-evidence-v1.schema.json",
+  "title": "Prompt archive migration reconstruction evidence v1",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "batch_id", "source_inventory_id", "entry_count", "entries", "raw_files_equal", "public_paths_persisted", "source_tree_opened"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_reconstruction_evidence"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"const": "reconstruct"},
+    "status": {"const": "verified"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "source_inventory_id": {"type": "string", "pattern": "^parinv1-[0-9a-f]{64}$"},
+    "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "entries": {"type": "array", "minItems": 1, "maxItems": 1000000, "items": {"$ref": "#/$defs/entry"}},
+    "raw_files_equal": {"const": true},
+    "public_paths_persisted": {"const": false},
+    "source_tree_opened": {"const": false}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "entry": {
+      "type": "object",
+      "required": ["entry_id", "ordinal", "response_id", "archive_id", "source_byte_size", "source_sha256", "reconstructed_byte_size", "reconstructed_sha256", "matched", "journal_state"],
+      "properties": {"entry_id": {"type": "string", "pattern": "^parme1-[0-9a-f]{64}$"}, "ordinal": {"type": "integer", "minimum": 0}, "response_id": {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"}, "archive_id": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"}, "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912}, "source_sha256": {"$ref": "#/$defs/sha256"}, "reconstructed_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912}, "reconstructed_sha256": {"$ref": "#/$defs/sha256"}, "matched": {"const": true}, "journal_state": {"const": "complete"}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

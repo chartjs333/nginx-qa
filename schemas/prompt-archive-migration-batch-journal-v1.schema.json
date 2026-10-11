@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-batch-journal-v1.schema.json",
+  "title": "Prompt archive offline migration batch journal v1",
+  "description": "Closed, path-free, hash-chained progress journal bound to one immutable batch plan.",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "id_algorithm", "batch_id", "plan_sha256", "journal_generation", "previous_journal_generation", "previous_journal_sha256", "state", "completed_entries", "pre_inventory", "post_inventory", "originals_preserved", "created_at", "updated_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_batch_journal"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-batch-journal-v1+json"},
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "journal_generation": {"type": "integer", "minimum": 0, "maximum": 1000001},
+    "previous_journal_generation": {"oneOf": [{"type": "integer", "minimum": 0, "maximum": 1000000}, {"type": "null"}]},
+    "previous_journal_sha256": {"oneOf": [{"$ref": "#/$defs/sha256"}, {"type": "null"}]},
+    "state": {"enum": ["planned", "running", "complete"]},
+    "completed_entries": {"type": "array", "maxItems": 1000000, "items": {"$ref": "#/$defs/result"}},
+    "pre_inventory": {"$ref": "#/$defs/inventory"},
+    "post_inventory": {"oneOf": [{"$ref": "#/$defs/inventory"}, {"type": "null"}]},
+    "originals_preserved": {"const": true},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "inventory": {
+      "type": "object",
+      "required": ["inventory_sha256", "entry_count", "source_root_identity_sha256", "safety_snapshot_sha256", "total_bytes"],
+      "properties": {
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "source_root_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "safety_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "total_bytes": {"type": "integer", "minimum": 0, "maximum": 68719476736}
+      },
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["entry_id", "ordinal", "operation_id", "response_id", "archive_id", "pointer_id", "source_byte_size", "source_sha256", "matched"],
+      "properties": {
+        "entry_id": {"type": "string", "pattern": "^parme1-[0-9a-f]{64}$"},
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 999999},
+        "operation_id": {"type": "string", "pattern": "^parop1-[0-9a-f]{32}$"},
+        "response_id": {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+        "archive_id": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
+        "pointer_id": {"type": "string", "pattern": "^parptr1-[0-9a-f]{64}$"},
+        "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "matched": {"const": true}
+      },
+      "additionalProperties": false
+    }
+  },
+  "allOf": [
+    {"if": {"properties": {"journal_generation": {"const": 0}}}, "then": {"properties": {"previous_journal_generation": {"type": "null"}, "previous_journal_sha256": {"type": "null"}}}},
+    {"if": {"properties": {"state": {"const": "planned"}}}, "then": {"properties": {"journal_generation": {"const": 0}, "completed_entries": {"maxItems": 0}, "post_inventory": {"type": "null"}}}},
+    {"if": {"properties": {"state": {"const": "running"}}}, "then": {"properties": {"completed_entries": {"minItems": 1}, "post_inventory": {"type": "null"}}}},
+    {"if": {"properties": {"state": {"const": "complete"}}}, "then": {"properties": {"post_inventory": {"$ref": "#/$defs/inventory"}}}}
+  ],
+  "additionalProperties": false
+}
