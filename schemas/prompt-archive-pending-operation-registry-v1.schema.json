@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-pending-operation-registry-v1.schema.json",
+  "title": "Prompt archive pending-operation registry shard v1",
+  "description": "One immutable generation of a bounded project-scoped pending-publication registry shard. There are exactly 256 logical shards (00 through ff); an entry belongs to the shard whose shard_id is the first two lowercase hexadecimal characters of SHA-256 over the UTF-8 recovery_key. Writers serialize each stable (project_id, shard_id) target with cross-process compare-and-swap: the complete predecessor generation must match before publishing a new immutable generation, while the exact intended generation already present is idempotent success and every other value is a conflict. Entries are ordered lexicographically by recovery_key, then operation_id, and each pair is unique.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "registry_id",
+    "project_id",
+    "shard_algorithm",
+    "shard_id",
+    "generation",
+    "previous_registry_id",
+    "entries",
+    "published_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_pending_operation_registry"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-pending-operation-registry-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "registry_id": {
+      "description": "PAS1-ID-v1 pending-operation-registry-id over project_id, shard_id, generation, previous_registry_id, the SHA-256 of canonical entries bytes, and published_at, in that exact order.",
+      "type": "string",
+      "pattern": "^parpending1-[0-9a-f]{64}$"
+    },
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "shard_algorithm": {
+      "const": "sha256-recovery-key-prefix-2-v1"
+    },
+    "shard_id": {
+      "description": "The first two lowercase hexadecimal characters of SHA-256 over each member entry's UTF-8 recovery_key.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{2}$"
+    },
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "previous_registry_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^parpending1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "entries": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {"$ref": "#/$defs/entry"}
+    },
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"generation": {"const": 1}},
+        "required": ["generation"]
+      },
+      "then": {"properties": {"previous_registry_id": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "previous_registry_id": {
+            "type": "string",
+            "pattern": "^parpending1-[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "entry": {
+      "description": "A bounded recovery index entry. recovery_key must hash to the enclosing shard_id. created_at is immutable across generations and updated_at is not earlier than created_at. Planned entries have no journal. Journaled entries bind an exact retained lower-bound immutable journal generation; the current journal may equal that generation or be its one verified deterministic successor until the registry entry is rebound.",
+      "type": "object",
+      "required": [
+        "operation_id",
+        "recovery_key",
+        "plan_ref",
+        "state",
+        "journal_ref",
+        "created_at",
+        "updated_at"
+      ],
+      "properties": {
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        },
+        "recovery_key": {
+          "description": "Safe PAS1 publication-locator identity; raw paths and caller-controlled lookup strings are not permitted.",
+          "type": "string",
+          "pattern": "^parloc1-[0-9a-f]{64}$"
+        },
+        "plan_ref": {"$ref": "#/$defs/publicationPlanRef"},
+        "state": {"enum": ["planned", "journaled"]},
+        "journal_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/journalRef"},
+            {"type": "null"}
+          ]
+        },
+        "created_at": {"type": "string", "format": "date-time"},
+        "updated_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"state": {"const": "planned"}},
+            "required": ["state"]
+          },
+          "then": {"properties": {"journal_ref": {"type": "null"}}},
+          "else": {
+            "properties": {"journal_ref": {"$ref": "#/$defs/journalRef"}}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "publicationPlanRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "publication_plan"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "journalRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "journal"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

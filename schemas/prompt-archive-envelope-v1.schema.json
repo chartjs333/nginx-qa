@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-envelope-v1.schema.json",
+  "title": "Prompt archive bounded token-span render plan v1",
+  "description": "A closed, non-cumulative PAS1 token-span plan over one exact source response. Steps are emitted in strictly increasing source order, are contiguous and non-overlapping, start at zero, end at source_byte_size, and reproduce source_sha256. The sum of literal-step byte_size values is at most 8388608. Those cross-item and aggregate invariants are verified by the builder and renderer.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "builder_version",
+    "renderer_version",
+    "json_value_model",
+    "response_id",
+    "response_kind",
+    "source_byte_size",
+    "source_sha256",
+    "steps"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_response_envelope"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-response-envelope-v1+json"
+    },
+    "builder_version": {"const": "pas1-render-plan-builder-v1"},
+    "renderer_version": {"const": "pas1-concat-renderer-v1"},
+    "json_value_model": {"const": "pas1-recursive-json-merkle-v1"},
+    "response_id": {
+      "type": "string",
+      "pattern": "^parresp1-[0-9a-f]{64}$"
+    },
+    "response_kind": {
+      "enum": [
+        "identity-response",
+        "transition-response",
+        "state-response",
+        "migration-snapshot"
+      ]
+    },
+    "source_byte_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    },
+    "source_sha256": {"$ref": "#/$defs/sha256"},
+    "steps": {
+      "description": "The builder and semantic validator enforce at most 8388608 aggregate literal bytes in addition to the 65536-byte per-literal-step bound.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 250000,
+      "items": {"$ref": "#/$defs/step"},
+      "allOf": [
+        {"$ref": "#/$defs/atMostOneRecentActivitySlot"},
+        {"$ref": "#/$defs/atMostOneHistoryTextSlot"},
+        {"$ref": "#/$defs/atMostOneHistoryTimelineSlot"},
+        {"$ref": "#/$defs/atMostOneActivityTimelineSlot"},
+        {"$ref": "#/$defs/atMostOneHistoryPatchesSlot"},
+        {"$ref": "#/$defs/atMostOneCodePatchesSlot"},
+        {"$ref": "#/$defs/atMostOneWorkHistorySlot"},
+        {"$ref": "#/$defs/atMostOneAssignmentExecutionAuditSlot"}
+      ]
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sourcePosition": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    },
+    "indexRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind"],
+          "properties": {
+            "logical_kind": {"const": "index_node"}
+          }
+        }
+      ]
+    },
+    "currentFieldRecordRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "current_field_record"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-record-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "boundedBase64": {
+      "description": "Canonical RFC 4648 base64 for at most 4096 decoded bytes of fixed renderer framing; an empty string represents zero bytes.",
+      "type": "string",
+      "maxLength": 5464,
+      "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/][AQgw]==|[A-Za-z0-9+/]{2}[AEIMQUYcgkosw048]=)?$",
+      "anyOf": [
+        {"maxLength": 5460},
+        {
+          "minLength": 5464,
+          "maxLength": 5464,
+          "pattern": "[A-Za-z0-9+/][AQgw]==$"
+        }
+      ]
+    },
+    "literalStep": {
+      "description": "One maximal static JSON gap. source_end - source_start must equal byte_size; chunks_root must resolve to a literal_chunks index; the concatenated literal_chunk bytes must match sha256.",
+      "type": "object",
+      "required": [
+        "step_kind",
+        "source_start",
+        "source_end",
+        "chunks_root",
+        "byte_size",
+        "sha256"
+      ],
+      "properties": {
+        "step_kind": {"const": "literal"},
+        "source_start": {"$ref": "#/$defs/sourcePosition"},
+        "source_end": {"$ref": "#/$defs/sourcePosition"},
+        "chunks_root": {"$ref": "#/$defs/indexRef"},
+        "byte_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    },
+    "currentFieldStep": {
+      "description": "One non-cumulative current JSON value token. value_ordinal is unique and strictly increasing among current_field steps; record_ref must be reachable from the manifest current_fields root, use recursive_json_merkle_v1, and reproduce exactly this source span. Alias subtrees may reuse json_value refs only when their exact reconstructed byte slices and digests match; indentation-dependent differences produce distinct refs.",
+      "type": "object",
+      "required": [
+        "step_kind",
+        "source_start",
+        "source_end",
+        "value_ordinal",
+        "record_ref"
+      ],
+      "properties": {
+        "step_kind": {"const": "current_field"},
+        "source_start": {"$ref": "#/$defs/sourcePosition"},
+        "source_end": {"$ref": "#/$defs/sourcePosition"},
+        "value_ordinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 249999
+        },
+        "record_ref": {"$ref": "#/$defs/currentFieldRecordRef"}
+      },
+      "additionalProperties": false
+    },
+    "sequenceStep": {
+      "description": "One frozen cumulative target span. index_root must equal the corresponding per-slot manifest root and resolve to an index whose sequence_kind equals this step's sequence_kind.",
+      "type": "object",
+      "required": [
+        "step_kind",
+        "source_start",
+        "source_end",
+        "slot_id",
+        "sequence_kind",
+        "index_root",
+        "prefix_b64",
+        "separator_b64",
+        "suffix_b64"
+      ],
+      "properties": {
+        "step_kind": {"const": "sequence"},
+        "source_start": {"$ref": "#/$defs/sourcePosition"},
+        "source_end": {"$ref": "#/$defs/sourcePosition"},
+        "slot_id": {
+          "enum": [
+            "project_state.recent_activity",
+            "project_state.history_with_patches.text",
+            "project_state.history_with_patches.timeline",
+            "project_state.activity_with_patches",
+            "project_state.history_with_patches.patches",
+            "project_state.code_patches",
+            "work_history",
+            "assignment.execution_audit.checkpoints"
+          ]
+        },
+        "sequence_kind": {
+          "enum": [
+            "events",
+            "patches",
+            "history_text",
+            "execution_audit"
+          ]
+        },
+        "index_root": {"$ref": "#/$defs/indexRef"},
+        "prefix_b64": {"$ref": "#/$defs/boundedBase64"},
+        "separator_b64": {"$ref": "#/$defs/boundedBase64"},
+        "suffix_b64": {"$ref": "#/$defs/boundedBase64"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.recent_activity"},
+            "sequence_kind": {"const": "events"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.history_with_patches.text"},
+            "sequence_kind": {"const": "history_text"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.history_with_patches.timeline"},
+            "sequence_kind": {"const": "events"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.activity_with_patches"},
+            "sequence_kind": {"const": "events"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.history_with_patches.patches"},
+            "sequence_kind": {"const": "patches"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "project_state.code_patches"},
+            "sequence_kind": {"const": "patches"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "work_history"},
+            "sequence_kind": {"const": "events"}
+          }
+        },
+        {
+          "properties": {
+            "slot_id": {"const": "assignment.execution_audit.checkpoints"},
+            "sequence_kind": {"const": "execution_audit"}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "step": {
+      "oneOf": [
+        {"$ref": "#/$defs/literalStep"},
+        {"$ref": "#/$defs/currentFieldStep"},
+        {"$ref": "#/$defs/sequenceStep"}
+      ]
+    },
+    "atMostOneRecentActivitySlot": {
+      "contains": {"$ref": "#/$defs/recentActivitySlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneHistoryTextSlot": {
+      "contains": {"$ref": "#/$defs/historyTextSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneHistoryTimelineSlot": {
+      "contains": {"$ref": "#/$defs/historyTimelineSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneActivityTimelineSlot": {
+      "contains": {"$ref": "#/$defs/activityTimelineSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneHistoryPatchesSlot": {
+      "contains": {"$ref": "#/$defs/historyPatchesSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneCodePatchesSlot": {
+      "contains": {"$ref": "#/$defs/codePatchesSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneWorkHistorySlot": {
+      "contains": {"$ref": "#/$defs/workHistorySlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "atMostOneAssignmentExecutionAuditSlot": {
+      "contains": {"$ref": "#/$defs/assignmentExecutionAuditSlot"},
+      "minContains": 0,
+      "maxContains": 1
+    },
+    "slotMatchBase": {
+      "type": "object",
+      "required": ["step_kind", "slot_id"],
+      "properties": {"step_kind": {"const": "sequence"}}
+    },
+    "recentActivitySlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.recent_activity"}}
+    },
+    "historyTextSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.history_with_patches.text"}}
+    },
+    "historyTimelineSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.history_with_patches.timeline"}}
+    },
+    "activityTimelineSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.activity_with_patches"}}
+    },
+    "historyPatchesSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.history_with_patches.patches"}}
+    },
+    "codePatchesSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "project_state.code_patches"}}
+    },
+    "workHistorySlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "work_history"}}
+    },
+    "assignmentExecutionAuditSlot": {
+      "$ref": "#/$defs/slotMatchBase",
+      "properties": {"slot_id": {"const": "assignment.execution_audit.checkpoints"}}
+    }
+  },
+  "additionalProperties": false
+}

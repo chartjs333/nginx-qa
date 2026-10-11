@@ -1,0 +1,429 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-index-node-v1.schema.json",
+  "title": "Prompt archive persistent sequence index node v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "sequence_kind",
+    "level",
+    "item_count",
+    "logical_bytes",
+    "children"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_index_node"},
+    "sequence_kind": {
+      "enum": [
+        "raw_bytes",
+        "payload_chunks",
+        "render_plan_chunks",
+        "literal_chunks",
+        "json_edges",
+        "events",
+        "patches",
+        "history_text",
+        "results",
+        "feedback",
+        "review_contexts",
+        "execution_audit",
+        "source_metadata",
+        "current_fields"
+      ]
+    },
+    "level": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 32
+    },
+    "item_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "logical_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "children": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"$ref": "#/$defs/child"}
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"level": {"const": 0}},
+        "required": ["level"]
+      },
+      "then": {
+        "properties": {
+          "children": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/child"},
+                {"properties": {"item_count": {"const": 1}}}
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"level": {"minimum": 1}},
+        "required": ["level"]
+      },
+      "then": {
+        "properties": {
+          "children": {
+            "items": {
+              "allOf": [
+                {"$ref": "#/$defs/child"},
+                {
+                  "properties": {
+                    "ref": {
+                      "allOf": [
+                        {"$ref": "prompt-archive-ref-v1.schema.json"},
+                        {
+                          "required": ["logical_kind"],
+                          "properties": {
+                            "logical_kind": {"const": "index_node"}
+                          }
+                        }
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {"const": "json_edges"}
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/jsonEdgeLeafChildren"}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {"const": "raw_bytes"}
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/rawLeafChildren"}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {"const": "payload_chunks"}
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/payloadLeafChildren"}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {"const": "render_plan_chunks"}
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/renderPlanLeafChildren"}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {"const": "literal_chunks"}
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/literalLeafChildren"}
+    },
+    {
+      "if": {
+        "properties": {
+          "level": {"const": 0},
+          "sequence_kind": {
+            "enum": [
+              "events",
+              "patches",
+              "history_text",
+              "results",
+              "feedback",
+              "review_contexts",
+              "execution_audit",
+              "source_metadata",
+              "current_fields"
+            ]
+          }
+        },
+        "required": ["level", "sequence_kind"]
+      },
+      "then": {"$ref": "#/$defs/recordLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "events"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/eventLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "patches"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/patchLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "history_text"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/historyTextLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "results"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/resultLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "feedback"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/feedbackLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "review_contexts"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/reviewContextLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "execution_audit"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/executionAuditLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "source_metadata"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/sourceMetadataLeafChildren"}
+    },
+    {
+      "if": {"properties": {"level": {"const": 0}, "sequence_kind": {"const": "current_fields"}}, "required": ["level", "sequence_kind"]},
+      "then": {"$ref": "#/$defs/currentFieldLeafChildren"}
+    }
+  ],
+  "$defs": {
+    "child": {
+      "type": "object",
+      "required": ["ordinal_start", "item_count", "logical_bytes", "ref"],
+      "properties": {
+        "ordinal_start": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "item_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9223372036854775807
+        },
+        "logical_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "ref": {"$ref": "prompt-archive-ref-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "rawLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {"logical_kind": {"const": "raw_chunk"}}
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "payloadLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {"logical_kind": {"const": "payload_chunk"}}
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "renderPlanLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {
+                          "logical_kind": {"const": "render_plan_chunk"}
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "literalLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {
+                          "logical_kind": {"const": "literal_chunk"}
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "jsonEdgeLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {
+                          "logical_kind": {"const": "json_edge"}
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "recordLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {
+                "properties": {
+                  "ref": {
+                    "allOf": [
+                      {"$ref": "prompt-archive-ref-v1.schema.json"},
+                      {
+                        "required": ["logical_kind"],
+                        "properties": {
+                          "logical_kind": {
+                            "enum": [
+                              "event_record",
+                              "patch_record",
+                              "history_text_record",
+                              "result_record",
+                              "feedback_record",
+                              "review_context_record",
+                              "execution_audit_record",
+                              "source_metadata_record",
+                              "current_field_record"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "eventLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "event_record"}}}}}}}},
+    "patchLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "patch_record"}}}}}}}},
+    "historyTextLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "history_text_record"}}}}}}}},
+    "resultLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "result_record"}}}}}}}},
+    "feedbackLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "feedback_record"}}}}}}}},
+    "reviewContextLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "review_context_record"}}}}}}}},
+    "executionAuditLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "execution_audit_record"}}}}}}}},
+    "sourceMetadataLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "source_metadata_record"}}}}}}}},
+    "currentFieldLeafChildren": {"$ref": "#/$defs/typedRecordLeafChildren", "properties": {"children": {"items": {"properties": {"ref": {"properties": {"logical_kind": {"const": "current_field_record"}}}}}}}},
+    "typedRecordLeafChildren": {
+      "properties": {
+        "children": {
+          "items": {
+            "allOf": [
+              {"$ref": "#/$defs/child"},
+              {"properties": {"ref": {"$ref": "prompt-archive-ref-v1.schema.json"}}}
+            ]
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-json-edge-v1.schema.json",
+  "title": "Prompt archive recursive exact-byte JSON edge v1",
+  "description": "One context-free ordered array item or object member. Position is supplied by the persistent json_edges index; the edge itself contains no ordinal or absolute source offset so identical edges can be reused.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "builder_version",
+    "edge_kind",
+    "separator_before",
+    "value_ref",
+    "byte_size",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_json_edge"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-json-edge-v1+json"
+    },
+    "builder_version": {"const": "pas1-recursive-json-merkle-v1"},
+    "edge_kind": {"enum": ["array_item", "object_member"]},
+    "separator_before": {"$ref": "#/$defs/byteSpan"},
+    "key_token": {"$ref": "#/$defs/byteSpan"},
+    "key_value_separator": {"$ref": "#/$defs/byteSpan"},
+    "value_ref": {"$ref": "#/$defs/jsonValueRef"},
+    "byte_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 536870912
+    },
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "oneOf": [
+    {
+      "properties": {"edge_kind": {"const": "array_item"}},
+      "not": {
+        "anyOf": [
+          {"required": ["key_token"]},
+          {"required": ["key_value_separator"]}
+        ]
+      }
+    },
+    {
+      "properties": {"edge_kind": {"const": "object_member"}},
+      "required": ["key_token", "key_value_separator"]
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "indexRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind"],
+          "properties": {"logical_kind": {"const": "index_node"}}
+        }
+      ]
+    },
+    "jsonValueRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "json_value"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-json-value-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "byteSpan": {
+      "description": "Exact syntax bytes stored below a literal_chunks index; an empty separator is represented by one verified zero-byte literal leaf.",
+      "type": "object",
+      "required": ["chunks_root", "byte_size", "sha256"],
+      "properties": {
+        "chunks_root": {"$ref": "#/$defs/indexRef"},
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,105 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-locator-v1.schema.json",
+  "title": "Prompt archive immutable archive locator v1",
+  "description": "A closed, immutable, path-free mapping from one archive_id to the exact committed pointer and manifest CAS identities. The locator is the bounded lookup artifact used by archive-id API routes; it contains no payload, credential, arbitrary path, or URL.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "locator_id",
+    "scope_kind",
+    "project_id",
+    "sprint_id",
+    "response_id",
+    "archive_id",
+    "pointer_id",
+    "pointer_ref",
+    "manifest_ref",
+    "published_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_locator"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "locator_id": {
+      "type": "string",
+      "pattern": "^pararc1-[0-9a-f]{64}$"
+    },
+    "scope_kind": {"enum": ["sprint", "project"]},
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "sprint_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/safeId"},
+        {"type": "null"}
+      ]
+    },
+    "response_id": {
+      "type": "string",
+      "pattern": "^parresp1-[0-9a-f]{64}$"
+    },
+    "archive_id": {
+      "type": "string",
+      "pattern": "^par1-[0-9a-f]{64}$"
+    },
+    "pointer_id": {
+      "type": "string",
+      "pattern": "^parptr1-[0-9a-f]{64}$"
+    },
+    "pointer_ref": {"$ref": "#/$defs/pointerRef"},
+    "manifest_ref": {"$ref": "#/$defs/manifestRef"},
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"scope_kind": {"const": "sprint"}},
+        "required": ["scope_kind"]
+      },
+      "then": {"properties": {"sprint_id": {"$ref": "#/$defs/safeId"}}},
+      "else": {"properties": {"sprint_id": {"type": "null"}}}
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "pointerRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "pointer"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "manifestRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "manifest"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-error-v1.schema.json",
+  "title": "Prompt archive API error v1",
+  "type": "object",
+  "required": ["detail"],
+  "properties": {
+    "detail": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "error",
+        "message",
+        "correlation_id",
+        "retryable"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "error": {
+          "enum": [
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
+            "PROMPT_ARCHIVE_NOT_FOUND",
+            "PROMPT_ARCHIVE_VERSION_UNSUPPORTED",
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            "PROMPT_ARCHIVE_BLOB_MISSING",
+            "PROMPT_ARCHIVE_BLOB_CORRUPT",
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+            "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+            "PROMPT_ARCHIVE_BUSY",
+            "PROMPT_ARCHIVE_LIMIT_EXCEEDED",
+            "PROMPT_ARCHIVE_UNAVAILABLE"
+          ]
+        },
+        "message": {
+          "const": "Prompt archive is unavailable for this request."
+        },
+        "correlation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "retryable": {"type": "boolean"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_REQUEST_INVALID"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_NOT_FOUND"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_VERSION_UNSUPPORTED"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_REFERENCE_INVALID"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_BLOB_MISSING"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_BLOB_CORRUPT"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_GENERATION_CONFLICT"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_BUSY"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": true}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_LIMIT_EXCEEDED"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": false}
+          }
+        },
+        {
+          "properties": {
+            "error": {"const": "PROMPT_ARCHIVE_UNAVAILABLE"},
+            "message": {
+              "const": "Prompt archive is unavailable for this request."
+            },
+            "retryable": {"const": true}
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

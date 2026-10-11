@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-source-inventory-v1.schema.json",
+  "title": "Prompt archive isolated source inventory descriptor v1",
+  "description": "Immutable bounded lookup metadata for an offline migration inventory. It identifies a separately supplied isolated root without persisting a filesystem path.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "inventory_id",
+    "inventory_format",
+    "project_id",
+    "source_root_handle_id",
+    "source_root_identity_sha256",
+    "inventory_sha256",
+    "entry_count",
+    "created_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_source_inventory"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "inventory_id": {"type": "string", "pattern": "^parinv1-[0-9a-f]{64}$"},
+    "inventory_format": {"const": "prompt-archive-isolated-inventory-v1"},
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "source_root_handle_id": {"$ref": "#/$defs/safeId"},
+    "source_root_identity_sha256": {"$ref": "#/$defs/sha256"},
+    "inventory_sha256": {"$ref": "#/$defs/sha256"},
+    "entry_count": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1000000
+    },
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "additionalProperties": false
+}

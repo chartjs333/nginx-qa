@@ -314,7 +314,7 @@
     },
     {
       "path": "orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md",
-      "sha256": "ccae73531bb2b108e59ee2ea16220663beb6729ea52eafff7f0a93886b8a442d"
+      "sha256": "3471cae3ace2421634c1dded6d2a0ab9479507e1844ed5561a5fae7b7579c2e9"
     },
     {
       "path": "orchestration/sprints/prompt-storage-compaction-v1/prototype-audit.md",

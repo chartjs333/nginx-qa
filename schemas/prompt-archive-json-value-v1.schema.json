@@ -1,0 +1,123 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-json-value-v1.schema.json",
+  "title": "Prompt archive recursive exact-byte JSON value v1",
+  "description": "A closed, context-free Merkle node for one exact JSON value. It contains no authorization scope, provenance, source path, or absolute source offset, so identical nested values can be reused across records and response occurrences.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "builder_version",
+    "node_kind",
+    "byte_size",
+    "sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_json_value"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-json-value-v1+json"
+    },
+    "builder_version": {"const": "pas1-recursive-json-merkle-v1"},
+    "node_kind": {"enum": ["scalar", "array", "object"]},
+    "scalar_kind": {"enum": ["null", "boolean", "number", "string"]},
+    "token": {"$ref": "#/$defs/byteSpan"},
+    "prefix": {"$ref": "#/$defs/byteSpan"},
+    "entries_root": {
+      "oneOf": [
+        {"$ref": "#/$defs/indexRef"},
+        {"type": "null"}
+      ]
+    },
+    "entry_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1000000
+    },
+    "suffix": {"$ref": "#/$defs/byteSpan"},
+    "byte_size": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 536870912
+    },
+    "sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "oneOf": [
+    {
+      "properties": {"node_kind": {"const": "scalar"}},
+      "required": ["scalar_kind", "token"],
+      "not": {
+        "anyOf": [
+          {"required": ["prefix"]},
+          {"required": ["entries_root"]},
+          {"required": ["entry_count"]},
+          {"required": ["suffix"]}
+        ]
+      }
+    },
+    {
+      "properties": {"node_kind": {"enum": ["array", "object"]}},
+      "required": ["prefix", "entries_root", "entry_count", "suffix"],
+      "not": {
+        "anyOf": [
+          {"required": ["scalar_kind"]},
+          {"required": ["token"]}
+        ]
+      }
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "node_kind": {"enum": ["array", "object"]},
+          "entry_count": {"const": 0}
+        },
+        "required": ["node_kind", "entry_count"]
+      },
+      "then": {"properties": {"entries_root": {"type": "null"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "node_kind": {"enum": ["array", "object"]},
+          "entry_count": {"minimum": 1}
+        },
+        "required": ["node_kind", "entry_count"]
+      },
+      "then": {"properties": {"entries_root": {"$ref": "#/$defs/indexRef"}}}
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "indexRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind"],
+          "properties": {"logical_kind": {"const": "index_node"}}
+        }
+      ]
+    },
+    "byteSpan": {
+      "description": "Exact non-JSON-or-complete-JSON syntax bytes. chunks_root must resolve to a literal_chunks index with literal_chunk leaves; semantic validation binds its totals to byte_size and sha256.",
+      "type": "object",
+      "required": ["chunks_root", "byte_size", "sha256"],
+      "properties": {
+        "chunks_root": {"$ref": "#/$defs/indexRef"},
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

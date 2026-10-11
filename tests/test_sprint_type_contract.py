@@ -51,6 +51,27 @@ from nginx_qa.sprint_types import (
     windows_path_is_within,
     windows_path_segment_valid,
 )
+from tests.test_prompt_archive_contract import (
+    archive_locator_fixture as contract_archive_locator_fixture,
+    blob_fixture as contract_blob_fixture,
+    blob_ref as contract_ref_fixture,
+    descriptor_fixture as contract_descriptor_fixture,
+    descriptor_stub_fixture as contract_descriptor_stub_fixture,
+    envelope_fixture as contract_envelope_fixture,
+    error_fixture as contract_error_fixture,
+    index_fixture as contract_index_fixture,
+    json_edge_fixture as contract_json_edge_fixture,
+    json_value_fixture as contract_json_value_fixture,
+    latest_slot_fixture as contract_latest_slot_fixture,
+    legacy_latest_journal_fixture as contract_legacy_latest_journal_fixture,
+    legacy_latest_plan_fixture as contract_legacy_latest_plan_fixture,
+    manifest_fixture as contract_manifest_fixture,
+    pending_registry_example_fixture as contract_pending_registry_fixture,
+    pointer_fixture as contract_pointer_fixture,
+    record_fixture as contract_record_fixture,
+    source_inventory_fixture as contract_source_inventory_fixture,
+    source_metadata_fixture as contract_source_metadata_fixture,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -89,6 +110,25 @@ EXPECTED_SCHEMA_FILES = {
     "managed-runtime-state-v1.schema.json",
     "managed-runtime-state-v2.schema.json",
     "managed-workspace-sprint-v1.schema.json",
+    "prompt-archive-blob-v1.schema.json",
+    "prompt-archive-descriptor-v1.schema.json",
+    "prompt-archive-error-v1.schema.json",
+    "prompt-archive-envelope-v1.schema.json",
+    "prompt-archive-index-node-v1.schema.json",
+    "prompt-archive-json-edge-v1.schema.json",
+    "prompt-archive-json-value-v1.schema.json",
+    "prompt-archive-journal-v1.schema.json",
+    "prompt-archive-latest-slot-v1.schema.json",
+    "prompt-archive-locator-v1.schema.json",
+    "prompt-archive-manifest-v1.schema.json",
+    "prompt-archive-pending-operation-registry-v1.schema.json",
+    "prompt-archive-pointer-v1.schema.json",
+    "prompt-archive-publication-plan-v1.schema.json",
+    "prompt-archive-record-v1.schema.json",
+    "prompt-archive-ref-v1.schema.json",
+    "prompt-archive-source-inventory-v1.schema.json",
+    "prompt-archive-source-metadata-v1.schema.json",
+    "prompt-archive-descriptor-stub-v1.schema.json",
     "repair-sprint-response-v1.schema.json",
     "repair-sprint-v1.schema.json",
     "scope-change-request-v1.schema.json",
@@ -98,6 +138,293 @@ EXPECTED_SCHEMA_FILES = {
     "start-sprint-from-git-response-v1.schema.json",
     "start-sprint-from-git-v1.schema.json",
 }
+
+
+def prompt_archive_ref_fixture(logical_kind: str = "payload_chunk") -> dict:
+    media_type = "application/octet-stream"
+    if logical_kind == "index_node":
+        media_type = "application/vnd.nginx-qa.prompt-archive-index-node-v1+json"
+    elif logical_kind == "manifest":
+        media_type = "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+    elif logical_kind == "publication_plan":
+        media_type = (
+            "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+        )
+    elif logical_kind == "pointer":
+        media_type = "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
+    elif logical_kind == "archive_locator":
+        media_type = "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
+    elif logical_kind == "descriptor_stub":
+        media_type = "application/vnd.nginx-qa.prompt-archive-descriptor+json"
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_blob_ref",
+        "hash_algorithm": "sha256",
+        "digest": "a" * 64,
+        "logical_kind": logical_kind,
+        "media_type": media_type,
+        "content_encoding": "identity",
+        "uncompressed_size": 128,
+        "stored_size": 128,
+        "stored_sha256": "a" * 64,
+    }
+
+
+def prompt_archive_manifest_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_manifest",
+        "media_type": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json",
+        "id_algorithm": "PAS1-ID-v1",
+        "archive_id": "par1-" + "a" * 64,
+        "archive_format": "legacy_raw_chunks_v1",
+        "scope": {
+            "project_id": "project-id",
+            "sprint_id": "sprint-example-1",
+            "response_id": "parresp1-" + "1" * 64,
+            "response_kind": "migration-snapshot",
+            "occurrence_kind": "migration",
+            "occurrence_id": "migration-example-1",
+            "transition_id": None,
+        },
+        "source": {
+            "source_kind": "offline_migration",
+            "source_commit": COMMIT,
+            "assignment_id": "assignment-1",
+            "predecessor_archive_id": None,
+        },
+        "authorization": {
+            "auth_model_version": "prompt-archive-authorization-v1",
+            "principal_kind": "offline_operator",
+            "principal_id": "operator-1",
+            "binding_id": None,
+            "scope_source": "offline_operator_gate",
+            "effective_scope_revision": None,
+            "effective_scope_sha256": None,
+            "decision_occurrence_id": "authorization-1",
+        },
+        "roots": {"raw_bytes": prompt_archive_ref_fixture("index_node")},
+        "integrity": {
+            "semantics": "raw-byte-equality",
+            "hydrated_media_type": "application/json",
+            "hydrated_size": 4096,
+            "hydrated_sha256": "b" * 64,
+            "canonical": {
+                "algorithm": "nginx-qa-canonical-json-v1",
+                "digest": "c" * 64,
+            },
+        },
+        "counts": {
+            "records": 0,
+            "raw_chunks": 2,
+            "index_nodes": 1,
+            "logical_bytes": 4096,
+            "referenced_stored_bytes": 1024,
+            "referenced_uncompressed_bytes": 1024,
+        },
+        "limits": {
+            "profile": "prompt-archive-limits-v1",
+            "max_blob_uncompressed_bytes": 8 * 1024 * 1024,
+            "max_blob_stored_bytes": 8 * 1024 * 1024 + 64 * 1024,
+            "max_manifest_bytes": 256 * 1024,
+            "max_hydrated_bytes": 256 * 1024 * 1024,
+            "max_referenced_stored_bytes": 384 * 1024 * 1024,
+            "max_referenced_uncompressed_bytes": 384 * 1024 * 1024,
+            "max_reference_depth": 16,
+            "max_reference_count": 250_000,
+            "max_index_fanout": 64,
+            "max_control_json_depth": 64,
+            "max_compression_ratio": 50,
+        },
+        "publication": {
+            "mode": "migration",
+            "legacy_authoritative": True,
+            "writer_version": "prompt-archive-writer-v1",
+            "verified_at": TIMESTAMP,
+        },
+        "created_at": TIMESTAMP,
+    }
+
+
+def prompt_archive_envelope_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_response_envelope",
+        "media_type": "application/vnd.nginx-qa.prompt-response-envelope-v1+json",
+        "builder_version": "pas1-render-plan-builder-v1",
+        "renderer_version": "pas1-concat-renderer-v1",
+        "response_id": "parresp1-" + "1" * 64,
+        "response_kind": "transition-response",
+        "steps": [
+            {
+                "step_kind": "sequence",
+                "slot_id": "current_fields",
+                "sequence_kind": "current_fields",
+                "index_root": prompt_archive_ref_fixture("index_node"),
+                "prefix_b64": "Ww==",
+                "separator_b64": "LA==",
+                "suffix_b64": "XQ==",
+            }
+        ],
+    }
+
+
+def prompt_archive_pointer_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_pointer",
+        "id_algorithm": "PAS1-ID-v1",
+        "pointer_id": "parptr1-" + "c" * 64,
+        "project_id": "project-id",
+        "sprint_id": "sprint-example-1",
+        "response_id": "parresp1-" + "1" * 64,
+        "archive_id": "par1-" + "a" * 64,
+        "generation": 1,
+        "previous_pointer_id": None,
+        "manifest_ref": prompt_archive_ref_fixture("manifest"),
+        "published_at": TIMESTAMP,
+    }
+
+
+def prompt_archive_locator_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_locator",
+        "media_type": "application/vnd.nginx-qa.prompt-archive-locator-v1+json",
+        "id_algorithm": "PAS1-ID-v1",
+        "locator_id": "pararc1-" + "d" * 64,
+        "scope_kind": "sprint",
+        "project_id": "project-id",
+        "sprint_id": "sprint-example-1",
+        "response_id": "parresp1-" + "1" * 64,
+        "archive_id": "par1-" + "a" * 64,
+        "pointer_id": "parptr1-" + "c" * 64,
+        "pointer_ref": prompt_archive_ref_fixture("pointer"),
+        "manifest_ref": prompt_archive_ref_fixture("manifest"),
+        "published_at": TIMESTAMP,
+    }
+
+
+def prompt_archive_publication_plan_fixture() -> dict:
+    operation_id = "parop1-" + "4" * 32
+    pointer = prompt_archive_pointer_fixture()
+    locator = prompt_archive_locator_fixture()
+    timestamps = {
+        "source_observed_at": TIMESTAMP,
+        "planned_at": TIMESTAMP,
+        "intent_at": TIMESTAMP,
+        "blobs_verified_at": TIMESTAMP,
+        "manifest_verified_at": TIMESTAMP,
+        "pointer_published_at": TIMESTAMP,
+        "locator_published_at": TIMESTAMP,
+        "compatibility_published_at": TIMESTAMP,
+        "completed_at": TIMESTAMP,
+        "aborted_at": TIMESTAMP,
+    }
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_publication_plan",
+        "media_type": (
+            "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+        ),
+        "id_algorithm": "PAS1-ID-v1",
+        "operation_id": operation_id,
+        "operation_kind": "offline_migration",
+        "scope": {"project_id": "project-id", "sprint_id": "sprint-example-1"},
+        "occurrence": {
+            "response_id": "parresp1-" + "1" * 64,
+            "response_kind": "migration-snapshot",
+            "occurrence_kind": "migration",
+            "occurrence_id": "migration-example-1",
+            "transition_id": None,
+        },
+        "recovery_locator": {
+            "locator_version": "prompt-archive-publication-locator-v1",
+            "recovery_key": "parloc1-" + "6" * 64,
+            "project_id": "project-id",
+            "sprint_id": "sprint-example-1",
+            "response_id": "parresp1-" + "1" * 64,
+            "occurrence_id": "migration-example-1",
+            "operation_id": operation_id,
+        },
+        "source_locator": {
+            "locator_kind": "isolated_inventory",
+            "locator_version": "prompt-archive-isolated-inventory-locator-v1",
+            "inventory_id": "inventory-1",
+            "inventory_format": "prompt-archive-isolated-inventory-v1",
+            "inventory_sha256": "7" * 64,
+            "entry_count": 1,
+        },
+        "intended_manifest": {
+            "identity_version": "prompt-archive-intended-manifest-identity-v1",
+            "archive_id": "par1-" + "a" * 64,
+            "manifest_ref": prompt_archive_ref_fixture("manifest"),
+            "document": prompt_archive_manifest_fixture(),
+        },
+        "intended_pointer": {
+            "identity_version": "prompt-archive-intended-pointer-identity-v1",
+            "pointer_id": pointer["pointer_id"],
+            "pointer_ref": prompt_archive_ref_fixture("pointer"),
+            "document": pointer,
+        },
+        "intended_archive_locator": {
+            "identity_version": "prompt-archive-intended-locator-identity-v1",
+            "locator_id": locator["locator_id"],
+            "locator_ref": prompt_archive_ref_fixture("archive_locator"),
+            "document": locator,
+        },
+        "planned_reachable_set": {
+            "digest_version": "prompt-archive-reachable-set-digest-v1",
+            "hash_algorithm": "sha256",
+            "digest": "5" * 64,
+            "unique_ref_count": 4,
+            "includes_manifest": True,
+        },
+        "pointer_precondition": {
+            "expected_generation": 0,
+            "previous_pointer_id": None,
+        },
+        "compatibility_publication": {"mode": "none"},
+        "frozen_timestamps": timestamps,
+    }
+
+
+def prompt_archive_journal_fixture() -> dict:
+    plan = prompt_archive_publication_plan_fixture()
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_journal",
+        "media_type": "application/vnd.nginx-qa.prompt-archive-journal-v1+json",
+        "id_algorithm": "PAS1-ID-v1",
+        "journal_id": "parjournal1-" + "8" * 64,
+        "operation_id": plan["operation_id"],
+        "operation_kind": "offline_migration",
+        "scope": plan["scope"],
+        "occurrence": {
+            "response_id": plan["occurrence"]["response_id"],
+            "occurrence_id": plan["occurrence"]["occurrence_id"],
+        },
+        "recovery_locator": plan["recovery_locator"],
+        "archive_id": "par1-" + "a" * 64,
+        "plan_ref": prompt_archive_ref_fixture("publication_plan"),
+        "manifest_ref": prompt_archive_ref_fixture("manifest"),
+        "pointer_ref": prompt_archive_ref_fixture("pointer"),
+        "archive_locator_ref": prompt_archive_ref_fixture("archive_locator"),
+        "compatibility_mode": "none",
+        "compatibility_descriptor_ref": None,
+        "expected_pointer_generation": 0,
+        "previous_pointer_id": None,
+        "journal_generation": 0,
+        "previous_journal_generation": None,
+        "previous_journal_sha256": None,
+        "result_pointer_id": None,
+        "result_archive_locator_id": None,
+        "compatibility_result": "pending",
+        "frozen_timestamps": plan["frozen_timestamps"],
+        "state": "intent",
+        "events": [{"state": "intent", "ordinal": 0, "occurred_at": TIMESTAMP}],
+        "updated_at": TIMESTAMP,
+    }
 
 
 def managed_manifest_fixture() -> dict:
@@ -2425,6 +2752,39 @@ class SprintSchemaContractTests(unittest.TestCase):
             "managed-runtime-state-v1.schema.json": active_runtime_fixture(),
             "managed-runtime-state-v2.schema.json": runtime_v2,
             "managed-workspace-sprint-v1.schema.json": managed_manifest_fixture(),
+            "prompt-archive-ref-v1.schema.json": contract_ref_fixture(),
+            "prompt-archive-blob-v1.schema.json": contract_blob_fixture(),
+            "prompt-archive-record-v1.schema.json": contract_record_fixture(),
+            "prompt-archive-index-node-v1.schema.json": contract_index_fixture(),
+            "prompt-archive-json-edge-v1.schema.json": contract_json_edge_fixture(),
+            "prompt-archive-json-value-v1.schema.json": contract_json_value_fixture(),
+            "prompt-archive-envelope-v1.schema.json": contract_envelope_fixture(),
+            "prompt-archive-manifest-v1.schema.json": contract_manifest_fixture(),
+            "prompt-archive-pointer-v1.schema.json": contract_pointer_fixture(),
+            "prompt-archive-locator-v1.schema.json": contract_archive_locator_fixture(),
+            "prompt-archive-publication-plan-v1.schema.json": (
+                contract_legacy_latest_plan_fixture()
+            ),
+            "prompt-archive-journal-v1.schema.json": (
+                contract_legacy_latest_journal_fixture()
+            ),
+            "prompt-archive-latest-slot-v1.schema.json": (
+                contract_latest_slot_fixture()
+            ),
+            "prompt-archive-pending-operation-registry-v1.schema.json": (
+                contract_pending_registry_fixture()
+            ),
+            "prompt-archive-source-inventory-v1.schema.json": (
+                contract_source_inventory_fixture()
+            ),
+            "prompt-archive-source-metadata-v1.schema.json": (
+                contract_source_metadata_fixture()
+            ),
+            "prompt-archive-descriptor-stub-v1.schema.json": (
+                contract_descriptor_stub_fixture()
+            ),
+            "prompt-archive-descriptor-v1.schema.json": contract_descriptor_fixture(),
+            "prompt-archive-error-v1.schema.json": contract_error_fixture(),
             "legacy-scope-amendment-v1.schema.json": {
                 "schema_version": 1,
                 "amendment_id": "ISC-S16-D01",

@@ -1,0 +1,1437 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-journal-v1.schema.json",
+  "title": "Prompt archive publication journal v1",
+  "description": "A closed, payload-free, hash-chained publication journal. Every generation records the immutable plan and all intended artifact refs. The response pointer is immutable create-or-verify. Every authoritative or legacy latest-response write binds a predecessor-independent ordered content intent and uses one physical cross-process lock collocated with and derived from the external latest-response target, never an archive/runtime root. Under that lock recovery compares intent order, dynamically derives a wrapper from the current predecessor only when needed, treats a later ordered slot as a safe superseded result, and reconciles mixed content/sidecar state before compatibility_published. Success advances intent -> blobs -> manifest -> pointer -> archive locator -> compatibility outputs -> complete. Abort is valid only before pointer publication. Prior immutable generation bytes are retained and bound by generation plus SHA-256.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "journal_id",
+    "operation_id",
+    "operation_kind",
+    "scope",
+    "occurrence",
+    "recovery_locator",
+    "pending_registry",
+    "plan_ref",
+    "compatibility_mode",
+    "compatibility_descriptor_ref",
+    "latest_intent",
+    "journal_generation",
+    "previous_journal_generation",
+    "previous_journal_sha256",
+    "result_latest_slot_id",
+    "result_latest_slot_ref",
+    "latest_slot_outcome",
+    "compatibility_result",
+    "frozen_timestamps",
+    "state",
+    "events",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_journal"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "journal_id": {
+      "type": "string",
+      "pattern": "^parjournal1-[0-9a-f]{64}$"
+    },
+    "operation_id": {
+      "type": "string",
+      "pattern": "^parop1-[0-9a-f]{32}$"
+    },
+    "operation_kind": {
+      "enum": [
+        "shadow_publish",
+        "native_publish",
+        "offline_migration",
+        "legacy_latest_publish"
+      ]
+    },
+    "scope": {"$ref": "#/$defs/scope"},
+    "occurrence": {"$ref": "#/$defs/occurrence"},
+    "recovery_locator": {"$ref": "#/$defs/recoveryLocator"},
+    "pending_registry": {"$ref": "#/$defs/pendingRegistryJournal"},
+    "archive_id": {
+      "type": "string",
+      "pattern": "^par1-[0-9a-f]{64}$"
+    },
+    "plan_ref": {"$ref": "#/$defs/planRef"},
+    "manifest_ref": {"$ref": "#/$defs/manifestRef"},
+    "pointer_ref": {"$ref": "#/$defs/pointerRef"},
+    "archive_locator_ref": {"$ref": "#/$defs/archiveLocatorRef"},
+    "legacy_payload_root": {"$ref": "#/$defs/indexNodeRef"},
+    "legacy_content_sha256": {"$ref": "#/$defs/sha256"},
+    "legacy_content_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    },
+    "authoritative_drain_barrier": {
+      "$ref": "#/$defs/authoritativeDrainBarrier"
+    },
+    "compatibility_mode": {
+      "enum": [
+        "none",
+        "authoritative_descriptor_stubs",
+        "legacy_latest_publish"
+      ]
+    },
+    "compatibility_descriptor_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/descriptorRef"},
+        {"type": "null"}
+      ]
+    },
+    "latest_intent": {
+      "oneOf": [
+        {"$ref": "#/$defs/latestContentIntent"},
+        {"type": "null"}
+      ]
+    },
+    "result_latest_slot_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/latestSlotRef"},
+        {"type": "null"}
+      ]
+    },
+    "expected_pointer_generation": {"const": 0},
+    "previous_pointer_id": {"type": "null"},
+    "journal_generation": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "previous_journal_generation": {
+      "oneOf": [
+        {"type": "integer", "minimum": 0, "maximum": 5},
+        {"type": "null"}
+      ]
+    },
+    "previous_journal_sha256": {
+      "description": "SHA-256 of the exact canonical UTF-8 bytes in the retained immutable previous generation file; null only for generation zero.",
+      "oneOf": [
+        {"$ref": "#/$defs/sha256"},
+        {"type": "null"}
+      ]
+    },
+    "result_pointer_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^parptr1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "result_archive_locator_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^pararc1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "result_latest_slot_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^parlatest1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "latest_slot_outcome": {
+      "enum": ["pending", "not_applicable", "published", "superseded"]
+    },
+    "compatibility_result": {
+      "enum": ["pending", "none", "published", "superseded"]
+    },
+    "frozen_timestamps": {"$ref": "#/$defs/frozenTimestamps"},
+    "state": {
+      "enum": [
+        "intent",
+        "blobs_verified",
+        "manifest_verified",
+        "pointer_published",
+        "locator_published",
+        "legacy_payload_verified",
+        "compatibility_published",
+        "complete",
+        "aborted"
+      ]
+    },
+    "abort_from_state": {
+      "enum": [
+        "intent",
+        "blobs_verified",
+        "manifest_verified",
+        "legacy_payload_verified"
+      ]
+    },
+    "abort_reason_code": {
+      "enum": [
+        "source_unavailable",
+        "source_changed",
+        "limit_exceeded",
+        "blob_verification_failed",
+        "manifest_verification_failed",
+        "legacy_payload_verification_failed",
+        "authoritative_drain_failed",
+        "generation_conflict",
+        "operator_cancelled"
+      ]
+    },
+    "events": {"type": "array"},
+    "updated_at": {"type": "string", "format": "date-time"}
+  },
+  "anyOf": [
+    {
+      "properties": {
+        "state": {"const": "intent"},
+        "journal_generation": {"const": 0},
+        "previous_journal_generation": {"type": "null"},
+        "previous_journal_sha256": {"type": "null"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsIntent"}
+      },
+      "allOf": [{"$ref": "#/$defs/notAborted"}]
+    },
+    {
+      "properties": {
+        "state": {"const": "blobs_verified"},
+        "journal_generation": {"const": 1},
+        "previous_journal_generation": {"const": 0},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsBlobsVerified"}
+      },
+      "allOf": [{"$ref": "#/$defs/notAborted"}]
+    },
+    {
+      "properties": {
+        "state": {"const": "manifest_verified"},
+        "journal_generation": {"const": 2},
+        "previous_journal_generation": {"const": 1},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsManifestVerified"}
+      },
+      "allOf": [{"$ref": "#/$defs/notAborted"}]
+    },
+    {
+      "properties": {
+        "state": {"const": "pointer_published"},
+        "journal_generation": {"const": 3},
+        "previous_journal_generation": {"const": 2},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsPointerPublished"}
+      },
+      "allOf": [{"$ref": "#/$defs/notAborted"}]
+    },
+    {
+      "properties": {
+        "state": {"const": "locator_published"},
+        "journal_generation": {"const": 4},
+        "previous_journal_generation": {"const": 3},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "result_archive_locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsLocatorPublished"}
+      },
+      "allOf": [{"$ref": "#/$defs/notAborted"}]
+    },
+    {
+      "properties": {
+        "state": {"const": "compatibility_published"},
+        "journal_generation": {"const": 5},
+        "previous_journal_generation": {"const": 4},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "result_archive_locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "events": {"$ref": "#/$defs/eventsCompatibilityPublished"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/notAborted"},
+        {"$ref": "#/$defs/compatibilityCompleted"}
+      ]
+    },
+    {
+      "properties": {
+        "state": {"const": "complete"},
+        "journal_generation": {"const": 6},
+        "previous_journal_generation": {"const": 5},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "result_archive_locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "events": {"$ref": "#/$defs/eventsComplete"}
+      },
+      "allOf": [
+        {"$ref": "#/$defs/notAborted"},
+        {"$ref": "#/$defs/compatibilityCompleted"}
+      ]
+    },
+    {
+      "required": ["abort_from_state", "abort_reason_code"],
+      "properties": {
+        "state": {"const": "aborted"},
+        "abort_from_state": {"const": "intent"},
+        "journal_generation": {"const": 1},
+        "previous_journal_generation": {"const": 0},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsAbortedFromIntent"}
+      }
+    },
+    {
+      "required": ["abort_from_state", "abort_reason_code"],
+      "properties": {
+        "state": {"const": "aborted"},
+        "abort_from_state": {"const": "blobs_verified"},
+        "journal_generation": {"const": 2},
+        "previous_journal_generation": {"const": 1},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsAbortedFromBlobsVerified"}
+      }
+    },
+    {
+      "required": ["abort_from_state", "abort_reason_code"],
+      "properties": {
+        "state": {"const": "aborted"},
+        "abort_from_state": {"const": "manifest_verified"},
+        "journal_generation": {"const": 3},
+        "previous_journal_generation": {"const": 2},
+        "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+        "result_pointer_id": {"type": "null"},
+        "result_archive_locator_id": {"type": "null"},
+        "compatibility_result": {"const": "pending"},
+        "events": {"$ref": "#/$defs/eventsAbortedFromManifestVerified"}
+      }
+    },
+    {
+      "properties": {"operation_kind": {"const": "legacy_latest_publish"}}
+    }
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation_kind": {"enum": ["shadow_publish", "offline_migration"]}
+        },
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "properties": {"compatibility_mode": {"const": "none"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "native_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "properties": {
+          "compatibility_mode": {"const": "authoritative_descriptor_stubs"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"compatibility_mode": {"const": "none"}},
+        "required": ["compatibility_mode"]
+      },
+      "then": {
+        "properties": {
+          "compatibility_descriptor_ref": {"type": "null"},
+          "latest_intent": {"type": "null"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "compatibility_mode": {"const": "authoritative_descriptor_stubs"}
+        },
+        "required": ["compatibility_mode"]
+      },
+      "then": {
+        "properties": {
+          "compatibility_descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+          "latest_intent": {"$ref": "#/$defs/descriptorLatestIntent"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"state": {"const": "complete"}},
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "intended_mutation": {
+                "properties": {"terminal_state": {"const": "complete"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"state": {"const": "aborted"}},
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "intended_mutation": {
+                "properties": {"terminal_state": {"const": "aborted"}}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"compatibility_mode": {"const": "legacy_latest_publish"}},
+        "required": ["compatibility_mode"]
+      },
+      "then": {
+        "properties": {
+          "compatibility_descriptor_ref": {"type": "null"},
+          "latest_intent": {"$ref": "#/$defs/legacyLatestIntent"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {
+            "enum": [
+              "intent",
+              "blobs_verified",
+              "manifest_verified",
+              "pointer_published",
+              "locator_published",
+              "legacy_payload_verified",
+              "aborted"
+            ]
+          }
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "result_latest_slot_id": {"type": "null"},
+          "result_latest_slot_ref": {"type": "null"},
+          "latest_slot_outcome": {"const": "pending"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "legacy_latest_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "required": [
+          "legacy_payload_root",
+          "legacy_content_sha256",
+          "legacy_content_size",
+          "authoritative_drain_barrier"
+        ],
+        "properties": {
+          "compatibility_mode": {"const": "legacy_latest_publish"}
+        },
+        "allOf": [{"$ref": "#/$defs/legacyLatestJournalState"}],
+        "not": {
+          "anyOf": [
+            {"required": ["archive_id"]},
+            {"required": ["manifest_ref"]},
+            {"required": ["pointer_ref"]},
+            {"required": ["archive_locator_ref"]},
+            {"required": ["expected_pointer_generation"]},
+            {"required": ["previous_pointer_id"]},
+            {"required": ["result_pointer_id"]},
+            {"required": ["result_archive_locator_id"]}
+          ]
+        }
+      },
+      "else": {
+        "required": [
+          "archive_id",
+          "manifest_ref",
+          "pointer_ref",
+          "archive_locator_ref",
+          "expected_pointer_generation",
+          "previous_pointer_id",
+          "result_pointer_id",
+          "result_archive_locator_id"
+        ],
+        "not": {
+          "anyOf": [
+            {"required": ["legacy_payload_root"]},
+            {"required": ["legacy_content_sha256"]},
+            {"required": ["legacy_content_size"]},
+            {"required": ["authoritative_drain_barrier"]}
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "state": {"enum": ["complete", "aborted"]}
+        },
+        "required": ["state"]
+      },
+      "then": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "intended_mutation": {
+                "$ref": "#/$defs/registryRemoveMutation"
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "intended_mutation": {
+                "$ref": "#/$defs/registryBindMutation"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"journal_generation": {"const": 0}},
+        "required": ["journal_generation"]
+      },
+      "then": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "precondition_entry": {
+                "properties": {
+                  "state": {"const": "planned"},
+                  "journal_ref": {"type": "null"}
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "pending_registry": {
+            "properties": {
+              "precondition_entry": {
+                "properties": {
+                  "state": {"const": "journaled"},
+                  "journal_ref": {"$ref": "#/$defs/journalRef"}
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "legacy_latest_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "properties": {
+          "frozen_timestamps": {"$ref": "#/$defs/legacyLatestFrozenTimestamps"}
+        }
+      },
+      "else": {
+        "properties": {
+          "frozen_timestamps": {"$ref": "#/$defs/archiveFrozenTimestamps"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["project_id", "sprint_id"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "required": ["response_id", "occurrence_id"],
+      "properties": {
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"}
+      },
+      "additionalProperties": false
+    },
+    "recoveryLocator": {
+      "type": "object",
+      "required": [
+        "locator_version",
+        "recovery_key",
+        "project_id",
+        "sprint_id",
+        "response_id",
+        "occurrence_id",
+        "operation_id"
+      ],
+      "properties": {
+        "locator_version": {
+          "const": "prompt-archive-publication-locator-v1"
+        },
+        "recovery_key": {
+          "type": "string",
+          "pattern": "^parloc1-[0-9a-f]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        },
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "planRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "publication_plan"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "journalRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "journal"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "registryShardIdentity": {
+      "type": "object",
+      "required": [
+        "project_id",
+        "shard_algorithm",
+        "shard_id",
+        "max_entries"
+      ],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "shard_algorithm": {"const": "sha256-recovery-key-prefix-2-v1"},
+        "shard_id": {"type": "string", "pattern": "^[0-9a-f]{2}$"},
+        "max_entries": {"const": 1024}
+      },
+      "additionalProperties": false
+    },
+    "registryBindMutation": {
+      "type": "object",
+      "required": [
+        "mutation",
+        "journal_ref_binding",
+        "updated_at",
+        "published_at"
+      ],
+      "properties": {
+        "mutation": {"const": "bind_current_journal"},
+        "journal_ref_binding": {"const": "canonical_current_journal_ref"},
+        "updated_at": {"type": "string", "format": "date-time"},
+        "published_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "registryRemoveMutation": {
+      "type": "object",
+      "required": ["mutation", "terminal_state", "published_at"],
+      "properties": {
+        "mutation": {"const": "remove_terminal_entry"},
+        "terminal_state": {"enum": ["complete", "aborted"]},
+        "published_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "pendingRegistryJournal": {
+      "description": "The exact key-level bounded-registry precondition and mutation intent for this immutable journal generation. shard project/id and precondition entry operation/recovery/plan refs must semantically equal the enclosing journal. Under the shard lock the writer loads the latest valid shard, compares only this recovery_key to precondition_entry or the exact intended result, preserves unrelated entries, deterministically rebases the key mutation, and publishes the next whole-shard CAS generation; unrelated changes retry, while only a differing same-key entry conflicts. Nonterminal generations bind their own canonical journal ref after journal CAS; terminal generations remove the exact entry. Binding tokens avoid impossible journal/registry content-hash cycles. Startup enumerates only 256 stable shard keys. A planned entry recovers index-before-journal; a journaled entry recovers the bound journal; terminal journal persistence precedes idempotent removal.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "shard",
+        "precondition_entry",
+        "intended_mutation"
+      ],
+      "properties": {
+        "protocol": {"const": "prompt-archive-pending-registry-cas-v1"},
+        "shard": {"$ref": "#/$defs/registryShardIdentity"},
+        "precondition_entry": {
+          "$ref": "prompt-archive-pending-operation-registry-v1.schema.json#/$defs/entry"
+        },
+        "intended_mutation": {
+          "oneOf": [
+            {"$ref": "#/$defs/registryBindMutation"},
+            {"$ref": "#/$defs/registryRemoveMutation"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "manifestRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "manifest"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "pointerRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "pointer"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "archiveLocatorRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "archive_locator"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "indexNodeRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "index_node"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-index-node-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "descriptorRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "descriptor_stub"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "latestSlotRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "latest_slot"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-latest-slot-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "latestOrdering": {
+      "description": "A deterministic total order compared lexicographically by source_revision, occurrence_id, then operation_id, but only after revision_authority exactly matches. The source revision is allocated from a durable project/slot high-water mark that is never reset by a process, launcher, or runtime-root restart. If that continuity cannot be restored, publication fails closed instead of allocating a lower revision.",
+      "type": "object",
+      "required": [
+        "revision_authority",
+        "source_revision",
+        "occurrence_id",
+        "operation_id"
+      ],
+      "properties": {
+        "revision_authority": {"$ref": "#/$defs/revisionAuthority"},
+        "source_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "revisionAuthority": {
+      "description": "The stable V1 revision domain is the enclosing (project_id, slot_scope, slot_id). Epoch rollover is not defined in V1: the durable high-water mark must be restored, or allocation and publication fail closed.",
+      "type": "object",
+      "required": ["protocol", "epoch", "reset_policy"],
+      "properties": {
+        "protocol": {
+          "const": "prompt-archive-durable-project-latest-revision-v1"
+        },
+        "epoch": {"const": 1},
+        "reset_policy": {"const": "restore_high_water_mark_or_fail_closed"}
+      },
+      "additionalProperties": false
+    },
+    "latestBootstrapPrecondition": {
+      "description": "Used only while no sidecar is enrolled. Under the one physical lock collocated with the resolved external latest-response target, the writer observes the target, durably publishes the intended bytes plus retained/current enrollment intent, and only then may unlock. That discoverable marker makes every legacy writer drain or fail closed. The writer performs the non-nested pending-registry mutation while no latest/operation/response lock is held, then reacquires the same latest lock, revalidates marker and observation, and holds it through content and first-slot reconciliation. Every code path capable of writing legacy latest-response bytes, including default legacy with no archive root and the legacy writer accompanying shadow mode, locates and takes that same lock. Once any valid marker/slot exists, ordered intent semantics supersede the bootstrap observation.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "lock_scope",
+        "slot_id",
+        "registry_shard_count",
+        "writer_lock_policy",
+        "lock_location_policy",
+        "registration_order",
+        "bootstrap_completion_barrier",
+        "kind"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "prompt-archive-project-global-bootstrap-enrollment-v1"
+        },
+        "lock_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "registry_shard_count": {"const": 256},
+        "writer_lock_policy": {
+          "const": "all-latest-writers-pre-and-post-enrollment-v1"
+        },
+        "lock_location_policy": {
+          "const": "external-latest-colocated-stable-lock-v1"
+        },
+        "registration_order": {
+          "const": "observe-mark-unlock-register-relock-reconcile-v1"
+        },
+        "bootstrap_completion_barrier": {
+          "const": "durable-marker-before-unlock-content-slot-before-final-unlock-v1"
+        },
+        "kind": {"enum": ["enrolled", "absent", "legacy_bytes"]},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {"kind": {"const": "enrolled"}},
+          "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["byte_size"]}]}
+        },
+        {
+          "properties": {"kind": {"const": "absent"}},
+          "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["byte_size"]}]}
+        },
+        {
+          "required": ["kind", "sha256", "byte_size"],
+          "properties": {
+            "kind": {"const": "legacy_bytes"}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "latestContentIntent": {
+      "description": "The exact predecessor-independent content intent copied from the immutable publication plan. No mutable whole-slot generation or predecessor ref is frozen here. Under the stable project-global lock a same intent succeeds, a greater current order yields superseded, and a lower order derives generation=current+1 and previous_slot_id=current before reconciling content and sidecar.",
+      "type": "object",
+      "required": [
+        "identity_version",
+        "intent_id",
+        "project_id",
+        "slot_scope",
+        "slot_id",
+        "publication_protocol",
+        "ordering",
+        "bootstrap_precondition",
+        "content_kind",
+        "content_sha256",
+        "content_size",
+        "descriptor_ref",
+        "source_sprint_id",
+        "source_response_id",
+        "published_at"
+      ],
+      "properties": {
+        "identity_version": {"const": "prompt-archive-latest-content-intent-v1"},
+        "intent_id": {
+          "type": "string",
+          "pattern": "^parlatestintent1-[0-9a-f]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "slot_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "publication_protocol": {
+          "const": "prompt-archive-project-global-ordered-latest-intent-v1"
+        },
+        "ordering": {"$ref": "#/$defs/latestOrdering"},
+        "bootstrap_precondition": {
+          "$ref": "#/$defs/latestBootstrapPrecondition"
+        },
+        "content_kind": {"enum": ["descriptor_stub", "legacy_inline"]},
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "content_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "descriptor_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/descriptorRef"},
+            {"type": "null"}
+          ]
+        },
+        "source_sprint_id": {
+          "oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]
+        },
+        "source_response_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        },
+        "published_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"content_kind": {"const": "descriptor_stub"}},
+            "required": ["content_kind"]
+          },
+          "then": {
+            "properties": {
+              "descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+              "source_sprint_id": {"$ref": "#/$defs/safeId"},
+              "source_response_id": {
+                "type": "string",
+                "pattern": "^parresp1-[0-9a-f]{64}$"
+              }
+            }
+          },
+          "else": {"properties": {"descriptor_ref": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "descriptorLatestIntent": {
+      "allOf": [
+        {"$ref": "#/$defs/latestContentIntent"},
+        {"properties": {"content_kind": {"const": "descriptor_stub"}}}
+      ]
+    },
+    "legacyLatestIntent": {
+      "allOf": [
+        {"$ref": "#/$defs/latestContentIntent"},
+        {
+          "properties": {
+            "content_kind": {"const": "legacy_inline"},
+            "descriptor_ref": {"type": "null"}
+          }
+        }
+      ]
+    },
+    "authoritativeDrainBarrier": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "lock_scope",
+        "slot_id",
+        "registry_shard_count",
+        "observed_incomplete_operation_ids",
+        "observed_at"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "reconcile-authoritative-before-legacy-latest-write-v1"
+        },
+        "lock_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "registry_shard_count": {"const": 256},
+        "observed_incomplete_operation_ids": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {
+            "type": "string",
+            "pattern": "^parop1-[0-9a-f]{32}$"
+          }
+        },
+        "observed_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "frozenTimestamps": {
+      "oneOf": [
+        {"$ref": "#/$defs/archiveFrozenTimestamps"},
+        {"$ref": "#/$defs/legacyLatestFrozenTimestamps"}
+      ]
+    },
+    "archiveFrozenTimestamps": {
+      "type": "object",
+      "required": [
+        "source_observed_at",
+        "planned_at",
+        "intent_at",
+        "blobs_verified_at",
+        "manifest_verified_at",
+        "pointer_published_at",
+        "locator_published_at",
+        "compatibility_published_at",
+        "completed_at",
+        "aborted_at"
+      ],
+      "properties": {
+        "source_observed_at": {"type": "string", "format": "date-time"},
+        "planned_at": {"type": "string", "format": "date-time"},
+        "intent_at": {"type": "string", "format": "date-time"},
+        "blobs_verified_at": {"type": "string", "format": "date-time"},
+        "manifest_verified_at": {"type": "string", "format": "date-time"},
+        "pointer_published_at": {"type": "string", "format": "date-time"},
+        "locator_published_at": {"type": "string", "format": "date-time"},
+        "compatibility_published_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "aborted_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "legacyLatestFrozenTimestamps": {
+      "type": "object",
+      "required": [
+        "source_observed_at",
+        "planned_at",
+        "intent_at",
+        "legacy_payload_verified_at",
+        "compatibility_published_at",
+        "completed_at",
+        "aborted_at"
+      ],
+      "properties": {
+        "source_observed_at": {"type": "string", "format": "date-time"},
+        "planned_at": {"type": "string", "format": "date-time"},
+        "intent_at": {"type": "string", "format": "date-time"},
+        "legacy_payload_verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "compatibility_published_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {"type": "string", "format": "date-time"},
+        "aborted_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "notAborted": {
+      "not": {
+        "anyOf": [
+          {"required": ["abort_from_state"]},
+          {"required": ["abort_reason_code"]}
+        ]
+      }
+    },
+    "compatibilityCompleted": {
+      "if": {
+        "properties": {"compatibility_mode": {"const": "none"}},
+        "required": ["compatibility_mode"]
+      },
+      "then": {
+        "properties": {
+          "compatibility_result": {"const": "none"},
+          "latest_slot_outcome": {"const": "not_applicable"},
+          "result_latest_slot_id": {"type": "null"},
+          "result_latest_slot_ref": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "result_latest_slot_id": {
+            "type": "string",
+            "pattern": "^parlatest1-[0-9a-f]{64}$"
+          },
+          "result_latest_slot_ref": {"$ref": "#/$defs/latestSlotRef"}
+        },
+        "oneOf": [
+          {
+            "properties": {
+              "compatibility_result": {"const": "published"},
+              "latest_slot_outcome": {"const": "published"}
+            }
+          },
+          {
+            "properties": {
+              "compatibility_result": {"const": "superseded"},
+              "latest_slot_outcome": {"const": "superseded"}
+            }
+          }
+        ]
+      }
+    },
+    "legacyLatestJournalState": {
+      "description": "The compact state machine shared by every normal legacy latest-response publication and operator rollback. Every event occurred_at must semantically equal the corresponding retry-stable frozen timestamp: intent_at, legacy_payload_verified_at, compatibility_published_at, completed_at, or aborted_at.",
+      "oneOf": [
+        {
+          "properties": {
+            "state": {"const": "intent"},
+            "journal_generation": {"const": 0},
+            "previous_journal_generation": {"type": "null"},
+            "previous_journal_sha256": {"type": "null"},
+            "result_latest_slot_id": {"type": "null"},
+            "compatibility_result": {"const": "pending"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsIntent"}
+          },
+          "allOf": [{"$ref": "#/$defs/notAborted"}]
+        },
+        {
+          "properties": {
+            "state": {"const": "legacy_payload_verified"},
+            "journal_generation": {"const": 1},
+            "previous_journal_generation": {"const": 0},
+            "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+            "result_latest_slot_id": {"type": "null"},
+            "compatibility_result": {"const": "pending"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsPayloadVerified"}
+          },
+          "allOf": [{"$ref": "#/$defs/notAborted"}]
+        },
+        {
+          "properties": {
+            "state": {"const": "compatibility_published"},
+            "journal_generation": {"const": 2},
+            "previous_journal_generation": {"const": 1},
+            "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsPublished"}
+          },
+          "allOf": [
+            {"$ref": "#/$defs/notAborted"},
+            {"$ref": "#/$defs/compatibilityCompleted"}
+          ]
+        },
+        {
+          "properties": {
+            "state": {"const": "complete"},
+            "journal_generation": {"const": 3},
+            "previous_journal_generation": {"const": 2},
+            "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsComplete"}
+          },
+          "allOf": [
+            {"$ref": "#/$defs/notAborted"},
+            {"$ref": "#/$defs/compatibilityCompleted"}
+          ]
+        },
+        {
+          "required": ["abort_from_state", "abort_reason_code"],
+          "properties": {
+            "state": {"const": "aborted"},
+            "abort_from_state": {"const": "intent"},
+            "journal_generation": {"const": 1},
+            "previous_journal_generation": {"const": 0},
+            "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+            "result_latest_slot_id": {"type": "null"},
+            "compatibility_result": {"const": "pending"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsAbortedFromIntent"}
+          }
+        },
+        {
+          "required": ["abort_from_state", "abort_reason_code"],
+          "properties": {
+            "state": {"const": "aborted"},
+            "abort_from_state": {"const": "legacy_payload_verified"},
+            "journal_generation": {"const": 2},
+            "previous_journal_generation": {"const": 1},
+            "previous_journal_sha256": {"$ref": "#/$defs/sha256"},
+            "result_latest_slot_id": {"type": "null"},
+            "compatibility_result": {"const": "pending"},
+            "events": {"$ref": "#/$defs/legacyLatestEventsAbortedFromPayload"}
+          }
+        }
+      ]
+    },
+    "eventBase": {
+      "type": "object",
+      "required": ["state", "ordinal", "occurred_at"],
+      "properties": {
+        "state": {
+          "enum": [
+            "intent",
+            "blobs_verified",
+            "manifest_verified",
+            "pointer_published",
+            "locator_published",
+            "legacy_payload_verified",
+            "compatibility_published",
+            "complete",
+            "aborted"
+          ]
+        },
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 6},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "from_state": {
+          "enum": [
+            "intent",
+            "blobs_verified",
+            "manifest_verified",
+            "legacy_payload_verified"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "eventIntent": {"$ref": "#/$defs/successEvent0"},
+    "eventBlobsVerified": {"$ref": "#/$defs/successEvent1"},
+    "eventManifestVerified": {"$ref": "#/$defs/successEvent2"},
+    "eventPointerPublished": {"$ref": "#/$defs/successEvent3"},
+    "eventLocatorPublished": {"$ref": "#/$defs/successEvent4"},
+    "eventCompatibilityPublished": {"$ref": "#/$defs/successEvent5"},
+    "eventComplete": {"$ref": "#/$defs/successEvent6"},
+    "successEvent0": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "intent"}, "ordinal": {"const": 0}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent1": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "blobs_verified"}, "ordinal": {"const": 1}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent2": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "manifest_verified"}, "ordinal": {"const": 2}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent3": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "pointer_published"}, "ordinal": {"const": 3}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent4": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "locator_published"}, "ordinal": {"const": 4}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent5": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "compatibility_published"}, "ordinal": {"const": 5}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "successEvent6": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"properties": {"state": {"const": "complete"}, "ordinal": {"const": 6}}, "not": {"required": ["from_state"]}}
+      ]
+    },
+    "eventAbortedFromIntent": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"required": ["from_state"], "properties": {"state": {"const": "aborted"}, "ordinal": {"const": 1}, "from_state": {"const": "intent"}}}
+      ]
+    },
+    "eventAbortedFromBlobsVerified": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"required": ["from_state"], "properties": {"state": {"const": "aborted"}, "ordinal": {"const": 2}, "from_state": {"const": "blobs_verified"}}}
+      ]
+    },
+    "eventAbortedFromManifestVerified": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {"required": ["from_state"], "properties": {"state": {"const": "aborted"}, "ordinal": {"const": 3}, "from_state": {"const": "manifest_verified"}}}
+      ]
+    },
+    "legacyLatestEventPayloadVerified": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {
+          "properties": {
+            "state": {"const": "legacy_payload_verified"},
+            "ordinal": {"const": 1}
+          },
+          "not": {"required": ["from_state"]}
+        }
+      ]
+    },
+    "legacyLatestEventPublished": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {
+          "properties": {
+            "state": {"const": "compatibility_published"},
+            "ordinal": {"const": 2}
+          },
+          "not": {"required": ["from_state"]}
+        }
+      ]
+    },
+    "legacyLatestEventComplete": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {
+          "properties": {
+            "state": {"const": "complete"},
+            "ordinal": {"const": 3}
+          },
+          "not": {"required": ["from_state"]}
+        }
+      ]
+    },
+    "legacyLatestEventAbortedFromPayload": {
+      "allOf": [
+        {"$ref": "#/$defs/eventBase"},
+        {
+          "required": ["from_state"],
+          "properties": {
+            "state": {"const": "aborted"},
+            "ordinal": {"const": 2},
+            "from_state": {"const": "legacy_payload_verified"}
+          }
+        }
+      ]
+    },
+    "eventsIntent": {"$ref": "#/$defs/events0"},
+    "eventsBlobsVerified": {"$ref": "#/$defs/events1"},
+    "eventsManifestVerified": {"$ref": "#/$defs/events2"},
+    "eventsPointerPublished": {"$ref": "#/$defs/events3"},
+    "eventsLocatorPublished": {"$ref": "#/$defs/events4"},
+    "eventsCompatibilityPublished": {"$ref": "#/$defs/events5"},
+    "eventsComplete": {"$ref": "#/$defs/events6"},
+    "events0": {"type": "array", "minItems": 1, "maxItems": 1, "prefixItems": [{"$ref": "#/$defs/successEvent0"}], "items": false},
+    "events1": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}], "items": false},
+    "events2": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}], "items": false},
+    "events3": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}, {"$ref": "#/$defs/successEvent3"}], "items": false},
+    "events4": {"type": "array", "minItems": 5, "maxItems": 5, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}, {"$ref": "#/$defs/successEvent3"}, {"$ref": "#/$defs/successEvent4"}], "items": false},
+    "events5": {"type": "array", "minItems": 6, "maxItems": 6, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}, {"$ref": "#/$defs/successEvent3"}, {"$ref": "#/$defs/successEvent4"}, {"$ref": "#/$defs/successEvent5"}], "items": false},
+    "events6": {"type": "array", "minItems": 7, "maxItems": 7, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}, {"$ref": "#/$defs/successEvent3"}, {"$ref": "#/$defs/successEvent4"}, {"$ref": "#/$defs/successEvent5"}, {"$ref": "#/$defs/successEvent6"}], "items": false},
+    "eventsAbortedFromIntent": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/eventAbortedFromIntent"}], "items": false},
+    "eventsAbortedFromBlobsVerified": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/eventAbortedFromBlobsVerified"}], "items": false},
+    "eventsAbortedFromManifestVerified": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/successEvent1"}, {"$ref": "#/$defs/successEvent2"}, {"$ref": "#/$defs/eventAbortedFromManifestVerified"}], "items": false}
+    ,
+    "legacyLatestEventsIntent": {"$ref": "#/$defs/events0"},
+    "legacyLatestEventsPayloadVerified": {"type": "array", "minItems": 2, "maxItems": 2, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/legacyLatestEventPayloadVerified"}], "items": false},
+    "legacyLatestEventsPublished": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/legacyLatestEventPayloadVerified"}, {"$ref": "#/$defs/legacyLatestEventPublished"}], "items": false},
+    "legacyLatestEventsComplete": {"type": "array", "minItems": 4, "maxItems": 4, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/legacyLatestEventPayloadVerified"}, {"$ref": "#/$defs/legacyLatestEventPublished"}, {"$ref": "#/$defs/legacyLatestEventComplete"}], "items": false},
+    "legacyLatestEventsAbortedFromIntent": {"$ref": "#/$defs/eventsAbortedFromIntent"},
+    "legacyLatestEventsAbortedFromPayload": {"type": "array", "minItems": 3, "maxItems": 3, "prefixItems": [{"$ref": "#/$defs/successEvent0"}, {"$ref": "#/$defs/legacyLatestEventPayloadVerified"}, {"$ref": "#/$defs/legacyLatestEventAbortedFromPayload"}], "items": false}
+  },
+  "additionalProperties": false
+}
