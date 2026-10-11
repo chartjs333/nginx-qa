@@ -591,6 +591,13 @@ the exact per-slot manifest root and its declared `sequence_kind`. A
 and suffix decodes to at most 4096 bytes; decoding must consume the whole
 string and re-encoding must reproduce it byte-for-byte.
 
+The `current_fields` root is present exactly when this traversal emits at least
+one `current_field` span.  A response whose only value spans are non-empty
+promoted targets omits `current_fields`; it must not de-promote the whole
+document merely to manufacture a non-empty index.  Empty promoted values still
+follow the frozen empty-family rule above and are represented by their exact
+recursive value span while the corresponding historical root is omitted.
+
 The renderer visits steps in source order. It streams verified literal bytes,
 recursively rendered current-field values, or the decoded sequence framing and
 verified record payloads as appropriate. The render plan itself is reconstructed

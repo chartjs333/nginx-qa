@@ -207,9 +207,6 @@
             "properties": {
               "sprint_id": {"$ref": "#/$defs/safeId"}
             }
-          },
-          "roots": {
-            "required": ["current_fields"]
           }
         }
       }
@@ -451,8 +448,9 @@
       "additionalProperties": false
     },
     "roots": {
-      "description": "Runtime-native manifests always carry current_fields; empty historical families omit their roots. legacy_raw_chunks_v1 requires raw_bytes exclusively.",
+      "description": "Runtime-native manifests carry current_fields exactly when the frozen render plan has one or more current_field spans; empty historical families omit their roots. legacy_raw_chunks_v1 requires raw_bytes exclusively.",
       "type": "object",
+      "minProperties": 1,
       "properties": {
         "raw_bytes": {"$ref": "#/$defs/indexRef"},
         "current_fields": {"$ref": "#/$defs/indexRef"},

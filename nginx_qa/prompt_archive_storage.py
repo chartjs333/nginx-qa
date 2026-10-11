@@ -200,6 +200,8 @@ class PromptArchiveLimits:
                 raise ValueError("Prompt archive limits must be positive integers")
             if value > ceiling:
                 raise ValueError("Prompt archive limit exceeds the V1 hard ceiling")
+        if self.max_reference_depth != 512:
+            raise ValueError("Prompt archive V1 reference depth is fixed at 512")
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -825,6 +827,17 @@ def _canonical_json_bytes(value: Any, *, maximum: int) -> bytes:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
 
 
+def canonical_json_bytes_v1(value: Any, *, maximum: int) -> bytes:
+    """Public frozen encoder for PAS1 control documents.
+
+    Higher archive layers must use this seam rather than duplicate the
+    canonical grammar, otherwise equal control documents could fork their CAS
+    identities.
+    """
+
+    return _canonical_json_bytes(value, maximum=maximum)
+
+
 def _gzip_bytes(data: bytes) -> bytes:
     if zlib.ZLIB_VERSION != "1.2.13" or zlib.ZLIB_RUNTIME_VERSION != "1.2.13":
         raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
@@ -853,6 +866,7 @@ class PromptArchiveStorage:
         fault_hook: Callable[[str], None] | None = None,
     ) -> None:
         self.limits = self._coerce_limits(limits)
+        self.project_id = project_id
         self.project_storage_key = _project_storage_key(project_id)
         raw_root = Path(root)
         if not raw_root.is_absolute():
@@ -1360,6 +1374,26 @@ class PromptArchiveStorage:
         logical_kind: str,
         media_type: str,
     ) -> dict[str, Any]:
+        ref, _created = self.put_blob_with_outcome(
+            data,
+            logical_kind=logical_kind,
+            media_type=media_type,
+        )
+        return ref
+
+    def put_blob_with_outcome(
+        self,
+        data: bytes | bytearray | memoryview,
+        *,
+        logical_kind: str,
+        media_type: str,
+    ) -> tuple[dict[str, Any], bool]:
+        """Publish one immutable blob and report whether this call won creation.
+
+        The outcome is established by the same pinned-directory/no-replace
+        operation that publishes the object.  Callers therefore do not need an
+        unsafe pathname pre-check merely to collect physical write metrics.
+        """
         payload = _bounded_bytes(data, self.limits.max_blob_uncompressed_bytes)
         self._validate_logical_type(logical_kind, media_type)
         digest = hashlib.sha256(payload).hexdigest()
@@ -1391,16 +1425,16 @@ class PromptArchiveStorage:
         self._ensure_directory(target.parent)
         if target.exists() or target.is_symlink():
             self._verify_blob_at_path(ref, target)
-            return ref
-        self._publish_blob_no_replace(target, stored, ref)
-        return ref
+            return ref, False
+        created = self._publish_blob_no_replace(target, stored, ref)
+        return ref, created
 
     def _publish_blob_no_replace(
         self,
         target: Path,
         stored: bytes,
         ref: Mapping[str, Any],
-    ) -> None:
+    ) -> bool:
         temporary_name = f".{target.name}.{uuid4().hex}.tmp"
         created_final = False
         parent_identity = self._directory_identity(target.parent)
@@ -1465,10 +1499,8 @@ class PromptArchiveStorage:
                         os.close(descriptor)
                     except OSError:
                         pass
-        if created_final:
-            self._verify_blob_at_path(ref, target)
-        else:
-            self._verify_blob_at_path(ref, target)
+        self._verify_blob_at_path(ref, target)
+        return created_final
 
     @staticmethod
     def _sync_pinned_directory(directory: _PinnedDirectory) -> bool:
@@ -1996,6 +2028,7 @@ class PromptArchiveStorage:
 
 
 __all__ = [
+    "canonical_json_bytes_v1",
     "ImmutablePublicationReceipt",
     "PromptArchiveLimits",
     "PromptArchiveStorage",
