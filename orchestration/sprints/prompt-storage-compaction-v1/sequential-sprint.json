@@ -302,7 +302,7 @@
   "files": [
     {
       "path": "schemas/managed-workspace-sprint-v1.schema.json",
-      "sha256": "dcd5a24bbf06f6ade02f2dacb25fbb7dbc7bf6e3b26300059809a9e9294a0dab"
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
     },
     {
       "path": "orchestration/sprints/prompt-storage-compaction-v1/README.md",
