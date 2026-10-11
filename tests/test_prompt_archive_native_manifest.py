@@ -970,64 +970,72 @@ class PromptArchiveNativeManifestTests(unittest.TestCase):
         self.assertEqual(work_delta.new_stored_bytes, 0)
         self.assertEqual(work_delta.new_uncompressed_bytes, 0)
 
-    def test_cross_role_same_digest_round_trips_and_is_counted_once_physically(self) -> None:
+    def test_cross_role_same_digest_is_rejected_by_full_traversal(self) -> None:
         # The string interior is stored as an opaque history payload while the
         # number is stored as a recursive-JSON literal. Both bytes are b"1".
         source = (
             b'{"project_state":{"history_with_patches":{"text":"1"}},'
             b'"scalar":1}'
         )
-        built = self.archive.build_incremental_archive(
-            source,
-            self.occurrence(1),
-            legacy_committed_bytes=source,
+        error = self.assert_archive_error(
+            lambda: self.archive.build_incremental_archive(
+                source,
+                self.occurrence(1),
+                legacy_committed_bytes=source,
+            )
         )
-        stream = self.envelope_stream(built)
-        observed_refs: list[tuple[str, str, str, dict]] = []
-        original_read = self.archive._read_blob
+        self.assertEqual(error.code, "PROMPT_ARCHIVE_REFERENCE_INVALID")
 
-        def recording_read(ref, *, logical_kind, media_type):
-            observed_refs.append(
-                (ref["digest"], logical_kind, media_type, dict(ref))
-            )
-            return original_read(
-                ref,
-                logical_kind=logical_kind,
-                media_type=media_type,
-            )
+        # Simulate an archive emitted by the former permissive implementation.
+        # The storage-wide CAS contract still permits typed references to the
+        # same bytes; only one archive closure now forbids that ambiguity.
+        def permissive_role(_roles, ref):
+            return ref["digest"], ref["logical_kind"], ref["media_type"]
 
-        with patch.object(self.archive, "_read_blob", side_effect=recording_read):
-            counted = self.archive._native_graph_counts(
-                built.roots,
-                stream,
-                logical_bytes=len(source),
+        with patch(
+            "nginx_qa.prompt_archive_incremental._register_digest_role",
+            side_effect=permissive_role,
+        ):
+            built = self.archive.build_incremental_archive(
+                source,
+                self.occurrence(1),
+                legacy_committed_bytes=source,
             )
 
         digest = hashlib.sha256(b"1").hexdigest()
-        same_content = [item for item in observed_refs if item[0] == digest]
-        self.assertEqual(
-            {(item[1], item[2]) for item in same_content},
-            {
-                (
-                    "literal_chunk",
-                    "application/vnd.nginx-qa.prompt-archive-json-fragment-v1",
-                ),
-                (
-                    "payload_chunk",
-                    "application/vnd.nginx-qa.prompt-archive-json-string-fragment-v1",
-                ),
-            },
+        literal_ref = self.archive.storage.put_blob(
+            b"1",
+            logical_kind="literal_chunk",
+            media_type="application/vnd.nginx-qa.prompt-archive-json-fragment-v1",
         )
-        self.assertEqual(
-            len({self.archive.storage.blob_path(item[3]) for item in same_content}),
-            1,
+        payload_ref = self.archive.storage.put_blob(
+            b"1",
+            logical_kind="payload_chunk",
+            media_type=(
+                "application/vnd.nginx-qa.prompt-archive-json-string-fragment-v1"
+            ),
         )
+        self.assertEqual(literal_ref["digest"], digest)
+        self.assertEqual(payload_ref["digest"], digest)
         self.assertEqual(
-            counted["unique_referenced_objects"],
-            len({item[0] for item in observed_refs}),
+            self.archive.storage.blob_path(literal_ref),
+            self.archive.storage.blob_path(payload_ref),
         )
-        self.assertEqual(counted, built.manifest["counts"])
-        self.assertEqual(self.archive.hydrate_archive_bytes(built.manifest_ref), source)
+
+        # Metadata is intentionally bounded to the manifest and may be served
+        # without opening descendants. Both complete graph paths fail closed.
+        self.assertEqual(
+            self.archive.read_manifest_metadata(built.manifest_ref)["archive_id"],
+            built.archive_id,
+        )
+        error = self.assert_archive_error(
+            lambda: self.archive.reachable_refs(built.manifest_ref)
+        )
+        self.assertEqual(error.code, "PROMPT_ARCHIVE_REFERENCE_INVALID")
+        error = self.assert_archive_error(
+            lambda: self.archive.hydrate_archive_bytes(built.manifest_ref)
+        )
+        self.assertEqual(error.code, "PROMPT_ARCHIVE_REFERENCE_INVALID")
 
     def test_native_graph_accepts_reference_at_exact_depth_512(self) -> None:
         envelope_stream, terminal_ref = self.native_graph_depth_fixture()

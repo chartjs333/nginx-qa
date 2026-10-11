@@ -314,7 +314,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             response_file.stat().st_size,
         )
 
-    def test_compact_response_keeps_task_body_and_removes_duplicate_context(
+    def test_compact_response_keeps_complete_task_and_removes_outer_history(
         self,
     ) -> None:
         task_message = "Точное тело назначения 🚀\n" * 500
@@ -383,16 +383,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
 
         compact = main.compact_sequential_agent_prompt_response(response)
 
-        self.assertEqual(compact["active_task"]["message"], task_message)
-        self.assertEqual(
-            compact["active_task"]["metadata"]["assignment_id"],
-            "assignment-1",
-        )
-        for duplicate_key in ("agent", "tasks", "workflow"):
-            self.assertNotIn(
-                duplicate_key,
-                compact["active_task"]["metadata"],
-            )
+        self.assertEqual(compact["active_task"], response["active_task"])
         self.assertNotIn("groups", compact["project"])
         self.assertNotIn("profile", compact["agent"])
         self.assertNotIn("profile", compact["team"][0])
@@ -410,7 +401,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(compact["active_task_message_complete"])
         self.assertLess(
             len(json.dumps(compact, ensure_ascii=False).encode("utf-8")),
-            64 * 1024,
+            len(json.dumps(response, ensure_ascii=False).encode("utf-8")),
         )
 
     async def test_transition_uses_caller_phone_and_terminal_response_still_persists(

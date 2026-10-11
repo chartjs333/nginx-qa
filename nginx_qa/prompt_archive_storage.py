@@ -22,8 +22,11 @@ import os
 import re
 import stat
 import struct
+import threading
+import time
 import zlib
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Final
 from uuid import uuid4
@@ -122,6 +125,8 @@ _LOGICAL_KINDS: Final = frozenset(_FIXED_MEDIA_TYPES) | _RECORD_KINDS | {
     "payload_chunk"
 }
 _ARCHIVE_LOCATOR_MAX_BYTES: Final = 64 * 1024
+_MAX_CONTROL_JSON_DEPTH: Final = 128
+_MUTABLE_CONTROL_MAX_BYTES: Final = 8 * _MIB
 _MAX_PENDING_GENERATION: Final = 9_223_372_036_854_775_807
 _BYTES_LIKE_TYPES: Final = (bytes, bytearray, memoryview)
 
@@ -174,6 +179,52 @@ class PromptArchiveStorageError(RuntimeError):
         self.message = _ERROR_MESSAGE
 
 
+class PromptArchiveCancellationToken:
+    """Cooperative, thread-safe cancellation for bounded archive reads.
+
+    HTTP hydration runs in a worker thread, so cancelling the asyncio future
+    alone cannot stop filesystem reads or decompression.  The caller owns this
+    token and may signal it from the event-loop thread; storage checks it at
+    every bounded read/decompression chunk.  Deadlines use ``monotonic`` time
+    so wall-clock adjustments cannot extend a request's work budget.
+    """
+
+    __slots__ = ("event", "deadline")
+
+    def __init__(
+        self,
+        *,
+        event: threading.Event | None = None,
+        deadline: float | None = None,
+    ) -> None:
+        if event is not None and not isinstance(event, threading.Event):
+            raise TypeError("Prompt archive cancellation event must be threading.Event")
+        if deadline is not None and not isinstance(deadline, (int, float)):
+            raise TypeError("Prompt archive cancellation deadline must be monotonic time")
+        self.event = event if event is not None else threading.Event()
+        self.deadline = float(deadline) if deadline is not None else None
+
+    @classmethod
+    def with_timeout(cls, seconds: float) -> "PromptArchiveCancellationToken":
+        if not isinstance(seconds, (int, float)) or seconds <= 0:
+            raise ValueError("Prompt archive cancellation timeout must be positive")
+        return cls(deadline=time.monotonic() + float(seconds))
+
+    def cancel(self) -> None:
+        self.event.set()
+
+    def check(self) -> None:
+        if self.event.is_set() or (
+            self.deadline is not None and time.monotonic() >= self.deadline
+        ):
+            self.event.set()
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+
+
+class _DuplicateControlMember(ValueError):
+    pass
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class PromptArchiveLimits:
     max_blob_uncompressed_bytes: int = 8 * _MIB
@@ -210,6 +261,40 @@ class ImmutablePublicationReceipt:
     sha256: str
     byte_size: int
     created: bool
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PromptArchiveCasWriteMetrics:
+    """Accepted CAS outcomes observed inside one explicit operation scope."""
+
+    put_attempts: int
+    new_object_count: int
+    new_stored_bytes: int
+    dedup_hits: int
+
+
+@dataclasses.dataclass(slots=True)
+class _PromptArchiveCasWriteAccounting:
+    put_attempts: int = 0
+    new_object_count: int = 0
+    new_stored_bytes: int = 0
+    dedup_hits: int = 0
+
+    def record(self, *, stored_size: int, created: bool) -> None:
+        self.put_attempts += 1
+        if created:
+            self.new_object_count += 1
+            self.new_stored_bytes += stored_size
+        else:
+            self.dedup_hits += 1
+
+    def snapshot(self) -> PromptArchiveCasWriteMetrics:
+        return PromptArchiveCasWriteMetrics(
+            put_attempts=self.put_attempts,
+            new_object_count=self.new_object_count,
+            new_stored_bytes=self.new_stored_bytes,
+            dedup_hits=self.dedup_hits,
+        )
 
 
 def _error(code: str) -> PromptArchiveStorageError:
@@ -327,6 +412,14 @@ def _path_from_open_descriptor(descriptor: int) -> Path | None:
     return None
 
 
+def resolved_path_from_open_descriptor(descriptor: int) -> Path | None:
+    """Expose the kernel-resolved path check for trusted external readers."""
+
+    if type(descriptor) is not int or descriptor < 0:
+        raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+    return _path_from_open_descriptor(descriptor)
+
+
 class _PinnedDirectory:
     """An opened directory used as the authority for relative publication."""
 
@@ -399,7 +492,7 @@ def _windows_open_pinned_directory(path: Path) -> int:
     create_file.restype = wintypes.HANDLE
     handle = create_file(
         str(path),
-        0x00100000 | 0x00000080 | 0x00000020 | 0x00000002,
+        0x00100000 | 0x00000080 | 0x00000020 | 0x00000001,
         0x00000001 | 0x00000002,
         None,
         3,
@@ -414,6 +507,9 @@ def _windows_open_pinned_directory(path: Path) -> int:
 def _windows_open_or_create_relative_directory(
     directory_handle: int,
     name: str,
+    *,
+    create: bool = True,
+    writable: bool = True,
 ) -> tuple[int, bool]:
     from ctypes import wintypes
 
@@ -474,25 +570,26 @@ def _windows_open_or_create_relative_directory(
         wintypes.ULONG,
     )
     create_file.restype = wintypes.LONG
+    desired_access = 0x00000001 | 0x00000020 | 0x00000080 | 0x00100000
+    if writable:
+        desired_access |= 0x00000002 | 0x00000004
     status = create_file(
         ctypes.byref(child_handle),
-        0x00000001
-        | 0x00000002
-        | 0x00000004
-        | 0x00000020
-        | 0x00000080
-        | 0x00100000,
+        desired_access,
         ctypes.byref(attributes),
         ctypes.byref(status_block),
         None,
         0x00000010,
         0x00000001 | 0x00000002,
-        3,
+        3 if create else 1,
         0x00000001 | 0x00000020 | 0x00200000,
         None,
         0,
     )
     if status != 0:
+        unsigned_status = ctypes.c_ulong(status).value
+        if unsigned_status in {0xC0000034, 0xC000003A}:
+            raise FileNotFoundError(name)
         raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
     return int(child_handle.value), status_block.Information == 2
 
@@ -586,6 +683,108 @@ def _windows_create_relative_file(directory_handle: int, name: str) -> int:
         raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
 
 
+def _windows_open_relative_control_file(
+    directory_handle: int,
+    name: str,
+    *,
+    create: bool,
+    writable: bool,
+) -> int:
+    """Open/open-if one control leaf relative to a pinned NT directory."""
+
+    import msvcrt
+    from ctypes import wintypes
+
+    class UnicodeString(ctypes.Structure):
+        _fields_ = (
+            ("Length", wintypes.USHORT),
+            ("MaximumLength", wintypes.USHORT),
+            ("Buffer", wintypes.LPWSTR),
+        )
+
+    class ObjectAttributes(ctypes.Structure):
+        _fields_ = (
+            ("Length", wintypes.ULONG),
+            ("RootDirectory", wintypes.HANDLE),
+            ("ObjectName", ctypes.POINTER(UnicodeString)),
+            ("Attributes", wintypes.ULONG),
+            ("SecurityDescriptor", ctypes.c_void_p),
+            ("SecurityQualityOfService", ctypes.c_void_p),
+        )
+
+    class IoStatusValue(ctypes.Union):
+        _fields_ = (("Status", wintypes.LONG), ("Pointer", ctypes.c_void_p))
+
+    class IoStatusBlock(ctypes.Structure):
+        _anonymous_ = ("value",)
+        _fields_ = (("value", IoStatusValue), ("Information", ctypes.c_size_t))
+
+    encoded_name = name.encode("utf-16-le", errors="strict")
+    name_buffer = ctypes.create_unicode_buffer(name)
+    unicode_name = UnicodeString(
+        len(encoded_name),
+        len(encoded_name),
+        ctypes.cast(name_buffer, wintypes.LPWSTR),
+    )
+    attributes = ObjectAttributes(
+        ctypes.sizeof(ObjectAttributes),
+        directory_handle,
+        ctypes.pointer(unicode_name),
+        0x00000040,
+        None,
+        None,
+    )
+    status_block = IoStatusBlock()
+    file_handle = wintypes.HANDLE()
+    ntdll = ctypes.WinDLL("ntdll")
+    create_file = ntdll.NtCreateFile
+    create_file.argtypes = (
+        ctypes.POINTER(wintypes.HANDLE),
+        wintypes.DWORD,
+        ctypes.POINTER(ObjectAttributes),
+        ctypes.POINTER(IoStatusBlock),
+        ctypes.c_void_p,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        wintypes.ULONG,
+        ctypes.c_void_p,
+        wintypes.ULONG,
+    )
+    create_file.restype = wintypes.LONG
+    desired_access = 0x80000000 | 0x00000080 | 0x00100000
+    if writable:
+        desired_access |= 0x40000000
+    status = create_file(
+        ctypes.byref(file_handle),
+        desired_access,
+        ctypes.byref(attributes),
+        ctypes.byref(status_block),
+        None,
+        0x00000080,
+        0x00000001 | 0x00000002,  # no delete sharing for lock/current leaves
+        3 if create else 1,  # FILE_OPEN_IF / FILE_OPEN
+        0x00000040 | 0x00000020 | 0x00200000,
+        None,
+        0,
+    )
+    unsigned_status = ctypes.c_ulong(status).value
+    if status != 0:
+        if unsigned_status in {0xC0000034, 0xC000003A}:
+            raise FileNotFoundError(name)
+        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+    try:
+        return msvcrt.open_osfhandle(
+            int(file_handle.value),
+            (os.O_RDWR if writable else os.O_RDONLY)
+            | getattr(os, "O_BINARY", 0),
+        )
+    except (OSError, ValueError):
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.CloseHandle(file_handle)
+        raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+
+
 def _windows_rename_relative_no_replace(
     descriptor: int,
     directory_handle: int,
@@ -632,6 +831,52 @@ def _windows_rename_relative_no_replace(
     if unsigned_status in {0xC0000035, 0xC00000BA}:
         return False
     raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+
+
+def _windows_rename_relative_replace(
+    descriptor: int,
+    directory_handle: int,
+    target_name: str,
+) -> None:
+    """Replace one exact leaf relative to a pinned Windows directory."""
+
+    import msvcrt
+    from ctypes import wintypes
+
+    encoded_name = target_name.encode("utf-16-le", errors="strict")
+    information = ctypes.create_string_buffer(20 + len(encoded_name))
+    ctypes.c_ubyte.from_buffer(information, 0).value = 1
+    ctypes.c_void_p.from_buffer(information, 8).value = directory_handle
+    ctypes.c_ulong.from_buffer(information, 16).value = len(encoded_name)
+    ctypes.memmove(ctypes.addressof(information) + 20, encoded_name, len(encoded_name))
+
+    class IoStatusValue(ctypes.Union):
+        _fields_ = (("Status", wintypes.LONG), ("Pointer", ctypes.c_void_p))
+
+    class IoStatusBlock(ctypes.Structure):
+        _anonymous_ = ("value",)
+        _fields_ = (("value", IoStatusValue), ("Information", ctypes.c_size_t))
+
+    status_block = IoStatusBlock()
+    ntdll = ctypes.WinDLL("ntdll")
+    set_information = ntdll.NtSetInformationFile
+    set_information.argtypes = (
+        wintypes.HANDLE,
+        ctypes.POINTER(IoStatusBlock),
+        ctypes.c_void_p,
+        wintypes.ULONG,
+        ctypes.c_int,
+    )
+    set_information.restype = wintypes.LONG
+    status = set_information(
+        msvcrt.get_osfhandle(descriptor),
+        ctypes.byref(status_block),
+        information,
+        len(information),
+        10,
+    )
+    if status != 0:
+        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
 
 
 def _windows_mark_file_for_delete(descriptor: int) -> None:
@@ -838,7 +1083,81 @@ def canonical_json_bytes_v1(value: Any, *, maximum: int) -> bytes:
     return _canonical_json_bytes(value, maximum=maximum)
 
 
-def _gzip_bytes(data: bytes) -> bytes:
+def _validate_control_nesting(raw: bytes) -> None:
+    depth = 0
+    in_string = False
+    escaped = False
+    for value in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif value == 0x5C:  # backslash
+                escaped = True
+            elif value == 0x22:  # quote
+                in_string = False
+            continue
+        if value == 0x22:
+            in_string = True
+        elif value in (0x5B, 0x7B):  # [ {
+            depth += 1
+            if depth > _MAX_CONTROL_JSON_DEPTH:
+                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+        elif value in (0x5D, 0x7D):  # ] }
+            depth -= 1
+            if depth < 0:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
+
+def parse_canonical_json_v1(
+    raw: bytes | bytearray | memoryview,
+    *,
+    maximum: int,
+) -> dict[str, Any]:
+    """Decode one bounded canonical PAS1 control object.
+
+    Duplicate decoded member names, non-integer JSON numbers, excessive
+    nesting, non-object roots, and non-canonical encodings are rejected.  This
+    is the public counterpart to :func:`canonical_json_bytes_v1`; runtime
+    readers use it rather than growing a second, subtly different grammar.
+    """
+
+    payload = _bounded_bytes(raw, maximum)
+
+    def pairs(values: list[tuple[str, Any]]) -> dict[str, Any]:
+        output: dict[str, Any] = {}
+        for key, value in values:
+            if type(key) is not str or key in output:
+                raise _DuplicateControlMember
+            output[key] = value
+        return output
+
+    def reject_number(_value: str) -> Any:
+        raise _DuplicateControlMember
+
+    _validate_control_nesting(payload)
+    try:
+        value = json.loads(
+            payload.decode("utf-8", errors="strict"),
+            object_pairs_hook=pairs,
+            parse_float=reject_number,
+            parse_constant=reject_number,
+        )
+    except (UnicodeError, json.JSONDecodeError, _DuplicateControlMember, ValueError):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    except (RecursionError, MemoryError):
+        raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED") from None
+    if type(value) is not dict:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if canonical_json_bytes_v1(value, maximum=maximum) != payload:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return value
+
+
+def _gzip_bytes(
+    data: bytes,
+    *,
+    cancellation: PromptArchiveCancellationToken | None = None,
+) -> bytes:
     if zlib.ZLIB_VERSION != "1.2.13" or zlib.ZLIB_RUNTIME_VERSION != "1.2.13":
         raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
     compressor = zlib.compressobj(
@@ -848,7 +1167,15 @@ def _gzip_bytes(data: bytes) -> bytes:
         8,
         zlib.Z_DEFAULT_STRATEGY,
     )
-    deflated = compressor.compress(data) + compressor.flush(zlib.Z_FINISH)
+    parts: list[bytes] = []
+    for offset in range(0, len(data), 64 * 1024):
+        if cancellation is not None:
+            cancellation.check()
+        parts.append(compressor.compress(data[offset : offset + 64 * 1024]))
+    if cancellation is not None:
+        cancellation.check()
+    parts.append(compressor.flush(zlib.Z_FINISH))
+    deflated = b"".join(parts)
     trailer = struct.pack("<II", zlib.crc32(data) & 0xFFFFFFFF, len(data) & 0xFFFFFFFF)
     return _GZIP_HEADER + deflated + trailer
 
@@ -871,18 +1198,24 @@ class PromptArchiveStorage:
         raw_root = Path(root)
         if not raw_root.is_absolute():
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        # Validate the caller's spelling before Win32 normalization can erase
+        # trailing dots/spaces or reinterpret reserved device names.
+        self._validate_configured_root(raw_root)
+        raw_root = Path(os.path.normpath(os.path.abspath(raw_root)))
+        self._validate_configured_root(raw_root)
         self._preflight_protected_roots(raw_root, protected_roots)
-        root_directories_durable = self._create_root_without_redirects(raw_root)
-        try:
-            self.root = raw_root.resolve(strict=True)
-            metadata = self.root.lstat()
-        except OSError as exc:
-            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
-        if _path_entry_is_redirected(self.root) or not stat.S_ISDIR(metadata.st_mode):
-            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        self._root_identity = (metadata.st_dev, metadata.st_ino)
-        self._validate_protected_roots(protected_roots)
+        # Establish the root authority without an absolute mkdir/resolve gap.
+        # Every component is opened or created relative to a pinned parent,
+        # every ancestor remains pinned until final revalidation, and the
+        # kernel-resolved handle path must equal the configured lexical path.
+        self._root_identity, root_directories_durable = self._bootstrap_root(
+            raw_root
+        )
+        self.root = raw_root
+        with self._open_pinned_directory(self.root):
+            self._validate_protected_roots(protected_roots)
         self._fault_hook = fault_hook
+        self._cas_write_accounting = threading.local()
         self.directory_sync_supported = root_directories_durable
 
     @staticmethod
@@ -908,34 +1241,182 @@ class PromptArchiveStorage:
             self._fault_hook(stage)
 
     @staticmethod
-    def _create_root_without_redirects(root: Path) -> bool:
-        current = Path(root.anchor)
-        if not current.exists():
+    def _validate_configured_root(root: Path) -> None:
+        """Reject ambiguous Windows root spellings before any mutation."""
+
+        if not root.is_absolute():
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
-        durable = os.name != "nt"
-        for component in root.parts[1:]:
-            current = current / component
-            if current.exists() or current.is_symlink():
-                if _path_entry_is_redirected(current):
-                    raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-                try:
-                    if not stat.S_ISDIR(current.lstat().st_mode):
-                        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-                except OSError as exc:
-                    raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
-                continue
-            created = False
-            try:
-                current.mkdir(mode=0o700)
-                created = True
-            except FileExistsError:
-                pass
-            except OSError as exc:
-                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
-            if _path_entry_is_redirected(current):
+        if os.name != "nt":
+            return
+        anchor_parts = len(Path(root.anchor).parts)
+        reserved = re.compile(
+            r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$",
+            re.IGNORECASE | re.ASCII,
+        )
+        for component in root.parts[anchor_parts:]:
+            if (
+                component in {"", ".", ".."}
+                or ":" in component
+                or component.endswith((" ", "."))
+                or reserved.fullmatch(component) is not None
+            ):
+                raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    @staticmethod
+    def _validate_bootstrap_resolved_path(resolved: Path, intended: Path) -> None:
+        """Bind a bootstrap handle to the exact configured lexical path."""
+
+        try:
+            resolved_absolute = Path(os.path.abspath(resolved))
+            intended_absolute = Path(os.path.abspath(intended))
+            if os.path.normcase(str(resolved_absolute)) != os.path.normcase(
+                str(intended_absolute)
+            ):
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-            durable = PromptArchiveStorage._sync_directory(current.parent) and durable
-        return durable
+            if os.name == "nt":
+                intended_tail = intended_absolute.relative_to(
+                    Path(intended_absolute.anchor)
+                ).parts
+                if intended_tail:
+                    observed_tail = resolved_absolute.parts[-len(intended_tail) :]
+                    if observed_tail != intended_tail:
+                        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        except PromptArchiveStorageError:
+            raise
+        except (OSError, ValueError):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+
+    @classmethod
+    def _validate_bootstrap_directory(
+        cls,
+        pinned: _PinnedDirectory,
+        intended: Path,
+    ) -> tuple[int, int]:
+        resolved = (
+            _windows_path_from_handle(pinned.descriptor)
+            if os.name == "nt"
+            else _path_from_open_descriptor(pinned.descriptor)
+        )
+        if resolved is None:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        cls._validate_bootstrap_resolved_path(resolved, intended)
+        try:
+            metadata = intended.lstat()
+        except OSError:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        if not stat.S_ISDIR(metadata.st_mode) or _path_entry_is_redirected(intended):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        identity = metadata.st_dev, metadata.st_ino
+        if os.name != "nt":
+            try:
+                opened = os.fstat(pinned.descriptor)
+            except OSError:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            if (
+                not stat.S_ISDIR(opened.st_mode)
+                or (opened.st_dev, opened.st_ino) != identity
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return identity
+
+    @classmethod
+    def _bootstrap_root(cls, root: Path) -> tuple[tuple[int, int], bool]:
+        """Create a root by relative no-follow traversal from a pinned anchor."""
+
+        anchor = Path(root.anchor)
+        try:
+            components = root.relative_to(anchor).parts
+        except ValueError:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID") from None
+
+        pins: list[_PinnedDirectory] = []
+        durable = os.name != "nt"
+        try:
+            try:
+                if os.name == "nt":
+                    descriptor = _windows_open_pinned_directory(anchor)
+                else:
+                    nofollow = getattr(os, "O_NOFOLLOW", 0)
+                    if not nofollow:
+                        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+                    descriptor = os.open(
+                        anchor,
+                        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow,
+                    )
+            except PromptArchiveStorageError:
+                raise
+            except OSError:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+
+            current_path = anchor
+            current = _PinnedDirectory(anchor, descriptor)
+            pins.append(current)
+            cls._validate_bootstrap_directory(current, current_path)
+
+            for component in components:
+                if component in {"", ".", ".."} or any(
+                    separator in component for separator in ("/", "\0")
+                ):
+                    raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+                intended = current_path / component
+                created = False
+                try:
+                    if os.name == "nt":
+                        try:
+                            child_descriptor, _ = (
+                                _windows_open_or_create_relative_directory(
+                                    current.descriptor,
+                                    component,
+                                    create=False,
+                                    writable=False,
+                                )
+                            )
+                        except FileNotFoundError:
+                            child_descriptor, created = (
+                                _windows_open_or_create_relative_directory(
+                                    current.descriptor,
+                                    component,
+                                    create=True,
+                                    writable=True,
+                                )
+                            )
+                    else:
+                        nofollow = getattr(os, "O_NOFOLLOW", 0)
+                        if not nofollow:
+                            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+                        try:
+                            os.mkdir(component, mode=0o700, dir_fd=current.descriptor)
+                            created = True
+                        except FileExistsError:
+                            pass
+                        child_descriptor = os.open(
+                            component,
+                            os.O_RDONLY
+                            | getattr(os, "O_DIRECTORY", 0)
+                            | nofollow,
+                            dir_fd=current.descriptor,
+                        )
+                except PromptArchiveStorageError:
+                    raise
+                except OSError:
+                    raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+
+                child = _PinnedDirectory(intended, child_descriptor)
+                pins.append(child)
+                cls._validate_bootstrap_directory(child, intended)
+                cls._validate_bootstrap_directory(current, current_path)
+                if created:
+                    durable = cls._sync_pinned_directory(current) and durable
+                current = child
+                current_path = intended
+
+            identities = [
+                cls._validate_bootstrap_directory(pin, pin.path) for pin in pins
+            ]
+            return identities[-1], durable
+        finally:
+            for pin in reversed(pins):
+                pin.close()
 
     def _validate_protected_roots(
         self,
@@ -1394,6 +1875,50 @@ class PromptArchiveStorage:
         operation that publishes the object.  Callers therefore do not need an
         unsafe pathname pre-check merely to collect physical write metrics.
         """
+        ref, stored = self._prepare_blob(
+            data,
+            logical_kind=logical_kind,
+            media_type=media_type,
+        )
+        target = self.blob_path(ref)
+        self._ensure_directory(target.parent)
+        if target.exists() or target.is_symlink():
+            self._verify_blob_at_path(ref, target)
+            self._record_accepted_cas_write(ref["stored_size"], created=False)
+            return ref, False
+        created = self._publish_blob_no_replace(target, stored, ref)
+        self._record_accepted_cas_write(ref["stored_size"], created=created)
+        return ref, created
+
+    def describe_blob(
+        self,
+        data: bytes | bytearray | memoryview,
+        *,
+        logical_kind: str,
+        media_type: str,
+    ) -> dict[str, Any]:
+        """Return the deterministic typed CAS reference without publishing.
+
+        Recovery uses this seam to verify that a retained control generation
+        still has its earlier-published CAS object.  Unlike ``put_blob``, it
+        cannot heal or otherwise mutate a missing object while validating
+        durable state.
+        """
+
+        ref, _stored = self._prepare_blob(
+            data,
+            logical_kind=logical_kind,
+            media_type=media_type,
+        )
+        return ref
+
+    def _prepare_blob(
+        self,
+        data: bytes | bytearray | memoryview,
+        *,
+        logical_kind: str,
+        media_type: str,
+    ) -> tuple[dict[str, Any], bytes]:
         payload = _bounded_bytes(data, self.limits.max_blob_uncompressed_bytes)
         self._validate_logical_type(logical_kind, media_type)
         digest = hashlib.sha256(payload).hexdigest()
@@ -1421,13 +1946,33 @@ class PromptArchiveStorage:
         }
         if encoding == "gzip":
             ref["encoding_parameters"] = _GZIP_CODEC
-        target = self.blob_path(ref)
-        self._ensure_directory(target.parent)
-        if target.exists() or target.is_symlink():
-            self._verify_blob_at_path(ref, target)
-            return ref, False
-        created = self._publish_blob_no_replace(target, stored, ref)
-        return ref, created
+        return self._validate_ref(ref), stored
+
+    @contextmanager
+    def account_cas_writes(self):
+        """Account accepted CAS outcomes on this thread without tree scans.
+
+        A put is visible to the scope only after the existing or newly-created
+        object has passed the normal full verification.  Failed attempts are
+        absent.  Nested scopes are supported so diagnostics can observe an
+        outer operation without changing the runtime's own exact accounting.
+        """
+
+        accounting = _PromptArchiveCasWriteAccounting()
+        stack = getattr(self._cas_write_accounting, "stack", ())
+        self._cas_write_accounting.stack = (*stack, accounting)
+        try:
+            yield accounting
+        finally:
+            current = getattr(self._cas_write_accounting, "stack", ())
+            if not current or current[-1] is not accounting:
+                self._cas_write_accounting.stack = ()
+                raise RuntimeError("Prompt archive CAS accounting scope mismatch")
+            self._cas_write_accounting.stack = current[:-1]
+
+    def _record_accepted_cas_write(self, stored_size: int, *, created: bool) -> None:
+        for accounting in getattr(self._cas_write_accounting, "stack", ()):
+            accounting.record(stored_size=stored_size, created=created)
 
     def _publish_blob_no_replace(
         self,
@@ -1542,7 +2087,10 @@ class PromptArchiveStorage:
         *,
         maximum: int,
         missing_code: str,
+        cancellation: PromptArchiveCancellationToken | None = None,
     ) -> bytes:
+        if cancellation is not None:
+            cancellation.check()
         self._assert_existing_chain_safe(path)
         flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -1562,6 +2110,8 @@ class PromptArchiveStorage:
             if metadata.st_nlink != 1:
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
             while True:
+                if cancellation is not None:
+                    cancellation.check()
                 chunk = os.read(descriptor, min(64 * 1024, maximum + 1 - observed))
                 if not chunk:
                     break
@@ -1604,6 +2154,8 @@ class PromptArchiveStorage:
             except OSError:
                 pass
         self._assert_root_identity()
+        if cancellation is not None:
+            cancellation.check()
         return b"".join(chunks)
 
     def _decode_stored(
@@ -1612,7 +2164,10 @@ class PromptArchiveStorage:
         stored: bytes,
         *,
         max_output_bytes: int | None,
+        cancellation: PromptArchiveCancellationToken | None = None,
     ) -> bytes:
+        if cancellation is not None:
+            cancellation.check()
         if len(stored) != ref["stored_size"]:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         if hashlib.sha256(stored).hexdigest() != ref["stored_sha256"]:
@@ -1633,19 +2188,32 @@ class PromptArchiveStorage:
         if ref["content_encoding"] == "identity":
             output = stored
         else:
-            output = self._decode_exact_gzip(stored, output_cap)
+            output = self._decode_exact_gzip(
+                stored,
+                output_cap,
+                cancellation=cancellation,
+            )
             if len(output) > len(stored) * self.limits.max_compression_ratio:
                 raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
-            if _gzip_bytes(output) != stored:
+            if _gzip_bytes(output, cancellation=cancellation) != stored:
                 raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         if len(output) != ref["uncompressed_size"]:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         if hashlib.sha256(output).hexdigest() != ref["digest"]:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
+        if cancellation is not None:
+            cancellation.check()
         return output
 
     @staticmethod
-    def _decode_exact_gzip(stored: bytes, output_cap: int) -> bytes:
+    def _decode_exact_gzip(
+        stored: bytes,
+        output_cap: int,
+        *,
+        cancellation: PromptArchiveCancellationToken | None = None,
+    ) -> bytes:
+        if cancellation is not None:
+            cancellation.check()
         if len(stored) < 18 or stored[:10] != _GZIP_HEADER:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         body = stored[10:-8]
@@ -1655,8 +2223,12 @@ class PromptArchiveStorage:
         output_size = 0
         try:
             for offset in range(0, len(body), 64 * 1024):
+                if cancellation is not None:
+                    cancellation.check()
                 pending = body[offset : offset + 64 * 1024]
                 while pending:
+                    if cancellation is not None:
+                        cancellation.check()
                     chunk = inflater.decompress(pending, output_cap - output_size + 1)
                     output_size += len(chunk)
                     if output_size > output_cap:
@@ -1665,6 +2237,8 @@ class PromptArchiveStorage:
                     pending = inflater.unconsumed_tail
                     if not pending:
                         break
+            if cancellation is not None:
+                cancellation.check()
             tail = inflater.flush(output_cap - output_size + 1)
         except PromptArchiveStorageError:
             raise
@@ -1710,7 +2284,10 @@ class PromptArchiveStorage:
         ref: Mapping[str, Any],
         *,
         max_output_bytes: int | None = None,
+        cancellation: PromptArchiveCancellationToken | None = None,
     ) -> bytes:
+        if cancellation is not None:
+            cancellation.check()
         validated = self._validate_ref(ref)
         path = self.blob_path(validated)
         maximum = self.limits.max_blob_stored_bytes
@@ -1731,11 +2308,13 @@ class PromptArchiveStorage:
             path,
             maximum=maximum,
             missing_code="PROMPT_ARCHIVE_BLOB_MISSING",
+            cancellation=cancellation,
         )
         return self._decode_stored(
             validated,
             stored,
             max_output_bytes=max_output_bytes,
+            cancellation=cancellation,
         )
 
     def verify_blob(self, ref: Mapping[str, Any]) -> None:
@@ -1867,6 +2446,382 @@ class PromptArchiveStorage:
     def _immutable_path(self, components: Sequence[str]) -> Path:
         validated = self._validate_relative_components(components)
         return self._immutable_path_from_validated(validated)
+
+    @staticmethod
+    def _validate_mutable_components(
+        components: Sequence[str],
+        *,
+        lock: bool,
+    ) -> tuple[str, ...]:
+        if isinstance(components, (str, bytes)) or not isinstance(components, Sequence):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            result = tuple(components)
+        except (TypeError, ValueError, OverflowError):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        if any(
+            type(component) is not str
+            or _COMPONENT_RE.fullmatch(component) is None
+            or component in {".", ".."}
+            or ":" in component
+            or "/" in component
+            or "\\" in component
+            for component in result
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        operation = (
+            len(result) == 5
+            and result[0:2] == ("operations", "v1")
+            and _RESPONSE_ID_RE.fullmatch(result[2]) is not None
+            and _OPERATION_ID_RE.fullmatch(result[3]) is not None
+            and result[4] == ("operation.lock" if lock else "journal.json")
+        )
+        shard = (
+            len(result) == 4
+            and result[0:3]
+            == (("pending", "v1", "locks") if lock else ("pending", "v1", "shards"))
+            and result[3].endswith(".lock" if lock else ".json")
+            and _SHARD_RE.fullmatch(result[3][:-5]) is not None
+        )
+        if not (operation or shard):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return result
+
+    def _mutable_path_from_validated(self, components: tuple[str, ...]) -> Path:
+        path = self._project_root.joinpath(*components)
+        self._assert_within_root(path)
+        self._assert_existing_chain_safe(path.parent)
+        return path
+
+    def _assert_relative_control_handle(
+        self,
+        descriptor: int,
+        *,
+        parent: _PinnedDirectory,
+        target: Path,
+        compare_size: bool = True,
+    ) -> os.stat_result:
+        """Bind an opened mutable leaf to its exact pinned in-root parent."""
+
+        self._validate_pinned_directory(parent, target.parent)
+        self._assert_open_handle(descriptor, target)
+        metadata = os.fstat(descriptor)
+        _require_regular(metadata)
+        if metadata.st_nlink != 1:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        resolved = resolved_path_from_open_descriptor(descriptor)
+        if os.name == "nt":
+            if resolved is None:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            if resolved.name != target.name:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            if os.name == "nt":
+                path_metadata = target.lstat()
+            else:
+                path_metadata = os.stat(
+                    target.name,
+                    dir_fd=parent.descriptor,
+                    follow_symlinks=False,
+                )
+        except FileNotFoundError:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        except OSError:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        _require_regular(path_metadata)
+        if (
+            path_metadata.st_nlink != 1
+            or (path_metadata.st_dev, path_metadata.st_ino)
+            != (metadata.st_dev, metadata.st_ino)
+            or (compare_size and path_metadata.st_size != metadata.st_size)
+            or _path_entry_is_redirected(target)
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return metadata
+
+    def _open_relative_control_file(
+        self,
+        parent: _PinnedDirectory,
+        target: Path,
+        *,
+        create: bool,
+        writable: bool,
+        compare_size: bool = True,
+    ) -> int | None:
+        """Open one closed mutable filename under an already pinned parent."""
+
+        flags = os.O_RDWR if writable else os.O_RDONLY
+        flags |= getattr(os, "O_BINARY", 0)
+        if create:
+            flags |= os.O_CREAT
+        if os.name != "nt":
+            nofollow = getattr(os, "O_NOFOLLOW", 0)
+            if not nofollow:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            flags |= nofollow
+        try:
+            if os.name == "nt":
+                descriptor = _windows_open_relative_control_file(
+                    parent.descriptor,
+                    target.name,
+                    create=create,
+                    writable=writable,
+                )
+            else:
+                descriptor = os.open(
+                    target.name,
+                    flags,
+                    0o600,
+                    dir_fd=parent.descriptor,
+                )
+        except FileNotFoundError:
+            if not create:
+                return None
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        except OSError:
+            if _path_entry_is_redirected(target):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        try:
+            self._assert_relative_control_handle(
+                descriptor,
+                parent=parent,
+                target=target,
+                compare_size=compare_size,
+            )
+            return descriptor
+        except BaseException:
+            os.close(descriptor)
+            raise
+
+    def _read_relative_control_file(
+        self,
+        parent: _PinnedDirectory,
+        target: Path,
+    ) -> bytes | None:
+        descriptor = self._open_relative_control_file(
+            parent,
+            target,
+            create=False,
+            writable=False,
+        )
+        if descriptor is None:
+            return None
+        try:
+            before = self._assert_relative_control_handle(
+                descriptor,
+                parent=parent,
+                target=target,
+            )
+            if before.st_size > _MUTABLE_CONTROL_MAX_BYTES:
+                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            payload = self._read_open_descriptor(
+                descriptor,
+                maximum=_MUTABLE_CONTROL_MAX_BYTES,
+            )
+            after = self._assert_relative_control_handle(
+                descriptor,
+                parent=parent,
+                target=target,
+            )
+            if (
+                (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino)
+                or after.st_size != before.st_size
+                or after.st_size != len(payload)
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            return payload
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    @staticmethod
+    def _replace_relative_control_file(
+        descriptor: int,
+        parent: _PinnedDirectory,
+        temporary_name: str,
+        target_name: str,
+    ) -> None:
+        if os.name == "nt":
+            _windows_rename_relative_replace(
+                descriptor,
+                parent.descriptor,
+                target_name,
+            )
+            return
+        try:
+            os.replace(
+                temporary_name,
+                target_name,
+                src_dir_fd=parent.descriptor,
+                dst_dir_fd=parent.descriptor,
+            )
+        except OSError:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+
+    @contextmanager
+    def control_lock(self, relative_components: Sequence[str]):
+        """Take one closed cross-process operation or pending-shard lock."""
+
+        validated = self._validate_mutable_components(relative_components, lock=True)
+        target = self._mutable_path_from_validated(validated)
+        self._ensure_directory(target.parent)
+        descriptor = -1
+        with self._open_pinned_directory(target.parent) as parent:
+            try:
+                descriptor = self._open_relative_control_file(
+                    parent,
+                    target,
+                    create=True,
+                    writable=True,
+                    compare_size=False,
+                )
+                assert descriptor is not None
+                metadata = os.fstat(descriptor)
+                if metadata.st_size not in {0, 1}:
+                    raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+                if metadata.st_size == 0:
+                    os.write(descriptor, b"\0")
+                    os.fsync(descriptor)
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    self._assert_relative_control_handle(
+                        descriptor,
+                        parent=parent,
+                        target=target,
+                    )
+                    yield
+                    self._assert_relative_control_handle(
+                        descriptor,
+                        parent=parent,
+                        target=target,
+                    )
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    if os.name == "nt":
+                        import msvcrt
+
+                        msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+            except PromptArchiveStorageError:
+                raise
+            except OSError:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            finally:
+                if descriptor != -1:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+    def read_current_json(
+        self,
+        relative_components: Sequence[str],
+    ) -> dict[str, Any] | None:
+        """Read one fixed mutable current control file; absence is explicit."""
+
+        validated = self._validate_mutable_components(relative_components, lock=False)
+        path = self._mutable_path_from_validated(validated)
+        self._ensure_directory(path.parent)
+        with self._open_pinned_directory(path.parent) as parent:
+            payload = self._read_relative_control_file(parent, path)
+        if payload is None:
+            return None
+        return parse_canonical_json_v1(payload, maximum=_MUTABLE_CONTROL_MAX_BYTES)
+
+    def replace_current_json(
+        self,
+        relative_components: Sequence[str],
+        document: Any,
+    ) -> ImmutablePublicationReceipt:
+        """Atomically replace one fixed current file while its caller holds its lock."""
+
+        validated = self._validate_mutable_components(relative_components, lock=False)
+        payload = canonical_json_bytes_v1(document, maximum=_MUTABLE_CONTROL_MAX_BYTES)
+        digest = hashlib.sha256(payload).hexdigest()
+        target = self._mutable_path_from_validated(validated)
+        self._ensure_directory(target.parent)
+        temporary_name = f".{target.name}.{uuid4().hex}.tmp"
+        descriptor = -1
+        replaced = False
+        with self._open_pinned_directory(target.parent) as parent:
+            try:
+                existing = self._open_relative_control_file(
+                    parent,
+                    target,
+                    create=False,
+                    writable=False,
+                )
+                if existing is not None:
+                    os.close(existing)
+                descriptor = self._create_relative_temp(parent, temporary_name)
+                with os.fdopen(descriptor, "wb", closefd=False) as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                observed = self._read_open_descriptor(
+                    descriptor,
+                    maximum=_MUTABLE_CONTROL_MAX_BYTES,
+                )
+                if observed != payload:
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                self._validate_pinned_directory(parent, target.parent)
+                self._replace_relative_control_file(
+                    descriptor,
+                    parent,
+                    temporary_name,
+                    target.name,
+                )
+                replaced = True
+                self._assert_relative_control_handle(
+                    descriptor,
+                    parent=parent,
+                    target=target,
+                )
+                self.directory_sync_supported = (
+                    self._sync_pinned_directory(parent)
+                    and self.directory_sync_supported
+                )
+                os.close(descriptor)
+                descriptor = -1
+                verified = self._read_relative_control_file(parent, target)
+                if verified != payload:
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                return ImmutablePublicationReceipt(
+                    target,
+                    digest,
+                    len(payload),
+                    True,
+                )
+            except PromptArchiveStorageError:
+                raise
+            except OSError:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            finally:
+                if descriptor != -1:
+                    if not replaced:
+                        self._delete_relative_temp(
+                            parent,
+                            temporary_name,
+                            descriptor,
+                        )
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
 
     def publish_immutable_bytes(
         self,
@@ -2026,11 +2981,39 @@ class PromptArchiveStorage:
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         return payload
 
+    def read_immutable_json(
+        self,
+        relative_components: Sequence[str],
+        *,
+        cancellation: PromptArchiveCancellationToken | None = None,
+    ) -> dict[str, Any]:
+        """Read one closed stable control artifact under its contract bound.
+
+        Callers select only a grammar-recognized tuple of path components;
+        arbitrary paths never enter this seam.  The artifact-specific byte
+        ceiling is enforced before canonical JSON is decoded.
+        """
+
+        validated = self._validate_relative_components(relative_components)
+        maximum = self._immutable_artifact_limit(validated)
+        path = self._immutable_path_from_validated(validated)
+        payload = self._read_regular_file(
+            path,
+            maximum=maximum,
+            missing_code="PROMPT_ARCHIVE_NOT_FOUND",
+            cancellation=cancellation,
+        )
+        return parse_canonical_json_v1(payload, maximum=maximum)
+
 
 __all__ = [
     "canonical_json_bytes_v1",
     "ImmutablePublicationReceipt",
+    "parse_canonical_json_v1",
+    "PromptArchiveCasWriteMetrics",
+    "PromptArchiveCancellationToken",
     "PromptArchiveLimits",
     "PromptArchiveStorage",
     "PromptArchiveStorageError",
+    "resolved_path_from_open_descriptor",
 ]

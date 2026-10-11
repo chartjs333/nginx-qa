@@ -1022,6 +1022,132 @@ class ManagedContinuityRuntime:
             return response
         raise RuntimeError("managed identity changed during publication")
 
+    def authorize_prompt_archive_read(
+        self,
+        project_id: str,
+        sprint_id: str,
+        agent_phone: str,
+        supplied_role_token: str = "",
+    ) -> dict[str, Any] | None:
+        """Authorize an archive read without claiming or publishing work.
+
+        Archive identifiers are deliberately not accepted here.  The caller
+        must establish this exact active project/sprint/phone authority before
+        it performs any locator or filesystem lookup.  Every ordinary
+        authentication, ownership, or Scope Control failure is collapsed to
+        ``None`` so the HTTP adapter can return the same non-enumerating 404.
+
+        Unlike :meth:`current_identity`, this predicate never drains an
+        outbox, repairs a publication, or selects one of several same-phone
+        bindings.  Ambiguity is denial for evidence reads.
+        """
+
+        if not all(
+            isinstance(value, str) and value and value == value.strip()
+            for value in (project_id, sprint_id, agent_phone)
+        ):
+            return None
+        try:
+            # Authenticate the route identity before discovering durable
+            # ownership.  Credential names and values never enter the result.
+            verify_role_token(agent_phone, supplied_role_token)
+        except LegacyScopeControlError:
+            return None
+
+        try:
+            bindings, corrupt_ownership, project_wide_corruption = (
+                self._project_binding_discovery(project_id)
+            )
+        except (LegacyScopeControlError, RuntimeError, TypeError, ValueError):
+            # A corrupt durable identity is not distinguishable from absence
+            # on this read boundary.
+            return None
+        if project_wide_corruption or any(
+            hint.get("live") is True
+            and hint.get("phone") in {None, agent_phone}
+            for hint in corrupt_ownership
+        ):
+            return None
+
+        owned_live = [
+            binding
+            for binding in bindings
+            if str(
+                binding.record.get("agent_phone")
+                or binding.record.get("reviewer_phone")
+                or binding.record.get("coordinator_phone")
+                or ""
+            )
+            == agent_phone
+            and self._binding_is_live(binding)
+        ]
+        if len(owned_live) != 1:
+            return None
+        candidate = owned_live[0]
+        if (
+            candidate.project_id != project_id
+            or candidate.sprint_id != sprint_id
+            or candidate.state.get("status") != "active"
+        ):
+            return None
+
+        assignment_id = candidate.record.get("assignment_id")
+        if not isinstance(assignment_id, str) or not assignment_id:
+            return None
+        actor_id = (
+            candidate.record.get("agent_id")
+            or candidate.record.get("reviewer_id")
+            or candidate.record.get("coordinator_id")
+        )
+        if not isinstance(actor_id, str) or not actor_id:
+            return None
+        try:
+            governed = assignment_binding(candidate.state, assignment_id)
+        except LegacyScopeControlError:
+            return None
+        if governed is None:
+            return None
+
+        context = governed.get("scope_context")
+        effective_revision = governed.get("effective_revision")
+        effective_hash = governed.get("effective_scope_sha256")
+        if (
+            not isinstance(context, Mapping)
+            or type(effective_revision) is not int
+            or effective_revision < 0
+            or effective_revision > 9_223_372_036_854_775_807
+            or not isinstance(effective_hash, str)
+            or re.fullmatch(r"[0-9a-f]{64}", effective_hash, re.ASCII) is None
+            or context.get("assignment_id") != assignment_id
+            or type(context.get("effective_revision")) is not int
+            or context.get("effective_revision") != effective_revision
+            or context.get("effective_scope_sha256") != effective_hash
+            or governed.get("agent_phone") != agent_phone
+            or governed.get("agent_id") != actor_id
+        ):
+            return None
+
+        # This is the complete non-secret decision snapshot.  Do not return
+        # the assignment, scope text, role token, or durable state record.
+        authorization = {
+            "auth_model_version": "prompt-archive-authorization-v1",
+            "principal_kind": "managed_agent",
+            "principal_id": actor_id,
+            "binding_id": assignment_id,
+            "scope_source": "managed_effective_scope",
+            "effective_scope_revision": effective_revision,
+            "effective_scope_sha256": effective_hash,
+            "decision_occurrence_id": assignment_id,
+        }
+        return {
+            "project_id": project_id,
+            "sprint_id": sprint_id,
+            "assignment_id": assignment_id,
+            "assignment_kind": candidate.kind,
+            "agent_phone": agent_phone,
+            "authorization": authorization,
+        }
+
     @staticmethod
     def _result_replay(receipt: Mapping[str, Any]) -> ManagedContinuityResult:
         stored = receipt.get("response")

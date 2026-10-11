@@ -8,6 +8,7 @@ import multiprocessing
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import traceback
 import unittest
@@ -16,6 +17,7 @@ from unittest import mock
 
 import nginx_qa.prompt_archive_storage as prompt_archive_storage_module
 from nginx_qa.prompt_archive_storage import (
+    PromptArchiveCancellationToken,
     PromptArchiveLimits,
     PromptArchiveStorage,
     PromptArchiveStorageError,
@@ -151,6 +153,29 @@ def process_crash_publish_immutable(
         operation_plan_components(operation_id),
         payload,
     )
+
+
+def process_increment_mutable_control(root: str, iterations: int, result_queue) -> None:
+    """Spawn-safe proof that every writer uses the same pinned lock leaf."""
+
+    response_id = "parresp1-" + "7" * 64
+    operation_id = "parop1-" + "8" * 32
+    lock = ("operations", "v1", response_id, operation_id, "operation.lock")
+    journal = ("operations", "v1", response_id, operation_id, "journal.json")
+    try:
+        storage = PromptArchiveStorage(Path(root), PROJECT_ID, protected_roots=())
+        for _ in range(iterations):
+            with storage.control_lock(lock):
+                current = storage.read_current_json(journal) or {"value": 0}
+                storage.replace_current_json(
+                    journal,
+                    {"value": current["value"] + 1},
+                )
+        result_queue.put(("ok", iterations))
+    except PromptArchiveStorageError as exc:  # pragma: no cover - parent asserts
+        result_queue.put(("storage-error", exc.code))
+    except Exception as exc:  # pragma: no cover - parent asserts
+        result_queue.put(("error", type(exc).__name__, str(exc)))
 
 
 class PromptArchiveStorageTests(unittest.TestCase):
@@ -295,6 +320,123 @@ class PromptArchiveStorageTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             PromptArchiveStorage(self.root / "implicit-policy", PROJECT_ID)
 
+    def test_constructor_does_not_create_through_redirected_ancestor(self) -> None:
+        outside = self.root.parent / "constructor-redirect-outside"
+        outside.mkdir()
+        redirected = self.root.parent / "constructor-redirect"
+        try:
+            redirected.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            if os.name != "nt":
+                self.assertIsInstance(exc, (OSError, NotImplementedError))
+                return
+            junction = subprocess.run(
+                [
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(redirected),
+                    str(outside),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if junction.returncode != 0:
+                self.assertNotEqual(junction.returncode, 0)
+                return
+
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            PromptArchiveStorage(
+                redirected / "new-archive-root",
+                PROJECT_ID,
+                protected_roots=(),
+            )
+        self.assertIn(
+            raised.exception.code,
+            {"PROMPT_ARCHIVE_REFERENCE_INVALID", "PROMPT_ARCHIVE_UNAVAILABLE"},
+        )
+        self.assertFalse((outside / "new-archive-root").exists())
+
+    def test_constructor_ancestor_swap_is_blocked_or_detected(self) -> None:
+        ancestor = self.root.parent / "constructor-swap-parent"
+        ancestor.mkdir()
+        displaced = self.root.parent / "constructor-swap-displaced"
+        requested = ancestor / "new-archive-root"
+        original = PromptArchiveStorage._validate_bootstrap_directory
+        race = {"attempted": False, "performed": False, "blocked": False}
+
+        def swap_after_pin(pinned, intended):
+            identity = original(pinned, intended)
+            if Path(intended) == ancestor and not race["attempted"]:
+                race["attempted"] = True
+                try:
+                    ancestor.rename(displaced)
+                except OSError:
+                    race["blocked"] = True
+                else:
+                    race["performed"] = True
+                    ancestor.mkdir()
+            return identity
+
+        with mock.patch.object(
+            PromptArchiveStorage,
+            "_validate_bootstrap_directory",
+            side_effect=swap_after_pin,
+        ):
+            if os.name == "nt":
+                store = PromptArchiveStorage(
+                    requested,
+                    PROJECT_ID,
+                    protected_roots=(),
+                )
+                self.assertTrue(race["attempted"])
+                self.assertTrue(race["blocked"])
+                self.assertFalse(race["performed"])
+                self.assertEqual(store.root, requested)
+            else:
+                with self.assertRaises(PromptArchiveStorageError):
+                    PromptArchiveStorage(
+                        requested,
+                        PROJECT_ID,
+                        protected_roots=(),
+                    )
+                self.assertTrue(race["attempted"])
+                self.assertTrue(race["performed"])
+                self.assertFalse((ancestor / "new-archive-root").exists())
+
+    def test_constructor_rejects_windows_root_case_aliases_and_ads(self) -> None:
+        if os.name != "nt":
+            return
+        exact = self.root.parent / "ConstructorExactCase"
+        exact.mkdir()
+        with self.assertRaises(PromptArchiveStorageError) as case_error:
+            PromptArchiveStorage(
+                self.root.parent / "constructorexactcase" / "archive",
+                PROJECT_ID,
+                protected_roots=(),
+            )
+        self.assertEqual(
+            case_error.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        )
+        self.assertFalse((exact / "archive").exists())
+
+        for component in ("archive:stream", "trailing.", "trailing ", "CON"):
+            with self.subTest(component=component):
+                with self.assertRaises(PromptArchiveStorageError) as invalid:
+                    PromptArchiveStorage(
+                        self.root.parent / component,
+                        PROJECT_ID,
+                        protected_roots=(),
+                    )
+                self.assertEqual(
+                    invalid.exception.code,
+                    "PROMPT_ARCHIVE_REQUEST_INVALID",
+                )
+
     def test_identity_and_frozen_gzip_storage_are_deterministic_and_exact(self) -> None:
         empty = self.put(b"")
         self.assertEqual(empty["digest"], hashlib.sha256(b"").hexdigest())
@@ -355,6 +497,58 @@ class PromptArchiveStorageTests(unittest.TestCase):
         self.store.verify_blob(first)
         self.store.verify_blob(compressed)
         self.assertEqual(gzip.decompress(expected_stored), raw)
+
+    def test_describe_blob_is_exact_and_never_publishes(self) -> None:
+        for payload in (b"described-only", bytes(1024)):
+            with self.subTest(byte_size=len(payload)):
+                before = {
+                    path.relative_to(self.root)
+                    for path in self.root.rglob("*")
+                    if path.is_file()
+                }
+                described = self.store.describe_blob(
+                    payload,
+                    logical_kind=PAYLOAD_KIND,
+                    media_type=PAYLOAD_MEDIA_TYPE,
+                )
+                after = {
+                    path.relative_to(self.root)
+                    for path in self.root.rglob("*")
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+                self.assertEqual(self.put(payload), described)
+                self.assertEqual(self.store.read_blob(described), payload)
+
+    def test_cooperative_cancellation_stops_bounded_blob_read(self) -> None:
+        payload = os.urandom(512 * 1024)
+        ref = self.put(payload)
+        token = PromptArchiveCancellationToken.with_timeout(5)
+        read_started = threading.Event()
+        original_read = prompt_archive_storage_module.os.read
+
+        def deliberately_slow_read(descriptor, amount):
+            chunk = original_read(descriptor, amount)
+            read_started.set()
+            token.event.wait(timeout=1)
+            return chunk
+
+        with mock.patch.object(
+            prompt_archive_storage_module.os,
+            "read",
+            side_effect=deliberately_slow_read,
+        ):
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    self.store.read_blob,
+                    ref,
+                    cancellation=token,
+                )
+                self.assertTrue(read_started.wait(timeout=2))
+                token.cancel()
+                with self.assertRaises(PromptArchiveStorageError) as raised:
+                    future.result(timeout=2)
+        self.assertEqual(raised.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
 
     def test_existing_blob_is_fully_verified_before_reuse_and_never_repaired(self) -> None:
         raw = b"x" * 2048
@@ -2031,6 +2225,286 @@ class PromptArchiveStorageTests(unittest.TestCase):
                 )
         self.assertEqual(list(self.root.rglob("payload.blob")), [])
         self.assertEqual(list(self.root.rglob("plan.json")), [])
+
+    def test_mutable_controls_round_trip_under_one_pinned_lock(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        lock = ("operations", "v1", response_id, operation_id, "operation.lock")
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+
+        with self.store.control_lock(lock):
+            self.assertIsNone(self.store.read_current_json(journal))
+            self.store.replace_current_json(journal, {"revision": 1})
+            self.assertEqual(
+                self.store.read_current_json(journal),
+                {"revision": 1},
+            )
+            self.store.replace_current_json(journal, {"revision": 2})
+            self.assertEqual(
+                self.store.read_current_json(journal),
+                {"revision": 2},
+            )
+
+    def test_mutable_lock_and_journal_hardlink_aliases_are_rejected(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        lock = ("operations", "v1", response_id, operation_id, "operation.lock")
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        with self.store.control_lock(lock):
+            self.store.replace_current_json(journal, {"revision": 1})
+
+        lock_path = self.store._mutable_path_from_validated(lock)
+        journal_path = self.store._mutable_path_from_validated(journal)
+        lock_alias = lock_path.with_name("lock-hardlink-alias")
+        journal_alias = journal_path.with_name("journal-hardlink-alias")
+        try:
+            os.link(lock_path, lock_alias)
+            os.link(journal_path, journal_alias)
+        except OSError as exc:
+            self.assertIsInstance(exc, OSError)
+            return
+
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            lambda: self.store.read_current_json(journal),
+        )
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            lambda: self.store.control_lock(lock).__enter__(),
+        )
+
+    def test_mutable_controls_reject_mocked_leaf_reparse_before_io(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        self.store.replace_current_json(journal, {"outside": False})
+        target = self.store._mutable_path_from_validated(journal)
+        original = prompt_archive_storage_module._path_entry_is_redirected
+
+        def selected_reparse(path: Path) -> bool:
+            if path == target:
+                return True
+            return original(path)
+
+        with mock.patch(
+            "nginx_qa.prompt_archive_storage._path_entry_is_redirected",
+            side_effect=selected_reparse,
+        ):
+            self.assert_error_code(
+                "PROMPT_ARCHIVE_REFERENCE_INVALID",
+                lambda: self.store.read_current_json(journal),
+            )
+
+    def test_mutable_descendant_parent_redirect_cannot_read_or_write_outside(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        target = self.store._mutable_path_from_validated(journal)
+        self.store._ensure_directory(target.parent)
+        outside = self.root.parent / "mutable-outside"
+        outside.mkdir()
+        outside_target = outside / target.name
+        outside_bytes = b'{"outside":true}'
+        outside_target.write_bytes(outside_bytes)
+        target.parent.rmdir()
+        try:
+            target.parent.symlink_to(outside, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            if os.name != "nt":
+                self.assertIsInstance(exc, (OSError, NotImplementedError))
+                return
+            junction = subprocess.run(
+                [
+                    "cmd.exe",
+                    "/d",
+                    "/c",
+                    "mklink",
+                    "/J",
+                    str(target.parent),
+                    str(outside),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if junction.returncode != 0:
+                self.assertNotEqual(junction.returncode, 0)
+                return
+
+        for operation in (
+            lambda: self.store.read_current_json(journal),
+            lambda: self.store.replace_current_json(journal, {"outside": False}),
+        ):
+            self.assert_error_code(
+                "PROMPT_ARCHIVE_REFERENCE_INVALID",
+                operation,
+            )
+        self.assertEqual(outside_target.read_bytes(), outside_bytes)
+
+    def test_mutable_parent_swap_cannot_publish_outside_pinned_directory(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        target = self.store._mutable_path_from_validated(journal)
+        self.store._ensure_directory(target.parent)
+        outside = self.root.parent / "mutable-swap-outside"
+        outside.mkdir()
+        detached = target.parent.with_name(target.parent.name + "-detached")
+        original = self.store._replace_relative_control_file
+        swapped = False
+
+        def swap_then_replace(descriptor, parent, temporary_name, target_name):
+            nonlocal swapped
+            try:
+                target.parent.rename(detached)
+            except OSError:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            swapped = True
+            if os.name == "nt":
+                junction = subprocess.run(
+                    [
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(target.parent),
+                        str(outside),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if junction.returncode != 0:
+                    raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            else:
+                target.parent.symlink_to(outside, target_is_directory=True)
+            return original(descriptor, parent, temporary_name, target_name)
+
+        with mock.patch.object(
+            self.store,
+            "_replace_relative_control_file",
+            side_effect=swap_then_replace,
+        ):
+            with self.assertRaises(PromptArchiveStorageError) as raised:
+                self.store.replace_current_json(journal, {"revision": 1})
+        self.assertEqual(
+            raised.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID"
+            if swapped
+            else "PROMPT_ARCHIVE_UNAVAILABLE",
+        )
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_mutable_ancestor_swap_cannot_redirect_lock_creation(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        lock = ("operations", "v1", response_id, operation_id, "operation.lock")
+        target = self.store._mutable_path_from_validated(lock)
+        self.store._ensure_directory(target.parent)
+        ancestor = self.store._project_root / "operations"
+        detached = ancestor.with_name("operations-detached")
+        outside = self.root.parent / "mutable-ancestor-outside"
+        outside.mkdir()
+        original = self.store._open_relative_control_file
+        swapped = False
+
+        def swap_then_open(parent, selected_target, **kwargs):
+            nonlocal swapped
+            try:
+                ancestor.rename(detached)
+            except OSError:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            swapped = True
+            if os.name == "nt":
+                junction = subprocess.run(
+                    [
+                        "cmd.exe",
+                        "/d",
+                        "/c",
+                        "mklink",
+                        "/J",
+                        str(ancestor),
+                        str(outside),
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                )
+                if junction.returncode != 0:
+                    raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            else:
+                ancestor.symlink_to(outside, target_is_directory=True)
+            return original(parent, selected_target, **kwargs)
+
+        with mock.patch.object(
+            self.store,
+            "_open_relative_control_file",
+            side_effect=swap_then_open,
+        ):
+            with self.assertRaises(PromptArchiveStorageError) as raised:
+                with self.store.control_lock(lock):
+                    self.fail("redirected lock path must not be acquired")
+        self.assertEqual(
+            raised.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID"
+            if swapped
+            else "PROMPT_ARCHIVE_UNAVAILABLE",
+        )
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_mutable_replace_never_uses_unpinned_absolute_replace(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        original = os.replace
+
+        def require_dirfds(source, target, *args, **kwargs):
+            if kwargs.get("src_dir_fd") is None or kwargs.get("dst_dir_fd") is None:
+                raise AssertionError("mutable replace escaped its pinned parent")
+            return original(source, target, *args, **kwargs)
+
+        with mock.patch(
+            "nginx_qa.prompt_archive_storage.os.replace",
+            side_effect=require_dirfds,
+        ):
+            self.store.replace_current_json(journal, {"revision": 1})
+            self.store.replace_current_json(journal, {"revision": 2})
+        self.assertEqual(
+            self.store.read_current_json(journal),
+            {"revision": 2},
+        )
+
+    def test_mutable_control_lock_serializes_cross_process_writers(self) -> None:
+        context = multiprocessing.get_context("spawn")
+        result_queue = context.Queue()
+        processes = [
+            context.Process(
+                target=process_increment_mutable_control,
+                args=(str(self.root), 8, result_queue),
+            )
+            for _ in range(4)
+        ]
+        outcomes = self.run_processes(processes, result_queue)
+        self.assertEqual(outcomes, [("ok", 8)] * 4)
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        self.assertEqual(self.store.read_current_json(journal), {"value": 32})
+
+    def test_mutable_control_rejects_wrong_case_leaf_alias(self) -> None:
+        if os.name != "nt":
+            return
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        journal = ("operations", "v1", response_id, operation_id, "journal.json")
+        target = self.store._mutable_path_from_validated(journal)
+        self.store._ensure_directory(target.parent)
+        target.with_name("Journal.json").write_text('{"revision":1}', encoding="utf-8")
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            lambda: self.store.read_current_json(journal),
+        )
 
     def test_archive_root_must_not_overlap_optional_protected_roots(self) -> None:
         protected = self.root / "protected"

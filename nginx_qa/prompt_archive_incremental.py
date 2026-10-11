@@ -13,7 +13,6 @@ import ctypes
 import base64
 import dataclasses
 import hashlib
-import json
 import os
 import re
 import stat
@@ -26,9 +25,11 @@ from pathlib import Path
 from typing import Any, Final
 
 from .prompt_archive_storage import (
+    PromptArchiveCancellationToken,
     PromptArchiveStorage,
     PromptArchiveStorageError,
     canonical_json_bytes_v1,
+    parse_canonical_json_v1,
     _error,
 )
 from .prompt_archive_json_spans import (
@@ -47,7 +48,6 @@ _MAX_INT64: Final = 9_223_372_036_854_775_807
 _MAX_MANIFEST_BYTES: Final = 256 * 1024
 _MAX_REFERENCED_STORED_BYTES: Final = 384 * _MIB
 _MAX_REFERENCED_UNCOMPRESSED_BYTES: Final = 384 * _MIB
-_MAX_CONTROL_JSON_DEPTH: Final = 128
 _ROOT_ORDER: Final = (
     "raw_bytes",
     "current_fields",
@@ -276,6 +276,15 @@ class ArchiveOccurrence:
     authorization: Mapping[str, Any]
     created_at: str
     verified_at: str
+    # Durable legacy assignment revision used only by the closed recovery
+    # locator. It is deliberately not part of the manifest transport shape.
+    state_revision: int = 0
+    # Transport-only identity of the exact committed legacy response.  These
+    # fields are registered with the closed runtime-occurrence prover and are
+    # deliberately absent from the immutable archive manifest.
+    source_response_key: str | None = None
+    source_byte_size: int | None = None
+    source_sha256: str | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -363,6 +372,34 @@ def _copy_ref(value: Mapping[str, Any]) -> dict[str, Any]:
     return copied
 
 
+def _register_digest_role(
+    digest_roles: dict[str, tuple[str, str]],
+    ref: Mapping[str, Any],
+) -> tuple[str, str, str]:
+    """Bind one physical digest to exactly one role in an archive closure.
+
+    The storage layer intentionally permits identical bytes to be addressed by
+    multiple typed references.  A single archive graph does not: manifest
+    counts are physical-digest counts, so admitting two logical roles for one
+    digest would make those counts disagree with the typed publication
+    closure.  Keep this invariant at graph traversal boundaries rather than
+    weakening the storage-wide CAS contract.
+    """
+
+    copied = _copy_ref(ref)
+    digest = _require_exact_string(copied.get("digest"))
+    logical_kind = _require_exact_string(copied.get("logical_kind"))
+    media_type = _require_exact_string(copied.get("media_type"))
+    if _SHA256_RE.fullmatch(digest) is None:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    role = (logical_kind, media_type)
+    previous = digest_roles.get(digest)
+    if previous is not None and previous != role:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    digest_roles[digest] = role
+    return digest, logical_kind, media_type
+
+
 def _pas1_frame(value: str | None) -> bytes:
     if value is None:
         return b"\xff"
@@ -375,11 +412,48 @@ def _pas1_frame(value: str | None) -> bytes:
     return b"\x00" + struct.pack(">Q", len(encoded)) + encoded
 
 
-def _pas1_id(domain: str, fields: Sequence[tuple[str, str | None]]) -> str:
+def pas1_id_v1(domain: str, fields: Sequence[tuple[str, str | None]]) -> str:
+    """Return a lowercase PAS1-ID-v1 digest for one frozen field sequence."""
+
+    if type(domain) is not str or not domain or len(domain) > 160:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if isinstance(fields, (str, bytes)) or not isinstance(fields, Sequence):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if len(fields) > 64:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     preimage = b"nginx-qa-pas1-id-v1\x00" + _pas1_frame(domain)
-    for name, value in fields:
+    for field in fields:
+        if (
+            not isinstance(field, tuple)
+            or len(field) != 2
+            or type(field[0]) is not str
+            or not field[0]
+            or len(field[0]) > 160
+            or (field[1] is not None and type(field[1]) is not str)
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        name, value = field
         preimage += _pas1_frame(name) + _pas1_frame(value)
     return hashlib.sha256(preimage).hexdigest()
+
+
+def sprint_storage_key_v1(project_id: str, sprint_id: str | None) -> str:
+    """Return the path-safe PAS1 sprint bucket key.
+
+    A null sprint is retained for the already-frozen offline migration bucket;
+    runtime publication requires a non-null sprint separately.
+    """
+
+    if type(project_id) is not str or _SAFE_ID_RE.fullmatch(project_id) is None:
+        raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if sprint_id is not None and (
+        type(sprint_id) is not str or _SAFE_ID_RE.fullmatch(sprint_id) is None
+    ):
+        raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+    return pas1_id_v1(
+        "sprint-storage-key",
+        (("project_id", project_id), ("sprint_id", sprint_id)),
+    )
 
 
 def response_id_v1(
@@ -391,7 +465,7 @@ def response_id_v1(
 ) -> str:
     """Return the deterministic PAS1 response identity for one occurrence."""
 
-    return "parresp1-" + _pas1_id(
+    return "parresp1-" + pas1_id_v1(
         "response-id",
         (
             ("project_id", project_id),
@@ -403,68 +477,8 @@ def response_id_v1(
     )
 
 
-class _DuplicateControlMember(ValueError):
-    pass
-
-
-def _validate_control_nesting(raw: bytes) -> None:
-    """Bound control JSON nesting before handing bytes to recursive json.loads."""
-
-    depth = 0
-    in_string = False
-    escaped = False
-    for value in raw:
-        if in_string:
-            if escaped:
-                escaped = False
-            elif value == 0x5C:  # backslash
-                escaped = True
-            elif value == 0x22:  # quote
-                in_string = False
-            continue
-        if value == 0x22:
-            in_string = True
-        elif value in (0x5B, 0x7B):  # [ {
-            depth += 1
-            if depth > _MAX_CONTROL_JSON_DEPTH:
-                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
-        elif value in (0x5D, 0x7D):  # ] }
-            depth -= 1
-            if depth < 0:
-                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-
-
 def _load_canonical_control(raw: bytes) -> dict[str, Any]:
-    def pairs(values: list[tuple[str, Any]]) -> dict[str, Any]:
-        output: dict[str, Any] = {}
-        for key, value in values:
-            if type(key) is not str or key in output:
-                raise _DuplicateControlMember
-            output[key] = value
-        return output
-
-    def reject_number(_value: str) -> Any:
-        raise _DuplicateControlMember
-
-    _validate_control_nesting(raw)
-    try:
-        decoded = raw.decode("utf-8", errors="strict")
-        value = json.loads(
-            decoded,
-            object_pairs_hook=pairs,
-            parse_float=reject_number,
-            parse_constant=reject_number,
-        )
-    except (UnicodeError, json.JSONDecodeError, _DuplicateControlMember, ValueError):
-        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
-    except (RecursionError, MemoryError):
-        raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED") from None
-    if type(value) is not dict:
-        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-    canonical = canonical_json_bytes_v1(value, maximum=max(1, len(raw)))
-    if canonical != raw:
-        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-    return value
+    return parse_canonical_json_v1(raw, maximum=max(1, len(raw)))
 
 
 def _allocated_size(path: Path, metadata: os.stat_result) -> int:
@@ -494,6 +508,8 @@ class PromptArchiveIncremental:
         storage: PromptArchiveStorage,
         project_id: str,
         sprint_id: str | None,
+        *,
+        cancellation: PromptArchiveCancellationToken | None = None,
     ) -> None:
         if not isinstance(storage, PromptArchiveStorage):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
@@ -505,9 +521,14 @@ class PromptArchiveIncremental:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if getattr(storage, "project_id", None) != project_id:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if cancellation is not None and not isinstance(
+            cancellation, PromptArchiveCancellationToken
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         self.storage = storage
         self.project_id = project_id
         self.sprint_id = sprint_id
+        self._cancellation = cancellation
         self._cas_put_attempts = 0
         self._cas_read_attempts = 0
         self._control_bytes_serialized = 0
@@ -526,9 +547,14 @@ class PromptArchiveIncremental:
             str, tuple[dict[str, Any], bytes]
         ] | None = None
 
+    def _check_cancelled(self) -> None:
+        if self._cancellation is not None:
+            self._cancellation.check()
+
     @contextmanager
     def _reference_budget(self):
         with self._operation_lock:
+            self._check_cancelled()
             owner = self._active_reference_digests is None
             if owner:
                 self._active_reference_digests = set()
@@ -541,6 +567,7 @@ class PromptArchiveIncremental:
                     self._active_read_cache = None
 
     def _track_reference(self, ref: Mapping[str, Any]) -> None:
+        self._check_cancelled()
         if self._active_reference_digests is None:
             return
         digest = _require_exact_string(_copy_ref(ref).get("digest"))
@@ -555,6 +582,7 @@ class PromptArchiveIncremental:
         but it must never let those reads stand in for the final complete graph
         verification performed immediately before publication or return.
         """
+        self._check_cancelled()
         if self._active_read_cache is not None:
             self._active_read_cache = {}
 
@@ -642,6 +670,7 @@ class PromptArchiveIncremental:
         logical_kind: str,
         media_type: str,
     ) -> bytes:
+        self._check_cancelled()
         validated = _copy_ref(ref)
         if (
             validated.get("logical_kind") != logical_kind
@@ -661,7 +690,13 @@ class PromptArchiveIncremental:
                 raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
             return cached_raw
         self._cas_read_attempts += 1
-        raw = self.storage.read_blob(validated)
+        if self._cancellation is None:
+            raw = self.storage.read_blob(validated)
+        else:
+            raw = self.storage.read_blob(
+                validated,
+                cancellation=self._cancellation,
+            )
         if self._active_read_cache is not None:
             self._active_read_cache[digest] = (physical, raw)
         return raw
@@ -1519,6 +1554,7 @@ class PromptArchiveIncremental:
             root: bool,
             reference_depth: int,
         ) -> tuple[int, int, int]:
+            self._check_cancelled()
             copied = _copy_ref(ref)
             digest = _require_exact_string(copied.get("digest"))
             if digest in active:
@@ -1539,6 +1575,7 @@ class PromptArchiveIncremental:
                 first = node["children"][0]["ordinal_start"]
                 count = size = 0
                 for child in node["children"]:
+                    self._check_cancelled()
                     if level == 0:
                         track(child["ref"])
                         record_type = self._record_type_for_sequence(
@@ -1688,6 +1725,7 @@ class PromptArchiveIncremental:
         if len(leaves) != receipt.chunk_count:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         for index, leaf in enumerate(leaves):
+            self._check_cancelled()
             raw = self._read_blob(
                 leaf.ref,
                 logical_kind=logical_kind,
@@ -1952,6 +1990,7 @@ class PromptArchiveIncremental:
         edge_visits = 0
 
         def count_ref(ref: Mapping[str, Any]) -> str:
+            self._check_cancelled()
             copied = _copy_ref(ref)
             digest = _require_exact_string(copied.get("digest"))
             if digest not in referenced:
@@ -1979,6 +2018,7 @@ class PromptArchiveIncremental:
             reference_depth: int,
         ) -> bytes:
             nonlocal edge_visits
+            self._check_cancelled()
             if syntax_depth > 128 or reference_depth > self.storage.limits.max_reference_depth:
                 raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
             incoming = _copy_ref(ref)
@@ -2405,7 +2445,7 @@ class PromptArchiveIncremental:
             or root_ref.get("media_type") != expected_root_media
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        record_id = "parrec1-" + _pas1_id(
+        record_id = "parrec1-" + pas1_id_v1(
             "record-id",
             (
                 ("project_id", self.project_id),
@@ -2546,7 +2586,7 @@ class PromptArchiveIncremental:
             }
         origin_response_id = frozen_provenance.get("origin_response_id")
         origin_transition_id = frozen_provenance.get("origin_transition_id")
-        record_id = "parrec1-" + _pas1_id(
+        record_id = "parrec1-" + pas1_id_v1(
             "record-id",
             (
                 ("project_id", self.project_id),
@@ -2894,6 +2934,26 @@ class PromptArchiveIncremental:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         _require_rfc3339(occurrence.created_at)
         _require_rfc3339(occurrence.verified_at)
+        if (
+            type(occurrence.state_revision) is not int
+            or not 0 <= occurrence.state_revision <= _MAX_INT64
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        source_fact = (
+            occurrence.source_response_key,
+            occurrence.source_byte_size,
+            occurrence.source_sha256,
+        )
+        if any(value is not None for value in source_fact):
+            if (
+                type(source_fact[0]) is not str
+                or _SAFE_ID_RE.fullmatch(source_fact[0]) is None
+                or type(source_fact[1]) is not int
+                or not 0 <= source_fact[1] <= self.storage.limits.max_hydrated_bytes
+                or type(source_fact[2]) is not str
+                or _SHA256_RE.fullmatch(source_fact[2]) is None
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
 
         source_raw = canonical_json_bytes_v1(
             occurrence.source,
@@ -3019,10 +3079,11 @@ class PromptArchiveIncremental:
                 ("hydrated_sha256", hydrated_sha256),
             ]
         )
-        return "par1-" + _pas1_id("archive-id", fields)
+        return "par1-" + pas1_id_v1("archive-id", fields)
 
     def _raw_graph_counts(self, receipt: SequenceReceipt) -> dict[str, int]:
         seen: set[str] = set()
+        digest_roles: dict[str, tuple[str, str]] = {}
         completed_indexes: set[str] = set()
         active_indexes: set[str] = set()
         raw_chunk_digests: set[str] = set()
@@ -3032,7 +3093,10 @@ class PromptArchiveIncremental:
         def add_ref(ref: Mapping[str, Any]) -> None:
             nonlocal stored_bytes, uncompressed_bytes
             value = _copy_ref(ref)
-            digest = _require_exact_string(value.get("digest"))
+            digest, _logical_kind, _media_type = _register_digest_role(
+                digest_roles,
+                value,
+            )
             if digest not in seen:
                 seen.add(digest)
                 stored_bytes += _require_exact_int(value.get("stored_size"))
@@ -3607,6 +3671,7 @@ class PromptArchiveIncremental:
         observed_non_literals: list[tuple[str, int, int, str | None]] = []
 
         for step in steps:
+            self._check_cancelled()
             if type(step) is not dict:
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
             start = _require_exact_int(step.get("source_start"))
@@ -3735,6 +3800,7 @@ class PromptArchiveIncremental:
         expected_non_literals: list[tuple[str, int, int, str | None]] = []
         candidates = self._candidate_value_spans(parsed)
         for candidate_kind, path, node in candidates:
+            self._check_cancelled()
             if candidate_kind != "sequence":
                 continue
             sequence_kind = _PROMOTED_SLOTS[path][1]
@@ -3744,6 +3810,7 @@ class PromptArchiveIncremental:
             ) or (sequence_kind != "history_text" and node.node_kind != "array"):
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         for candidate_kind, path, node in candidates:
+            self._check_cancelled()
             if candidate_kind == "sequence":
                 _root_name, sequence_kind, _record_type = _PROMOTED_SLOTS[path]
                 if sequence_kind == "history_text":
@@ -3806,14 +3873,17 @@ class PromptArchiveIncremental:
         expected_step_ranges: list[tuple[str, int, int]] = []
         gap_cursor = 0
         for kind, start, end, _slot in expected_non_literals:
+            self._check_cancelled()
             offset = gap_cursor
             while offset < start:
+                self._check_cancelled()
                 next_offset = min(start, offset + 65_536)
                 expected_step_ranges.append(("literal", offset, next_offset))
                 offset = next_offset
             expected_step_ranges.append((kind, start, end))
             gap_cursor = end
         while gap_cursor < source_size:
+            self._check_cancelled()
             next_offset = min(source_size, gap_cursor + 65_536)
             expected_step_ranges.append(("literal", gap_cursor, next_offset))
             gap_cursor = next_offset
@@ -3833,6 +3903,7 @@ class PromptArchiveIncremental:
         logical_bytes: int,
     ) -> dict[str, int]:
         seen: dict[str, dict[str, Any]] = {}
+        digest_roles: dict[str, tuple[str, str]] = {}
         seen_typed: set[tuple[str, str, str]] = set()
         control_children: dict[
             tuple[str, str, str], list[Mapping[str, Any]]
@@ -3885,14 +3956,14 @@ class PromptArchiveIncremental:
 
         def visit(ref: Mapping[str, Any], reference_depth: int) -> None:
             nonlocal graph_edges
+            self._check_cancelled()
             if reference_depth > self.storage.limits.max_reference_depth:
                 raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
             copied = _copy_ref(ref)
-            digest = _require_exact_string(copied.get("digest"))
-            if _SHA256_RE.fullmatch(digest) is None:
-                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-            logical_kind = _require_exact_string(copied.get("logical_kind"))
-            media_type = _require_exact_string(copied.get("media_type"))
+            digest, logical_kind, media_type = _register_digest_role(
+                digest_roles,
+                copied,
+            )
             typed_key = (digest, logical_kind, media_type)
             physical = {
                 key: item
@@ -4623,6 +4694,152 @@ class PromptArchiveIncremental:
                 max_output_bytes=max_output_bytes,
             )
 
+    def read_manifest_metadata(
+        self,
+        manifest_ref: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Read one bounded manifest without traversing its referenced graph.
+
+        This is the metadata-only seam used by descriptor and manifest HTTP
+        resources.  The manifest CAS object, closed schema, project/sprint
+        scope, and archive self-ID are verified here.  Referenced index,
+        record, payload, and chunk blobs are deliberately not opened; complete
+        reachability, count, and hydrated-byte verification belongs only to
+        :meth:`hydrate_archive_bytes` under hydration admission.
+        """
+
+        with self._reference_budget():
+            manifest = self._read_control(manifest_ref, logical_kind="manifest")
+            if manifest.get("schema_version") != 1:
+                raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+            archive_format = manifest.get("archive_format")
+            if archive_format == "incremental_transition_v1":
+                value = self._validate_native_manifest(manifest)
+            elif archive_format == "legacy_raw_chunks_v1":
+                value = self._validate_legacy_manifest(manifest)
+            else:
+                raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+            # Metadata reads stay shallow, but all references present directly
+            # in the bounded manifest still participate in the one-role-per-
+            # digest closure invariant.  Descendant roles are deliberately
+            # deferred to full reachability/hydration traversal.
+            digest_roles: dict[str, tuple[str, str]] = {}
+            _register_digest_role(digest_roles, manifest_ref)
+            for ref in value["roots"].values():
+                _register_digest_role(digest_roles, ref)
+            if archive_format == "incremental_transition_v1":
+                _register_digest_role(
+                    digest_roles,
+                    value["envelope"]["chunks_root"],
+                )
+            scope = value.get("scope")
+            if type(scope) is not dict or (
+                scope.get("project_id") != self.project_id
+                or scope.get("sprint_id") != self.sprint_id
+            ):
+                raise _error("PROMPT_ARCHIVE_NOT_FOUND")
+            integrity = value["integrity"]
+            envelope_sha256 = (
+                value["envelope"]["sha256"]
+                if archive_format == "incremental_transition_v1"
+                else None
+            )
+            expected_archive_id = self._archive_id(
+                archive_format=archive_format,
+                scope=scope,
+                roots=value["roots"],
+                hydrated_size=_require_exact_int(integrity["hydrated_size"]),
+                hydrated_sha256=_require_exact_string(
+                    integrity["hydrated_sha256"]
+                ),
+                envelope_sha256=envelope_sha256,
+            )
+            if value["archive_id"] != expected_archive_id:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return value
+
+    def read_manifest(
+        self,
+        manifest_ref: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Backward-compatible alias for the explicit metadata-only reader."""
+
+        return self.read_manifest_metadata(manifest_ref)
+
+    def reachable_refs(
+        self,
+        manifest_ref: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], ...]:
+        """Return and verify the manifest's unique typed CAS closure.
+
+        The publication plan binds this exact set.  Traversal is deliberately
+        rooted in the supplied manifest reference and follows only closed
+        ``prompt_archive_blob_ref`` values found in PAS1 control objects; it
+        never enumerates the blob directory.
+        """
+
+        control_kinds = {
+            "manifest",
+            "index_node",
+            "json_value",
+            "json_edge",
+            *set(_RECORD_SEQUENCE_TYPES.values()),
+        }
+        observed: dict[tuple[str, str, str], dict[str, Any]] = {}
+        digest_roles: dict[str, tuple[str, str]] = {}
+        active: set[tuple[str, str, str]] = set()
+
+        def nested_refs(value: Any) -> Iterable[Mapping[str, Any]]:
+            if isinstance(value, Mapping):
+                if value.get("kind") == "prompt_archive_blob_ref":
+                    yield value
+                    return
+                for child in value.values():
+                    yield from nested_refs(child)
+            elif type(value) is list:
+                for child in value:
+                    yield from nested_refs(child)
+
+        def visit(ref: Mapping[str, Any], depth: int) -> None:
+            if depth > self.storage.limits.max_reference_depth:
+                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            copied = _copy_ref(ref)
+            typed_key = _register_digest_role(
+                digest_roles,
+                copied,
+            )
+            if typed_key in active:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            previous = observed.get(typed_key)
+            if previous is not None:
+                if previous != copied:
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                return
+            if len(observed) >= self.storage.limits.max_referenced_objects:
+                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            raw = self.storage.read_blob(copied)
+            observed[typed_key] = copied
+            logical_kind = typed_key[1]
+            if logical_kind not in control_kinds:
+                return
+            active.add(typed_key)
+            try:
+                document = _load_canonical_control(raw)
+                for child in nested_refs(document):
+                    visit(child, depth + 1)
+            finally:
+                active.remove(typed_key)
+
+        with self._reference_budget():
+            visit(manifest_ref, 1)
+        return tuple(
+            observed[key]
+            for key in sorted(
+                observed,
+                key=lambda item: tuple(part.encode("utf-8") for part in item),
+            )
+        )
+
     def _hydrate_archive_bytes(
         self,
         manifest_ref: Mapping[str, Any],
@@ -4772,5 +4989,7 @@ __all__ = [
     "SequenceReceipt",
     "StorageInventory",
     "WorkMetrics",
+    "pas1_id_v1",
     "response_id_v1",
+    "sprint_storage_key_v1",
 ]
