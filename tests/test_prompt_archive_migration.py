@@ -1197,6 +1197,157 @@ class PromptArchiveMigrationTests(unittest.TestCase):
         self.assertFalse((target.parent / temp_name).exists())
         self.assertEqual(unrelated.read_bytes(), b"do-not-touch")
 
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_owned_private_temp_ads_is_rejected_without_mutation(self) -> None:
+        raw = b'{"preserved":"byte-exact"}\r\n'
+        target = self.base / "private-ads" / "witness.json"
+        target.parent.mkdir()
+        operation_id = "parop1-" + "c" * 32
+        temp_name = migration_module._owned_temp_name(
+            target.name,
+            "par-private",
+            operation_id,
+        )
+        temporary = target.parent / temp_name
+        original = b"operator-owned-default-stream"
+        temporary.write_bytes(original)
+        stream = Path(str(temporary) + ":psc-audit")
+        stream_raw = b"operator-owned-alternate-stream"
+        stream.write_bytes(stream_raw)
+        before_identity = migration_module._file_identity(temporary.lstat())
+        before_mtime = temporary.stat().st_mtime_ns
+        try:
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                lambda: migration_module._publish_private_evidence_file(
+                    target,
+                    raw,
+                    ownership_id=operation_id,
+                ),
+            )
+
+            self.assertFalse(target.exists())
+            self.assertTrue(temporary.exists())
+            self.assertEqual(temporary.read_bytes(), original)
+            self.assertEqual(stream.read_bytes(), stream_raw)
+            self.assertEqual(
+                migration_module._file_identity(temporary.lstat()),
+                before_identity,
+            )
+            self.assertEqual(temporary.stat().st_mtime_ns, before_mtime)
+        finally:
+            stream.unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_owned_temp_handle_blocks_ads_race_and_rechecks_before_rename(
+        self,
+    ) -> None:
+        raw = b'{"preserved":"race-closed"}\r\n'
+        target = self.base / "private-race" / "witness.json"
+        target.parent.mkdir()
+        operation_id = "parop1-" + "d" * 32
+        temp_name = migration_module._owned_temp_name(
+            target.name,
+            "par-private",
+            operation_id,
+        )
+        temporary = target.parent / temp_name
+        temporary.write_bytes(b"safe-resume-temp")
+        raced_stream = Path(str(temporary) + ":psc-race")
+        original_writer = migration_module._write_and_verify_descriptor
+        race_blocked: list[bool] = []
+
+        def attempt_race(descriptor: int, payload: bytes) -> None:
+            try:
+                raced_stream.write_bytes(b"must-not-attach")
+            except OSError:
+                race_blocked.append(True)
+            else:
+                self.fail("publication handle allowed a concurrent ADS writer")
+            original_writer(descriptor, payload)
+
+        original_checker = (
+            migration_module._windows_reject_named_streams_descriptor
+        )
+        with (
+            mock.patch.object(
+                migration_module,
+                "_windows_reject_named_streams_descriptor",
+                wraps=original_checker,
+            ) as checker,
+            mock.patch.object(
+                migration_module,
+                "_write_and_verify_descriptor",
+                side_effect=attempt_race,
+            ),
+        ):
+            digest, size = migration_module._publish_private_evidence_file(
+                target,
+                raw,
+                ownership_id=operation_id,
+            )
+
+        self.assertEqual(race_blocked, [True])
+        self.assertEqual(checker.call_count, 2)
+        self.assertEqual(digest, hashlib.sha256(raw).hexdigest())
+        self.assertEqual(size, len(raw))
+        self.assertEqual(target.read_bytes(), raw)
+        self.assertFalse(temporary.exists())
+        self.assertFalse(raced_stream.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_pre_rename_stream_fault_preserves_temp_and_closes_handle(self) -> None:
+        raw = b'{"preserved":"fault-boundary"}\r\n'
+        target = self.base / "private-fault" / "witness.json"
+        target.parent.mkdir()
+        operation_id = "parop1-" + "e" * 32
+        temp_name = migration_module._owned_temp_name(
+            target.name,
+            "par-private",
+            operation_id,
+        )
+        temporary = target.parent / temp_name
+        temporary.write_bytes(b"safe-resume-temp")
+        original_checker = (
+            migration_module._windows_reject_named_streams_descriptor
+        )
+        checks = 0
+
+        def fail_from_pre_rename(descriptor: int) -> None:
+            nonlocal checks
+            checks += 1
+            if checks >= 2:
+                raise migration_module._error(
+                    "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE"
+                )
+            original_checker(descriptor)
+
+        with mock.patch.object(
+            migration_module,
+            "_windows_reject_named_streams_descriptor",
+            side_effect=fail_from_pre_rename,
+        ):
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                lambda: migration_module._publish_private_evidence_file(
+                    target,
+                    raw,
+                    ownership_id=operation_id,
+                ),
+            )
+
+        self.assertEqual(checks, 3)
+        self.assertFalse(target.exists())
+        self.assertTrue(temporary.exists())
+        # A new writer can open the leaf only after the restrictive publication
+        # handle has been closed by the outer finally.
+        post_fault_stream = Path(str(temporary) + ":post-fault")
+        try:
+            post_fault_stream.write_bytes(b"handle-closed")
+            self.assertEqual(post_fault_stream.read_bytes(), b"handle-closed")
+        finally:
+            post_fault_stream.unlink(missing_ok=True)
+
     def test_reconstruction_owned_partial_temp_resumes_exactly(self) -> None:
         raw = b"opaque\x00legacy\r\n"
         source_file = self.source / "latest-response.json"

@@ -968,6 +968,69 @@ def _windows_reject_named_streams(
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
 
 
+def _windows_reject_named_streams_descriptor(descriptor: int) -> None:
+    """Verify streams on the exact Windows file handle being mutated.
+
+    The caller holds this handle without write/delete sharing.  Querying by
+    handle avoids a pathname ABA window between the safety check and
+    truncate/rename.
+    """
+
+    if os.name != "nt":
+        return
+    import msvcrt
+    from ctypes import wintypes
+
+    maximum = 64 * 1024
+    information = ctypes.create_string_buffer(maximum)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_information = kernel32.GetFileInformationByHandleEx
+    get_information.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    )
+    get_information.restype = wintypes.BOOL
+    if not get_information(
+        msvcrt.get_osfhandle(descriptor),
+        7,  # FileStreamInfo
+        information,
+        maximum,
+    ):
+        if ctypes.get_last_error() in {122, 234}:
+            # A clean regular leaf has one tiny unnamed stream.  Overflowing a
+            # bounded stream-information buffer therefore proves it unsafe.
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE")
+
+    streams: list[str] = []
+    offset = 0
+    while True:
+        if offset < 0 or offset + 24 > maximum:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        next_offset = ctypes.c_ulong.from_buffer(information, offset).value
+        name_size = ctypes.c_ulong.from_buffer(information, offset + 4).value
+        name_end = offset + 24 + name_size
+        if name_size % 2 or name_end > maximum:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        try:
+            name = ctypes.string_at(
+                ctypes.addressof(information) + offset + 24,
+                name_size,
+            ).decode("utf-16-le", errors="strict")
+        except UnicodeError:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE") from None
+        streams.append(name)
+        if next_offset == 0:
+            break
+        if next_offset < 24 + name_size or offset + next_offset <= offset:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        offset += next_offset
+    if streams != ["::$DATA"]:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+
+
 def _inspect_regular_file(
     path: Path,
     *,
@@ -3809,7 +3872,11 @@ def _windows_open_relative_file(
         ctypes.byref(status_block),
         None,
         0x00000100,
-        0x00000001 | 0x00000002 | 0x00000004,
+        # Hold the publication leaf without write/delete sharing.  A second
+        # handle may inspect it, but it cannot add/modify an alternate stream,
+        # replace the pathname, or delete the leaf between safety checks and
+        # the handle-relative rename below.
+        0x00000001,
         2 if create else 1,
         0x00000040 | 0x00000020 | 0x00200000,
         None,
@@ -3926,6 +3993,10 @@ def _open_owned_relative_temp(
     try:
         if not _descriptor_matches_relative_leaf(parent, name, descriptor, path):
             raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        # This check is deliberately before ftruncate/write.  A deterministic
+        # name proves which operation may resume a temp, but it does not prove
+        # that an operator-created leaf with the same name is stream-safe.
+        _windows_reject_named_streams_descriptor(descriptor)
         if not created:
             # The deterministic name is an immutable reservation in the batch
             # plan.  Only that exact operation may resume and rewrite it.
@@ -3980,10 +4051,25 @@ def _discard_owned_relative_temp(
         ):
             return
         if os.name == "nt":
+            # Never delete an unsafe pre-existing/raced leaf while cleaning up
+            # a failed publication.  The held handle denies write/delete share
+            # and the second identity proof binds this pathname to that handle.
+            _windows_reject_named_streams_descriptor(descriptor)
+            if not _descriptor_matches_relative_leaf(
+                parent, name, descriptor, path
+            ):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
             _windows_mark_file_for_delete(descriptor)
         else:
             os.unlink(name, dir_fd=parent.descriptor)
-    except (FileNotFoundError, PromptArchiveStorageError, OSError):
+    except (
+        FileNotFoundError,
+        PromptArchiveMigrationError,
+        PromptArchiveStorageError,
+        OSError,
+    ):
+        # Cleanup is best-effort and must not mask the publication failure.
+        # Every error above occurs before a potentially unsafe temp is deleted.
         pass
 
 
@@ -3997,7 +4083,7 @@ def _publish_pinned_no_replace(
     ownership_id: str,
     maximum: int,
 ) -> bool:
-    temporary_name, _temporary_path, descriptor = _open_owned_relative_temp(
+    temporary_name, temporary_path, descriptor = _open_owned_relative_temp(
         parent,
         target_name,
         label=label,
@@ -4011,7 +4097,18 @@ def _publish_pinned_no_replace(
                 parent,
                 temporary_name,
                 descriptor,
-                parent.path / temporary_name,
+                temporary_path,
+            ):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
+            # Recheck the complete stream set after writing and immediately
+            # before publication.  The Windows handle remains open without
+            # write/delete sharing throughout this check and rename.
+            _windows_reject_named_streams_descriptor(descriptor)
+            if not _descriptor_matches_relative_leaf(
+                parent,
+                temporary_name,
+                descriptor,
+                temporary_path,
             ):
                 raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
             published = _atomic_rename_pinned_no_replace(
@@ -4050,12 +4147,14 @@ def _publish_pinned_no_replace(
             raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
         return False
     finally:
-        if not published:
-            _discard_owned_relative_temp(parent, temporary_name, descriptor)
         try:
-            os.close(descriptor)
-        except OSError:
-            pass
+            if not published:
+                _discard_owned_relative_temp(parent, temporary_name, descriptor)
+        finally:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
 
 
 def _preflight_private_evidence_file(path: Path, raw: bytes) -> None:

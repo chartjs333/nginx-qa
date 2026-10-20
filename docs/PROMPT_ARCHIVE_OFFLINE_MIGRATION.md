@@ -34,6 +34,12 @@ archive, private-evidence parent, and reconstruction directories reject NTFS
 alternate streams before publication. A lexical overlap is rejected before
 the protected tree is probed.
 
+A deterministic partial-temp name is not proof of ownership by itself. On
+Windows the exact temp handle rejects named streams before any truncate/write,
+is held without write/delete sharing, and is rechecked immediately before the
+handle-relative rename. An unsafe pre-existing temp is left unchanged and is
+never promoted to the final witness or reconstruction path.
+
 The public archive stores only path-free hashes, IDs, counts, provenance, and
 journal state. The exact pre/post paths and filesystem identities exist only in
 the explicitly selected private evidence file. Protect that file as sensitive
