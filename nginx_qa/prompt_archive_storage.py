@@ -2505,6 +2505,15 @@ class PromptArchiveStorage:
             and _JOURNAL_GENERATION_FILE_RE.fullmatch(components[5]) is not None
         ):
             return "journal_generation"
+        if components == ("legacy-latest", "v1", "target-authority.json"):
+            return "legacy_latest_target_binding"
+        if (
+            len(components) == 3
+            and components[0:2] == ("rollback-selections", "v1")
+            and components[2].endswith(".json")
+            and _OPERATION_ID_RE.fullmatch(components[2][:-5]) is not None
+        ):
+            return "rollback_selection"
         if (
             len(components) == 5
             and components[0:3] == ("pending", "v1", "generations")
@@ -2623,13 +2632,17 @@ class PromptArchiveStorage:
             and result[3].endswith(".lock" if lock else ".json")
             and _SHARD_RE.fullmatch(result[3][:-5]) is not None
         )
+        admission = (
+            lock
+            and result == ("pending", "v1", "locks", "admission.lock")
+        )
         migration = (
             len(result) == 4
             and result[0:2] == ("migrations", "v1")
             and _MIGRATION_BATCH_ID_RE.fullmatch(result[2]) is not None
             and result[3] == ("operation.lock" if lock else "journal.json")
         )
-        if not (operation or shard or migration):
+        if not (operation or shard or admission or migration):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return result
 

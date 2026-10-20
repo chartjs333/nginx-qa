@@ -46,6 +46,7 @@ SHA_B = "b" * 64
 SHA_C = "c" * 64
 ARCHIVE_ID = f"par1-{SHA_A}"
 RESPONSE_ID = f"parresp1-{'1' * 64}"
+TARGET_AUTHORITY_ID = f"parlatestauthority1-{'8' * 64}"
 
 
 def pas1_frame(value: str | None) -> bytes:
@@ -1283,7 +1284,7 @@ def native_publication_plan_fixture() -> dict:
         content_size=len(descriptor_bytes),
         descriptor_ref=descriptor_ref,
     )
-    target_authority_id = "parlatestauthority1-" + "8" * 64
+    target_authority_id = TARGET_AUTHORITY_ID
     transition_stub_name = f"transition-response-{RESPONSE_ID}.json"
     owner_projection = {
         "project_id": "9000",
@@ -1383,6 +1384,16 @@ def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
         response_kind = "identity-response" if write_kind == "identity" else "state-response"
         occurrence_kind = "identity-state"
         transition_id = None
+    response_id = "parresp1-" + pas1_id_digest(
+        "response-id",
+        [
+            ("project_id", "9000"),
+            ("sprint_id", "sprint-example-1"),
+            ("response_kind", response_kind),
+            ("occurrence_kind", occurrence_kind),
+            ("occurrence_id", occurrence_id),
+        ],
+    )
     frozen_timestamps = {
         "source_observed_at": "2026-10-11T11:28:00Z",
         "planned_at": "2026-10-11T11:29:00Z",
@@ -1400,14 +1411,14 @@ def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
             [
                 ("project_id", "9000"),
                 ("sprint_id", "sprint-example-1"),
-                ("response_id", RESPONSE_ID),
+                ("response_id", response_id),
                 ("occurrence_id", occurrence_id),
                 ("operation_id", operation_id),
             ],
         ),
         "project_id": "9000",
         "sprint_id": "sprint-example-1",
-        "response_id": RESPONSE_ID,
+        "response_id": response_id,
         "occurrence_id": occurrence_id,
         "operation_id": operation_id,
     }
@@ -1417,7 +1428,7 @@ def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
         content_kind="legacy_inline",
         content_sha256=SHA_C,
         content_size=512,
-        response_id=RESPONSE_ID,
+        response_id=response_id,
         bootstrap_kind="enrolled",
     )
     return {
@@ -1431,7 +1442,7 @@ def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
         "operation_kind": "legacy_latest_publish",
         "scope": {"project_id": "9000", "sprint_id": "sprint-example-1"},
         "occurrence": {
-            "response_id": RESPONSE_ID,
+            "response_id": response_id,
             "response_kind": response_kind,
             "occurrence_kind": occurrence_kind,
             "occurrence_id": occurrence_id,
@@ -1445,6 +1456,7 @@ def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
         ),
         "compatibility_publication": {
             "mode": "legacy_latest_publish",
+            "target_authority_id": TARGET_AUTHORITY_ID,
             "latest_intent": latest_intent,
         },
         "legacy_latest": {
@@ -1508,6 +1520,7 @@ def legacy_latest_journal_fixture(
         "journal_id": expected_journal_id,
         "operation_id": plan["operation_id"],
         "operation_kind": plan["operation_kind"],
+        "write_kind": plan["legacy_latest"]["write_kind"],
         "scope": copy.deepcopy(plan["scope"]),
         "occurrence": {
             "response_id": plan["occurrence"]["response_id"],
@@ -1995,6 +2008,18 @@ def legacy_publication_plan_semantic_issues(plan: dict) -> tuple[str, ...]:
     issues = list(plan_pending_registry_semantic_issues(plan))
     scope = plan["scope"]
     occurrence = plan["occurrence"]
+    expected_response_id = "parresp1-" + pas1_id_digest(
+        "response-id",
+        [
+            ("project_id", scope["project_id"]),
+            ("sprint_id", scope["sprint_id"]),
+            ("response_kind", occurrence["response_kind"]),
+            ("occurrence_kind", occurrence["occurrence_kind"]),
+            ("occurrence_id", occurrence["occurrence_id"]),
+        ],
+    )
+    if occurrence["response_id"] != expected_response_id:
+        issues.append("legacy response id digest differs from occurrence identity")
     locator = plan["recovery_locator"]
     for field, expected in {
         "project_id": scope["project_id"],
@@ -2299,6 +2324,8 @@ def legacy_journal_semantic_issues(
     if journal["latest_intent"] != compatibility["latest_intent"]:
         issues.append("journal latest intent differs from plan")
     legacy = plan["legacy_latest"]
+    if journal["write_kind"] != legacy["write_kind"]:
+        issues.append("journal write kind differs from plan")
     for journal_field, plan_field in (
         ("legacy_payload_root", "payload_root"),
         ("legacy_content_sha256", "content_sha256"),
@@ -3682,6 +3709,68 @@ class PromptArchiveContractTests(unittest.TestCase):
                     )
                 previous = journal
 
+        missing_write_kind = legacy_latest_journal_fixture()
+        missing_write_kind.pop("write_kind")
+        self.assert_invalid(journal_name, missing_write_kind)
+
+        wrong_write_kind = legacy_latest_journal_fixture()
+        wrong_write_kind["write_kind"] = "identity"
+        self.validator(journal_name).validate(wrong_write_kind)
+        self.assertIn(
+            "journal write kind differs from plan",
+            journal_semantic_issues(
+                wrong_write_kind,
+                legacy_latest_plan_fixture(),
+            ),
+        )
+
+        nonlegacy_write_kind = journal_fixture()
+        nonlegacy_write_kind["write_kind"] = "transition"
+        self.assert_invalid(journal_name, nonlegacy_write_kind)
+
+        wrong_response_id = legacy_latest_plan_fixture()
+        wrong_response_id["occurrence"]["response_id"] = "parresp1-" + "f" * 64
+        self.validator(plan_name).validate(wrong_response_id)
+        self.assertIn(
+            "legacy response id digest differs from occurrence identity",
+            publication_plan_semantic_issues(wrong_response_id),
+        )
+
+        target_bound = legacy_latest_plan_fixture()
+        self.assertEqual(
+            target_bound["compatibility_publication"]["target_authority_id"],
+            TARGET_AUTHORITY_ID,
+        )
+
+        missing_target = copy.deepcopy(target_bound)
+        missing_target["compatibility_publication"].pop("target_authority_id")
+        self.assert_invalid(plan_name, missing_target)
+
+        for malformed_target in (
+            "latest-response.json",
+            "parlatestauthority1-" + "A" * 64,
+            "parlatestauthority1-" + "8" * 63,
+        ):
+            candidate = copy.deepcopy(target_bound)
+            candidate["compatibility_publication"][
+                "target_authority_id"
+            ] = malformed_target
+            with self.subTest(malformed_target=malformed_target):
+                self.assert_invalid(plan_name, candidate)
+
+        extra_target_selector = copy.deepcopy(target_bound)
+        extra_target_selector["compatibility_publication"]["target_path"] = (
+            "C:/forbidden/latest-response.json"
+        )
+        self.assert_invalid(plan_name, extra_target_selector)
+
+        another_closed_target = copy.deepcopy(target_bound)
+        another_closed_target["compatibility_publication"][
+            "target_authority_id"
+        ] = "parlatestauthority1-" + "9" * 64
+        self.validator(plan_name).validate(another_closed_target)
+        self.assertEqual(publication_plan_semantic_issues(another_closed_target), ())
+
         bypass_drain = legacy_latest_plan_fixture()
         bypass_drain["legacy_latest"]["authoritative_drain_barrier"][
             "observed_incomplete_operation_ids"
@@ -4299,6 +4388,7 @@ class PromptArchiveContractTests(unittest.TestCase):
             "gzip-rfc1952-zlib-1.2.13-level9-v1",
             "pas1-concat-renderer-v1",
             "prompt-archive-publication-plan-v1",
+            "compatibility_publication.target_authority_id",
             "operations/v1/<response_id>/<operation_id>/plan.json",
             "pointers/v1/<response_id>.json",
             "archives/v1/<archive_id>.json",

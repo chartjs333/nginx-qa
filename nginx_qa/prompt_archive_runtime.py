@@ -29,12 +29,14 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Final, Protocol
 
 from .prompt_archive_incremental import (
     ArchiveOccurrence,
+    ByteStreamReceipt,
     PromptArchiveIncremental,
     pas1_id_v1,
     response_id_v1,
@@ -111,6 +113,12 @@ _LATEST_SLOT_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-latest-slot
 _COMPATIBILITY_RESULT_MEDIA: Final = (
     "application/vnd.nginx-qa.prompt-archive-compatibility-result-v1+json"
 )
+_LEGACY_TARGET_BINDING_MEDIA: Final = (
+    "application/vnd.nginx-qa.prompt-archive-legacy-target-binding-v1+json"
+)
+_ROLLBACK_SELECTION_MEDIA: Final = (
+    "application/vnd.nginx-qa.prompt-archive-rollback-selection-v1+json"
+)
 _PLAN_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
 _JOURNAL_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
 _PENDING_MEDIA: Final = (
@@ -120,6 +128,7 @@ _INVENTORY_MEDIA: Final = (
     "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
 )
 _OFFLINE_OPERATOR_GATE: Final = "prompt-archive-offline-migration-v1"
+_AUTHORITATIVE_OPERATOR_GATE: Final = "prompt-archive-authoritative-v1"
 _OFFLINE_MIGRATION_CONTRACT: Final = "prompt-archive-offline-migration-contract-v1"
 _OFFLINE_MIGRATION_TOOL: Final = "prompt-archive-migration-v1"
 _MIGRATION_BATCH_PLAN_MEDIA: Final = (
@@ -134,6 +143,12 @@ _JOURNAL_STATES: Final = (
     "compatibility_published",
     "complete",
 )
+_LEGACY_LATEST_JOURNAL_STATES: Final = (
+    "intent",
+    "legacy_payload_verified",
+    "compatibility_published",
+    "complete",
+)
 # Runtime source proof is an intent-only gate.  Once ``blobs_verified`` is
 # durable, the closed plan/manifest graph is the recovery source of truth.
 _PRE_POINTER_STATES: Final = frozenset({"intent"})
@@ -144,6 +159,8 @@ _ABORT_REASON_CODES: Final = frozenset(
         "limit_exceeded",
         "blob_verification_failed",
         "manifest_verification_failed",
+        "legacy_payload_verification_failed",
+        "authoritative_drain_failed",
         "generation_conflict",
         "operator_cancelled",
     }
@@ -156,6 +173,15 @@ _JOURNAL_TIMESTAMP_KEYS: Final = (
     "locator_published_at",
     "compatibility_published_at",
     "completed_at",
+)
+_LEGACY_LATEST_TIMESTAMP_KEYS: Final = (
+    "intent_at",
+    "legacy_payload_verified_at",
+    "compatibility_published_at",
+    "completed_at",
+)
+_LEGACY_LATEST_WRITE_KINDS: Final = frozenset(
+    {"transition", "identity", "state", "rollback"}
 )
 
 
@@ -515,6 +541,42 @@ class PromptArchiveCompatibilityPublisher(Protocol):
     ) -> Mapping[str, Any]: ...
 
 
+class PromptArchiveLegacyLatestPublisher(Protocol):
+    """Ordered external-latest seam used by the common durable operation.
+
+    Preparation is read-only and freezes the predecessor-independent intent
+    before the outer plan is admitted.  Publication accepts only that exact
+    intent and rechecks the supplied drain barrier while holding the physical
+    project-global latest lock.
+    """
+
+    @property
+    def target_authority_id(self) -> str: ...
+
+    def prepare_legacy_intent(
+        self,
+        content: bytes,
+        *,
+        write_kind: str,
+        occurrence_id: str,
+        operation_id: str,
+        published_at: str,
+        source_response_id: str,
+        source_sprint_id: str | None,
+        source_revision: int,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Mapping[str, Any]: ...
+
+    def publish_prepared_legacy(
+        self,
+        content: bytes,
+        *,
+        prepared: Mapping[str, Any],
+        write_kind: str,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Any: ...
+
+
 class PromptArchiveRuntime:
     """One project-bound Prompt Archive runtime."""
 
@@ -529,6 +591,7 @@ class PromptArchiveRuntime:
         ]
         | None = None,
         metrics: PromptArchiveMetrics | None = None,
+        legacy_latest_publication_enabled: bool = True,
     ) -> None:
         if not isinstance(config, PromptArchiveRuntimeConfig):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
@@ -549,6 +612,8 @@ class PromptArchiveRuntime:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if metrics is not None and not isinstance(metrics, PromptArchiveMetrics):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if type(legacy_latest_publication_enabled) is not bool:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if compatibility_resolver is not None and not callable(
             compatibility_resolver
         ):
@@ -557,6 +622,7 @@ class PromptArchiveRuntime:
         self._occurrence_prover = occurrence_prover
         self._compatibility_resolver = compatibility_resolver
         self.metrics = metrics if metrics is not None else PromptArchiveMetrics()
+        self.legacy_latest_publication_enabled = legacy_latest_publication_enabled
         self._live_occurrence_proofs: dict[
             bytes,
             PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof,
@@ -612,31 +678,238 @@ class PromptArchiveRuntime:
         supplied: PromptArchiveCompatibilityPublisher | None,
     ) -> PromptArchiveCompatibilityPublisher:
         compatibility = plan.get("compatibility_publication")
-        expected_target = (
+        plan_target = (
             compatibility.get("target_authority_id")
             if isinstance(compatibility, Mapping)
             else None
         )
+        if (
+            type(plan_target) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(plan_target) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        bound_target = self.latest_target_authority_id()
+        if bound_target is not None and bound_target != plan_target:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        expected_target = bound_target or plan_target
         if supplied is not None:
-            return self._require_compatibility_publisher(
+            selected = self._require_compatibility_publisher(
                 supplied,
                 expected_target_authority_id=expected_target,
             )
-        if self._compatibility_resolver is None:
-            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
-        try:
-            resolved = self._compatibility_resolver(
-                self.project_id,
-                copy.deepcopy(dict(plan)),
+        else:
+            if self._compatibility_resolver is None:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            try:
+                resolved = self._compatibility_resolver(
+                    self.project_id,
+                    copy.deepcopy(dict(plan)),
+                )
+            except PromptArchiveStorageError:
+                raise
+            except Exception:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            selected = self._require_compatibility_publisher(
+                resolved,
+                expected_target_authority_id=expected_target,
             )
-        except PromptArchiveStorageError:
+        if bound_target is None:
+            self._bind_latest_target_authority_id(plan_target, create=True)
+        return selected
+
+    @staticmethod
+    def _require_legacy_latest_publisher(
+        value: PromptArchiveLegacyLatestPublisher | None,
+        *,
+        expected_target_authority_id: str | None = None,
+    ) -> PromptArchiveLegacyLatestPublisher:
+        target_authority_id = getattr(value, "target_authority_id", None)
+        if (
+            value is None
+            or not callable(getattr(value, "prepare_legacy_intent", None))
+            or not callable(getattr(value, "publish_prepared_legacy", None))
+            or type(target_authority_id) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(target_authority_id) is None
+            or (
+                expected_target_authority_id is not None
+                and target_authority_id != expected_target_authority_id
+            )
+        ):
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        return value
+
+    @staticmethod
+    def _legacy_latest_target_binding_path() -> tuple[str, ...]:
+        return ("legacy-latest", "v1", "target-authority.json")
+
+    def latest_target_authority_id(self) -> str | None:
+        """Return the immutable physical-latest binding without mutating it."""
+
+        if self.storage is None:
+            return None
+        path = self._legacy_latest_target_binding_path()
+        try:
+            binding = self._require_storage().read_immutable_json(path)
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_NOT_FOUND":
+                return None
             raise
-        except Exception:
-            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
-        return self._require_compatibility_publisher(
-            resolved,
-            expected_target_authority_id=expected_target,
+        if (
+            set(binding)
+            != {
+                "schema_version",
+                "kind",
+                "media_type",
+                "project_id",
+                "target_authority_id",
+            }
+            or binding.get("schema_version") != 1
+            or binding.get("kind") != "prompt_archive_legacy_target_binding"
+            or binding.get("media_type") != _LEGACY_TARGET_BINDING_MEDIA
+            or binding.get("project_id") != self.project_id
+            or type(binding.get("target_authority_id")) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(binding["target_authority_id"])
+            is None
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return binding["target_authority_id"]
+
+    def _bind_latest_target_authority_id(
+        self,
+        target_authority_id: str,
+        *,
+        create: bool,
+    ) -> str | None:
+        if (
+            type(target_authority_id) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(target_authority_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        observed_target = self.latest_target_authority_id()
+        if observed_target is not None:
+            if observed_target != target_authority_id:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return observed_target
+        if not create:
+            return None
+        storage = self._require_storage()
+        with storage.control_lock(self._registry_admission_lock_path()):
+            observed_target = self.latest_target_authority_id()
+            if observed_target is not None:
+                if observed_target != target_authority_id:
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                return observed_target
+            document = {
+                "schema_version": 1,
+                "kind": "prompt_archive_legacy_target_binding",
+                "media_type": _LEGACY_TARGET_BINDING_MEDIA,
+                "project_id": self.project_id,
+                "target_authority_id": target_authority_id,
+            }
+            raw = canonical_json_bytes_v1(document, maximum=_CONTROL_MAX_BYTES)
+            storage.publish_immutable_bytes(
+                self._legacy_latest_target_binding_path(),
+                raw,
+                expected_sha256=hashlib.sha256(raw).hexdigest(),
+            )
+            observed_target = self.latest_target_authority_id()
+            if observed_target != target_authority_id:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return observed_target
+
+    @contextmanager
+    def legacy_latest_pre_enrollment_admission(
+        self,
+        publisher: PromptArchiveLegacyLatestPublisher,
+    ):
+        """Serialize one storage-backed private first write with common admission.
+
+        The configured-root compatibility path may use the colocated typed
+        coordinator before a durable revision exists.  This fence proves that
+        no common operation or target binding is already authoritative, then
+        remains held through the caller's private latest decision.  All common
+        target binding and pending registration uses the same lock.
+        """
+
+        selected = self._require_legacy_latest_publisher(publisher)
+        storage = self._require_storage()
+        self.recover_pending(legacy_latest_publisher=selected)
+        with storage.control_lock(self._registry_admission_lock_path()):
+            if self.latest_target_authority_id() is not None:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            for ordinal in range(256):
+                shard_id = f"{ordinal:02x}"
+                with storage.control_lock(self._registry_lock_path(shard_id)):
+                    registry = self._read_registry_locked(shard_id)
+                    if registry is not None and registry["entries"]:
+                        raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            yield
+
+    def _legacy_latest_target_binding(
+        self,
+        publisher: PromptArchiveLegacyLatestPublisher,
+        *,
+        create: bool,
+    ) -> str | None:
+        selected = self._require_legacy_latest_publisher(publisher)
+        return self._bind_latest_target_authority_id(
+            selected.target_authority_id,
+            create=create,
         )
+
+    def _resolve_legacy_latest_publisher(
+        self,
+        plan: Mapping[str, Any],
+        supplied: PromptArchiveLegacyLatestPublisher | None,
+    ) -> PromptArchiveLegacyLatestPublisher:
+        compatibility = plan.get("compatibility_publication")
+        plan_target = (
+            compatibility.get("target_authority_id")
+            if isinstance(compatibility, Mapping)
+            else None
+        )
+        if plan_target is not None and (
+            type(plan_target) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(plan_target) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        expected_target: str | None = plan_target
+        bound_target = self.latest_target_authority_id()
+        if (
+            expected_target is not None
+            and bound_target is not None
+            and bound_target != expected_target
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if bound_target is not None:
+            expected_target = bound_target
+        if supplied is not None:
+            selected = self._require_legacy_latest_publisher(
+                supplied,
+                expected_target_authority_id=expected_target,
+            )
+        else:
+            if self._compatibility_resolver is None:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+            try:
+                resolved = self._compatibility_resolver(
+                    self.project_id,
+                    copy.deepcopy(dict(plan)),
+                )
+            except PromptArchiveStorageError:
+                raise
+            except Exception:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            selected = self._require_legacy_latest_publisher(  # type: ignore[arg-type]
+                resolved,
+                expected_target_authority_id=expected_target,
+            )
+        # Only a target already embedded in an admitted immutable plan may
+        # restore a missing binding during recovery.  A caller-selected target
+        # for a not-yet-admitted operation never mutates this authority here.
+        if plan_target is not None and bound_target is None:
+            self._bind_latest_target_authority_id(plan_target, create=True)
+        return selected
 
     @staticmethod
     def _occurrence_locator_key(locator: Mapping[str, Any]) -> bytes:
@@ -2128,6 +2401,11 @@ class PromptArchiveRuntime:
             != f"{owner['response_kind']}-{owner['response_id']}.json"
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        bound_target = self.latest_target_authority_id()
+        if bound_target is None:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        if bound_target != owner["target_authority_id"]:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         projection = {
             key: owner[key]
             for key in (
@@ -2309,6 +2587,28 @@ class PromptArchiveRuntime:
             publication_mode=publication_mode,
             compatibility_publisher=compatibility_publisher,
         )
+        # Treat every publisher-prepared field as untrusted protocol input.
+        # Validate the complete closed candidate before creating a durable
+        # target binding, native occurrence receipt, stable operation plan or
+        # pending entry.  CAS written while constructing the candidate remains
+        # harmless and unreachable if validation fails.
+        plan_raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.put_blob(
+            plan_raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        plan = self._validate_plan(plan, plan_ref)
+        if canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES) != plan_raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if publication_mode == "authoritative":
+            # The physical compatibility target is a project authority, not
+            # a mutable configuration choice.  Bind the exact target carried
+            # by this closed plan before it can become recoverable.
+            self._resolve_compatibility_publisher(
+                plan,
+                compatibility_publisher,
+            )
         native_source: PromptArchiveNativeOccurrenceSource | None = None
         if publication_mode == "authoritative":
             native_source = self._native_source_for_plan(plan)
@@ -2326,12 +2626,6 @@ class PromptArchiveRuntime:
                 effective_occurrence,
                 native_source,
             )
-        plan_raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
-        plan_ref = storage.put_blob(
-            plan_raw,
-            logical_kind="publication_plan",
-            media_type=_PLAN_MEDIA,
-        )
         storage.publish_immutable_bytes(
             self._plan_path(plan),
             plan_raw,
@@ -2444,6 +2738,10 @@ class PromptArchiveRuntime:
         elif plan["operation_kind"] == "native_publish":
             if occurrence_source is not None:
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            self._resolve_compatibility_publisher(
+                plan,
+                compatibility_publisher,
+            )
             persisted_source = manifest.get("source")
             if type(persisted_source) is not dict:
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
@@ -2503,6 +2801,560 @@ class PromptArchiveRuntime:
             manifest_ref=copy.deepcopy(verified.pointer["manifest_ref"]),
             locator=copy.deepcopy(verified.locator),
         )
+
+    def publish_legacy_latest(
+        self,
+        raw_bytes: bytes | bytearray | memoryview,
+        occurrence: ArchiveOccurrence,
+        *,
+        write_kind: str,
+        source_revision: int | None = None,
+        operation_id: str | None = None,
+        published_at: str | None = None,
+        compatibility_publisher: PromptArchiveLegacyLatestPublisher | None = None,
+    ) -> Mapping[str, Any]:
+        """Publish exact legacy latest bytes through the common durable plan.
+
+        This is the only post-enrollment seam for transition, identity, state,
+        and explicitly authorized rollback writes.  The payload is immutable
+        CAS data; the external target is changed only after plan admission,
+        pending registration, journal intent, and full payload hydration.
+        """
+
+        if (
+            not self.legacy_latest_publication_enabled
+            or self.config.mode not in {"legacy", "shadow", "authoritative"}
+        ):
+            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+        self._require_legacy_latest_occurrence(occurrence, write_kind)
+        if occurrence.project_id != self.project_id:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        frozen = _freeze_bytes(raw_bytes, maximum=self.max_hydrated_bytes)
+        effective_revision = (
+            occurrence.state_revision if source_revision is None else source_revision
+        )
+        if (
+            type(effective_revision) is not int
+            or not 0 <= effective_revision <= 9_223_372_036_854_775_807
+            or effective_revision != occurrence.state_revision
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        effective_operation_id = (
+            self._legacy_latest_operation_id(occurrence, write_kind)
+            if operation_id is None
+            else operation_id
+        )
+        if (
+            type(effective_operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(effective_operation_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        effective_published_at = _require_rfc3339(
+            occurrence.verified_at if published_at is None else published_at
+        )
+        storage = self._require_storage()
+        plan_path = (
+            "operations",
+            "v1",
+            occurrence.response_id,
+            effective_operation_id,
+            "plan.json",
+        )
+        if write_kind == "rollback":
+            try:
+                storage.read_immutable_json(plan_path)
+            except PromptArchiveStorageError as exc:
+                if exc.code != "PROMPT_ARCHIVE_NOT_FOUND":
+                    raise
+                plan_already_admitted = False
+            else:
+                plan_already_admitted = True
+            if not plan_already_admitted:
+                # Authorization is an admission prerequisite, not a journal
+                # state. Verify the configured operator gate and the immutable
+                # selection receipt before resolving/binding an external
+                # target or storing any bytes for a new rollback operation.
+                # Recovery of a plan that was already admitted remains
+                # gate-independent and is authorized by that plan's durable
+                # selection receipt.
+                self._prevalidate_legacy_latest_rollback_admission(
+                    occurrence=occurrence,
+                    operation_id=effective_operation_id,
+                    published_at=effective_published_at,
+                    content_sha256=hashlib.sha256(frozen).hexdigest(),
+                    content_size=len(frozen),
+                )
+        occurrence_projection = {
+            "response_id": occurrence.response_id,
+            "response_kind": occurrence.response_kind,
+            "occurrence_kind": occurrence.occurrence_kind,
+            "occurrence_id": occurrence.occurrence_id,
+            "transition_id": occurrence.transition_id,
+        }
+        resolver_plan = {
+            "operation_kind": "legacy_latest_publish",
+            "scope": {
+                "project_id": self.project_id,
+                "sprint_id": occurrence.sprint_id,
+            },
+            "occurrence": occurrence_projection,
+            "operation_id": effective_operation_id,
+        }
+        publisher = self._resolve_legacy_latest_publisher(
+            resolver_plan,
+            compatibility_publisher,
+        )
+
+        # Drain already-registered work before freezing a new barrier.  The
+        # callback executed later under the external latest lock is read-only
+        # and closes the race with a newly registered authoritative plan.
+        self.recover_pending(legacy_latest_publisher=publisher)
+        with self._stream_lock:
+            with storage.account_cas_writes() as cas_writes:
+                try:
+                    existing = storage.read_immutable_json(plan_path)
+                except PromptArchiveStorageError as exc:
+                    if exc.code != "PROMPT_ARCHIVE_NOT_FOUND":
+                        raise
+                    existing = None
+                if existing is None:
+                    try:
+                        prepared = publisher.prepare_legacy_intent(
+                            frozen,
+                            write_kind=write_kind,
+                            occurrence_id=occurrence.occurrence_id,
+                            operation_id=effective_operation_id,
+                            published_at=effective_published_at,
+                            source_response_id=occurrence.response_id,
+                            source_sprint_id=occurrence.sprint_id,
+                            source_revision=effective_revision,
+                            authoritative_drain_verifier=(
+                                self._verify_authoritative_drain_barrier
+                            ),
+                        )
+                    except PromptArchiveStorageError:
+                        raise
+                    except Exception:
+                        raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+                    if (
+                        not isinstance(prepared, Mapping)
+                        or set(prepared)
+                        != {"latest_intent", "authoritative_drain_barrier"}
+                        or not isinstance(prepared["latest_intent"], Mapping)
+                        or not isinstance(
+                            prepared["authoritative_drain_barrier"], Mapping
+                        )
+                    ):
+                        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+                    prepared_intent = prepared["latest_intent"]
+                    incremental = PromptArchiveIncremental(
+                        storage,
+                        self.project_id,
+                        occurrence.sprint_id,
+                    )
+                    payload = incremental.store_byte_stream(
+                        frozen,
+                        sequence_kind="raw_bytes",
+                    )
+                    if incremental.hydrate_byte_stream(payload) != frozen:
+                        raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                    plan = self._build_legacy_latest_plan(
+                        occurrence=occurrence,
+                        operation_id=effective_operation_id,
+                        write_kind=write_kind,
+                        target_authority_id=publisher.target_authority_id,
+                        payload=payload,
+                        prepared_intent=prepared_intent,
+                        authoritative_drain_barrier=prepared[
+                            "authoritative_drain_barrier"
+                        ],
+                        published_at=effective_published_at,
+                    )
+                    plan_raw = canonical_json_bytes_v1(
+                        plan,
+                        maximum=_PLAN_MAX_BYTES,
+                    )
+                    plan_ref = storage.put_blob(
+                        plan_raw,
+                        logical_kind="publication_plan",
+                        media_type=_PLAN_MEDIA,
+                    )
+                    plan = self._validate_plan(plan, plan_ref)
+                    if (
+                        canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+                        != plan_raw
+                    ):
+                        raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                    plan_target = plan["compatibility_publication"][
+                        "target_authority_id"
+                    ]
+                    if publisher.target_authority_id != plan_target:
+                        raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+                    # Establish the project target before the immutable plan.
+                    # A crash after plan publication must never leave an
+                    # unbound plan A that a later operation can redirect by
+                    # binding target B first.
+                    self._bind_latest_target_authority_id(
+                        plan_target,
+                        create=True,
+                    )
+                    storage.publish_immutable_bytes(
+                        self._plan_path(plan),
+                        plan_raw,
+                        expected_sha256=hashlib.sha256(plan_raw).hexdigest(),
+                    )
+                    storage._fault("after_publication_plan")
+                    plan = self._validate_plan(plan, plan_ref)
+                else:
+                    plan_raw = canonical_json_bytes_v1(
+                        existing,
+                        maximum=_PLAN_MAX_BYTES,
+                    )
+                    plan_ref = storage.put_blob(
+                        plan_raw,
+                        logical_kind="publication_plan",
+                        media_type=_PLAN_MEDIA,
+                    )
+                    plan = self._validate_plan(existing, plan_ref)
+                    if (
+                        plan.get("operation_id") != effective_operation_id
+                        or plan.get("occurrence") != occurrence_projection
+                        or plan.get("legacy_latest", {}).get("write_kind")
+                        != write_kind
+                        or plan.get("compatibility_publication", {}).get(
+                            "target_authority_id"
+                        )
+                        != publisher.target_authority_id
+                        or plan.get("compatibility_publication", {})
+                        .get("latest_intent", {})
+                        .get("ordering", {})
+                        .get("source_revision")
+                        != effective_revision
+                        or plan.get("frozen_timestamps", {}).get(
+                            "compatibility_published_at"
+                        )
+                        != effective_published_at
+                        or self._legacy_latest_payload_bytes(plan) != frozen
+                    ):
+                        raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+
+                # Binding is created only after an existing immutable plan was
+                # adopted exactly or a new closed plan was built and
+                # validated.  A wrong caller target can therefore neither
+                # poison a missing binding nor redirect recovery of plan A.
+                plan_target = plan["compatibility_publication"][
+                    "target_authority_id"
+                ]
+                if publisher.target_authority_id != plan_target:
+                    raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+                self._bind_latest_target_authority_id(
+                    plan_target,
+                    create=True,
+                )
+
+                with storage.control_lock(self._operation_lock_path(plan)):
+                    current = self._load_journal_chain_locked(plan, plan_ref)
+                if current is not None and current[0]["state"] in {
+                    "complete",
+                    "aborted",
+                }:
+                    self._apply_pending_mutation(*current)
+                    terminal_state = current[0]["state"]
+                else:
+                    self._register_planned(plan, plan_ref)
+                    storage._fault("after_pending_registration")
+                    terminal_state = self._drive_operation(
+                        plan,
+                        plan_ref,
+                        legacy_latest_publisher=publisher,
+                    )
+                if terminal_state == "aborted":
+                    raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+                receipt = self._load_compatibility_result(plan)
+                if receipt is None:
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            outcomes = cas_writes.snapshot()
+            self.metrics.record_publication(
+                logical_bytes=len(frozen),
+                new_physical_bytes=outcomes.new_stored_bytes,
+                dedup_hits=outcomes.dedup_hits,
+            )
+            return copy.deepcopy(receipt)
+
+    def select_legacy_latest_payload_for_rollback(
+        self,
+        *,
+        response_id: str,
+        operation_id: str,
+    ) -> tuple[bytes, Mapping[str, Any]]:
+        """Resolve one already-complete immutable payload as rollback input.
+
+        The operator seam never accepts caller-created bytes as its authority.
+        Selection names a previously admitted common operation; its exact plan,
+        terminal journal, CAS root, digest, and size are reverified before the
+        payload can be used by a distinct gated rollback operation.
+        """
+
+        if (
+            type(response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(response_id) is None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        storage = self._require_storage()
+        plan_path = ("operations", "v1", response_id, operation_id, "plan.json")
+        plan = storage.read_immutable_json(plan_path)
+        raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.describe_blob(
+            raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        if storage.read_blob(plan_ref, max_output_bytes=_PLAN_MAX_BYTES) != raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        plan = self._validate_plan(plan, plan_ref)
+        if (
+            plan.get("operation_kind") != "legacy_latest_publish"
+            or plan.get("operation_id") != operation_id
+            or plan.get("occurrence", {}).get("response_id") != response_id
+            or plan.get("legacy_latest", {}).get("write_kind") == "rollback"
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        with storage.control_lock(self._operation_lock_path(plan)):
+            current = self._load_journal_chain_locked(plan, plan_ref)
+        if current is None or current[0].get("state") != "complete":
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        payload = self._legacy_latest_payload_bytes(plan)
+        legacy = plan["legacy_latest"]
+        if (
+            len(payload) != legacy["content_size"]
+            or hashlib.sha256(payload).hexdigest() != legacy["content_sha256"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return payload, {
+            "project_id": plan["scope"]["project_id"],
+            "sprint_id": plan["scope"]["sprint_id"],
+            "response_id": response_id,
+            "operation_id": operation_id,
+            "payload_root": copy.deepcopy(legacy["payload_root"]),
+            "content_sha256": legacy["content_sha256"],
+            "content_size": legacy["content_size"],
+            "target_authority_id": plan["compatibility_publication"][
+                "target_authority_id"
+            ],
+        }
+
+    @staticmethod
+    def _rollback_selection_path(operation_id: str) -> tuple[str, ...]:
+        return ("rollback-selections", "v1", f"{operation_id}.json")
+
+    def _require_legacy_latest_rollback_operator_gate(self) -> None:
+        if self.config.operator_gate != _AUTHORITATIVE_OPERATOR_GATE:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    def _prevalidate_legacy_latest_rollback_admission(
+        self,
+        *,
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        published_at: str,
+        content_sha256: str,
+        content_size: int,
+    ) -> None:
+        """Authorize a new rollback before any operation artifact is written."""
+
+        self._require_legacy_latest_rollback_operator_gate()
+        selected_target = self._verify_legacy_latest_rollback_selection(
+            {
+                "operation_id": operation_id,
+                "scope": {"sprint_id": occurrence.sprint_id},
+                "occurrence": {
+                    "response_id": occurrence.response_id,
+                    "occurrence_id": occurrence.occurrence_id,
+                },
+                "compatibility_publication": {
+                    "latest_intent": {
+                        "ordering": {
+                            "source_revision": occurrence.state_revision,
+                        },
+                    },
+                },
+                "legacy_latest": {
+                    "content_sha256": content_sha256,
+                    "content_size": content_size,
+                },
+                "frozen_timestamps": {
+                    "compatibility_published_at": published_at,
+                },
+            }
+        )
+        self._bind_latest_target_authority_id(selected_target, create=True)
+
+    def authorize_legacy_latest_rollback_selection(
+        self,
+        *,
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        selected_response_id: str,
+        selected_operation_id: str,
+        expected_content_sha256: str,
+        expected_content_size: int,
+        expected_target_authority_id: str,
+        published_at: str,
+    ) -> bytes:
+        """Persist a closed operator selection of an existing immutable payload."""
+
+        self._require_legacy_latest_rollback_operator_gate()
+        self._require_legacy_latest_occurrence(occurrence, "rollback")
+        if (
+            occurrence.project_id != self.project_id
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+            or type(expected_content_sha256) is not str
+            or _SHA256_RE.fullmatch(expected_content_sha256) is None
+            or type(expected_content_size) is not int
+            or not 0 <= expected_content_size <= self.max_hydrated_bytes
+            or type(expected_target_authority_id) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(expected_target_authority_id)
+            is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        selected_payload, selected = self.select_legacy_latest_payload_for_rollback(
+            response_id=selected_response_id,
+            operation_id=selected_operation_id,
+        )
+        if (
+            selected["content_sha256"] != expected_content_sha256
+            or selected["content_size"] != expected_content_size
+            or selected["target_authority_id"]
+            != expected_target_authority_id
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        selected_at = _require_rfc3339(published_at)
+        # Bind the selected operation's physical authority before publishing
+        # even the immutable selection receipt.  A pre-upgrade operation with
+        # a missing binding can therefore be restored only to its own target;
+        # a configured or concurrent target B fails without artifacts.
+        self._bind_latest_target_authority_id(
+            selected["target_authority_id"],
+            create=True,
+        )
+        document = {
+            "schema_version": 1,
+            "kind": "prompt_archive_rollback_selection",
+            "media_type": _ROLLBACK_SELECTION_MEDIA,
+            "authorization_protocol": "prompt-archive-operator-gate-v1",
+            "project_id": self.project_id,
+            "sprint_id": occurrence.sprint_id,
+            "response_id": occurrence.response_id,
+            "occurrence_id": occurrence.occurrence_id,
+            "operation_id": operation_id,
+            "source_revision": occurrence.state_revision,
+            "published_at": selected_at,
+            "selected_response_id": selected_response_id,
+            "selected_operation_id": selected_operation_id,
+            "selected_payload_root": copy.deepcopy(selected["payload_root"]),
+            "target_authority_id": selected["target_authority_id"],
+            "content_sha256": expected_content_sha256,
+            "content_size": expected_content_size,
+        }
+        raw = canonical_json_bytes_v1(document, maximum=_CONTROL_MAX_BYTES)
+        storage = self._require_storage()
+        storage.publish_immutable_bytes(
+            self._rollback_selection_path(operation_id),
+            raw,
+            expected_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+        if storage.read_immutable_json(
+            self._rollback_selection_path(operation_id)
+        ) != document:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return selected_payload
+
+    def _verify_legacy_latest_rollback_selection(
+        self,
+        plan: Mapping[str, Any],
+    ) -> str:
+        selection = self._require_storage().read_immutable_json(
+            self._rollback_selection_path(plan["operation_id"])
+        )
+        required = {
+            "schema_version",
+            "kind",
+            "media_type",
+            "authorization_protocol",
+            "project_id",
+            "sprint_id",
+            "response_id",
+            "occurrence_id",
+            "operation_id",
+            "source_revision",
+            "published_at",
+            "selected_response_id",
+            "selected_operation_id",
+            "selected_payload_root",
+            "target_authority_id",
+            "content_sha256",
+            "content_size",
+        }
+        if set(selection) != required or (
+            selection.get("schema_version") != 1
+            or selection.get("kind") != "prompt_archive_rollback_selection"
+            or selection.get("media_type") != _ROLLBACK_SELECTION_MEDIA
+            or selection.get("authorization_protocol")
+            != "prompt-archive-operator-gate-v1"
+            or selection.get("project_id") != self.project_id
+            or selection.get("sprint_id") != plan["scope"]["sprint_id"]
+            or selection.get("response_id")
+            != plan["occurrence"]["response_id"]
+            or selection.get("occurrence_id")
+            != plan["occurrence"]["occurrence_id"]
+            or selection.get("operation_id") != plan["operation_id"]
+            or selection.get("source_revision")
+            != plan["compatibility_publication"]["latest_intent"]["ordering"][
+                "source_revision"
+            ]
+            or selection.get("published_at")
+            != plan["frozen_timestamps"]["compatibility_published_at"]
+            or selection.get("content_sha256")
+            != plan["legacy_latest"]["content_sha256"]
+            or selection.get("content_size")
+            != plan["legacy_latest"]["content_size"]
+            or type(selection.get("target_authority_id")) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(
+                selection["target_authority_id"]
+            )
+            is None
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        _payload, selected = self.select_legacy_latest_payload_for_rollback(
+            response_id=selection.get("selected_response_id"),
+            operation_id=selection.get("selected_operation_id"),
+        )
+        if (
+            selection.get("selected_payload_root") != selected["payload_root"]
+            or selection.get("content_sha256") != selected["content_sha256"]
+            or selection.get("content_size") != selected["content_size"]
+            or selection.get("target_authority_id")
+            != selected["target_authority_id"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        plan_compatibility = plan.get("compatibility_publication")
+        plan_target = (
+            plan_compatibility.get("target_authority_id")
+            if isinstance(plan_compatibility, Mapping)
+            else None
+        )
+        if plan_target is not None and plan_target != selection["target_authority_id"]:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        bound_target = self.latest_target_authority_id()
+        if (
+            bound_target is not None
+            and bound_target != selection["target_authority_id"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return selection["target_authority_id"]
 
     def _load_offline_plan_identity(
         self,
@@ -2964,6 +3816,214 @@ class PromptArchiveRuntime:
             ),
         )
         return "parop1-" + digest[:32]
+
+    @staticmethod
+    def _legacy_latest_operation_id(
+        occurrence: ArchiveOccurrence,
+        write_kind: str,
+    ) -> str:
+        digest = pas1_id_v1(
+            "legacy-latest-publication-operation",
+            (
+                ("project_id", occurrence.project_id),
+                ("sprint_id", occurrence.sprint_id),
+                ("response_id", occurrence.response_id),
+                ("occurrence_id", occurrence.occurrence_id),
+                ("write_kind", write_kind),
+            ),
+        )
+        return "parop1-" + digest[:32]
+
+    @staticmethod
+    def _require_legacy_latest_occurrence(
+        occurrence: ArchiveOccurrence,
+        write_kind: str,
+    ) -> None:
+        if (
+            not isinstance(occurrence, ArchiveOccurrence)
+            or occurrence.sprint_id is not None
+            and (
+                type(occurrence.sprint_id) is not str
+                or _SAFE_ID_RE.fullmatch(occurrence.sprint_id) is None
+            )
+            or type(write_kind) is not str
+            or write_kind not in _LEGACY_LATEST_WRITE_KINDS
+            or type(occurrence.response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(occurrence.response_id) is None
+            or type(occurrence.occurrence_id) is not str
+            or _SAFE_ID_RE.fullmatch(occurrence.occurrence_id) is None
+            or type(occurrence.state_revision) is not int
+            or not 0 <= occurrence.state_revision <= 9_223_372_036_854_775_807
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if occurrence.response_id != response_id_v1(
+            occurrence.project_id,
+            occurrence.sprint_id,
+            occurrence.response_kind,
+            occurrence.occurrence_kind,
+            occurrence.occurrence_id,
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        expected = {
+            "transition": ("transition-response", "transition"),
+            "identity": ("identity-response", "identity-state"),
+            "state": ("state-response", "identity-state"),
+        }
+        if write_kind == "rollback":
+            valid = (
+                occurrence.response_kind in {"identity-response", "state-response"}
+                and occurrence.occurrence_kind == "identity-state"
+                and occurrence.transition_id is None
+            )
+        else:
+            response_kind, occurrence_kind = expected[write_kind]
+            valid = (
+                occurrence.response_kind == response_kind
+                and occurrence.occurrence_kind == occurrence_kind
+                and (
+                    type(occurrence.transition_id) is str
+                    and _SAFE_ID_RE.fullmatch(occurrence.transition_id) is not None
+                    and occurrence.transition_id == occurrence.occurrence_id
+                    if occurrence_kind == "transition"
+                    else occurrence.transition_id is None
+                )
+            )
+        if not valid:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    def _build_legacy_latest_plan(
+        self,
+        *,
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        write_kind: str,
+        target_authority_id: str,
+        payload: ByteStreamReceipt,
+        prepared_intent: Mapping[str, Any],
+        authoritative_drain_barrier: Mapping[str, Any],
+        published_at: str,
+    ) -> dict[str, Any]:
+        self._require_storage()
+        planned_at = _require_rfc3339(published_at)
+        source_observed_at = _require_rfc3339(occurrence.created_at)
+        timestamps = {
+            "source_observed_at": source_observed_at,
+            "planned_at": planned_at,
+            "intent_at": planned_at,
+            "legacy_payload_verified_at": planned_at,
+            "compatibility_published_at": planned_at,
+            "completed_at": planned_at,
+            "aborted_at": planned_at,
+        }
+        recovery_key = "parloc1-" + pas1_id_v1(
+            "publication-locator",
+            (
+                ("project_id", self.project_id),
+                ("sprint_id", occurrence.sprint_id),
+                ("response_id", occurrence.response_id),
+                ("occurrence_id", occurrence.occurrence_id),
+                ("operation_id", operation_id),
+            ),
+        )
+        shard_id = hashlib.sha256(recovery_key.encode("utf-8")).hexdigest()[:2]
+        plan = {
+            "schema_version": 1,
+            "kind": "prompt_archive_publication_plan",
+            "media_type": _PLAN_MEDIA,
+            "id_algorithm": "PAS1-ID-v1",
+            "operation_id": operation_id,
+            "operation_kind": "legacy_latest_publish",
+            "scope": {
+                "project_id": self.project_id,
+                "sprint_id": occurrence.sprint_id,
+            },
+            "occurrence": {
+                "response_id": occurrence.response_id,
+                "response_kind": occurrence.response_kind,
+                "occurrence_kind": occurrence.occurrence_kind,
+                "occurrence_id": occurrence.occurrence_id,
+                "transition_id": occurrence.transition_id,
+            },
+            "recovery_locator": {
+                "locator_version": "prompt-archive-publication-locator-v1",
+                "recovery_key": recovery_key,
+                "project_id": self.project_id,
+                "sprint_id": occurrence.sprint_id,
+                "response_id": occurrence.response_id,
+                "occurrence_id": occurrence.occurrence_id,
+                "operation_id": operation_id,
+            },
+            "pending_registry": {
+                "protocol": "prompt-archive-pending-registry-cas-v1",
+                "shard": {
+                    "project_id": self.project_id,
+                    "shard_algorithm": "sha256-recovery-key-prefix-2-v1",
+                    "shard_id": shard_id,
+                    "max_entries": 1024,
+                },
+                "entry_precondition": {"kind": "absent"},
+                "intended_mutation": {
+                    "mutation": "upsert_planned",
+                    "operation_id": operation_id,
+                    "recovery_key": recovery_key,
+                    "plan_ref_binding": "canonical_current_plan_ref",
+                    "state": "planned",
+                    "journal_ref": None,
+                    "created_at": planned_at,
+                    "updated_at": planned_at,
+                    "published_at": planned_at,
+                },
+            },
+            "compatibility_publication": {
+                "mode": "legacy_latest_publish",
+                "target_authority_id": target_authority_id,
+                "latest_intent": _copy_document(
+                    prepared_intent,
+                    maximum=_CONTROL_MAX_BYTES,
+                ),
+            },
+            "legacy_latest": {
+                "identity_version": "prompt-archive-legacy-latest-payload-v1",
+                "write_kind": write_kind,
+                "content_media_type": "application/json",
+                "content_sha256": payload.sha256,
+                "content_size": payload.byte_size,
+                "payload_root": copy.deepcopy(dict(payload.sequence.root_ref)),
+                "authoritative_drain_barrier": copy.deepcopy(
+                    dict(authoritative_drain_barrier)
+                ),
+            },
+            "frozen_timestamps": timestamps,
+        }
+        # Keep construction closed over a configured storage instance; this
+        # also makes accidental use of a legacy/no-root runtime fail before a
+        # plan is exposed to a caller.
+        return plan
+
+    def _legacy_latest_payload_bytes(self, plan: Mapping[str, Any]) -> bytes:
+        legacy = plan["legacy_latest"]
+        incremental = PromptArchiveIncremental(
+            self._require_storage(),
+            self.project_id,
+            plan["scope"]["sprint_id"],
+        )
+        sequence = incremental._receipt_from_root(
+            legacy["payload_root"],
+            "raw_bytes",
+        )
+        receipt = ByteStreamReceipt(
+            sequence,
+            legacy["content_size"],
+            legacy["content_sha256"],
+            sequence.item_count,
+        )
+        payload = incremental.hydrate_byte_stream(receipt)
+        if (
+            len(payload) != legacy["content_size"]
+            or hashlib.sha256(payload).hexdigest() != legacy["content_sha256"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return payload
 
     def _authoritative_archive_owner(
         self,
@@ -3626,6 +4686,105 @@ class PromptArchiveRuntime:
         return receipt
 
     @staticmethod
+    def _legacy_publication_mapping(value: Any) -> dict[str, Any]:
+        names = (
+            "outcome",
+            "intent_id",
+            "latest_slot_id",
+            "latest_slot_ref",
+            "source_revision",
+            "generation",
+            "content_sha256",
+            "content_size",
+            "recovered",
+        )
+        if isinstance(value, Mapping):
+            result = {name: copy.deepcopy(value.get(name)) for name in names}
+        else:
+            try:
+                result = {
+                    name: copy.deepcopy(getattr(value, name)) for name in names
+                }
+            except (AttributeError, TypeError):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        return result
+
+    def _ensure_legacy_latest_compatibility(
+        self,
+        plan: Mapping[str, Any],
+        publisher: PromptArchiveLegacyLatestPublisher,
+    ) -> dict[str, Any]:
+        payload = self._legacy_latest_payload_bytes(plan)
+        legacy = plan["legacy_latest"]
+        prepared = {
+            "latest_intent": copy.deepcopy(
+                plan["compatibility_publication"]["latest_intent"]
+            ),
+            "authoritative_drain_barrier": copy.deepcopy(
+                legacy["authoritative_drain_barrier"]
+            ),
+        }
+        try:
+            # The project admission fence is held from the final full-registry
+            # proof through the external latest decision.  Native registration
+            # takes the same fence before its shard lock, so it can linearize
+            # only wholly before or wholly after this compatibility write.
+            with self._require_storage().control_lock(
+                self._registry_admission_lock_path()
+            ):
+                published = publisher.publish_prepared_legacy(
+                    payload,
+                    prepared=prepared,
+                    write_kind=legacy["write_kind"],
+                    authoritative_drain_verifier=(
+                        self._verify_authoritative_drain_barrier
+                    ),
+                )
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        normalized = self._legacy_publication_mapping(published)
+        existing = self._load_compatibility_result(plan)
+        outcome = normalized["outcome"]
+        normalized_outcome = "published" if outcome == "idempotent" else outcome
+        candidate = self._validate_compatibility_result(
+            plan,
+            {
+                "schema_version": 1,
+                "kind": "prompt_archive_compatibility_result",
+                "media_type": _COMPATIBILITY_RESULT_MEDIA,
+                "operation_id": plan["operation_id"],
+                "intent_id": normalized["intent_id"],
+                "result_latest_slot_id": normalized["latest_slot_id"],
+                "result_latest_slot_ref": normalized["latest_slot_ref"],
+                "result_latest_slot_generation": normalized["generation"],
+                "latest_slot_outcome": normalized_outcome,
+                "content_sha256": normalized["content_sha256"],
+                "content_size": normalized["content_size"],
+                "source_revision": normalized["source_revision"],
+                "published_at": plan["frozen_timestamps"][
+                    "compatibility_published_at"
+                ],
+            },
+        )
+        if existing is not None:
+            if candidate != existing:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return existing
+        raw = canonical_json_bytes_v1(candidate, maximum=_CONTROL_MAX_BYTES)
+        self._require_storage().publish_immutable_bytes(
+            self._compatibility_result_path(plan),
+            raw,
+            expected_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+        self._require_storage()._fault("after_compatibility_publication")
+        observed = self._load_compatibility_result(plan)
+        if observed != candidate:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return candidate
+
+    @staticmethod
     def _journal_generation_path(
         plan: Mapping[str, Any], generation: int, digest: str
     ) -> tuple[str, ...]:
@@ -3645,6 +4804,10 @@ class PromptArchiveRuntime:
     @staticmethod
     def _registry_lock_path(shard_id: str) -> tuple[str, ...]:
         return ("pending", "v1", "locks", f"{shard_id}.lock")
+
+    @staticmethod
+    def _registry_admission_lock_path() -> tuple[str, ...]:
+        return ("pending", "v1", "locks", "admission.lock")
 
     @staticmethod
     def _registry_generation_path(
@@ -3879,37 +5042,38 @@ class PromptArchiveRuntime:
         shard_id = plan["pending_registry"]["shard"]["shard_id"]
         planned = self._planned_entry(plan, plan_ref)
         storage = self._require_storage()
-        with storage.control_lock(self._registry_lock_path(shard_id)):
-            registry = self._read_registry_locked(shard_id)
-            entries = [] if registry is None else copy.deepcopy(registry["entries"])
-            existing = next(
-                (
-                    entry
-                    for entry in entries
-                    if entry["recovery_key"] == planned["recovery_key"]
-                ),
-                None,
-            )
-            if existing is not None:
-                if existing == planned:
-                    return
-                # A retry may meet an operation whose journal is already
-                # registered.  It is the same operation only when its plan
-                # and immutable identity match exactly; never downgrade it.
-                if (
-                    existing["operation_id"] == planned["operation_id"]
-                    and existing["plan_ref"] == planned["plan_ref"]
-                    and existing["state"] == "journaled"
-                ):
-                    return
-                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
-            entries.append(planned)
-            self._write_registry_locked(
-                shard_id=shard_id,
-                previous=registry,
-                entries=entries,
-                published_at=plan["frozen_timestamps"]["planned_at"],
-            )
+        with storage.control_lock(self._registry_admission_lock_path()):
+            with storage.control_lock(self._registry_lock_path(shard_id)):
+                registry = self._read_registry_locked(shard_id)
+                entries = [] if registry is None else copy.deepcopy(registry["entries"])
+                existing = next(
+                    (
+                        entry
+                        for entry in entries
+                        if entry["recovery_key"] == planned["recovery_key"]
+                    ),
+                    None,
+                )
+                if existing is not None:
+                    if existing == planned:
+                        return
+                    # A retry may meet an operation whose journal is already
+                    # registered.  It is the same operation only when its plan
+                    # and immutable identity match exactly; never downgrade it.
+                    if (
+                        existing["operation_id"] == planned["operation_id"]
+                        and existing["plan_ref"] == planned["plan_ref"]
+                        and existing["state"] == "journaled"
+                    ):
+                        return
+                    raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+                entries.append(planned)
+                self._write_registry_locked(
+                    shard_id=shard_id,
+                    previous=registry,
+                    entries=entries,
+                    published_at=plan["frozen_timestamps"]["planned_at"],
+                )
 
     def _journal_document(
         self,
@@ -3919,6 +5083,14 @@ class PromptArchiveRuntime:
         previous: Mapping[str, Any] | None,
         previous_ref: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
+        if plan.get("operation_kind") == "legacy_latest_publish":
+            return self._legacy_latest_journal_document(
+                plan,
+                plan_ref,
+                generation,
+                previous,
+                previous_ref,
+            )
         if type(generation) is not int or not 0 <= generation < len(_JOURNAL_STATES):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         if generation == 0 and (previous is not None or previous_ref is not None):
@@ -4081,6 +5253,146 @@ class PromptArchiveRuntime:
             "updated_at": updated_at,
         }
 
+    def _legacy_latest_journal_document(
+        self,
+        plan: Mapping[str, Any],
+        plan_ref: Mapping[str, Any],
+        generation: int,
+        previous: Mapping[str, Any] | None,
+        previous_ref: Mapping[str, Any] | None,
+        *,
+        allow_pending_compatibility: bool = False,
+    ) -> dict[str, Any]:
+        states = _LEGACY_LATEST_JOURNAL_STATES
+        if type(generation) is not int or not 0 <= generation < len(states):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if generation == 0 and (previous is not None or previous_ref is not None):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if generation > 0 and (previous is None or previous_ref is None):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if generation > 0 and (
+            previous.get("journal_generation") != generation - 1
+            or previous.get("state") != states[generation - 1]
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        state = states[generation]
+        updated_at = plan["frozen_timestamps"][
+            _LEGACY_LATEST_TIMESTAMP_KEYS[generation]
+        ]
+        if previous is None:
+            precondition_entry = self._planned_entry(plan, plan_ref)
+        else:
+            precondition_entry = {
+                "operation_id": plan["operation_id"],
+                "recovery_key": plan["recovery_locator"]["recovery_key"],
+                "plan_ref": copy.deepcopy(dict(plan_ref)),
+                "state": "journaled",
+                "journal_ref": copy.deepcopy(dict(previous_ref)),
+                "created_at": plan["frozen_timestamps"]["planned_at"],
+                "updated_at": previous["updated_at"],
+            }
+        terminal = state == "complete"
+        pending_mutation = (
+            {
+                "mutation": "remove_terminal_entry",
+                "terminal_state": "complete",
+                "published_at": updated_at,
+            }
+            if terminal
+            else {
+                "mutation": "bind_current_journal",
+                "journal_ref_binding": "canonical_current_journal_ref",
+                "updated_at": updated_at,
+                "published_at": updated_at,
+            }
+        )
+        events = [
+            {
+                "state": item_state,
+                "ordinal": ordinal,
+                "occurred_at": plan["frozen_timestamps"][
+                    _LEGACY_LATEST_TIMESTAMP_KEYS[ordinal]
+                ],
+            }
+            for ordinal, item_state in enumerate(states[: generation + 1])
+        ]
+        receipt = self._load_compatibility_result(plan) if generation >= 2 else None
+        if generation >= 2 and receipt is None and not allow_pending_compatibility:
+            raise _error("PROMPT_ARCHIVE_NOT_FOUND")
+        legacy = plan["legacy_latest"]
+        return {
+            "schema_version": 1,
+            "kind": "prompt_archive_journal",
+            "media_type": _JOURNAL_MEDIA,
+            "id_algorithm": "PAS1-ID-v1",
+            "journal_id": "parjournal1-"
+            + pas1_id_v1(
+                "publication-journal",
+                (
+                    ("project_id", self.project_id),
+                    ("sprint_id", plan["scope"]["sprint_id"]),
+                    ("response_id", plan["occurrence"]["response_id"]),
+                    ("operation_id", plan["operation_id"]),
+                ),
+            ),
+            "operation_id": plan["operation_id"],
+            "operation_kind": "legacy_latest_publish",
+            "write_kind": legacy["write_kind"],
+            "scope": copy.deepcopy(plan["scope"]),
+            "occurrence": {
+                "response_id": plan["occurrence"]["response_id"],
+                "occurrence_id": plan["occurrence"]["occurrence_id"],
+            },
+            "recovery_locator": copy.deepcopy(plan["recovery_locator"]),
+            "pending_registry": {
+                "protocol": "prompt-archive-pending-registry-cas-v1",
+                "shard": copy.deepcopy(plan["pending_registry"]["shard"]),
+                "precondition_entry": precondition_entry,
+                "intended_mutation": pending_mutation,
+            },
+            "plan_ref": copy.deepcopy(dict(plan_ref)),
+            "legacy_payload_root": copy.deepcopy(legacy["payload_root"]),
+            "legacy_content_sha256": legacy["content_sha256"],
+            "legacy_content_size": legacy["content_size"],
+            "authoritative_drain_barrier": copy.deepcopy(
+                legacy["authoritative_drain_barrier"]
+            ),
+            "compatibility_mode": "legacy_latest_publish",
+            "compatibility_descriptor_ref": None,
+            "latest_intent": copy.deepcopy(
+                plan["compatibility_publication"]["latest_intent"]
+            ),
+            "journal_generation": generation,
+            "previous_journal_generation": (
+                None if previous is None else generation - 1
+            ),
+            "previous_journal_sha256": (
+                None
+                if previous is None
+                else hashlib.sha256(
+                    canonical_json_bytes_v1(previous, maximum=_JOURNAL_MAX_BYTES)
+                ).hexdigest()
+            ),
+            "result_latest_slot_id": (
+                None if receipt is None else receipt["result_latest_slot_id"]
+            ),
+            "result_latest_slot_ref": (
+                None
+                if receipt is None
+                else copy.deepcopy(receipt["result_latest_slot_ref"])
+            ),
+            "latest_slot_outcome": (
+                "pending" if receipt is None else receipt["latest_slot_outcome"]
+            ),
+            "compatibility_result": (
+                "pending" if receipt is None else receipt["latest_slot_outcome"]
+            ),
+            "frozen_timestamps": copy.deepcopy(plan["frozen_timestamps"]),
+            "state": state,
+            "events": events,
+            "updated_at": updated_at,
+        }
+
     def _aborted_journal_document(
         self,
         plan: Mapping[str, Any],
@@ -4092,6 +5404,49 @@ class PromptArchiveRuntime:
     ) -> dict[str, Any]:
         from_state = previous.get("state")
         generation = previous.get("journal_generation", -1) + 1
+        if plan.get("operation_kind") == "legacy_latest_publish":
+            if (
+                from_state not in {"intent", "legacy_payload_verified"}
+                or reason_code not in _ABORT_REASON_CODES
+                or generation not in {1, 2}
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            journal = self._legacy_latest_journal_document(
+                plan,
+                plan_ref,
+                generation,
+                previous,
+                previous_ref,
+                allow_pending_compatibility=True,
+            )
+            aborted_at = plan["frozen_timestamps"]["aborted_at"]
+            journal.update(
+                {
+                    "state": "aborted",
+                    "abort_from_state": from_state,
+                    "abort_reason_code": reason_code,
+                    "result_latest_slot_id": None,
+                    "result_latest_slot_ref": None,
+                    "latest_slot_outcome": "pending",
+                    "compatibility_result": "pending",
+                    "updated_at": aborted_at,
+                }
+            )
+            journal["events"] = [
+                *copy.deepcopy(previous["events"]),
+                {
+                    "state": "aborted",
+                    "ordinal": generation,
+                    "occurred_at": aborted_at,
+                    "from_state": from_state,
+                },
+            ]
+            journal["pending_registry"]["intended_mutation"] = {
+                "mutation": "remove_terminal_entry",
+                "terminal_state": "aborted",
+                "published_at": aborted_at,
+            }
+            return journal
         if (
             from_state not in _PRE_POINTER_STATES
             or reason_code not in _ABORT_REASON_CODES
@@ -4163,12 +5518,326 @@ class PromptArchiveRuntime:
                 ("content_kind", intent["content_kind"]),
                 ("content_sha256", intent["content_sha256"]),
                 ("content_size", str(intent["content_size"])),
-                ("descriptor_digest", descriptor_ref["digest"]),
+                (
+                    "descriptor_digest",
+                    None if descriptor_ref is None else descriptor_ref["digest"],
+                ),
                 ("source_sprint_id", intent["source_sprint_id"]),
                 ("source_response_id", intent["source_response_id"]),
                 ("published_at", intent["published_at"]),
             ),
         )
+
+    def _validate_legacy_latest_intent(
+        self,
+        plan: Mapping[str, Any],
+        intent: Any,
+    ) -> dict[str, Any]:
+        required = {
+            "identity_version",
+            "intent_id",
+            "project_id",
+            "slot_scope",
+            "slot_id",
+            "publication_protocol",
+            "ordering",
+            "bootstrap_precondition",
+            "content_kind",
+            "content_sha256",
+            "content_size",
+            "descriptor_ref",
+            "source_sprint_id",
+            "source_response_id",
+            "published_at",
+        }
+        if type(intent) is not dict or set(intent) != required:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        ordering = intent.get("ordering")
+        authority = {
+            "protocol": "prompt-archive-durable-project-latest-revision-v1",
+            "epoch": 1,
+            "reset_policy": "restore_high_water_mark_or_fail_closed",
+        }
+        if type(ordering) is not dict or set(ordering) != {
+            "revision_authority",
+            "source_revision",
+            "occurrence_id",
+            "operation_id",
+        } or (
+            ordering.get("revision_authority") != authority
+            or type(ordering.get("source_revision")) is not int
+            or not 0 <= ordering["source_revision"] <= 9_223_372_036_854_775_807
+            or ordering.get("occurrence_id")
+            != plan["occurrence"]["occurrence_id"]
+            or ordering.get("operation_id") != plan["operation_id"]
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        bootstrap = intent.get("bootstrap_precondition")
+        bootstrap_base = {
+            "protocol": "prompt-archive-project-global-bootstrap-enrollment-v1",
+            "lock_scope": "project",
+            "slot_id": "latest-response",
+            "registry_shard_count": 256,
+            "writer_lock_policy": "all-latest-writers-pre-and-post-enrollment-v1",
+            "lock_location_policy": "external-latest-colocated-stable-lock-v1",
+            "registration_order": "observe-mark-unlock-register-relock-reconcile-v1",
+            "bootstrap_completion_barrier": (
+                "durable-marker-before-unlock-content-slot-before-final-unlock-v1"
+            ),
+        }
+        if type(bootstrap) is not dict or bootstrap.get("kind") not in {
+            "enrolled",
+            "absent",
+            "legacy_bytes",
+        } or any(bootstrap.get(key) != value for key, value in bootstrap_base.items()):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        bootstrap_keys = set(bootstrap_base) | {"kind"}
+        if bootstrap["kind"] == "legacy_bytes":
+            bootstrap_keys |= {"sha256", "byte_size"}
+            if (
+                type(bootstrap.get("sha256")) is not str
+                or _SHA256_RE.fullmatch(bootstrap["sha256"]) is None
+                or type(bootstrap.get("byte_size")) is not int
+                or not 0 <= bootstrap["byte_size"] <= 512 * _MIB
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if set(bootstrap) != bootstrap_keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        legacy = plan["legacy_latest"]
+        if (
+            intent.get("identity_version")
+            != "prompt-archive-latest-content-intent-v1"
+            or intent.get("project_id") != self.project_id
+            or intent.get("slot_scope") != "project"
+            or intent.get("slot_id") != "latest-response"
+            or intent.get("publication_protocol")
+            != "prompt-archive-project-global-ordered-latest-intent-v1"
+            or intent.get("content_kind") != "legacy_inline"
+            or intent.get("content_sha256") != legacy["content_sha256"]
+            or intent.get("content_size") != legacy["content_size"]
+            or intent.get("descriptor_ref") is not None
+            or intent.get("source_sprint_id") != plan["scope"]["sprint_id"]
+            or intent.get("source_response_id")
+            != plan["occurrence"]["response_id"]
+            or intent.get("published_at")
+            != plan["frozen_timestamps"]["compatibility_published_at"]
+            or type(intent.get("intent_id")) is not str
+            or _LATEST_INTENT_ID_RE.fullmatch(intent["intent_id"]) is None
+            or intent["intent_id"] != self._latest_intent_id(intent)
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return copy.deepcopy(intent)
+
+    def _validate_legacy_latest_plan(
+        self,
+        plan: Mapping[str, Any],
+        plan_ref: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        expected_keys = {
+            "schema_version",
+            "kind",
+            "media_type",
+            "id_algorithm",
+            "operation_id",
+            "operation_kind",
+            "scope",
+            "occurrence",
+            "recovery_locator",
+            "pending_registry",
+            "compatibility_publication",
+            "legacy_latest",
+            "frozen_timestamps",
+        }
+        value = dict(plan)
+        if set(value) != expected_keys or (
+            value.get("schema_version") != 1
+            or value.get("kind") != "prompt_archive_publication_plan"
+            or value.get("media_type") != _PLAN_MEDIA
+            or value.get("id_algorithm") != "PAS1-ID-v1"
+            or value.get("operation_kind") != "legacy_latest_publish"
+            or type(value.get("operation_id")) is not str
+            or _OPERATION_ID_RE.fullmatch(value["operation_id"]) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        scope = value.get("scope")
+        occurrence = value.get("occurrence")
+        if (
+            type(scope) is not dict
+            or set(scope) != {"project_id", "sprint_id"}
+            or scope.get("project_id") != self.project_id
+            or (
+                scope.get("sprint_id") is not None
+                and (
+                    type(scope["sprint_id"]) is not str
+                    or _SAFE_ID_RE.fullmatch(scope["sprint_id"]) is None
+                )
+            )
+            or type(occurrence) is not dict
+            or set(occurrence)
+            != {
+                "response_id",
+                "response_kind",
+                "occurrence_kind",
+                "occurrence_id",
+                "transition_id",
+            }
+            or type(occurrence.get("response_id")) is not str
+            or _RESPONSE_ID_RE.fullmatch(occurrence["response_id"]) is None
+            or type(occurrence.get("occurrence_id")) is not str
+            or _SAFE_ID_RE.fullmatch(occurrence["occurrence_id"]) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        write_kind = value.get("legacy_latest", {}).get("write_kind")
+        if write_kind == "transition":
+            relation_ok = (
+                occurrence.get("response_kind") == "transition-response"
+                and occurrence.get("occurrence_kind") == "transition"
+                and type(occurrence.get("transition_id")) is str
+                and _SAFE_ID_RE.fullmatch(occurrence["transition_id"]) is not None
+                and occurrence["transition_id"] == occurrence["occurrence_id"]
+            )
+        elif write_kind in {"identity", "state", "rollback"}:
+            expected_response = {
+                "identity": {"identity-response"},
+                "state": {"state-response"},
+                "rollback": {"identity-response", "state-response"},
+            }[write_kind]
+            relation_ok = (
+                occurrence.get("response_kind") in expected_response
+                and occurrence.get("occurrence_kind") == "identity-state"
+                and occurrence.get("transition_id") is None
+            )
+        else:
+            relation_ok = False
+        if not relation_ok:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        expected_response_id = response_id_v1(
+            scope["project_id"],
+            scope["sprint_id"],
+            occurrence["response_kind"],
+            occurrence["occurrence_kind"],
+            occurrence["occurrence_id"],
+        )
+        if occurrence["response_id"] != expected_response_id:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        locator = value.get("recovery_locator")
+        expected_locator = {
+            "locator_version": "prompt-archive-publication-locator-v1",
+            "recovery_key": "parloc1-"
+            + pas1_id_v1(
+                "publication-locator",
+                (
+                    ("project_id", self.project_id),
+                    ("sprint_id", scope["sprint_id"]),
+                    ("response_id", occurrence["response_id"]),
+                    ("occurrence_id", occurrence["occurrence_id"]),
+                    ("operation_id", value["operation_id"]),
+                ),
+            ),
+            "project_id": self.project_id,
+            "sprint_id": scope["sprint_id"],
+            "response_id": occurrence["response_id"],
+            "occurrence_id": occurrence["occurrence_id"],
+            "operation_id": value["operation_id"],
+        }
+        if locator != expected_locator:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        timestamps = value.get("frozen_timestamps")
+        expected_timestamp_keys = {
+            "source_observed_at",
+            "planned_at",
+            "intent_at",
+            "legacy_payload_verified_at",
+            "compatibility_published_at",
+            "completed_at",
+            "aborted_at",
+        }
+        if type(timestamps) is not dict or set(timestamps) != expected_timestamp_keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        for timestamp in timestamps.values():
+            _require_rfc3339(timestamp)
+        shard_id = hashlib.sha256(locator["recovery_key"].encode("utf-8")).hexdigest()[:2]
+        planned = self._planned_entry(value, plan_ref)
+        expected_pending = {
+            "protocol": "prompt-archive-pending-registry-cas-v1",
+            "shard": {
+                "project_id": self.project_id,
+                "shard_algorithm": "sha256-recovery-key-prefix-2-v1",
+                "shard_id": shard_id,
+                "max_entries": 1024,
+            },
+            "entry_precondition": {"kind": "absent"},
+            "intended_mutation": {
+                "mutation": "upsert_planned",
+                "operation_id": value["operation_id"],
+                "recovery_key": locator["recovery_key"],
+                "plan_ref_binding": "canonical_current_plan_ref",
+                "state": "planned",
+                "journal_ref": None,
+                "created_at": planned["created_at"],
+                "updated_at": planned["updated_at"],
+                "published_at": planned["updated_at"],
+            },
+        }
+        if value.get("pending_registry") != expected_pending:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        legacy = value.get("legacy_latest")
+        if type(legacy) is not dict or set(legacy) != {
+            "identity_version",
+            "write_kind",
+            "content_media_type",
+            "content_sha256",
+            "content_size",
+            "payload_root",
+            "authoritative_drain_barrier",
+        } or (
+            legacy.get("identity_version")
+            != "prompt-archive-legacy-latest-payload-v1"
+            or legacy.get("write_kind") not in _LEGACY_LATEST_WRITE_KINDS
+            or legacy.get("content_media_type") != "application/json"
+            or type(legacy.get("content_sha256")) is not str
+            or _SHA256_RE.fullmatch(legacy["content_sha256"]) is None
+            or type(legacy.get("content_size")) is not int
+            or not 0 <= legacy["content_size"] <= self.max_hydrated_bytes
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        legacy["payload_root"] = _closed_ref(
+            legacy["payload_root"],
+            logical_kind="index_node",
+            media_type="application/vnd.nginx-qa.prompt-archive-index-node-v1+json",
+        )
+        barrier = legacy.get("authoritative_drain_barrier")
+        expected_barrier = {
+            "protocol": "reconcile-authoritative-before-legacy-latest-write-v1",
+            "lock_scope": "project",
+            "slot_id": "latest-response",
+            "registry_shard_count": 256,
+            "observed_incomplete_operation_ids": [],
+            "observed_at": timestamps["planned_at"],
+        }
+        if barrier != expected_barrier:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        compatibility = value.get("compatibility_publication")
+        if type(compatibility) is not dict or set(compatibility) != {
+            "mode",
+            "target_authority_id",
+            "latest_intent",
+        } or (
+            compatibility.get("mode") != "legacy_latest_publish"
+            or type(compatibility.get("target_authority_id")) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(
+                compatibility["target_authority_id"]
+            )
+            is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        compatibility["latest_intent"] = self._validate_legacy_latest_intent(
+            value,
+            compatibility["latest_intent"],
+        )
+        if write_kind == "rollback":
+            self._verify_legacy_latest_rollback_selection(value)
+        return value
 
     def _validate_authoritative_compatibility(
         self,
@@ -4361,6 +6030,8 @@ class PromptArchiveRuntime:
     ) -> dict[str, Any]:
         plan = dict(value)
         operation_kind = plan.get("operation_kind")
+        if operation_kind == "legacy_latest_publish":
+            return self._validate_legacy_latest_plan(plan, plan_ref)
         if set(plan) != {
             "schema_version",
             "kind",
@@ -4803,7 +6474,12 @@ class PromptArchiveRuntime:
         if current is None:
             return None
         generation = current.get("journal_generation")
-        if type(generation) is not int or not 0 <= generation < len(_JOURNAL_STATES):
+        states = (
+            _LEGACY_LATEST_JOURNAL_STATES
+            if plan.get("operation_kind") == "legacy_latest_publish"
+            else _JOURNAL_STATES
+        )
+        if type(generation) is not int or not 0 <= generation < len(states):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         reverse_documents: list[dict[str, Any]] = []
         document = current
@@ -4915,9 +6591,14 @@ class PromptArchiveRuntime:
         if state in {"complete", "aborted"}:
             return None
         generation = current.get("journal_generation")
+        states = (
+            _LEGACY_LATEST_JOURNAL_STATES
+            if plan.get("operation_kind") == "legacy_latest_publish"
+            else _JOURNAL_STATES
+        )
         if (
             type(generation) is not int
-            or not 0 <= generation < len(_JOURNAL_STATES) - 1
+            or not 0 <= generation < len(states) - 1
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
 
@@ -4932,6 +6613,12 @@ class PromptArchiveRuntime:
             and self._load_compatibility_result(plan) is None
         ):
             return None
+        if (
+            state == "legacy_payload_verified"
+            and plan.get("operation_kind") == "legacy_latest_publish"
+            and self._load_compatibility_result(plan) is None
+        ):
+            return None
 
         candidates = [
             self._journal_document(
@@ -4942,7 +6629,12 @@ class PromptArchiveRuntime:
                 current_ref,
             )
         ]
-        if state in _PRE_POINTER_STATES:
+        abortable_states = (
+            {"intent", "legacy_payload_verified"}
+            if plan.get("operation_kind") == "legacy_latest_publish"
+            else _PRE_POINTER_STATES
+        )
+        if state in abortable_states:
             candidates.extend(
                 self._aborted_journal_document(
                     plan,
@@ -5208,9 +6900,24 @@ class PromptArchiveRuntime:
         offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
         | None = None,
         compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
+        legacy_latest_publisher: PromptArchiveLegacyLatestPublisher | None = None,
     ) -> str | None:
         storage = self._require_storage()
         state = journal["state"]
+        if plan.get("operation_kind") == "legacy_latest_publish":
+            if state == "intent":
+                self._legacy_latest_payload_bytes(plan)
+                return None
+            if state == "legacy_payload_verified":
+                publisher = self._resolve_legacy_latest_publisher(
+                    plan,
+                    legacy_latest_publisher,
+                )
+                self._ensure_legacy_latest_compatibility(plan, publisher)
+                return None
+            if state == "compatibility_published":
+                return None
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         # The exact external source is required at intent.  After the graph is
         # verified and ``blobs_verified`` is journaled, recovery deliberately
         # depends only on the immutable plan/manifest graph: reconstructing or
@@ -5298,6 +7005,7 @@ class PromptArchiveRuntime:
         offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
         | None = None,
         compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
+        legacy_latest_publisher: PromptArchiveLegacyLatestPublisher | None = None,
     ) -> str:
         storage = self._require_storage()
         while True:
@@ -5321,6 +7029,7 @@ class PromptArchiveRuntime:
                 journal,
                 offline_inventory_verifier=offline_inventory_verifier,
                 compatibility_publisher=compatibility_publisher,
+                legacy_latest_publisher=legacy_latest_publisher,
             )
             with storage.control_lock(self._operation_lock_path(plan)):
                 latest = self._load_journal_chain_locked(plan, plan_ref)
@@ -5382,10 +7091,77 @@ class PromptArchiveRuntime:
         else:
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
 
-    def recover_pending(self) -> int:
-        """Replay pending operations found through exactly 256 fixed shards."""
+    def _verify_authoritative_drain_barrier(
+        self,
+        barrier: Mapping[str, Any],
+    ) -> bool:
+        """Read-only proof used while the external latest lock is held.
 
-        if self.config.mode not in {"shadow", "authoritative"}:
+        Preparation first drains recoverable work outside the latest lock.
+        This callback then enumerates the complete fixed registry and rejects
+        any newly admitted, nonterminal native publication.  It deliberately
+        performs no recovery or registry mutation while nested under the
+        external lock.
+        """
+
+        if not isinstance(barrier, Mapping) or dict(barrier) != {
+            "protocol": "reconcile-authoritative-before-legacy-latest-write-v1",
+            "lock_scope": "project",
+            "slot_id": "latest-response",
+            "registry_shard_count": 256,
+            "observed_incomplete_operation_ids": [],
+            "observed_at": barrier.get("observed_at"),
+        }:
+            return False
+        try:
+            _require_rfc3339(barrier.get("observed_at"))
+        except PromptArchiveStorageError:
+            return False
+        storage = self._require_storage()
+        entries: list[dict[str, Any]] = []
+        for ordinal in range(256):
+            shard_id = f"{ordinal:02x}"
+            with storage.control_lock(self._registry_lock_path(shard_id)):
+                registry = self._read_registry_locked(shard_id)
+                if registry is not None:
+                    entries.extend(copy.deepcopy(registry["entries"]))
+        for entry in entries:
+            plan, plan_ref = self._load_plan(entry)
+            if plan["operation_kind"] != "native_publish":
+                continue
+            with storage.control_lock(self._operation_lock_path(plan)):
+                current = self._load_journal_chain_locked(
+                    plan,
+                    plan_ref,
+                    adopt_retained_successor=False,
+                )
+                self._validate_recovery_lower_bound(entry, current)
+            if current is None or current[0]["state"] not in {
+                "complete",
+                "aborted",
+            }:
+                return False
+        return True
+
+    def recover_pending(
+        self,
+        *,
+        legacy_latest_publisher: PromptArchiveLegacyLatestPublisher | None = None,
+    ) -> int:
+        """Replay pending operations found through exactly 256 fixed shards.
+
+        Native/shadow publications are always drained before a legacy latest
+        operation.  A legacy plan's external-lock verifier intentionally
+        rejects an incomplete native publication, so shard lexical order must
+        never be allowed to turn that safety check into a recovery livelock.
+        An exact publisher supplied by a public retry is also carried into the
+        recovery pass; recovery must not unexpectedly require a global path
+        resolver when the caller already supplied the plan-bound authority.
+        """
+
+        if self.config.mode not in {"legacy", "shadow", "authoritative"}:
+            return 0
+        if self.storage is None:
             return 0
         storage = self._require_storage()
         pending: list[dict[str, Any]] = []
@@ -5395,13 +7171,61 @@ class PromptArchiveRuntime:
                 registry = self._read_registry_locked(shard_id)
                 if registry is not None:
                     pending.extend(copy.deepcopy(registry["entries"]))
-        recovered = 0
+        loaded: list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]] = []
         for entry in pending:
+            plan, plan_ref = self._load_plan(entry)
+            loaded.append((entry, plan, plan_ref))
+        loaded.sort(
+            key=lambda item: (
+                item[1].get("operation_kind") == "legacy_latest_publish",
+                item[1].get("operation_id", ""),
+            )
+        )
+
+        recovered = 0
+        for entry, plan, plan_ref in loaded:
             with storage.account_cas_writes() as cas_writes:
-                plan, plan_ref = self._load_plan(entry)
+                target_bound_operation = (
+                    plan["operation_kind"] == "legacy_latest_publish"
+                    or (
+                        plan["operation_kind"] == "native_publish"
+                        and plan["compatibility_publication"].get("mode")
+                        == "authoritative_descriptor_stubs"
+                    )
+                )
                 with storage.control_lock(self._operation_lock_path(plan)):
-                    current = self._load_journal_chain_locked(plan, plan_ref)
+                    current = self._load_journal_chain_locked(
+                        plan,
+                        plan_ref,
+                        adopt_retained_successor=not target_bound_operation,
+                    )
                     self._validate_recovery_lower_bound(entry, current)
+                selected_legacy_publisher = None
+                selected_compatibility_publisher = None
+                if plan["operation_kind"] == "legacy_latest_publish":
+                    # Validate the registry lower bound read-only before an
+                    # exact target can be restored.  Then resolve/cross-bind
+                    # before any journal adoption, advance, or terminal
+                    # cleanup.  Corrupt recovery authority therefore cannot
+                    # mutate the target binding.
+                    selected_legacy_publisher = (
+                        self._resolve_legacy_latest_publisher(
+                            plan,
+                            legacy_latest_publisher,
+                        )
+                    )
+                elif (
+                    plan["operation_kind"] == "native_publish"
+                    and plan["compatibility_publication"].get("mode")
+                    == "authoritative_descriptor_stubs"
+                ):
+                    # A terminal native journal can otherwise remove its last
+                    # pending root without ever visiting the compatibility
+                    # state action.  Restore/verify its exact project target
+                    # before any journal adoption or terminal cleanup too.
+                    selected_compatibility_publisher = (
+                        self._resolve_compatibility_publisher(plan, None)
+                    )
                 # Offline operations require the operator to re-supply the
                 # exact isolated root handle.  Runtime startup has no such
                 # authority and must leave their registry entries pending.
@@ -5420,13 +7244,52 @@ class PromptArchiveRuntime:
                     self._apply_pending_mutation(*current)
                     terminal_state = current[0]["state"]
                 else:
-                    terminal_state = self._drive_operation(plan, plan_ref)
+                    if (
+                        self.config.mode == "legacy"
+                        and self._occurrence_prover is None
+                        and plan["operation_kind"]
+                        in {"native_publish", "shadow_publish"}
+                    ):
+                        source_required = current is None or (
+                            current[0]["state"] == "intent"
+                            and not self._intended_pointer_is_published(plan)
+                        )
+                        if (
+                            source_required
+                            and self._runtime_occurrence_abort_reason(plan)
+                            == "source_unavailable"
+                        ):
+                            # A mode-switch/startup without the durable
+                            # occurrence authority cannot reinterpret absence
+                            # as a committed source-loss decision.  Leave the
+                            # plan/journal/registry byte-for-byte pending for a
+                            # later authoritative restart that can prove it.
+                            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+                    terminal_state = self._drive_operation(
+                        plan,
+                        plan_ref,
+                        compatibility_publisher=(
+                            selected_compatibility_publisher
+                            if plan["operation_kind"] == "native_publish"
+                            else None
+                        ),
+                        legacy_latest_publisher=(
+                            selected_legacy_publisher
+                            if plan["operation_kind"] == "legacy_latest_publish"
+                            else None
+                        ),
+                    )
             if terminal_state == "complete":
                 outcomes = cas_writes.snapshot()
+                logical_bytes = (
+                    plan["legacy_latest"]["content_size"]
+                    if plan["operation_kind"] == "legacy_latest_publish"
+                    else plan["intended_manifest"]["document"]["integrity"][
+                        "hydrated_size"
+                    ]
+                )
                 self.metrics.record_publication(
-                    logical_bytes=plan["intended_manifest"]["document"][
-                        "integrity"
-                    ]["hydrated_size"],
+                    logical_bytes=logical_bytes,
                     new_physical_bytes=outcomes.new_stored_bytes,
                     dedup_hits=outcomes.dedup_hits,
                 )
@@ -5963,6 +7826,7 @@ class PromptArchiveRuntimeRegistry:
         ]
         | None = None,
         metrics: PromptArchiveMetrics | None = None,
+        legacy_latest_publication_enabled: bool = True,
     ) -> None:
         if not isinstance(config, PromptArchiveRuntimeConfig):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
@@ -5973,6 +7837,8 @@ class PromptArchiveRuntimeRegistry:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if metrics is not None and not isinstance(metrics, PromptArchiveMetrics):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if type(legacy_latest_publication_enabled) is not bool:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if compatibility_resolver is not None and not callable(
             compatibility_resolver
         ):
@@ -5981,6 +7847,7 @@ class PromptArchiveRuntimeRegistry:
         self._occurrence_prover = occurrence_prover
         self._compatibility_resolver = compatibility_resolver
         self.metrics = metrics if metrics is not None else PromptArchiveMetrics()
+        self.legacy_latest_publication_enabled = legacy_latest_publication_enabled
         self._lock = threading.Lock()
         self._projects: dict[str, PromptArchiveRuntime] = {}
 
@@ -6033,6 +7900,9 @@ class PromptArchiveRuntimeRegistry:
                 occurrence_prover=self._occurrence_prover,
                 compatibility_resolver=self._compatibility_resolver,
                 metrics=self.metrics,
+                legacy_latest_publication_enabled=(
+                    self.legacy_latest_publication_enabled
+                ),
             )
             self._projects[project_id] = runtime
             return runtime
@@ -6054,9 +7924,14 @@ class PromptArchiveRuntimeRegistry:
         frozen_ids = tuple(_require_safe_id(project_id) for project_id in project_ids)
         if len(set(frozen_ids)) != len(frozen_ids):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
-        if self.config.mode == "legacy":
+        if self.config.mode == "legacy" and (
+            self.config.root is None or not self.config.root.exists()
+        ):
             return 0
-        if self.config.mode not in {"shadow", "authoritative"} or self.config.root is None:
+        if (
+            self.config.mode not in {"legacy", "shadow", "authoritative"}
+            or self.config.root is None
+        ):
             raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
         # Even an empty project registry must preflight/create the configured
         # root and prove protected-root separation before the server starts.
@@ -6083,5 +7958,6 @@ __all__ = [
     "PromptArchiveRuntimeConfig",
     "PromptArchiveOccurrenceProver",
     "PromptArchiveCompatibilityPublisher",
+    "PromptArchiveLegacyLatestPublisher",
     "PromptArchiveRuntimeRegistry",
 ]

@@ -55,6 +55,9 @@
         "legacy_latest_publish"
       ]
     },
+    "write_kind": {
+      "enum": ["transition", "identity", "state", "rollback"]
+    },
     "scope": {"$ref": "#/$defs/scope"},
     "occurrence": {"$ref": "#/$defs/occurrence"},
     "recovery_locator": {"$ref": "#/$defs/recoveryLocator"},
@@ -474,6 +477,7 @@
       },
       "then": {
         "required": [
+          "write_kind",
           "legacy_payload_root",
           "legacy_content_sha256",
           "legacy_content_size",
@@ -509,6 +513,7 @@
         ],
         "not": {
           "anyOf": [
+            {"required": ["write_kind"]},
             {"required": ["legacy_payload_root"]},
             {"required": ["legacy_content_sha256"]},
             {"required": ["legacy_content_size"]},

@@ -829,6 +829,50 @@ class SequentialPromptArchiveCompatibilityPublisher(
         )
         return self._result_mapping(verified)
 
+    def prepare_legacy_intent(
+        self,
+        content: bytes,
+        *,
+        write_kind: str,
+        occurrence_id: str,
+        operation_id: str,
+        published_at: str,
+        source_response_id: str,
+        source_sprint_id: str | None,
+        source_revision: int,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Mapping[str, Any]:
+        """Freeze a typed legacy intent for the common publication plan."""
+
+        return self.coordinator.prepare_legacy_intent(
+            content,
+            write_kind=write_kind,
+            occurrence_id=occurrence_id,
+            operation_id=operation_id,
+            published_at=published_at,
+            source_response_id=source_response_id,
+            source_sprint_id=source_sprint_id,
+            source_revision=source_revision,
+            authoritative_drain_verifier=authoritative_drain_verifier,
+        )
+
+    def publish_prepared_legacy(
+        self,
+        content: bytes,
+        *,
+        prepared: Mapping[str, Any],
+        write_kind: str,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Any:
+        """Apply only the exact common-plan-owned legacy publication."""
+
+        return self.coordinator.publish_prepared_legacy(
+            content,
+            prepared=prepared,
+            write_kind=write_kind,
+            authoritative_drain_verifier=authoritative_drain_verifier,
+        )
+
 
 def resolve_prompt_archive_compatibility_publisher(
     project_id: str,
@@ -847,7 +891,37 @@ def resolve_prompt_archive_compatibility_publisher(
         r"parresp1-[0-9a-f]{64}", response_id
     ) is None:
         raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
-    directory = _prompt_archive_project_prompt_directory(project_id)
+    if project_id.startswith("prompt-target-"):
+        try:
+            with git_config_file_lock():
+                git_config = read_git_config_file()
+            settings = read_sequential_prompt_settings_file()
+            matching_directories: dict[str, Path] = {}
+            for context in configured_git_contexts_from_config(git_config):
+                candidate_id = _prompt_archive_shared_target_project_id(
+                    git_context_key=str(context.get("git_context_key") or "").strip(),
+                    git_address=str(context.get("git_address") or "").strip(),
+                    project_name=str(context.get("project_name") or "").strip(),
+                )
+                if candidate_id != project_id:
+                    continue
+                candidate = resolve_sequential_prompt_directory(
+                    settings["directory_template"],
+                    project_name=str(context.get("project_name") or "").strip(),
+                    git_address=str(context.get("git_address") or "").strip(),
+                    git_context_key=str(context.get("git_context_key") or "").strip(),
+                )
+                key = os.path.normcase(os.path.abspath(os.fspath(candidate)))
+                matching_directories[key] = candidate
+            if len(matching_directories) != 1:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            directory = next(iter(matching_directories.values()))
+        except PromptArchiveStorageError:
+            raise
+        except (HTTPException, OSError, UnicodeError, ValueError, TypeError):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+    else:
+        directory = _prompt_archive_project_prompt_directory(project_id)
     response_path = directory / f"{response_kind}-{response_id}.json"
     runtime = prompt_archive_runtime.for_project(project_id)
     return SequentialPromptArchiveCompatibilityPublisher(
@@ -1283,6 +1357,7 @@ def disable_prompt_archive_shadow_after_recovery_failure(
             runtime_instance_id=config.runtime_instance_id,
         ),
         metrics=prompt_archive_runtime_metrics,
+        legacy_latest_publication_enabled=False,
     )
     prompt_archive_runtime = disabled
     # Keep the already-validated receipt authority root as an isolation fence.
@@ -1299,7 +1374,12 @@ async def recover_prompt_archive_runtime_for_startup(
 ) -> PromptArchiveRuntimeRegistry:
     """Recover a validated sidecar or atomically degrade it to read-only legacy."""
 
-    if configured.config.mode == "legacy":
+    if configured.config.mode == "legacy" and (
+        configured.config.root is None or not configured.config.root.exists()
+    ):
+        # The default no-root launcher remains completely inert.  An existing
+        # configured root, however, may contain a common legacy_latest_publish
+        # operation and must be replayed before any latest writer is admitted.
         return configured
     try:
         await asyncio.to_thread(
@@ -1313,15 +1393,17 @@ async def recover_prompt_archive_runtime_for_startup(
             "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
         }:
             prompt_archive_runtime_metrics.record_corruption_failure()
-        if configured.config.mode == "authoritative":
+        if configured.config.mode in {"authoritative", "legacy"}:
             # Native mode has no legacy writer to fall back to.  Starting in a
             # different write mode after incomplete recovery would violate the
-            # exact operator gate and external-latest ownership contract.
+            # exact operator gate and external-latest ownership contract.  A
+            # root-enrolled legacy operation has the same fail-closed rule: a
+            # direct pre-enrollment fallback could otherwise overtake it.
             raise
         return disable_prompt_archive_shadow_after_recovery_failure(configured)
     except Exception:
         prompt_archive_runtime_metrics.record_recovery_failure()
-        if configured.config.mode == "authoritative":
+        if configured.config.mode in {"authoritative", "legacy"}:
             raise
         return disable_prompt_archive_shadow_after_recovery_failure(configured)
     return configured
@@ -1349,11 +1431,14 @@ async def app_lifespan(_: FastAPI):
     global managed_continuity_stop_event, managed_continuity_thread
     configured_archive_runtime = configure_prompt_archive_runtime()
     startup_git_config: dict[str, Any] | None = None
-    if configured_archive_runtime.config.mode != "legacy":
+    archive_root = configured_archive_runtime.config.root
+    if configured_archive_runtime.config.mode != "legacy" or (
+        archive_root is not None and archive_root.exists()
+    ):
         startup_git_config = await read_git_config()
         configured_archive_runtime = await recover_prompt_archive_runtime_for_startup(
             configured_archive_runtime,
-            tuple(sorted(inbound_known_project_ids(startup_git_config))),
+            tuple(sorted(prompt_archive_startup_project_ids(startup_git_config))),
         )
     if os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV):
         inbound_config = startup_git_config or await read_git_config()
@@ -11073,7 +11158,24 @@ def _sequential_latest_project_id(
     # which may be shared by multiple project registry entries for one Git
     # context.  Use a target-stable authority identity instead of permanently
     # enrolling the shared target to whichever project writes first.
+    return _prompt_archive_shared_target_project_id(
+        git_context_key=git_context_key,
+        git_address=git_address,
+        project_name=project_name,
+    )
+
+
+def _prompt_archive_shared_target_project_id(
+    *,
+    git_context_key: str,
+    git_address: str,
+    project_name: str,
+) -> str:
+    """Return the stable common-runtime identity of one shared latest target."""
+
     stable_context = git_context_key or git_address or project_name
+    if not stable_context:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
     return "prompt-target-" + hashlib.sha256(
         stable_context.encode("utf-8", errors="strict")
     ).hexdigest()[:32]
@@ -11114,20 +11216,31 @@ def _legacy_latest_publication_identity(
 
     content_sha256 = hashlib.sha256(content).hexdigest()
     occurrence_id = f"legacy-latest-{response_key}-{content_sha256[:24]}"
+    occurrence_kind = (
+        "transition" if response_kind == "transition-response" else "identity-state"
+    )
     source_response_id = prompt_archive_response_id_v1(
         project_id,
         sprint_id,
         response_kind,
-        "identity-state",
+        occurrence_kind,
         occurrence_id,
     )
+    write_kind = {
+        "transition-response": "transition",
+        "identity-response": "identity",
+        "state-response": "state",
+    }.get(response_kind)
+    if write_kind is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
     operation_id = "parop1-" + prompt_archive_pas1_id_v1(
-        "external-latest-legacy-operation",
+        "legacy-latest-publication-operation",
         (
             ("project_id", project_id),
             ("sprint_id", sprint_id),
             ("response_id", source_response_id),
-            ("content_sha256", content_sha256),
+            ("occurrence_id", occurrence_id),
+            ("write_kind", write_kind),
         ),
     )[:32]
     # The compatibility response has no independent durable timestamp.  Its
@@ -11139,6 +11252,265 @@ def _legacy_latest_publication_identity(
         source_response_id,
         "1970-01-01T00:00:00Z",
     )
+
+
+_LEGACY_LATEST_WRITE_KIND_BY_RESPONSE_KIND = {
+    "transition-response": "transition",
+    "identity-response": "identity",
+    "state-response": "state",
+}
+_PROMPT_ARCHIVE_OPERATOR_GATE = "prompt-archive-authoritative-v1"
+
+
+def _legacy_latest_write_kind(response_kind: str) -> str:
+    """Map one closed runtime response kind to its durable latest intent kind."""
+
+    if type(response_kind) is not str:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    write_kind = _LEGACY_LATEST_WRITE_KIND_BY_RESPONSE_KIND.get(response_kind)
+    if write_kind is None:
+        # Never let a new caller silently enter the generic legacy publication
+        # path.  Adding a response kind requires an explicit protocol choice and
+        # corresponding schema/recovery coverage.
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    return write_kind
+
+
+def _legacy_latest_occurrence(
+    *,
+    project_id: str,
+    sprint_id: str | None,
+    response_kind: str,
+    occurrence_id: str,
+    source_response_id: str,
+    published_at: str,
+    response: Mapping[str, Any],
+    committed_occurrence: ArchiveOccurrence | None,
+) -> ArchiveOccurrence:
+    """Project a legacy latest write onto the closed occurrence vocabulary."""
+
+    write_kind = _legacy_latest_write_kind(response_kind)
+    occurrence_kind = (
+        "transition" if write_kind == "transition" else "identity-state"
+    )
+    transition_id = occurrence_id if occurrence_kind == "transition" else None
+    state_revision: int | None = None
+    assignment_value = response.get("assignment")
+    assignment = assignment_value if isinstance(assignment_value, Mapping) else {}
+    for candidate in (assignment.get("revision"), response.get("revision")):
+        if type(candidate) is int and 0 <= candidate <= 9_223_372_036_854_775_807:
+            state_revision = candidate
+            break
+
+    source: Mapping[str, Any] = {"source_kind": "runtime_shadow"}
+    authorization: Mapping[str, Any] = {
+        "auth_model_version": "prompt-archive-authorization-v1",
+        "principal_kind": "legacy_local_principal",
+        "principal_id": project_id,
+        "binding_id": None,
+        "scope_source": "legacy_project_context",
+        "effective_scope_revision": None,
+        "effective_scope_sha256": None,
+        "decision_occurrence_id": occurrence_id,
+    }
+    created_at = published_at
+    verified_at = published_at
+    if committed_occurrence is not None:
+        if (
+            committed_occurrence.response_kind != response_kind
+            or committed_occurrence.occurrence_kind != occurrence_kind
+            or committed_occurrence.sprint_id != sprint_id
+            or (
+                not project_id.startswith("prompt-target-")
+                and committed_occurrence.project_id != project_id
+            )
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        expected_committed_response_id = prompt_archive_response_id_v1(
+            committed_occurrence.project_id,
+            committed_occurrence.sprint_id,
+            committed_occurrence.response_kind,
+            committed_occurrence.occurrence_kind,
+            committed_occurrence.occurrence_id,
+        )
+        if committed_occurrence.response_id != expected_committed_response_id:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if occurrence_kind == "transition":
+            if committed_occurrence.transition_id != committed_occurrence.occurrence_id:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        elif committed_occurrence.transition_id is not None:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        occurrence_id = committed_occurrence.occurrence_id
+        transition_id = committed_occurrence.transition_id
+        source_response_id = prompt_archive_response_id_v1(
+            project_id,
+            sprint_id,
+            response_kind,
+            occurrence_kind,
+            occurrence_id,
+        )
+        state_revision = committed_occurrence.state_revision
+        source = committed_occurrence.source
+        authorization = committed_occurrence.authorization
+        created_at = committed_occurrence.created_at
+        verified_at = committed_occurrence.verified_at
+    else:
+        expected_source_response_id = prompt_archive_response_id_v1(
+            project_id,
+            sprint_id,
+            response_kind,
+            occurrence_kind,
+            occurrence_id,
+        )
+        if source_response_id != expected_source_response_id:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if state_revision is None:
+            # Once a latest target is enrolled, ordering is durable.  Inventing
+            # revision zero can silently supersede a valid response behind a
+            # higher current slot, so missing revision authority fails closed.
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    if type(state_revision) is not int:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    return ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=sprint_id,
+        response_id=source_response_id,
+        response_kind=response_kind,
+        occurrence_kind=occurrence_kind,
+        occurrence_id=occurrence_id,
+        transition_id=transition_id,
+        source=source,
+        authorization=authorization,
+        created_at=created_at,
+        verified_at=verified_at,
+        state_revision=state_revision,
+    )
+
+
+def publish_prompt_archive_legacy_latest_rollback(
+    *,
+    project_id: str,
+    source_sprint_id: str,
+    source_response_id: str,
+    occurrence_id: str,
+    operation_id: str,
+    selected_response_id: str,
+    selected_operation_id: str,
+    published_at: str,
+    source_revision: int,
+    expected_content_sha256: str,
+    expected_content_size: int,
+    operator_gate: str,
+) -> Mapping[str, Any]:
+    """Publish verified rollback bytes through the enrolled latest protocol.
+
+    This is deliberately a narrow in-process operator seam, not an HTTP route.
+    Possession of arbitrary response bytes is insufficient: the running
+    instance must have its explicit archive operator gate enabled, the caller
+    must repeat that gate, and selection must name an already-complete common
+    operation whose immutable CAS root matches the approved size/digest.  The
+    durable selection receipt is then rebound to this rollback operation and
+    the project target must already be enrolled.  Therefore a mode toggle or an
+    unreviewed path can never turn into a rollback overwrite.
+    """
+
+    if (
+        operator_gate != _PROMPT_ARCHIVE_OPERATOR_GATE
+        or prompt_archive_runtime.config.operator_gate
+        != _PROMPT_ARCHIVE_OPERATOR_GATE
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if (
+        type(project_id) is not str
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", project_id) is None
+        or type(source_sprint_id) is not str
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", source_sprint_id)
+        is None
+        or type(expected_content_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_content_sha256) is None
+        or type(expected_content_size) is not int
+        or expected_content_size < 1
+        or type(source_revision) is not int
+        or not 0 <= source_revision <= 9_223_372_036_854_775_807
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if source_response_id != prompt_archive_response_id_v1(
+        project_id,
+        source_sprint_id,
+        "state-response",
+        "identity-state",
+        occurrence_id,
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
+    prompt_directory = _prompt_archive_project_prompt_directory(project_id)
+    runtime = prompt_archive_runtime.for_project(project_id)
+    coordinator = ExternalLatestCoordinator(
+        prompt_directory / "latest-response.json",
+        project_id=project_id,
+        archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+    )
+    if not coordinator.enrolled():
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    occurrence = ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=source_sprint_id,
+        response_id=source_response_id,
+        response_kind="state-response",
+        occurrence_kind="identity-state",
+        occurrence_id=occurrence_id,
+        transition_id=None,
+        source={"source_kind": "operator_rollback"},
+        authorization={
+            "auth_model_version": "prompt-archive-authorization-v1",
+            "principal_kind": "legacy_local_principal",
+            "principal_id": project_id,
+            "binding_id": None,
+            "scope_source": "operator_gate",
+            "effective_scope_revision": None,
+            "effective_scope_sha256": None,
+            "decision_occurrence_id": occurrence_id,
+        },
+        created_at=published_at,
+        verified_at=published_at,
+        state_revision=source_revision,
+    )
+    payload = runtime.authorize_legacy_latest_rollback_selection(
+        occurrence=occurrence,
+        operation_id=operation_id,
+        selected_response_id=selected_response_id,
+        selected_operation_id=selected_operation_id,
+        expected_content_sha256=expected_content_sha256,
+        expected_content_size=expected_content_size,
+        expected_target_authority_id=coordinator.target_authority_id,
+        published_at=published_at,
+    )
+    publisher = SequentialPromptArchiveCompatibilityPublisher(
+        project_id=project_id,
+        transition_stub_path=(
+            prompt_directory / f"state-response-{source_response_id}.json"
+        ),
+        latest_path=prompt_directory / "latest-response.json",
+        archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+    )
+    receipt = runtime.publish_legacy_latest(
+        payload,
+        occurrence,
+        write_kind="rollback",
+        operation_id=operation_id,
+        published_at=published_at,
+        source_revision=source_revision,
+        compatibility_publisher=publisher,
+    )
+    return {
+        **dict(receipt),
+        "outcome": receipt.get("latest_slot_outcome"),
+        "latest_slot_id": receipt.get("result_latest_slot_id"),
+        "latest_slot_ref": receipt.get("result_latest_slot_ref"),
+        "generation": receipt.get("result_latest_slot_generation"),
+    }
 
 
 def _safe_sequential_storage_error_code(exc: BaseException) -> str:
@@ -11199,6 +11571,7 @@ def materialize_sequential_graph_response(
     archive_source_metadata: Mapping[str, Any] | None = None,
     archive_source_metadata_error: str | None = None,
 ) -> dict[str, Any]:
+    legacy_latest_write_kind = _legacy_latest_write_kind(response_kind)
     project = response.get("project")
     project_data = project if isinstance(project, dict) else {}
     project_name = str(project_data.get("project_name") or "Project").strip()
@@ -11279,10 +11652,36 @@ def materialize_sequential_graph_response(
         # Re-resolve from the durable project registry instead of trusting a
         # response-carried project label/path. Startup recovery uses this same
         # resolver, so a completed plan can never drift to another target.
-        compatibility_directory = _prompt_archive_project_prompt_directory(
-            archive_occurrence.project_id,
-            create=True,
+        authority_runtime = prompt_archive_runtime.for_project(
+            archive_occurrence.project_id
         )
+        bound_target = authority_runtime.latest_target_authority_id()
+        try:
+            compatibility_directory = _prompt_archive_project_prompt_directory(
+                archive_occurrence.project_id,
+                create=bound_target is None,
+            )
+        except PromptArchiveStorageError:
+            if bound_target is not None:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                ) from None
+            raise
+        if bound_target is not None:
+            try:
+                configured_target = (
+                    ExternalLatestCoordinator.target_authority_id_for_path(
+                        compatibility_directory / "latest-response.json"
+                    )
+                )
+            except PromptArchiveStorageError:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                ) from None
+            if configured_target != bound_target:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                )
         compatibility_response_id = archive_occurrence.response_id
         compatibility_safe_kind = sequential_prompt_path_segment(
             archive_occurrence.response_kind,
@@ -11296,17 +11695,46 @@ def materialize_sequential_graph_response(
         # writer remains on that physical target and must reconcile it.  A
         # corrupt or unverifiable owner fails closed in the coordinator; it
         # never falls back to the shared pre-enrollment target.
-        enrolled_candidate = (
-            prompt_directory / ".nginx-qa-projects" / durable_project_id
-        )
-        if os.path.lexists(enrolled_candidate):
+        durable_runtime = prompt_archive_runtime.for_project(durable_project_id)
+        bound_target = durable_runtime.latest_target_authority_id()
+        enrolled_candidate = prompt_directory / ".nginx-qa-projects" / durable_project_id
+        if bound_target is not None:
             try:
                 enrolled_directory = _prompt_archive_project_prompt_directory(
                     durable_project_id
                 )
-                enrolled_sidecar = (
-                    enrolled_directory / "latest-response.json.nginx-qa-v1"
+                configured_target = (
+                    ExternalLatestCoordinator.target_authority_id_for_path(
+                        enrolled_directory / "latest-response.json"
+                    )
                 )
+                if configured_target != bound_target:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                    )
+                compatibility_directory = enrolled_directory
+                latest_project_id = durable_project_id
+                project_authority_selected = True
+                if isinstance(archive_occurrence, ArchiveOccurrence):
+                    compatibility_response_id = archive_occurrence.response_id
+                    compatibility_safe_kind = sequential_prompt_path_segment(
+                        archive_occurrence.response_kind,
+                        "graph-response",
+                    )
+            except PromptArchiveStorageError:
+                # Never fall back to a second latest authority.  Legacy/shadow
+                # still writes the compact agent prompt and transition response,
+                # but skips the unsafe latest target with a stable closed code.
+                project_latest_enabled = False
+                project_latest_selection_error = (
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                )
+        elif os.path.lexists(enrolled_candidate):
+            try:
+                enrolled_directory = _prompt_archive_project_prompt_directory(
+                    durable_project_id
+                )
+                enrolled_sidecar = enrolled_directory / "latest-response.json.nginx-qa-v1"
                 if os.path.lexists(enrolled_sidecar):
                     compatibility_directory = enrolled_directory
                     latest_project_id = durable_project_id
@@ -11318,9 +11746,6 @@ def materialize_sequential_graph_response(
                             "graph-response",
                         )
             except PromptArchiveStorageError as exc:
-                # Never fall back to a second latest authority.  Legacy/shadow
-                # still writes the compact agent prompt and transition response,
-                # but skips the unsafe latest target with a stable closed code.
                 project_latest_enabled = False
                 project_latest_selection_error = exc.code
     response_path = (
@@ -11771,26 +12196,137 @@ def materialize_sequential_graph_response(
         if project_latest_selection_error is not None:
             raise PromptArchiveStorageError(project_latest_selection_error)
         if project_latest_enabled:
-            ExternalLatestCoordinator(
+            latest_runtime = prompt_archive_runtime.for_project(latest_project_id)
+            coordinator = ExternalLatestCoordinator(
                 latest_path,
                 project_id=latest_project_id,
                 archive_owner_verifier=(
-                    prompt_archive_runtime.for_project(
-                        latest_project_id
-                    ).verify_authoritative_archive_owner
-                    if project_authority_selected
-                    else None
+                    latest_runtime.verify_authoritative_archive_owner
                 ),
-            ).publish(
-                latest_bytes,
-                occurrence_id=latest_occurrence_id,
-                operation_id=latest_operation_id,
-                published_at=latest_published_at,
-                source_response_id=latest_source_response_id,
-                source_sprint_id=latest_sprint_id,
-                source_revision=None,
-                content_kind="legacy_inline",
             )
+
+            def publish_common_latest() -> None:
+                latest_occurrence = _legacy_latest_occurrence(
+                    project_id=latest_project_id,
+                    sprint_id=latest_sprint_id,
+                    response_kind=response_kind,
+                    occurrence_id=latest_occurrence_id,
+                    source_response_id=latest_source_response_id,
+                    published_at=latest_published_at,
+                    response=response,
+                    committed_occurrence=archive_occurrence,
+                )
+                latest_runtime.publish_legacy_latest(
+                    latest_bytes,
+                    latest_occurrence,
+                    write_kind=legacy_latest_write_kind,
+                    source_revision=latest_occurrence.state_revision,
+                    published_at=latest_occurrence.verified_at,
+                    compatibility_publisher=(
+                        SequentialPromptArchiveCompatibilityPublisher(
+                            project_id=latest_project_id,
+                            transition_stub_path=response_path,
+                            latest_path=latest_path,
+                            archive_owner_verifier=(
+                                latest_runtime.verify_authoritative_archive_owner
+                            ),
+                        )
+                    ),
+                )
+
+            def publish_private_latest(*, guarded: bool) -> None:
+                if not latest_runtime.legacy_latest_publication_enabled:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_VERSION_UNSUPPORTED"
+                    )
+
+                def apply() -> None:
+                    coordinator.publish(
+                        latest_bytes,
+                        write_kind=legacy_latest_write_kind,
+                        occurrence_id=latest_occurrence_id,
+                        operation_id=latest_operation_id,
+                        published_at=latest_published_at,
+                        source_response_id=latest_source_response_id,
+                        source_sprint_id=latest_sprint_id,
+                        source_revision=None,
+                        content_kind="legacy_inline",
+                        pre_enrollment_verifier=(
+                            (
+                                lambda: latest_runtime.latest_target_authority_id()
+                                is None
+                            )
+                            if guarded
+                            else None
+                        ),
+                    )
+
+                if not guarded:
+                    apply()
+                    return
+                compatibility_publisher = (
+                    SequentialPromptArchiveCompatibilityPublisher(
+                        project_id=latest_project_id,
+                        transition_stub_path=response_path,
+                        latest_path=latest_path,
+                        archive_owner_verifier=(
+                            latest_runtime.verify_authoritative_archive_owner
+                        ),
+                    )
+                )
+                with latest_runtime.legacy_latest_pre_enrollment_admission(
+                    compatibility_publisher
+                ):
+                    apply()
+
+            if latest_runtime.storage is None:
+                # With no common archive root, every write (including writes
+                # after target enrollment) stays on the typed colocated
+                # coordinator.  Its immutable plan/pending/slot sidecar is the
+                # documented recovery authority for rootless legacy mode.
+                publish_private_latest(guarded=False)
+            elif coordinator.operation_admitted(
+                latest_source_response_id,
+                latest_operation_id,
+            ):
+                # A configured-root bootstrap may have faulted after its
+                # immutable private plan was admitted.  Replay that exact
+                # operation before choosing the common path, even if a target
+                # binding appeared meanwhile.  Request equality is enforced
+                # by the private plan; this branch cannot admit a new write.
+                publish_private_latest(guarded=False)
+            elif (
+                project_authority_selected
+                or latest_runtime.latest_target_authority_id() is not None
+            ):
+                publish_common_latest()
+            else:
+                # A configured-root target without a durable revision may make
+                # exactly one private bootstrap write.  The common admission
+                # fence is held through the coordinator's atomic latest-lock
+                # precondition, so concurrent enrollment can only make this
+                # attempt fail before artifacts.  The attempt is also made
+                # when a private marker exists: only an exact already-admitted
+                # operation may recover/replay there; a new operation is
+                # rejected and retried through the common path.
+                try:
+                    publish_private_latest(guarded=True)
+                except PromptArchiveStorageError:
+                    if coordinator.operation_admitted(
+                        latest_source_response_id,
+                        latest_operation_id,
+                    ):
+                        # Preserve the original safe failure.  The next exact
+                        # request will enter the admitted replay branch above
+                        # instead of masking this fault with a common-path
+                        # missing-revision error.
+                        raise
+                    if (
+                        latest_runtime.latest_target_authority_id() is None
+                        and not coordinator.enrolled()
+                    ):
+                        raise
+                    publish_common_latest()
     except (PromptArchiveStorageError, OSError, UnicodeError) as exc:
         storage_errors["project_latest"] = _safe_sequential_storage_error_code(exc)
         stored_response["response_storage_errors"] = storage_errors
@@ -34324,6 +34860,21 @@ def inbound_known_project_ids(config: dict[str, Any]) -> set[str]:
         if isinstance(entry, dict)
         if (phone := normalize_project_phone(entry.get("project_phone")))
     }
+
+
+def prompt_archive_startup_project_ids(config: dict[str, Any]) -> set[str]:
+    """Include durable projects and shared pre-enrollment target authorities."""
+
+    selected = inbound_known_project_ids(config)
+    for context in configured_git_contexts_from_config(config):
+        selected.add(
+            _prompt_archive_shared_target_project_id(
+                git_context_key=str(context.get("git_context_key") or "").strip(),
+                git_address=str(context.get("git_address") or "").strip(),
+                project_name=str(context.get("project_name") or "").strip(),
+            )
+        )
+    return selected
 
 
 def inbound_proposal_error_response(error: InboundProposalError) -> JSONResponse:

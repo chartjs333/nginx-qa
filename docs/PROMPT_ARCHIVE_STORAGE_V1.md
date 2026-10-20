@@ -732,11 +732,17 @@ Publication order is mandatory for archive-producing operations:
    sorted reachable-ref set digest/count. Each embedded document has its exact
    deterministic CAS ref. The plan contains no payload text, filesystem path,
    credential, or secret.
-3. Publish/verify the canonical plan at its operation path and CAS ref. Then,
-   with no latest/operation/response lock held, take only the pending-registry
-   shard lock and apply the plan's key-level
+3. Validate the complete closed plan before creating any stable operation
+   artifact. For a compatibility target, take the project admission lock and
+   create-or-verify the immutable target-authority binding before the stable
+   plan can become recoverable. Publish/verify the canonical plan at its
+   operation path and CAS ref. Then, with no
+   latest/operation/response lock held, take the admission lock followed by
+   only the pending-registry shard lock and apply the plan's key-level
    `upsert_planned` mutation. A crash before registry acceptance leaves only an
-   unreachable immutable plan orphan and no externally visible effect. Once
+   unreachable immutable plan orphan and, when applicable, its harmless
+   path-free target binding; it leaves no payload publication or journal
+   effect. Once
    registered, the operation is durable and discoverable without a directory
    scan. A full 1024-entry shard rejects admission before registry acceptance
    or any externally visible publication; the prewritten plan may remain as an
@@ -858,6 +864,9 @@ Stable locations are exactly
 `projects/<project_storage_key>/pending/v1/shards/<00..ff>.json`,
 `projects/<project_storage_key>/pending/v1/generations/<00..ff>/<generation>-<registry_id>.json`,
 `projects/<project_storage_key>/pending/v1/locks/<00..ff>.lock`,
+`projects/<project_storage_key>/pending/v1/locks/admission.lock`,
+`projects/<project_storage_key>/legacy-latest/v1/target-authority.json`,
+`projects/<project_storage_key>/rollback-selections/v1/<operation_id>.json`,
 `projects/<project_storage_key>/sprints/<sprint_storage_key>/pointers/v1/<response_id>.json`,
 `projects/<project_storage_key>/sprints/<sprint_storage_key>/archives/v1/<archive_id>.json`,
 `projects/<project_storage_key>/inventories/v1/<inventory_id>.json`, and
@@ -963,6 +972,25 @@ current journal at or beyond `locator_published` and exact immutable pointer and
 locator bytes. Target drift, a wrong safe transition leaf, mixed owner/intent,
 or missing owner authority fails before any compatibility mutation.
 
+Every enrolled `legacy_latest_publish` plan also freezes that same closed,
+path-free `compatibility_publication.target_authority_id`. Recovery and retry
+resolve the external latest target again and require its derived authority ID
+to equal the committed plan before they read or mutate compatibility content,
+intent, slot, or journal state. The plan reference retained by the operation
+journal binds this target choice for transition, identity, state, and rollback
+writes. A plan produced before this required field, a malformed authority ID,
+or a valid but different target is not upgraded or guessed during recovery;
+it fails closed. The identifier is authority provenance, not a filesystem path
+and not permission to fall back to a shared or newly configured target.
+
+The plan validator also recomputes `response_id_v1` from the exact project,
+sprint, response kind, occurrence kind, and occurrence ID before admitting or
+replaying a common latest operation. Every retained journal generation,
+including `complete` and `aborted`, repeats the plan's exact
+`legacy_latest.write_kind`; recovery reconstructs and byte-compares that
+binding. The field is required only for `legacy_latest_publish` journals and is
+forbidden in native, shadow, and offline-migration journals.
+
 The colocated `operations` and fixed 256-shard `pending` trees are the complete
 recovery authority for `legacy_latest_publish` after enrollment, so a default
 legacy launcher does not need an archive root to finish or discover such work.
@@ -998,11 +1026,14 @@ root and the legacy writer accompanying shadow mode, locates and takes this
 same lock and must reconcile a current intent before writing. Thus the necessary
 non-nested registry phase cannot race an uncoordinated legacy overwrite.
 Before any valid current-intent enrollment marker or slot exists, an ordinary
-legacy writer still takes `latest.lock` but may retain its existing unjournaled
-atomic-write semantics. Creating the lock-only control directory is not
-enrollment. Once a valid current-intent marker or slot exists, every transition,
-identity, state, and rollback write is a colocated, registered, journaled
-`legacy_latest_publish`; there is no fallback to the pre-enrollment overwrite.
+rootless legacy writer still uses the colocated typed plan/pending/journal
+coordinator. A configured-root first write additionally holds the archive-root
+admission fence through its atomic pre-enrollment check; an exact faulted
+private plan is replayed before common-path selection. Creating the lock-only
+control directory is not enrollment. There is no direct unjournaled latest
+overwrite: every transition, identity, state, and rollback write is represented
+by a durable typed operation, and post-enrollment configured-root writes also
+carry the common archive-root plan/journal authority.
 
 Authoritative outputs use the trusted project-specific target below
 `.nginx-qa-projects/<project_id>`. After that target's sidecar exists, disabling
@@ -1012,6 +1043,20 @@ the same project target first. A corrupt sidecar or unavailable archive-owner
 proof fails closed and never causes fallback to the base
 `latest-response.json`. Projects which have never enrolled a project-specific
 target retain the pre-enrollment legacy base-path behavior.
+
+A configured legacy/shadow target shared by registry entries uses a synthetic
+common-runtime project authority, not the first logical project that writes it.
+Let `stable_context` be the first non-empty configured value in this exact
+order: `git_context_key`, `git_address`, `project_name`. Its project ID is
+`prompt-target-` followed by the first 32 lowercase hexadecimal characters of
+`SHA-256(UTF-8(stable_context))`. Startup derives these IDs from every bounded
+configured Git context and includes them alongside durable logical project IDs
+in the fixed recovery set; it never discovers them by scanning archive project
+directories. Resolver recovery recomputes the same ID and canonical prompt
+target from the current protected Git/sequential configuration. Zero matches,
+multiple distinct canonical target matches, an empty stable context, or any
+mapping ambiguity is `PROMPT_ARCHIVE_UNAVAILABLE`/reference failure and never
+falls back to another target.
 
 Startup reads at most the 256 fixed pending-shard paths for each configured
 project and never enumerates historical operation directories. Registry entries
@@ -1145,10 +1190,19 @@ process instance is dead and replay of its matching durable journal; elapsed
 time alone is never sufficient. When a path needs both latest and operation
 locks, it always acquires `latest.lock` before `operation.lock`; the inverse is
 forbidden. A pending-registry shard lock is never nested with latest,
-operation, response, or another shard lock in either direction. Before a
-registry bind/update, the writer releases latest/operation/response locks,
-takes exactly one shard lock for one key-level mutation, releases it, then
-reacquires and revalidates any other lock/state it still needs. A competing
+operation, response, or another shard lock for a mutation. The one narrow
+read-only exception closes legacy/common admission races: while holding the
+project admission fence and external `latest.lock`, the authoritative-drain
+verifier may take exactly one shard lock at a time to snapshot its bounded
+registry, release it, and only afterward inspect an operation under its
+operation lock. The order is therefore
+`admission -> latest -> one shard` followed, after shard release, by
+`admission -> latest -> operation`; no shard-to-latest/operation path exists.
+New `upsert_planned` admission releases latest/operation/response locks and
+takes `admission -> one shard`. Journal-ref bind/rebind and terminal removal of
+an already admitted entry take only that one shard lock. Each path performs one
+key-level mutation, releases the shard, then reacquires and revalidates any
+other lock/state it still needs. A competing
 writer either converges on the same verified content, is safely
 superseded by a greater ordered intent, or receives
 `PROMPT_ARCHIVE_GENERATION_CONFLICT`.

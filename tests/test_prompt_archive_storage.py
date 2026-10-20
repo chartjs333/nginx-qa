@@ -1559,6 +1559,12 @@ class PromptArchiveStorageTests(unittest.TestCase):
                 f"{ARCHIVE_ID}.json",
             ),
             ("inventories", "v1", f"{INVENTORY_ID}.json"),
+            ("legacy-latest", "v1", "target-authority.json"),
+            (
+                "rollback-selections",
+                "v1",
+                f"{operation_id}.json",
+            ),
         )
         for index, components in enumerate(layouts):
             payload = f'{{"layout":{index}}}'.encode("ascii")
@@ -1643,6 +1649,14 @@ class PromptArchiveStorageTests(unittest.TestCase):
                 f"pararc1-{'3' * 64}.json",
             ),
             ("inventories", "v1", f"{INVENTORY_ID.upper()}.json"),
+            ("legacy-latest", "v2", "target-authority.json"),
+            ("legacy-latest", "v1", "other.json"),
+            (
+                "rollback-selections",
+                "v1",
+                f"{operation_id.upper()}.json",
+            ),
+            ("rollback-selections", "v1", "arbitrary.json"),
             # These are stable PAS1 paths, but are mutable CAS/current files or
             # lock receipts and must not use immutable create-or-verify.
             ("operations", "v1", RESPONSE_ID, operation_id, "journal.json"),

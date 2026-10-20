@@ -6,7 +6,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, Mapping
 from unittest import mock
+
+from jsonschema import Draft202012Validator, FormatChecker
+from referencing import Registry, Resource
 
 from nginx_qa.prompt_archive_latest import (
     FAULT_AFTER_CURRENT_INSTALL,
@@ -110,6 +114,7 @@ def process_publish_latest(
             Path(target), project_id=PROJECT_ID
         ).publish(
             payload,
+            write_kind="transition",
             occurrence_id=f"occ-{label}",
             operation_id=operation_id(label),
             published_at=f"2026-10-12T00:00:{revision:02d}Z",
@@ -150,6 +155,7 @@ def process_fault_publish_latest(
             fault_hook=inject,
         ).publish(
             payload,
+            write_kind="transition",
             occurrence_id=f"occ-{label}",
             operation_id=operation_id(label),
             published_at=f"2026-10-12T00:01:{revision:02d}Z",
@@ -183,6 +189,10 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
     @staticmethod
     def owner_verifier(expected: dict):
         return lambda observed, _intent: observed == expected
+
+    @staticmethod
+    def drain_verifier(_barrier: Mapping[str, Any]) -> bool:
+        return True
 
     @staticmethod
     def owner_publish_args(
@@ -222,7 +232,8 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
 
             self.assertFalse(coordinator.enrolled())
             result = coordinator.publish(
-                b'{"answer":1}', **self.publish_args("first")
+                b'{"answer":1}',
+                **self.publish_args("first", write_kind="transition"),
             )
 
             self.assertEqual(result.outcome, "published")
@@ -257,10 +268,453 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             self.assertTrue(recovered.recovered)
             self.assertEqual(recovered.outcome, "idempotent")
             replay = restarted.publish(
-                b'{"answer":1}', **self.publish_args("first")
+                b'{"answer":1}',
+                **self.publish_args("first", write_kind="transition"),
             )
             self.assertEqual(replay.outcome, "idempotent")
             self.assertEqual(replay.latest_slot_id, result.latest_slot_id)
+
+    def test_legacy_write_kind_is_bound_in_every_durable_replay_record(self) -> None:
+        for ordinal, write_kind in enumerate(
+            ("transition", "identity", "state", "rollback"),
+            start=1,
+        ):
+            with self.subTest(write_kind=write_kind), tempfile.TemporaryDirectory() as raw:
+                directory = Path(raw)
+                coordinator = self.coordinator(directory)
+                label = f"typed-{write_kind}"
+                args = self.publish_args(
+                    label,
+                    write_kind=write_kind,
+                    source_revision=ordinal,
+                )
+                result = coordinator.publish(
+                    json.dumps({"write_kind": write_kind}).encode(),
+                    **args,
+                )
+                self.assertEqual(result.outcome, "published")
+
+                operation_root = (
+                    coordinator.sidecar
+                    / "operations"
+                    / "v1"
+                    / response_id(label)
+                    / operation_id(label)
+                )
+                plan = json.loads((operation_root / "plan.json").read_bytes())
+                journal = json.loads((operation_root / "journal.json").read_bytes())
+                slot = json.loads((coordinator.sidecar / "slot.json").read_bytes())
+                self.assertEqual(plan["operation_kind"], "legacy_latest_publish")
+                self.assertEqual(plan["write_kind"], write_kind)
+                self.assertNotIn("write_kind", plan["latest_intent"])
+                self.assertEqual(journal["operation_kind"], "legacy_latest_publish")
+                self.assertEqual(journal["write_kind"], write_kind)
+                self.assertNotIn("write_kind", slot)
+                self.assertEqual(
+                    journal["authoritative_drain_barrier"],
+                    plan["authoritative_drain_barrier"],
+                )
+
+                replay = self.coordinator(directory).publish(
+                    json.dumps({"write_kind": write_kind}).encode(),
+                    **args,
+                )
+                self.assertEqual(replay.outcome, "idempotent")
+                with self.assertRaises(PromptArchiveStorageError) as caught:
+                    self.coordinator(directory).publish(
+                        json.dumps({"write_kind": write_kind}).encode(),
+                        **{**args, "write_kind": "state" if write_kind != "state" else "identity"},
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+                )
+
+    def test_rollback_recovers_each_fault_boundary_with_typed_provenance(self) -> None:
+        for stage in (
+            item for item in FAULT_STAGES if item != "after_transition_stub_publish"
+        ):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as raw:
+                directory = Path(raw)
+                fired = False
+
+                def inject(observed: str) -> None:
+                    nonlocal fired
+                    if observed == stage and not fired:
+                        fired = True
+                        raise InjectedLatestFault(stage)
+
+                label = f"rollback-{stage}"
+                args = self.publish_args(
+                    label,
+                    write_kind="rollback",
+                    source_revision=20,
+                )
+                with self.assertRaises(InjectedLatestFault):
+                    self.coordinator(directory, fault_hook=inject).publish(
+                        b'{"restored":true}',
+                        **args,
+                    )
+                self.assertTrue(fired)
+
+                restarted = self.coordinator(directory)
+                recovered = restarted.recover(
+                    authoritative_drain_verifier=lambda _barrier: True
+                )
+                if recovered is None:
+                    # A plan fault happens before the operation enters the
+                    # fixed pending index, so the exact typed request resumes it.
+                    recovered = restarted.publish(b'{"restored":true}', **args)
+                self.assertIn(recovered.outcome, {"published", "idempotent"})
+                self.assertEqual(
+                    (directory / "latest-response.json").read_bytes(),
+                    b'{"restored":true}',
+                )
+                operation_root = (
+                    restarted.sidecar
+                    / "operations"
+                    / "v1"
+                    / response_id(label)
+                    / operation_id(label)
+                )
+                plan = json.loads((operation_root / "plan.json").read_bytes())
+                journal = json.loads((operation_root / "journal.json").read_bytes())
+                self.assertEqual(plan["operation_kind"], "legacy_latest_publish")
+                self.assertEqual(plan["write_kind"], "rollback")
+                self.assertNotIn("write_kind", plan["latest_intent"])
+                self.assertEqual(journal["operation_kind"], "legacy_latest_publish")
+                self.assertEqual(journal["write_kind"], "rollback")
+                self.assertEqual(
+                    journal["authoritative_drain_barrier"],
+                    plan["authoritative_drain_barrier"],
+                )
+
+    def test_superseded_rollback_keeps_exact_typed_terminal_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            coordinator = self.coordinator(directory)
+            winner = coordinator.publish(
+                b'{"state":"newer"}',
+                **self.publish_args(
+                    "newer-state",
+                    write_kind="state",
+                    source_revision=40,
+                ),
+            )
+            rollback_args = self.publish_args(
+                "older-rollback",
+                write_kind="rollback",
+                source_revision=39,
+            )
+            superseded = coordinator.publish(
+                b'{"state":"selected-backup"}',
+                **rollback_args,
+            )
+            self.assertEqual(superseded.outcome, "superseded")
+            self.assertEqual(superseded.latest_slot_id, winner.latest_slot_id)
+            self.assertEqual(
+                (directory / "latest-response.json").read_bytes(),
+                b'{"state":"newer"}',
+            )
+
+            operation_root = (
+                coordinator.sidecar
+                / "operations"
+                / "v1"
+                / response_id("older-rollback")
+                / operation_id("older-rollback")
+            )
+            plan = json.loads((operation_root / "plan.json").read_bytes())
+            journal = json.loads((operation_root / "journal.json").read_bytes())
+            self.assertEqual(plan["operation_kind"], "legacy_latest_publish")
+            self.assertEqual(plan["write_kind"], "rollback")
+            self.assertNotIn("write_kind", plan["latest_intent"])
+            self.assertEqual(journal["operation_kind"], "legacy_latest_publish")
+            self.assertEqual(journal["write_kind"], "rollback")
+            self.assertEqual(journal["outcome"], "superseded")
+
+            replay = self.coordinator(directory).publish(
+                b'{"state":"selected-backup"}',
+                **rollback_args,
+            )
+            self.assertEqual(replay.outcome, "superseded")
+            self.assertEqual(replay.latest_slot_id, winner.latest_slot_id)
+
+    def test_write_kind_is_required_and_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            coordinator = self.coordinator(Path(raw))
+            args = self.publish_args("closed-kind")
+            with self.assertRaises(TypeError):
+                coordinator.publish(b'{"closed":true}', **args)
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                coordinator.publish(
+                    b'{"closed":true}',
+                    **{**args, "write_kind": "maintenance"},
+                )
+            self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_REQUEST_INVALID")
+            self.assertFalse((Path(raw) / "latest-response.json").exists())
+
+    def test_prepared_legacy_intent_and_slot_match_committed_schemas(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            coordinator = self.coordinator(directory)
+            observed_barriers = []
+
+            def verify(barrier):
+                observed_barriers.append(barrier)
+                return True
+
+            prepared = coordinator.prepare_legacy_intent(
+                b'{"prepared":"legacy"}',
+                write_kind="state",
+                occurrence_id="prepared-state",
+                operation_id=operation_id("prepared-state"),
+                published_at="2026-10-20T17:00:00Z",
+                source_response_id=response_id("prepared-state"),
+                source_sprint_id="sprint-prepared",
+                source_revision=17,
+                authoritative_drain_verifier=verify,
+            )
+            self.assertEqual(
+                set(prepared),
+                {"latest_intent", "authoritative_drain_barrier"},
+            )
+            intent = prepared["latest_intent"]
+            self.assertNotIn("write_kind", intent)
+            self.assertEqual(
+                prepared["authoritative_drain_barrier"][
+                    "observed_incomplete_operation_ids"
+                ],
+                [],
+            )
+            self.assertFalse((coordinator.sidecar / "intent.json").exists())
+            self.assertFalse((coordinator.sidecar / "slot.json").exists())
+
+            repository = Path(__file__).resolve().parents[1]
+            publication_schema = json.loads(
+                (
+                    repository
+                    / "schemas"
+                    / "prompt-archive-publication-plan-v1.schema.json"
+                ).read_text(encoding="utf-8")
+            )
+            registry = Registry()
+            for schema_path in (repository / "schemas").glob("*.schema.json"):
+                schema = json.loads(schema_path.read_text(encoding="utf-8"))
+                resource = Resource.from_contents(schema)
+                registry = registry.with_resource(schema["$id"], resource)
+                registry = registry.with_resource(
+                    "https://github.com/chartjs333/nginx-qa/schemas/"
+                    + schema_path.name,
+                    resource,
+                )
+            Draft202012Validator(
+                publication_schema,
+                registry=registry,
+                format_checker=FormatChecker(),
+            ).evolve(
+                schema=publication_schema["$defs"]["legacyLatestIntent"]
+            ).validate(intent)
+
+            result = coordinator.publish_prepared_legacy(
+                b'{"prepared":"legacy"}',
+                prepared=prepared,
+                write_kind="state",
+                authoritative_drain_verifier=verify,
+            )
+            self.assertEqual(result.outcome, "published")
+            slot = json.loads((coordinator.sidecar / "slot.json").read_bytes())
+            slot_schema = json.loads(
+                (
+                    repository
+                    / "schemas"
+                    / "prompt-archive-latest-slot-v1.schema.json"
+                ).read_text(encoding="utf-8")
+            )
+            Draft202012Validator(
+                slot_schema,
+                registry=registry,
+                format_checker=FormatChecker(),
+            ).validate(slot)
+            self.assertNotIn("write_kind", slot)
+            self.assertGreaterEqual(len(observed_barriers), 2)
+            self.assertTrue(
+                all(item == prepared["authoritative_drain_barrier"] for item in observed_barriers)
+            )
+
+    def test_prepared_legacy_fault_replay_reuses_exact_plan_and_barrier(self) -> None:
+        for stage in (
+            FAULT_AFTER_OPERATION_PLAN,
+            FAULT_AFTER_PENDING_BIND,
+            FAULT_AFTER_CURRENT_INSTALL,
+            FAULT_AFTER_TERMINAL_BEFORE_PENDING_REMOVE,
+        ):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as raw:
+                directory = Path(raw)
+                fired = False
+
+                def inject(observed: str) -> None:
+                    nonlocal fired
+                    if observed == stage and not fired:
+                        fired = True
+                        raise InjectedLatestFault(stage)
+
+                coordinator = self.coordinator(directory, fault_hook=inject)
+                prepared = coordinator.prepare_legacy_intent(
+                    b'{"prepared":"rollback"}',
+                    write_kind="rollback",
+                    occurrence_id=f"prepared-{stage}",
+                    operation_id=operation_id(f"prepared-{stage}"),
+                    published_at="2026-10-20T17:01:00Z",
+                    source_response_id=response_id(f"prepared-{stage}"),
+                    source_sprint_id="sprint-prepared",
+                    source_revision=18,
+                    authoritative_drain_verifier=lambda _barrier: True,
+                )
+                with self.assertRaises(InjectedLatestFault):
+                    coordinator.publish_prepared_legacy(
+                        b'{"prepared":"rollback"}',
+                        prepared=prepared,
+                        write_kind="rollback",
+                        authoritative_drain_verifier=lambda _barrier: True,
+                    )
+                self.assertTrue(fired)
+
+                restarted = self.coordinator(directory)
+                result = restarted.publish_prepared_legacy(
+                    b'{"prepared":"rollback"}',
+                    prepared=prepared,
+                    write_kind="rollback",
+                    authoritative_drain_verifier=lambda barrier: (
+                        barrier == prepared["authoritative_drain_barrier"]
+                    ),
+                )
+                self.assertIn(result.outcome, {"published", "idempotent"})
+                operation_root = (
+                    restarted.sidecar
+                    / "operations"
+                    / "v1"
+                    / response_id(f"prepared-{stage}")
+                    / operation_id(f"prepared-{stage}")
+                )
+                plan = json.loads((operation_root / "plan.json").read_bytes())
+                journal = json.loads((operation_root / "journal.json").read_bytes())
+                self.assertEqual(plan["write_kind"], "rollback")
+                self.assertNotIn("write_kind", plan["latest_intent"])
+                self.assertEqual(
+                    journal["authoritative_drain_barrier"],
+                    prepared["authoritative_drain_barrier"],
+                )
+
+    def test_completing_plan_revalidates_different_typed_current_plan(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            coordinator = self.coordinator(directory)
+
+            def stage_plan(
+                payload: bytes,
+                *,
+                label: str,
+                source_revision: int,
+                published_at: str,
+            ):
+                prepared = coordinator.prepare_legacy_intent(
+                    payload,
+                    write_kind="transition",
+                    occurrence_id=f"occ-{label}",
+                    operation_id=operation_id(label),
+                    published_at=published_at,
+                    source_response_id=response_id(label),
+                    source_sprint_id="sprint-prepared",
+                    source_revision=source_revision,
+                    authoritative_drain_verifier=lambda _barrier: True,
+                )
+                plan = coordinator._plan_for_intent(
+                    prepared["latest_intent"],
+                    transition_stub_name=None,
+                    archive_owner=None,
+                    write_kind="transition",
+                    authoritative_drain_barrier=(
+                        prepared["authoritative_drain_barrier"]
+                    ),
+                )
+                plan_raw = canonical_json_bytes_v1(
+                    plan, maximum=8 * 1024 * 1024
+                )
+                with coordinator._operation_lock(plan):
+                    coordinator._publish_operation_artifacts(
+                        plan,
+                        plan_raw,
+                        payload,
+                    )
+                coordinator._register_pending(plan, plan_raw)
+                return prepared, plan, plan_raw
+
+            first_payload = b'{"current":1}'
+            first_prepared, first_plan, first_raw = stage_plan(
+                first_payload,
+                label="different-current-first",
+                source_revision=20,
+                published_at="2026-10-20T17:03:00Z",
+            )
+            with coordinator._latest_lock():
+                with coordinator._operation_lock(first_plan):
+                    coordinator._install_current_plan(
+                        first_plan,
+                        first_raw,
+                        first_payload,
+                    )
+
+            second_payload = b'{"current":2}'
+            second_prepared, second_plan, second_raw = stage_plan(
+                second_payload,
+                label="different-current-second",
+                source_revision=21,
+                published_at="2026-10-20T17:04:00Z",
+            )
+            observed = []
+            expected = [
+                first_prepared["authoritative_drain_barrier"],
+                second_prepared["authoritative_drain_barrier"],
+            ]
+
+            def verify(barrier: Mapping[str, Any]) -> bool:
+                observed.append(dict(barrier))
+                return dict(barrier) in expected
+
+            result = coordinator._complete_registered_plan(
+                second_plan,
+                second_raw,
+                recovered=False,
+                authoritative_drain_verifier=verify,
+            )
+
+            self.assertEqual(result.outcome, "published")
+            self.assertEqual(observed, expected)
+            self.assertEqual(
+                (directory / "latest-response.json").read_bytes(),
+                second_payload,
+            )
+            self.assertIsNotNone(coordinator._load_journal(first_plan, first_raw))
+            self.assertIsNotNone(coordinator._load_journal(second_plan, second_raw))
+
+    def test_prepared_legacy_drain_verifier_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            coordinator = self.coordinator(Path(raw))
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                coordinator.prepare_legacy_intent(
+                    b'{"prepared":true}',
+                    write_kind="identity",
+                    occurrence_id="prepared-denied",
+                    operation_id=operation_id("prepared-denied"),
+                    published_at="2026-10-20T17:02:00Z",
+                    source_response_id=response_id("prepared-denied"),
+                    source_sprint_id="sprint-prepared",
+                    source_revision=19,
+                    authoritative_drain_verifier=lambda _barrier: False,
+                )
+            self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
+            self.assertFalse((Path(raw) / "latest-response.json").exists())
 
     def test_lexicographic_order_supersedes_regressions_and_detects_divergence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -268,11 +722,15 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             coordinator = self.coordinator(directory)
             first = coordinator.publish(
                 b'{"value":10}',
-                **self.publish_args("ten", source_revision=10),
+                **self.publish_args(
+                    "ten", write_kind="transition", source_revision=10
+                ),
             )
             older = coordinator.publish(
                 b'{"value":9}',
-                **self.publish_args("nine", source_revision=9),
+                **self.publish_args(
+                    "nine", write_kind="transition", source_revision=9
+                ),
             )
             self.assertEqual(older.outcome, "superseded")
             self.assertEqual(older.generation, first.generation)
@@ -285,6 +743,7 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                 b'{"value":11}',
                 **self.publish_args(
                     "same-revision",
+                    write_kind="transition",
                     source_revision=10,
                     occurrence_id="zz-occurrence",
                 ),
@@ -297,13 +756,84 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                     b'{"different":true}',
                     **self.publish_args(
                         "same-revision",
+                        write_kind="transition",
                         source_revision=10,
                         occurrence_id="zz-occurrence",
                     ),
                 )
-            self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            self.assertEqual(
+                caught.exception.code, "PROMPT_ARCHIVE_GENERATION_CONFLICT"
+            )
             self.assertEqual(
                 (directory / "latest-response.json").read_bytes(), b'{"value":11}'
+            )
+
+    def test_pre_upgrade_untyped_plan_recovers_but_cannot_satisfy_typed_retry(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            coordinator = self.coordinator(directory)
+            payload = b'{"pre_upgrade":true}'
+            args = self.publish_args(
+                "pre-upgrade-untyped",
+                write_kind="transition",
+                source_revision=11,
+            )
+            intent = coordinator._new_intent(
+                content_sha256=hashlib.sha256(payload).hexdigest(),
+                content_size=len(payload),
+                content_kind="legacy_inline",
+                descriptor_ref=None,
+                source_sprint_id=None,
+                source_response_id=args["source_response_id"],
+                source_revision=args["source_revision"],
+                occurrence_id=args["occurrence_id"],
+                operation_id=args["operation_id"],
+                published_at=args["published_at"],
+                bootstrap=coordinator._bootstrap("absent"),
+            )
+            plan = {
+                "schema_version": 1,
+                "kind": "prompt_archive_external_latest_plan",
+                "media_type": (
+                    "application/vnd.nginx-qa."
+                    "prompt-archive-external-latest-plan-v1+json"
+                ),
+                "plan_id": "",
+                "project_id": PROJECT_ID,
+                "target_authority_id": coordinator.target_authority_id,
+                "recovery_response_id": args["source_response_id"],
+                "operation_id": args["operation_id"],
+                "recovery_key": coordinator._legacy_recovery_key(intent),
+                "transition_stub_name": None,
+                "archive_owner": None,
+                "latest_intent": intent,
+            }
+            plan["plan_id"] = coordinator._plan_id(plan)
+            plan_raw = canonical_json_bytes_v1(plan, maximum=8 * 1024 * 1024)
+            with coordinator._operation_lock(plan):
+                coordinator._publish_operation_artifacts(plan, plan_raw, payload)
+            coordinator._register_pending(plan, plan_raw)
+
+            recovered = self.coordinator(directory).recover()
+            self.assertEqual(recovered.outcome, "published")
+            self.assertTrue(recovered.recovered)
+            self.assertEqual(
+                (directory / "latest-response.json").read_bytes(), payload
+            )
+            journal = json.loads(
+                (
+                    coordinator._operation_root(plan)
+                    / "journal.json"
+                ).read_bytes()
+            )
+            self.assertNotIn("write_kind", journal)
+
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                self.coordinator(directory).publish(payload, **args)
+            self.assertEqual(
+                caught.exception.code, "PROMPT_ARCHIVE_GENERATION_CONFLICT"
             )
 
     def test_auto_revision_uses_durable_high_water_after_restart(self) -> None:
@@ -311,14 +841,116 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             directory = Path(raw)
             first = self.coordinator(directory).publish(
                 b'{"revision":41}',
-                **self.publish_args("forty-one", source_revision=41),
+                **self.publish_args(
+                    "forty-one", write_kind="transition", source_revision=41
+                ),
             )
             self.assertEqual(first.source_revision, 41)
             second = self.coordinator(directory).publish(
-                b'{"revision":42}', **self.publish_args("forty-two")
+                b'{"revision":42}',
+                **self.publish_args("forty-two", write_kind="transition"),
             )
             self.assertEqual(second.source_revision, 42)
             self.assertEqual(second.generation, 2)
+
+    def test_rootless_typed_writes_continue_after_enrollment(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            target = directory / "latest-response.json"
+
+            first = self.coordinator(directory).publish(
+                b'{"rootless":1}',
+                **self.publish_args("rootless-one", write_kind="identity"),
+            )
+            self.assertEqual(first.outcome, "published")
+            self.assertEqual(first.source_revision, 1)
+            self.assertTrue(self.coordinator(directory).enrolled())
+
+            second = self.coordinator(directory).publish(
+                b'{"rootless":2}',
+                **self.publish_args("rootless-two", write_kind="state"),
+            )
+            self.assertEqual(second.outcome, "published")
+            self.assertEqual(second.source_revision, 2)
+            self.assertEqual(second.generation, 2)
+            self.assertEqual(target.read_bytes(), b'{"rootless":2}')
+
+            recovered = self.coordinator(directory).recover(
+                authoritative_drain_verifier=self.drain_verifier,
+            )
+            self.assertIsNotNone(recovered)
+            self.assertEqual(recovered.latest_slot_id, second.latest_slot_id)
+            self.assertEqual(target.read_bytes(), b'{"rootless":2}')
+
+    def test_atomic_pre_enrollment_verifier_rejects_before_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            directory = Path(raw)
+            coordinator = self.coordinator(directory)
+            denied_label = "pre-enrollment-denied"
+            denied_root = (
+                coordinator.sidecar
+                / "operations"
+                / "v1"
+                / response_id(denied_label)
+                / operation_id(denied_label)
+            )
+            calls = []
+
+            def deny() -> bool:
+                calls.append("denied")
+                return False
+
+            with self.assertRaises(PromptArchiveStorageError) as denied:
+                coordinator.publish(
+                    b'{"pre_enrollment":"denied"}',
+                    **self.publish_args(
+                        denied_label,
+                        write_kind="transition",
+                        pre_enrollment_verifier=deny,
+                    ),
+                )
+            self.assertEqual(denied.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
+            self.assertEqual(calls, ["denied"])
+            self.assertFalse((directory / "latest-response.json").exists())
+            self.assertFalse(denied_root.exists())
+
+            accepted_label = "pre-enrollment-accepted"
+            accepted = coordinator.publish(
+                b'{"pre_enrollment":"accepted"}',
+                **self.publish_args(
+                    accepted_label,
+                    write_kind="transition",
+                    pre_enrollment_verifier=lambda: True,
+                ),
+            )
+            self.assertEqual(accepted.outcome, "published")
+
+            later_label = "pre-enrollment-too-late"
+            later_root = (
+                coordinator.sidecar
+                / "operations"
+                / "v1"
+                / response_id(later_label)
+                / operation_id(later_label)
+            )
+            with self.assertRaises(PromptArchiveStorageError) as enrolled:
+                coordinator.publish(
+                    b'{"pre_enrollment":"too-late"}',
+                    **self.publish_args(
+                        later_label,
+                        write_kind="state",
+                        pre_enrollment_verifier=lambda: True,
+                    ),
+                )
+            self.assertEqual(
+                enrolled.exception.code,
+                "PROMPT_ARCHIVE_UNAVAILABLE",
+            )
+            self.assertFalse(later_root.exists())
+            self.assertEqual(
+                (directory / "latest-response.json").read_bytes(),
+                b'{"pre_enrollment":"accepted"}',
+            )
 
     def test_incomplete_current_intent_is_reconciled_before_allocating(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -331,10 +963,13 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             with self.assertRaises(InjectedLatestFault):
                 self.coordinator(directory, fault_hook=stop_after_intent).publish(
                     b'{"revision":50}',
-                    **self.publish_args("fifty", source_revision=50),
+                    **self.publish_args(
+                        "fifty", write_kind="transition", source_revision=50
+                    ),
                 )
             later = self.coordinator(directory).publish(
-                b'{"revision":51}', **self.publish_args("fifty-one")
+                b'{"revision":51}',
+                **self.publish_args("fifty-one", write_kind="transition"),
             )
             self.assertEqual(later.source_revision, 51)
             self.assertEqual(later.generation, 2)
@@ -358,7 +993,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                         fired = True
                         raise InjectedLatestFault(stage)
 
-                kwargs = self.publish_args(f"fault-{stage}")
+                kwargs = self.publish_args(
+                    f"fault-{stage}", write_kind="transition"
+                )
                 with self.assertRaises(InjectedLatestFault):
                     self.coordinator(directory, fault_hook=inject).publish(
                         b'{"new":true}', **kwargs
@@ -366,12 +1003,19 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                 self.assertTrue(fired)
 
                 restarted = self.coordinator(directory)
-                recovered = restarted.recover()
+                recovered = restarted.recover(
+                    authoritative_drain_verifier=self.drain_verifier
+                )
                 if recovered is None:
                     recovered = restarted.publish(b'{"new":true}', **kwargs)
                 self.assertIn(recovered.outcome, {"published", "idempotent"})
                 self.assertEqual(target.read_bytes(), b'{"new":true}')
-                self.assertEqual(restarted.recover().outcome, "idempotent")
+                self.assertEqual(
+                    restarted.recover(
+                        authoritative_drain_verifier=self.drain_verifier
+                    ).outcome,
+                    "idempotent",
+                )
 
     def test_plan_retry_boundary_and_registered_startup_boundaries(self) -> None:
         boundaries = (
@@ -391,7 +1035,11 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                         fired = True
                         raise InjectedLatestFault(stage)
 
-                kwargs = self.publish_args(f"focused-{stage}", source_revision=7)
+                kwargs = self.publish_args(
+                    f"focused-{stage}",
+                    write_kind="transition",
+                    source_revision=7,
+                )
                 with self.assertRaises(InjectedLatestFault):
                     self.coordinator(directory, fault_hook=inject).publish(
                         b'{"focused":true}',
@@ -400,7 +1048,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                 self.assertTrue(fired)
 
                 restarted = self.coordinator(directory)
-                recovered = restarted.recover()
+                recovered = restarted.recover(
+                    authoritative_drain_verifier=self.drain_verifier
+                )
                 if stage == FAULT_AFTER_OPERATION_PLAN:
                     # The immutable plan is deliberately not discoverable
                     # before its key is accepted by a fixed pending shard.
@@ -465,6 +1115,12 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                     operation_id=operation_id(label),
                     published_at="2026-10-12T11:36:00Z",
                     bootstrap=coordinator._bootstrap("absent"),
+                    write_kind="transition",
+                    authoritative_drain_barrier=(
+                        coordinator._authoritative_drain_barrier(
+                            "2026-10-12T11:36:00Z"
+                        )
+                    ),
                 )
                 plan_raw = canonical_json_bytes_v1(plan, maximum=8 * 1024 * 1024)
                 shard_id = coordinator._pending_shard_id(plan["recovery_key"])
@@ -495,14 +1151,24 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                 coordinator._register_pending(first[0], first[1] + b"\n")
             self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_GENERATION_CONFLICT")
 
-            coordinator._complete_registered_plan(first[0], first[1], recovered=False)
+            coordinator._complete_registered_plan(
+                first[0],
+                first[1],
+                recovered=False,
+                authoritative_drain_verifier=self.drain_verifier,
+            )
             with coordinator._pending_shard_lock(shard_id):
                 registry = coordinator._read_pending_registry_locked(shard_id)
             self.assertEqual(
                 [entry["recovery_key"] for entry in registry["entries"]],
                 [second[0]["recovery_key"]],
             )
-            coordinator._complete_registered_plan(second[0], second[1], recovered=False)
+            coordinator._complete_registered_plan(
+                second[0],
+                second[1],
+                recovered=False,
+                authoritative_drain_verifier=self.drain_verifier,
+            )
             with coordinator._pending_shard_lock(shard_id):
                 registry = coordinator._read_pending_registry_locked(shard_id)
             self.assertEqual(registry["entries"], [])
@@ -726,7 +1392,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
                 with self.assertRaises(PromptArchiveStorageError) as caught:
                     rejected.publish(
                         b'{"legacy":"later"}',
-                        **self.publish_args(f"legacy-after-{label}"),
+                        **self.publish_args(
+                            f"legacy-after-{label}", write_kind="transition"
+                        ),
                     )
                 self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
                 self.assertFalse(transition.exists())
@@ -1059,7 +1727,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             )
             winner = coordinator.publish(
                 b'{"winner":true}',
-                **self.publish_args("winner", source_revision=4),
+                **self.publish_args(
+                    "winner", write_kind="transition", source_revision=4
+                ),
             )
             result = coordinator.publish_prepared_descriptor(
                 payload,
@@ -1158,11 +1828,14 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
 
             with self.assertRaises(InjectedLatestFault):
                 self.coordinator(directory, fault_hook=stop_after_intent).publish(
-                    b'{"new":true}', **self.publish_args("unrelated")
+                    b'{"new":true}',
+                    **self.publish_args("unrelated", write_kind="transition"),
                 )
             target.write_bytes(b'{"intruder":"SECRET_CANARY"}')
             with self.assertRaises(PromptArchiveStorageError) as caught:
-                self.coordinator(directory).recover()
+                self.coordinator(directory).recover(
+                    authoritative_drain_verifier=self.drain_verifier
+                )
             self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
             self.assertNotIn("SECRET_CANARY", str(caught.exception))
             self.assertEqual(target.read_bytes(), b'{"intruder":"SECRET_CANARY"}')
@@ -1177,7 +1850,8 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
 
             with self.assertRaises(InjectedLatestFault):
                 self.coordinator(directory, fault_hook=stop_after_intent).publish(
-                    b'{"first":true}', **self.publish_args("missing-cas")
+                    b'{"first":true}',
+                    **self.publish_args("missing-cas", write_kind="transition"),
                 )
             sidecar = directory / "latest-response.json.nginx-qa-v1"
             plan = json.loads((sidecar / "intent.json").read_bytes())
@@ -1186,7 +1860,8 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
 
             with self.assertRaises(PromptArchiveStorageError) as caught:
                 self.coordinator(directory).publish(
-                    b'{"second":true}', **self.publish_args("later")
+                    b'{"second":true}',
+                    **self.publish_args("later", write_kind="transition"),
                 )
             self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
             self.assertFalse((directory / "latest-response.json").exists())
@@ -1195,7 +1870,10 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             coordinator = self.coordinator(directory)
-            coordinator.publish(b'{"ok":true}', **self.publish_args("missing-intent"))
+            coordinator.publish(
+                b'{"ok":true}',
+                **self.publish_args("missing-intent", write_kind="transition"),
+            )
             (coordinator.sidecar / "intent.json").unlink()
 
             with self.assertRaises(PromptArchiveStorageError) as caught:
@@ -1283,7 +1961,10 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             directory = Path(raw)
             coordinator = self.coordinator(directory)
-            coordinator.publish(b'{"ok":true}', **self.publish_args("control-link"))
+            coordinator.publish(
+                b'{"ok":true}',
+                **self.publish_args("control-link", write_kind="transition"),
+            )
             intent = coordinator.sidecar / "intent.json"
             os.link(intent, coordinator.sidecar / "intent-alias.json")
             with self.assertRaises(PromptArchiveStorageError) as caught:
@@ -1382,7 +2063,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             target = directory / "latest-response.json"
             first = self.coordinator(directory).publish(
                 b'{"version":1}',
-                **self.publish_args("restart-v1", source_revision=1),
+                **self.publish_args(
+                    "restart-v1", write_kind="transition", source_revision=1
+                ),
             )
             self.assertEqual(first.source_revision, 1)
 
@@ -1409,7 +2092,9 @@ class ExternalLatestCoordinatorTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b'{"version":1}')
 
             restarted = self.coordinator(directory)
-            recovered = restarted.recover()
+            recovered = restarted.recover(
+                authoritative_drain_verifier=self.drain_verifier
+            )
             self.assertEqual(recovered.source_revision, 2)
             self.assertEqual(target.read_bytes(), b'{"version":2}')
             sidecar = restarted.sidecar

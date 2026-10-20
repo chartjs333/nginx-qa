@@ -105,6 +105,10 @@ _RESPONSE_KINDS: Final = frozenset(
         "migration-snapshot",
     }
 )
+_LEGACY_LATEST_OPERATION_KIND: Final = "legacy_latest_publish"
+_LEGACY_LATEST_WRITE_KINDS: Final = frozenset(
+    {"transition", "identity", "state", "rollback"}
+)
 
 FAULT_AFTER_CONTENT: Final = "after_content_publish"
 FAULT_AFTER_OPERATION_PLAN: Final = "after_operation_plan_publish"
@@ -475,13 +479,7 @@ class ExternalLatestCoordinator:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         self.project_id = project_id
         self.external_latest = parent / name
-        self._target_authority_id = "parlatestauthority1-" + pas1_id_v1(
-            "external-latest-target-authority-id",
-            (
-                ("canonical_parent", os.path.normcase(str(parent))),
-                ("normative_leaf", "latest-response.json"),
-            ),
-        )
+        self._target_authority_id = self._target_authority_id_from_parent(parent)
         self.sidecar = parent / f"{name}.nginx-qa-v1"
         self._fault_hook = fault_hook
         self._archive_owner_verifier = archive_owner_verifier
@@ -489,6 +487,31 @@ class ExternalLatestCoordinator:
         self._parent_storage = _AuthorityStorage(parent)
         self._sidecar_storage = _AuthorityStorage(self.sidecar)
         self.latest_lock_path = self.sidecar / "latest.lock"
+
+    @staticmethod
+    def _target_authority_id_from_parent(parent: Path) -> str:
+        return "parlatestauthority1-" + pas1_id_v1(
+            "external-latest-target-authority-id",
+            (
+                ("canonical_parent", os.path.normcase(str(parent))),
+                ("normative_leaf", "latest-response.json"),
+            ),
+        )
+
+    @classmethod
+    def target_authority_id_for_path(
+        cls,
+        external_latest: str | os.PathLike[str],
+    ) -> str:
+        """Return the canonical target identity without creating a sidecar."""
+
+        parent, name = _resolved_external_leaf(
+            external_latest,
+            absent_basename="latest-response.json",
+        )
+        if name.casefold() != "latest-response.json":
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return cls._target_authority_id_from_parent(parent)
 
     @property
     def target_authority_id(self) -> str:
@@ -618,6 +641,42 @@ class ExternalLatestCoordinator:
         if parsed.tzinfo is None or parsed.utcoffset() is None:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return value
+
+    def _validate_authoritative_drain_barrier(
+        self,
+        value: Any,
+    ) -> dict[str, Any]:
+        keys = {
+            "protocol",
+            "lock_scope",
+            "slot_id",
+            "registry_shard_count",
+            "observed_incomplete_operation_ids",
+            "observed_at",
+        }
+        if type(value) is not dict or set(value) != keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if (
+            value["protocol"]
+            != "reconcile-authoritative-before-legacy-latest-write-v1"
+            or value["lock_scope"] != "project"
+            or value["slot_id"] != "latest-response"
+            or value["registry_shard_count"] != _PENDING_SHARD_COUNT
+            or value["observed_incomplete_operation_ids"] != []
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        self._validate_timestamp(value["observed_at"])
+        return value
+
+    def _authoritative_drain_barrier(self, observed_at: str) -> dict[str, Any]:
+        return {
+            "protocol": "reconcile-authoritative-before-legacy-latest-write-v1",
+            "lock_scope": "project",
+            "slot_id": "latest-response",
+            "registry_shard_count": _PENDING_SHARD_COUNT,
+            "observed_incomplete_operation_ids": [],
+            "observed_at": self._validate_timestamp(observed_at),
+        }
 
     @staticmethod
     def _validate_json_content(payload: bytes) -> None:
@@ -868,7 +927,7 @@ class ExternalLatestCoordinator:
         authority = ordering["revision_authority"]
         bootstrap = intent["bootstrap_precondition"]
         descriptor = intent["descriptor_ref"]
-        return (
+        fields = (
             ("project_id", intent["project_id"]),
             ("slot_id", intent["slot_id"]),
             ("revision_protocol", authority["protocol"]),
@@ -894,6 +953,7 @@ class ExternalLatestCoordinator:
             ("source_response_id", intent["source_response_id"]),
             ("published_at", intent["published_at"]),
         )
+        return fields
 
     @classmethod
     def _intent_id(cls, intent: Mapping[str, Any]) -> str:
@@ -907,7 +967,7 @@ class ExternalLatestCoordinator:
         ordering = slot["ordering"]
         authority = ordering["revision_authority"]
         descriptor = slot["descriptor_ref"]
-        return (
+        fields = (
             ("project_id", slot["project_id"]),
             ("slot_id", slot["slot_id"]),
             ("intent_id", slot["intent_id"]),
@@ -930,6 +990,7 @@ class ExternalLatestCoordinator:
             ("source_response_id", slot["source_response_id"]),
             ("published_at", slot["published_at"]),
         )
+        return fields
 
     @classmethod
     def _slot_id(cls, slot: Mapping[str, Any]) -> str:
@@ -945,7 +1006,7 @@ class ExternalLatestCoordinator:
                 canonical_json_bytes_v1(owner, maximum=_CONTROL_MAX_BYTES)
             ).hexdigest()
         )
-        return (
+        fields = (
             ("project_id", plan["project_id"]),
             ("recovery_response_id", plan["recovery_response_id"]),
             ("operation_id", plan["operation_id"]),
@@ -955,6 +1016,19 @@ class ExternalLatestCoordinator:
             ("archive_owner_sha256", owner_sha256),
             ("intent_id", plan["latest_intent"]["intent_id"]),
         )
+        if "operation_kind" in plan:
+            barrier_sha256 = hashlib.sha256(
+                canonical_json_bytes_v1(
+                    plan["authoritative_drain_barrier"],
+                    maximum=_CONTROL_MAX_BYTES,
+                )
+            ).hexdigest()
+            fields += (
+                ("operation_kind", plan["operation_kind"]),
+                ("write_kind", plan["write_kind"]),
+                ("authoritative_drain_barrier_sha256", barrier_sha256),
+            )
+        return fields
 
     @classmethod
     def _plan_id(cls, plan: Mapping[str, Any]) -> str:
@@ -963,17 +1037,24 @@ class ExternalLatestCoordinator:
             cls._plan_fields(plan),
         )
 
-    def _legacy_recovery_key(self, intent: Mapping[str, Any]) -> str:
+    def _legacy_recovery_key(
+        self,
+        intent: Mapping[str, Any],
+        write_kind: str | None = None,
+    ) -> str:
         ordering = intent["ordering"]
+        fields: tuple[tuple[str, str | None], ...] = (
+            ("project_id", self.project_id),
+            ("target_authority_id", self.target_authority_id),
+            ("response_id", intent["source_response_id"]),
+            ("occurrence_id", ordering["occurrence_id"]),
+            ("operation_id", ordering["operation_id"]),
+        )
+        if write_kind is not None:
+            fields += (("write_kind", write_kind),)
         return "parloc1-" + pas1_id_v1(
             "external-latest-recovery-key",
-            (
-                ("project_id", self.project_id),
-                ("target_authority_id", self.target_authority_id),
-                ("response_id", intent["source_response_id"]),
-                ("occurrence_id", ordering["occurrence_id"]),
-                ("operation_id", ordering["operation_id"]),
-            ),
+            fields,
         )
 
     def _new_intent(
@@ -1032,6 +1113,8 @@ class ExternalLatestCoordinator:
         operation_id: str,
         published_at: str,
         bootstrap: dict[str, Any],
+        write_kind: str | None,
+        authoritative_drain_barrier: dict[str, Any] | None = None,
         transition_stub_name: str | None = None,
         archive_owner: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -1052,6 +1135,8 @@ class ExternalLatestCoordinator:
             intent,
             transition_stub_name=transition_stub_name,
             archive_owner=archive_owner,
+            write_kind=write_kind,
+            authoritative_drain_barrier=authoritative_drain_barrier,
         )
 
     def _plan_for_intent(
@@ -1060,6 +1145,8 @@ class ExternalLatestCoordinator:
         *,
         transition_stub_name: str | None,
         archive_owner: dict[str, Any] | None,
+        write_kind: str | None = None,
+        authoritative_drain_barrier: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Construct the private crash-recovery plan for one exact intent."""
 
@@ -1080,7 +1167,7 @@ class ExternalLatestCoordinator:
         if intent["content_kind"] == "legacy_inline" and transition_stub_name is not None:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         recovery_key = (
-            self._legacy_recovery_key(intent)
+            self._legacy_recovery_key(intent, write_kind)
             if frozen_owner is None
             else frozen_owner["recovery_key"]
         )
@@ -1100,6 +1187,17 @@ class ExternalLatestCoordinator:
             "archive_owner": frozen_owner,
             "latest_intent": intent,
         }
+        if intent["content_kind"] == "legacy_inline":
+            if write_kind not in _LEGACY_LATEST_WRITE_KINDS:
+                raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+            barrier = self._validate_authoritative_drain_barrier(
+                authoritative_drain_barrier
+            )
+            plan["operation_kind"] = _LEGACY_LATEST_OPERATION_KIND
+            plan["write_kind"] = write_kind
+            plan["authoritative_drain_barrier"] = barrier
+        elif write_kind is not None or authoritative_drain_barrier is not None:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         plan["plan_id"] = self._plan_id(plan)
         return plan
 
@@ -1126,7 +1224,7 @@ class ExternalLatestCoordinator:
         return value
 
     def _validate_intent(self, value: Any) -> dict[str, Any]:
-        keys = {
+        base_keys = {
             "identity_version",
             "intent_id",
             "project_id",
@@ -1143,7 +1241,7 @@ class ExternalLatestCoordinator:
             "source_response_id",
             "published_at",
         }
-        if type(value) is not dict or set(value) != keys:
+        if type(value) is not dict or set(value) != base_keys:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         if (
             value["identity_version"] != "prompt-archive-latest-content-intent-v1"
@@ -1209,7 +1307,7 @@ class ExternalLatestCoordinator:
         return value
 
     def _validate_plan(self, value: Any) -> dict[str, Any]:
-        keys = {
+        base_keys = {
             "schema_version",
             "kind",
             "media_type",
@@ -1223,7 +1321,14 @@ class ExternalLatestCoordinator:
             "archive_owner",
             "latest_intent",
         }
-        if type(value) is not dict or set(value) != keys:
+        if type(value) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        keys = set(value)
+        if keys != base_keys and keys != base_keys | {
+            "operation_kind",
+            "write_kind",
+            "authoritative_drain_barrier",
+        }:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         if (
             value["schema_version"] != 1
@@ -1248,6 +1353,17 @@ class ExternalLatestCoordinator:
             if transition_stub_name.casefold() == "latest-response.json":
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         intent = self._validate_intent(value["latest_intent"])
+        typed_legacy = "operation_kind" in value
+        if typed_legacy:
+            if (
+                value["operation_kind"] != _LEGACY_LATEST_OPERATION_KIND
+                or value["write_kind"] not in _LEGACY_LATEST_WRITE_KINDS
+                or intent["content_kind"] != "legacy_inline"
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            self._validate_authoritative_drain_barrier(
+                value["authoritative_drain_barrier"]
+            )
         owner = self._validate_archive_owner(value["archive_owner"], intent=intent)
         if owner != value["archive_owner"]:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
@@ -1266,7 +1382,10 @@ class ExternalLatestCoordinator:
             or value["operation_id"] != intent["ordering"]["operation_id"]
             or value["recovery_key"]
             != (
-                self._legacy_recovery_key(intent)
+                self._legacy_recovery_key(
+                    intent,
+                    value["write_kind"] if typed_legacy else None,
+                )
                 if owner is None
                 else owner["recovery_key"]
             )
@@ -1835,7 +1954,7 @@ class ExternalLatestCoordinator:
         return content
 
     def _validate_slot(self, value: Any) -> dict[str, Any]:
-        keys = {
+        base_keys = {
             "schema_version",
             "kind",
             "media_type",
@@ -1857,7 +1976,7 @@ class ExternalLatestCoordinator:
             "source_response_id",
             "published_at",
         }
-        if type(value) is not dict or set(value) != keys:
+        if type(value) is not dict or set(value) != base_keys:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         projection = {
             key: value[key]
@@ -2057,7 +2176,7 @@ class ExternalLatestCoordinator:
         plan: Mapping[str, Any],
         plan_raw: bytes,
     ) -> dict[str, Any]:
-        keys = {
+        base_keys = {
             "schema_version",
             "kind",
             "media_type",
@@ -2072,7 +2191,21 @@ class ExternalLatestCoordinator:
             "result_generation",
             "completed_at",
         }
-        if type(value) is not dict or set(value) != keys:
+        if type(value) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        keys = set(value)
+        typed_plan = "operation_kind" in plan
+        expected_keys = (
+            base_keys
+            | {
+                "operation_kind",
+                "write_kind",
+                "authoritative_drain_barrier",
+            }
+            if typed_plan
+            else base_keys
+        )
+        if keys != expected_keys:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         if (
             value["schema_version"] != 1
@@ -2091,6 +2224,13 @@ class ExternalLatestCoordinator:
             or type(value["result_generation"]) is not int
             or not 1 <= value["result_generation"] <= _MAX_REVISION
             or value["completed_at"] != plan["latest_intent"]["published_at"]
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if typed_plan and (
+            value["operation_kind"] != plan["operation_kind"]
+            or value["write_kind"] != plan["write_kind"]
+            or value["authoritative_drain_barrier"]
+            != plan["authoritative_drain_barrier"]
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         slot, _raw = self._load_retained_slot(
@@ -2165,6 +2305,12 @@ class ExternalLatestCoordinator:
             "result_generation": result_slot["generation"],
             "completed_at": plan["latest_intent"]["published_at"],
         }
+        if "operation_kind" in plan:
+            journal["operation_kind"] = plan["operation_kind"]
+            journal["write_kind"] = plan["write_kind"]
+            journal["authoritative_drain_barrier"] = plan[
+                "authoritative_drain_barrier"
+            ]
         raw = canonical_json_bytes_v1(journal, maximum=_CONTROL_MAX_BYTES)
         digest = hashlib.sha256(raw).hexdigest()
         retained = (
@@ -2268,14 +2414,84 @@ class ExternalLatestCoordinator:
         if created:
             self._fault(FAULT_AFTER_TRANSITION_STUB)
 
+    def _revalidate_authoritative_drain(
+        self,
+        plan: Mapping[str, Any],
+        plan_raw: bytes,
+        verifier: Callable[[Mapping[str, Any]], bool] | None,
+    ) -> None:
+        if plan.get("operation_kind") != _LEGACY_LATEST_OPERATION_KIND:
+            return
+        barrier = self._validate_authoritative_drain_barrier(
+            plan.get("authoritative_drain_barrier")
+        )
+        if verifier is None:
+            # A terminal operation may be inspected/replayed by generic
+            # startup code without mutating external bytes.  An incomplete
+            # typed legacy operation requires its outer common-runtime drain
+            # authority before it can advance.
+            if self._load_journal(plan, plan_raw) is not None:
+                return
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        self._invoke_authoritative_drain_verifier(barrier, verifier)
+
+    def _invoke_authoritative_drain_verifier(
+        self,
+        barrier: Mapping[str, Any],
+        verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> None:
+        if not callable(verifier):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        validated = self._validate_authoritative_drain_barrier(dict(barrier))
+        frozen = parse_canonical_json_v1(
+            canonical_json_bytes_v1(validated, maximum=_CONTROL_MAX_BYTES),
+            maximum=_CONTROL_MAX_BYTES,
+        )
+        try:
+            accepted = verifier(frozen)
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        if accepted is not True:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        if self._validate_authoritative_drain_barrier(
+            dict(barrier)
+        ) != validated:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+
+    @staticmethod
+    def _invoke_pre_enrollment_verifier(
+        verifier: Callable[[], bool],
+    ) -> None:
+        """Require one read-only caller precondition under ``latest.lock``."""
+
+        if not callable(verifier):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        try:
+            accepted = verifier()
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        if accepted is not True:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+
     def _reconcile_plan(
         self,
         plan: dict[str, Any],
         plan_raw: bytes,
         *,
         recovered: bool,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
     ) -> ExternalLatestResult:
         self._verify_archive_owner(plan)
+        self._revalidate_authoritative_drain(
+            plan,
+            plan_raw,
+            authoritative_drain_verifier,
+        )
         intent = plan["latest_intent"]
         intended_content = self._read_content(intent)
         self._publish_transition_stub(plan, intended_content)
@@ -2416,8 +2632,15 @@ class ExternalLatestCoordinator:
         current_slot: dict[str, Any],
         *,
         recovered: bool = False,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
     ) -> ExternalLatestResult:
         self._verify_archive_owner(plan)
+        self._revalidate_authoritative_drain(
+            plan,
+            plan_raw,
+            authoritative_drain_verifier,
+        )
         intent = plan["latest_intent"]
         self._verify_plan_artifacts(plan, plan_raw)
         if self._read_content(intent) != content:
@@ -2462,6 +2685,8 @@ class ExternalLatestCoordinator:
         operation_id: str,
         published_at: str,
         transition_stub_name: str | None,
+        write_kind: str,
+        authoritative_drain_barrier: Mapping[str, Any],
     ) -> None:
         intent = plan["latest_intent"]
         expected = {
@@ -2477,6 +2702,15 @@ class ExternalLatestCoordinator:
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
         if plan["transition_stub_name"] != transition_stub_name:
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        if (
+            plan.get("operation_kind") != _LEGACY_LATEST_OPERATION_KIND
+            or plan.get("write_kind") != write_kind
+            or plan.get("authoritative_drain_barrier")
+            != authoritative_drain_barrier
+        ):
+            # Do not infer a semantic kind for an old untyped operation, and
+            # never let an exact operation key be replayed under a new kind.
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
         ordering = intent["ordering"]
         if (
             ordering["occurrence_id"] != occurrence_id
@@ -2485,7 +2719,11 @@ class ExternalLatestCoordinator:
         ):
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
 
-    def _reconcile_fixed_current(self) -> ExternalLatestResult | None:
+    def _reconcile_fixed_current(
+        self,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
+    ) -> ExternalLatestResult | None:
         """Reconcile the one fixed current plan under latest then its op lock."""
 
         with self._latest_lock():
@@ -2500,7 +2738,12 @@ class ExternalLatestCoordinator:
                 observed = self._load_current_plan()
                 if observed is None or observed[1] != raw or observed[0] != plan:
                     raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
-                return self._reconcile_plan(plan, raw, recovered=True)
+                return self._reconcile_plan(
+                    plan,
+                    raw,
+                    recovered=True,
+                    authoritative_drain_verifier=authoritative_drain_verifier,
+                )
 
     def _drive_registered_plan(
         self,
@@ -2508,6 +2751,8 @@ class ExternalLatestCoordinator:
         plan_raw: bytes,
         *,
         recovered: bool,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
     ) -> ExternalLatestResult:
         """Drive one registered plan while holding latest before operation."""
 
@@ -2527,7 +2772,14 @@ class ExternalLatestCoordinator:
                         or observed[0] != current_plan
                     ):
                         raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
-                    self._reconcile_plan(current_plan, current_raw, recovered=True)
+                    self._reconcile_plan(
+                        current_plan,
+                        current_raw,
+                        recovered=True,
+                        authoritative_drain_verifier=(
+                            authoritative_drain_verifier
+                        ),
+                    )
 
             with self._operation_lock(plan):
                 loaded = self._load_operation_plan(
@@ -2552,6 +2804,9 @@ class ExternalLatestCoordinator:
                             content,
                             current_slot,
                             recovered=recovered,
+                            authoritative_drain_verifier=(
+                                authoritative_drain_verifier
+                            ),
                         )
                     if (
                         new_order == old_order
@@ -2566,6 +2821,7 @@ class ExternalLatestCoordinator:
                     plan,
                     plan_raw,
                     recovered=recovered,
+                    authoritative_drain_verifier=authoritative_drain_verifier,
                 )
                 return result
 
@@ -2575,16 +2831,23 @@ class ExternalLatestCoordinator:
         plan_raw: bytes,
         *,
         recovered: bool,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
     ) -> ExternalLatestResult:
         result = self._drive_registered_plan(
             plan,
             plan_raw,
             recovered=recovered,
+            authoritative_drain_verifier=authoritative_drain_verifier,
         )
         self._finalize_pending(plan, plan_raw)
         return result
 
-    def _recover_pending_results(self) -> list[ExternalLatestResult]:
+    def _recover_pending_results(
+        self,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
+    ) -> list[ExternalLatestResult]:
         """Replay entries from exactly 256 fixed pending-shard current files."""
 
         entries: list[dict[str, Any]] = []
@@ -2621,14 +2884,24 @@ class ExternalLatestCoordinator:
         results = []
         for _entry, plan, raw in pending:
             results.append(
-                self._complete_registered_plan(plan, raw, recovered=True)
+                self._complete_registered_plan(
+                    plan,
+                    raw,
+                    recovered=True,
+                    authoritative_drain_verifier=authoritative_drain_verifier,
+                )
             )
         return results
 
-    def recover_pending(self) -> int:
+    def recover_pending(
+        self,
+        *,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
+    ) -> int:
         """Recover the bounded pending vector and return its operation count."""
 
-        return len(self._recover_pending_results())
+        return len(self._recover_pending_results(authoritative_drain_verifier))
 
     def enrolled(self) -> bool:
         """Return whether a valid intent marker or slot enrolled the target."""
@@ -2642,11 +2915,36 @@ class ExternalLatestCoordinator:
                 self._read_content(current[0]["latest_intent"])
             return current is not None or slot is not None
 
-    def recover(self) -> ExternalLatestResult | None:
+    def operation_admitted(self, response_id: str, operation_id: str) -> bool:
+        """Return whether this exact immutable operation plan is admitted.
+
+        This read-only probe lets the outer runtime distinguish an enrolled
+        target owned by another operation from a faulted bootstrap request
+        which must be retried through its own durable private plan.  It never
+        creates the per-operation lock or any filesystem artifact.
+        """
+
+        if (
+            type(response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(response_id) is None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return self._load_operation_plan(response_id, operation_id) is not None
+
+    def recover(
+        self,
+        *,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
+    ) -> ExternalLatestResult | None:
         """Reconcile the exact fixed current intent without directory scans."""
 
-        pending_results = self._recover_pending_results()
-        current = self._reconcile_fixed_current()
+        pending_results = self._recover_pending_results(
+            authoritative_drain_verifier
+        )
+        current = self._reconcile_fixed_current(authoritative_drain_verifier)
         if current is not None:
             for result in reversed(pending_results):
                 if (
@@ -2804,6 +3102,91 @@ class ExternalLatestCoordinator:
                 outcome=durable_outcome,
                 recovered=False,
             )
+
+    def prepare_legacy_intent(
+        self,
+        content: bytes | bytearray | memoryview,
+        *,
+        write_kind: Literal["transition", "identity", "state", "rollback"],
+        occurrence_id: str,
+        operation_id: str,
+        published_at: str,
+        source_response_id: str,
+        source_sprint_id: str | None,
+        source_revision: int,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> dict[str, Any]:
+        """Freeze one schema-valid legacy latest intent without publication.
+
+        The semantic ``write_kind`` is deliberately validated here but is not
+        embedded in the committed latest-intent schema.  The common outer plan
+        and the target-colocated private plan/journal bind that value.  A
+        durable source revision is mandatory because this read-only method
+        does not reserve or mutate the project-global high-water mark.
+        """
+
+        payload = _bounded_bytes(content, self.max_content_bytes)
+        self._validate_json_content(payload)
+        digest = hashlib.sha256(payload).hexdigest()
+        if (
+            type(write_kind) is not str
+            or write_kind not in _LEGACY_LATEST_WRITE_KINDS
+            or type(occurrence_id) is not str
+            or _SAFE_ID_RE.fullmatch(occurrence_id) is None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+            or type(source_response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(source_response_id) is None
+            or (
+                source_sprint_id is not None
+                and (
+                    type(source_sprint_id) is not str
+                    or _SAFE_ID_RE.fullmatch(source_sprint_id) is None
+                )
+            )
+            or type(source_revision) is not int
+            or not 0 <= source_revision <= _MAX_REVISION
+            or not callable(authoritative_drain_verifier)
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        published_at = self._validate_timestamp(published_at)
+
+        with self._latest_lock():
+            current = self._load_current_plan()
+            current_slot = self._load_current_slot()
+            if current is None and current_slot is not None:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            bootstrap, _observed = (
+                (self._bootstrap("enrolled"), None)
+                if current is not None or current_slot is not None
+                else self._observe_external()
+            )
+            intent = self._new_intent(
+                content_sha256=digest,
+                content_size=len(payload),
+                content_kind="legacy_inline",
+                descriptor_ref=None,
+                source_sprint_id=source_sprint_id,
+                source_response_id=source_response_id,
+                source_revision=source_revision,
+                occurrence_id=occurrence_id,
+                operation_id=operation_id,
+                published_at=published_at,
+                bootstrap=bootstrap,
+            )
+            raw = canonical_json_bytes_v1(intent, maximum=_CONTROL_MAX_BYTES)
+            intent = self._validate_intent(
+                parse_canonical_json_v1(raw, maximum=_CONTROL_MAX_BYTES)
+            )
+            barrier = self._authoritative_drain_barrier(published_at)
+            self._invoke_authoritative_drain_verifier(
+                barrier,
+                authoritative_drain_verifier,
+            )
+            return {
+                "latest_intent": intent,
+                "authoritative_drain_barrier": barrier,
+            }
 
     def prepare_descriptor_intent(
         self,
@@ -2971,10 +3354,103 @@ class ExternalLatestCoordinator:
             recovered=recovered,
         )
 
+    def publish_prepared_legacy(
+        self,
+        content: bytes | bytearray | memoryview,
+        *,
+        prepared: Mapping[str, Any],
+        write_kind: Literal["transition", "identity", "state", "rollback"],
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> ExternalLatestResult:
+        """Publish an outer-plan-owned typed legacy latest operation.
+
+        The common runtime persists the exact intent, payload proof, semantic
+        write kind, and drain barrier before calling this method.  This method
+        cross-binds those immutable values into the colocated private recovery
+        plan and rechecks the drain proof under ``latest.lock`` immediately
+        before any incomplete operation can advance.
+        """
+
+        payload = _bounded_bytes(content, self.max_content_bytes)
+        self._validate_json_content(payload)
+        if (
+            type(write_kind) is not str
+            or write_kind not in _LEGACY_LATEST_WRITE_KINDS
+            or type(prepared) is not dict
+            or set(prepared)
+            != {"latest_intent", "authoritative_drain_barrier"}
+            or not callable(authoritative_drain_verifier)
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        intent = self._validate_intent(
+            parse_canonical_json_v1(
+                canonical_json_bytes_v1(
+                    prepared["latest_intent"],
+                    maximum=_CONTROL_MAX_BYTES,
+                ),
+                maximum=_CONTROL_MAX_BYTES,
+            )
+        )
+        if (
+            intent["content_kind"] != "legacy_inline"
+            or intent["descriptor_ref"] is not None
+            or len(payload) != intent["content_size"]
+            or hashlib.sha256(payload).hexdigest() != intent["content_sha256"]
+        ):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        barrier = self._validate_authoritative_drain_barrier(
+            parse_canonical_json_v1(
+                canonical_json_bytes_v1(
+                    prepared["authoritative_drain_barrier"],
+                    maximum=_CONTROL_MAX_BYTES,
+                ),
+                maximum=_CONTROL_MAX_BYTES,
+            )
+        )
+        plan = self._plan_for_intent(
+            intent,
+            transition_stub_name=None,
+            archive_owner=None,
+            write_kind=write_kind,
+            authoritative_drain_barrier=barrier,
+        )
+        plan_raw = canonical_json_bytes_v1(plan, maximum=_CONTROL_MAX_BYTES)
+        plan = self._parse_plan_bytes(plan_raw)
+
+        self.recover_pending(
+            authoritative_drain_verifier=authoritative_drain_verifier
+        )
+        self._reconcile_fixed_current(authoritative_drain_verifier)
+        recovered = False
+        with self._latest_lock():
+            with self._operation_lock(plan):
+                existing = self._load_operation_plan(
+                    plan["recovery_response_id"],
+                    plan["operation_id"],
+                )
+                if existing is not None:
+                    existing_plan, existing_raw = existing
+                    if existing_raw != plan_raw or existing_plan != plan:
+                        raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+                    if self._read_content(intent) != payload:
+                        raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+                    recovered = True
+                else:
+                    self._publish_operation_artifacts(plan, plan_raw, payload)
+
+        self._register_pending(plan, plan_raw)
+        return self._complete_registered_plan(
+            plan,
+            plan_raw,
+            recovered=recovered,
+            authoritative_drain_verifier=authoritative_drain_verifier,
+        )
+
     def publish(
         self,
         content: bytes | bytearray | memoryview,
         *,
+        write_kind: Literal["transition", "identity", "state", "rollback"],
         occurrence_id: str,
         operation_id: str,
         published_at: str,
@@ -2983,20 +3459,38 @@ class ExternalLatestCoordinator:
         source_revision: int | None = None,
         content_kind: Literal["legacy_inline", "descriptor_stub"] = "legacy_inline",
         descriptor_ref: Mapping[str, Any] | None = None,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool]
+        | None = None,
+        pre_enrollment_verifier: Callable[[], bool] | None = None,
     ) -> ExternalLatestResult:
-        """Publish one predecessor-independent ordered content intent.
+        """Publish one typed predecessor-independent legacy latest intent.
 
         ``source_revision=None`` allocates ``high_water + 1`` while holding the
         physical latest lock.  A caller-supplied revision is accepted only as
         part of the caller's already-durable occurrence and participates in the
-        frozen lexicographic order.
+        frozen lexicographic order.  ``write_kind`` is part of every durable
+        identity and replay comparison; an operation cannot be relabelled on
+        retry.  Operator rollback deliberately uses this same protocol with
+        ``write_kind="rollback"`` rather than an out-of-band overwrite.
+
+        ``pre_enrollment_verifier`` is the atomic first-write seam used by a
+        caller which selected an un-enrolled path before entering this method.
+        When supplied, recovery and the final precondition both invoke it
+        while ``latest.lock`` is held.  Enrollment rejects a new operation,
+        while an exact operation plan already admitted by this same bootstrap
+        attempt may finish/replay after a crash.  A verifier result other than
+        the literal ``True`` rejects before new artifacts.  Omitting the
+        verifier preserves the ordinary rootless typed coordinator protocol,
+        including subsequent ordered writes after enrollment.
         """
 
         payload = _bounded_bytes(content, self.max_content_bytes)
         self._validate_json_content(payload)
         digest = hashlib.sha256(payload).hexdigest()
         if (
-            type(occurrence_id) is not str
+            type(write_kind) is not str
+            or write_kind not in _LEGACY_LATEST_WRITE_KINDS
+            or type(occurrence_id) is not str
             or _SAFE_ID_RE.fullmatch(occurrence_id) is None
             or type(operation_id) is not str
             or _OPERATION_ID_RE.fullmatch(operation_id) is None
@@ -3016,6 +3510,10 @@ class ExternalLatestCoordinator:
                     or not 0 <= source_revision <= _MAX_REVISION
                 )
             )
+            or (
+                pre_enrollment_verifier is not None
+                and not callable(pre_enrollment_verifier)
+            )
         ):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         published_at = self._validate_timestamp(published_at)
@@ -3032,22 +3530,75 @@ class ExternalLatestCoordinator:
             # cross-binding accepted only by ``publish_prepared_descriptor``.
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
 
-        self.recover_pending()
-        self._reconcile_fixed_current()
+        barrier = self._authoritative_drain_barrier(published_at)
+        drain_verifier = authoritative_drain_verifier
+        if drain_verifier is None:
+            # Compatibility for callers which have not yet adopted the common
+            # outer operation.  The production common-runtime path uses
+            # ``prepare_legacy_intent``/``publish_prepared_legacy`` and always
+            # supplies the authoritative registry verifier.
+            drain_verifier = lambda observed: (
+                self._validate_authoritative_drain_barrier(dict(observed))
+                == dict(observed)
+            )
+
+        if pre_enrollment_verifier is not None:
+            selected_drain_verifier = drain_verifier
+
+            def guarded_drain_verifier(observed: Mapping[str, Any]) -> bool:
+                self._invoke_pre_enrollment_verifier(
+                    pre_enrollment_verifier
+                )
+                try:
+                    accepted = selected_drain_verifier(observed)
+                except PromptArchiveStorageError:
+                    raise
+                except Exception:
+                    raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+                return accepted is True
+
+            drain_verifier = guarded_drain_verifier
+
+        self.recover_pending(authoritative_drain_verifier=drain_verifier)
+        self._reconcile_fixed_current(drain_verifier)
         recovered = False
         with self._latest_lock():
             current = self._load_current_plan()
             current_slot_loaded = self._load_current_slot()
             if current is None and current_slot_loaded is not None:
                 raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            if pre_enrollment_verifier is not None:
+                self._invoke_pre_enrollment_verifier(
+                    pre_enrollment_verifier
+                )
             current_slot = (
                 None if current_slot_loaded is None else current_slot_loaded[0]
             )
+            preexisting_operation: tuple[dict[str, Any], bytes] | None = None
+            if (
+                pre_enrollment_verifier is not None
+                and (current is not None or current_slot_loaded is not None)
+            ):
+                # Do this read before taking the per-operation lock.  Creating
+                # that lock also creates the operation directory, which would
+                # leave an artifact for a new request rejected solely because
+                # the target is already enrolled.  An exact crash-replay has
+                # an immutable operation plan and may proceed.
+                preexisting_operation = self._load_operation_plan(
+                    source_response_id,
+                    operation_id,
+                )
+                if preexisting_operation is None:
+                    raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
             with self._operation_lock_ids(source_response_id, operation_id):
                 existing = self._load_operation_plan(
                     source_response_id,
                     operation_id,
                 )
+                if preexisting_operation is not None and (
+                    existing is None or existing[1] != preexisting_operation[1]
+                ):
+                    raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
                 if existing is not None:
                     plan, raw = existing
                     self._assert_request_matches_plan(
@@ -3063,6 +3614,8 @@ class ExternalLatestCoordinator:
                         operation_id=operation_id,
                         published_at=published_at,
                         transition_stub_name=None,
+                        write_kind=write_kind,
+                        authoritative_drain_barrier=barrier,
                     )
                     if self._read_content(plan["latest_intent"]) != payload:
                         raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
@@ -3100,6 +3653,8 @@ class ExternalLatestCoordinator:
                         operation_id=operation_id,
                         published_at=published_at,
                         bootstrap=bootstrap,
+                        write_kind=write_kind,
+                        authoritative_drain_barrier=barrier,
                     )
                     raw = canonical_json_bytes_v1(
                         plan,
@@ -3112,6 +3667,7 @@ class ExternalLatestCoordinator:
             plan,
             raw,
             recovered=recovered,
+            authoritative_drain_verifier=drain_verifier,
         )
 
 

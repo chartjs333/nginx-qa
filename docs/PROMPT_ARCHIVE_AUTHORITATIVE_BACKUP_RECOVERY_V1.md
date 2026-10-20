@@ -57,7 +57,10 @@ regular files. The required inventory includes, without being limited to:
   receipts;
 - the archive-root pending-operation registry: all 256 stable shard names
   `00` through `ff`, every retained shard generation, and all shard lock
-  receipts;
+  receipts, including the project admission-lock receipt;
+- the immutable project latest-target binding at
+  `legacy-latest/v1/target-authority.json` and every immutable gated rollback
+  selection below `rollback-selections/v1`;
 - isolated migration inventories and any other stable artifact reached by a
   plan, journal, pointer, locator, or pending entry; and
 - reserved temporary entries and unreachable immutable objects. Their
@@ -115,6 +118,18 @@ pending/v1/shards/<00..ff>.json
 pending/v1/generations/<00..ff>/...
 pending/v1/locks/<00..ff>.lock
 ```
+
+Each retained external-sidecar `legacy_latest_publish` plan carries its
+immutable, path-free top-level `target_authority_id`. The corresponding common
+archive-root publication plan carries the same authority at
+`compatibility_publication.target_authority_id`, and the project binding plus
+any rollback-selection receipt must agree with it. Restore validation must
+derive the ID from the restored canonical external target and require exact
+agreement across every applicable authority before replaying any pending
+transition, identity, state, or rollback write.
+An absent, malformed, or different ID is target-provenance failure: do not
+rewrite the plan, select another target, or treat matching response bytes as
+authority.
 
 The external file, transition stubs, and sidecar are one authority even though
 they are not under the PAS1 archive root. A backup that contains only

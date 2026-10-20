@@ -1091,9 +1091,13 @@
     },
     "legacyLatestCompatibility": {
       "type": "object",
-      "required": ["mode", "latest_intent"],
+      "required": ["mode", "target_authority_id", "latest_intent"],
       "properties": {
         "mode": {"const": "legacy_latest_publish"},
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
         "latest_intent": {"$ref": "#/$defs/legacyLatestIntent"}
       },
       "additionalProperties": false

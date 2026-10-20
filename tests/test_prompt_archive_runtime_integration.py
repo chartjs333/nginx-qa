@@ -17,7 +17,11 @@ from jsonschema.exceptions import ValidationError
 
 import main
 from nginx_qa.prompt_archive_incremental import ArchiveOccurrence, response_id_v1
-from nginx_qa.prompt_archive_latest import ExternalLatestCoordinator
+from nginx_qa.prompt_archive_latest import (
+    ExternalLatestCoordinator,
+    FAULT_AFTER_CURRENT_INTENT,
+    FAULT_AFTER_OPERATION_PLAN,
+)
 from nginx_qa.prompt_archive_runtime import (
     PromptArchivePublication,
     PromptArchiveRuntimeConfig,
@@ -989,6 +993,7 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         self.configure("legacy")
         legacy_response = self.response()
         legacy_response["answer"] = "Explicit legacy-mode response after disable"
+        legacy_response["assignment"] = {"revision": occurrence.state_revision + 1}
         legacy = main.materialize_sequential_graph_response(
             response=legacy_response,
             directory_template=str(self.prompt_root / "{repository}"),
@@ -1014,6 +1019,606 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         self.assertFalse(shared_base_latest.exists())
         self.assertTrue(
             (rollback_latest.parent / "latest-response.json.nginx-qa-v1").is_dir()
+        )
+
+    def test_legacy_latest_response_kinds_are_explicit_and_closed(self) -> None:
+        self.configure("legacy")
+        coordinator = Mock()
+        coordinator.enrolled.return_value = False
+        with patch.object(main, "ExternalLatestCoordinator", return_value=coordinator):
+            for response_kind, write_kind in (
+                ("transition-response", "transition"),
+                ("identity-response", "identity"),
+                ("state-response", "state"),
+            ):
+                with self.subTest(response_kind=response_kind):
+                    coordinator.publish.reset_mock()
+                    main.materialize_sequential_graph_response(
+                        response=self.response(),
+                        directory_template=str(self.prompt_root / "{repository}"),
+                        agent_latest_file_template=str(
+                            self.prompt_root
+                            / "agents"
+                            / "{repository}_{agent_phone}-latest.prompt"
+                        ),
+                        response_kind=response_kind,
+                        request_agent_phone="4102",
+                        archive_occurrence=None,
+                    )
+                    self.assertEqual(
+                        coordinator.publish.call_args.kwargs["write_kind"],
+                        write_kind,
+                    )
+
+            coordinator.reset_mock()
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                main.materialize_sequential_graph_response(
+                    response=self.response(),
+                    directory_template=str(self.prompt_root / "{repository}"),
+                    agent_latest_file_template=str(
+                        self.prompt_root
+                        / "agents"
+                        / "{repository}_{agent_phone}-latest.prompt"
+                    ),
+                    response_kind="future-unreviewed-response",
+                    request_agent_phone="4102",
+                    archive_occurrence=None,
+                )
+        self.assertEqual(caught.exception.code, "PROMPT_ARCHIVE_REQUEST_INVALID")
+        coordinator.publish.assert_not_called()
+
+    def test_rootless_legacy_second_materialize_updates_typed_latest(self) -> None:
+        environment = self.environment("legacy")
+        environment.pop("NGINX_QA_PROMPT_ARCHIVE_ROOT")
+        configured = main.configure_prompt_archive_runtime(
+            environment,
+            occurrence_source_reader=self.source_reader,
+            occurrence_receipt_root=self.root / "occurrence-receipts",
+        )
+        self.assertIsNone(configured.config.root)
+
+        first_response = self.response()
+        first_response["answer"] = "rootless first latest"
+        first = self.materialize(first_response)
+        self.assertNotIn(
+            "project_latest",
+            first.get("response_storage_errors", {}),
+        )
+        latest_path = Path(first["latest_response_file_path"])
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            first_response["answer"],
+        )
+
+        second_response = copy.deepcopy(first_response)
+        second_response["answer"] = "rootless second latest"
+        second_response["transition_applied"]["transition_id"] = (
+            "rootless-transition-two"
+        )
+        second_response["transition_applied"]["resolved_at"] = (
+            "2026-10-11T18:02:00+02:00"
+        )
+        second = self.materialize(second_response)
+
+        self.assertNotIn(
+            "project_latest",
+            second.get("response_storage_errors", {}),
+        )
+        self.assertEqual(Path(second["latest_response_file_path"]), latest_path)
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            second_response["answer"],
+        )
+        sidecar = latest_path.parent / "latest-response.json.nginx-qa-v1"
+        self.assertTrue(sidecar.is_dir())
+        terminal_journals = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in sidecar.rglob("journal.json")
+        ]
+        self.assertEqual(len(terminal_journals), 2)
+        self.assertEqual(
+            {journal["state"] for journal in terminal_journals},
+            {"complete"},
+        )
+        self.assertFalse(self.archive_root.exists())
+
+    def test_configured_legacy_private_bootstrap_exact_retry_recovers_without_revision(
+        self,
+    ) -> None:
+        for stage in (FAULT_AFTER_OPERATION_PLAN, FAULT_AFTER_CURRENT_INTENT):
+            with self.subTest(stage=stage):
+                self.prompt_root = self.root / f"prompt-private-retry-{stage}"
+                self.archive_root = self.root / f"archive-private-retry-{stage}"
+                self.prompt_root.mkdir()
+                self.archive_root.mkdir()
+                self.configure("legacy")
+                response = self.response()
+                response["answer"] = f"exact private retry after {stage}"
+                fired = False
+
+                def inject(observed: str) -> None:
+                    nonlocal fired
+                    if observed == stage and not fired:
+                        fired = True
+                        raise PromptArchiveStorageError(
+                            "PROMPT_ARCHIVE_UNAVAILABLE"
+                        )
+
+                real_coordinator = ExternalLatestCoordinator
+
+                def coordinator_with_fault(*args, **kwargs):
+                    options = {**kwargs, "fault_hook": inject}
+                    return real_coordinator(*args, **options)
+
+                def materialize():
+                    return main.materialize_sequential_graph_response(
+                        response=response,
+                        directory_template=str(
+                            self.prompt_root / "{repository}"
+                        ),
+                        agent_latest_file_template=str(
+                            self.prompt_root
+                            / "agents"
+                            / "{repository}_{agent_phone}-latest.prompt"
+                        ),
+                        response_kind="identity-response",
+                        request_agent_phone="4102",
+                        archive_occurrence=None,
+                    )
+
+                with patch.object(
+                    main,
+                    "ExternalLatestCoordinator",
+                    side_effect=coordinator_with_fault,
+                ):
+                    interrupted = materialize()
+                    self.assertTrue(fired)
+                    # Before enrollment the injected storage failure is
+                    # reported directly.  After current-intent installation,
+                    # the same request may first probe the common path and
+                    # report its missing-revision admission error.  Both are
+                    # safe warnings; the invariant under test is that the
+                    # following exact no-revision retry adopts the private plan.
+                    self.assertIn(
+                        interrupted["response_storage_errors"]["project_latest"],
+                        {
+                            "PROMPT_ARCHIVE_UNAVAILABLE",
+                            "PROMPT_ARCHIVE_REQUEST_INVALID",
+                        },
+                    )
+
+                    recovered = materialize()
+
+                self.assertNotIn(
+                    "response_storage_errors",
+                    recovered,
+                )
+                latest_path = Path(recovered["latest_response_file_path"])
+                self.assertEqual(
+                    json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+                    response["answer"],
+                )
+                sidecar = latest_path.parent / "latest-response.json.nginx-qa-v1"
+                plans = list(sidecar.glob("operations/v1/*/*/plan.json"))
+                journals = list(sidecar.glob("operations/v1/*/*/journal.json"))
+                self.assertEqual(len(plans), 1)
+                self.assertEqual(len(journals), 1)
+                self.assertEqual(
+                    json.loads(journals[0].read_text(encoding="utf-8"))["state"],
+                    "complete",
+                )
+                slot = json.loads(
+                    (sidecar / "slot.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(slot["generation"], 1)
+                self.assertEqual(list(self.archive_root.rglob("plan.json")), [])
+
+    def test_configured_legacy_enrollment_race_switches_to_one_common_result(
+        self,
+    ) -> None:
+        self.archive_root.mkdir()
+        self.configure("legacy")
+        response = self.response()
+        response["answer"] = "requested writer wins through common recovery"
+        response["assignment"] = {"revision": 7}
+        original_publish = ExternalLatestCoordinator.publish
+        injected = False
+
+        def publish_with_racing_enrollment(coordinator, content, **kwargs):
+            nonlocal injected
+            if not injected and kwargs.get("pre_enrollment_verifier") is not None:
+                injected = True
+                race_occurrence_id = "racing-private-enrollment"
+                race_operation_id = "parop1-" + hashlib.sha256(
+                    race_occurrence_id.encode("ascii")
+                ).hexdigest()[:32]
+                race_response_id = response_id_v1(
+                    coordinator.project_id,
+                    "sprint-runtime-one",
+                    "state-response",
+                    "identity-state",
+                    race_occurrence_id,
+                )
+                racing = ExternalLatestCoordinator(
+                    coordinator.external_latest,
+                    project_id=coordinator.project_id,
+                )
+                original_publish(
+                    racing,
+                    b'{"answer":"racing private enrollment"}',
+                    write_kind="state",
+                    occurrence_id=race_occurrence_id,
+                    operation_id=race_operation_id,
+                    published_at="2026-10-20T18:00:00Z",
+                    source_response_id=race_response_id,
+                    source_sprint_id="sprint-runtime-one",
+                    source_revision=1,
+                    content_kind="legacy_inline",
+                )
+            return original_publish(coordinator, content, **kwargs)
+
+        with patch.object(
+            ExternalLatestCoordinator,
+            "publish",
+            new=publish_with_racing_enrollment,
+        ):
+            compact = main.materialize_sequential_graph_response(
+                response=response,
+                directory_template=str(self.prompt_root / "{repository}"),
+                agent_latest_file_template=str(
+                    self.prompt_root
+                    / "agents"
+                    / "{repository}_{agent_phone}-latest.prompt"
+                ),
+                response_kind="state-response",
+                request_agent_phone="4102",
+                archive_occurrence=None,
+            )
+
+        self.assertTrue(injected)
+        self.assertNotIn("response_storage_errors", compact)
+        latest_path = Path(compact["latest_response_file_path"])
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            response["answer"],
+        )
+        sidecar = latest_path.parent / "latest-response.json.nginx-qa-v1"
+        private_plans = list(sidecar.glob("operations/v1/*/*/plan.json"))
+        private_journals = list(sidecar.glob("operations/v1/*/*/journal.json"))
+        self.assertEqual(len(private_plans), 2)
+        self.assertEqual(len(private_journals), 2)
+        self.assertEqual(
+            {
+                json.loads(path.read_text(encoding="utf-8"))["state"]
+                for path in private_journals
+            },
+            {"complete"},
+        )
+        common_plans = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in self.archive_root.rglob("plan.json")
+        ]
+        self.assertEqual(len(common_plans), 1)
+        self.assertEqual(
+            common_plans[0]["legacy_latest"]["write_kind"],
+            "state",
+        )
+        self.assertEqual(
+            json.loads((sidecar / "slot.json").read_text(encoding="utf-8"))[
+                "generation"
+            ],
+            2,
+        )
+
+    def test_shared_legacy_target_switches_to_common_plan_after_enrollment(
+        self,
+    ) -> None:
+        self.archive_root.mkdir()
+        self.configure("legacy")
+        first_response = self.response()
+        first_response["answer"] = "pre-enrollment latest"
+        first = main.materialize_sequential_graph_response(
+            response=first_response,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="state-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+        latest_path = Path(first["latest_response_file_path"])
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            first_response["answer"],
+        )
+
+        missing_revision = self.response()
+        missing_revision["answer"] = "must not supersede without revision"
+        rejected = main.materialize_sequential_graph_response(
+            response=missing_revision,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="state-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+        self.assertEqual(
+            rejected["response_storage_errors"]["project_latest"],
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
+        )
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            first_response["answer"],
+        )
+
+        second_response = self.response()
+        second_response["answer"] = "post-enrollment common latest"
+        second_response["assignment"] = {"revision": 7}
+        second = main.materialize_sequential_graph_response(
+            response=second_response,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="state-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+
+        self.assertNotIn("project_latest", second.get("response_storage_errors", {}))
+        self.assertEqual(
+            json.loads(latest_path.read_text(encoding="utf-8"))["answer"],
+            second_response["answer"],
+        )
+        common_plans = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in self.archive_root.rglob("plan.json")
+        ]
+        self.assertEqual(len(common_plans), 1)
+        plan = common_plans[0]
+        self.assertEqual(plan["operation_kind"], "legacy_latest_publish")
+        self.assertEqual(plan["legacy_latest"]["write_kind"], "state")
+        self.assertRegex(
+            plan["scope"]["project_id"],
+            r"^prompt-target-[0-9a-f]{32}$",
+        )
+        self.assertEqual(
+            plan["compatibility_publication"]["target_authority_id"],
+            ExternalLatestCoordinator(
+                latest_path,
+                project_id=plan["scope"]["project_id"],
+            ).target_authority_id,
+        )
+
+    def test_legacy_latest_committed_occurrence_provenance_is_exact(self) -> None:
+        response = self.response()
+        committed = self.occurrence(response)
+        assert committed is not None
+
+        def project(candidate: ArchiveOccurrence, *, project_id="9000", sprint_id=None):
+            selected_sprint = committed.sprint_id if sprint_id is None else sprint_id
+            occurrence_id = "synthetic-before-projection"
+            return main._legacy_latest_occurrence(
+                project_id=project_id,
+                sprint_id=selected_sprint,
+                response_kind="transition-response",
+                occurrence_id=occurrence_id,
+                source_response_id=response_id_v1(
+                    project_id,
+                    selected_sprint,
+                    "transition-response",
+                    "transition",
+                    occurrence_id,
+                ),
+                published_at="1970-01-01T00:00:00Z",
+                response=response,
+                committed_occurrence=candidate,
+            )
+
+        with self.assertRaises(PromptArchiveStorageError) as sprint_mismatch:
+            project(committed, sprint_id="different-sprint")
+        self.assertEqual(
+            sprint_mismatch.exception.code,
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
+        )
+
+        with self.assertRaises(PromptArchiveStorageError) as project_mismatch:
+            project(committed, project_id="9001")
+        self.assertEqual(
+            project_mismatch.exception.code,
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
+        )
+
+        forged = replace(committed, response_id="parresp1-" + "f" * 64)
+        with self.assertRaises(PromptArchiveStorageError) as response_mismatch:
+            project(forged)
+        self.assertEqual(
+            response_mismatch.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        )
+
+    def test_operator_rollback_is_gated_verified_and_uses_ordered_protocol(
+        self,
+    ) -> None:
+        self.archive_root.mkdir()
+        environment = self.environment("legacy")
+        environment["NGINX_QA_PROMPT_ARCHIVE_OPERATOR_GATE"] = (
+            "prompt-archive-authoritative-v1"
+        )
+        main.configure_prompt_archive_runtime(
+            environment,
+            occurrence_source_reader=self.source_reader,
+            occurrence_receipt_root=self.root / "occurrence-receipts",
+        )
+        project_directory = self.resolve_project_prompt_directory(
+            "9000",
+            create=True,
+        )
+        latest_path = project_directory / "latest-response.json"
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        publisher = main.SequentialPromptArchiveCompatibilityPublisher(
+            project_id="9000",
+            transition_stub_path=project_directory / "state-selected.json",
+            latest_path=latest_path,
+            archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+        )
+
+        def state_occurrence(name: str, revision: int, timestamp: str):
+            return ArchiveOccurrence(
+                project_id="9000",
+                sprint_id="sprint-runtime-one",
+                response_id=response_id_v1(
+                    "9000",
+                    "sprint-runtime-one",
+                    "state-response",
+                    "identity-state",
+                    name,
+                ),
+                response_kind="state-response",
+                occurrence_kind="identity-state",
+                occurrence_id=name,
+                transition_id=None,
+                source={"source_kind": "runtime_shadow"},
+                authorization={},
+                created_at=timestamp,
+                verified_at=timestamp,
+                state_revision=revision,
+            )
+
+        selected = b'{"answer":"operator-selected legacy rollback"}'
+        selected_occurrence = state_occurrence(
+            "state-selected-for-rollback",
+            1,
+            "2026-10-20T16:00:00Z",
+        )
+        selected_operation_id = runtime._legacy_latest_operation_id(
+            selected_occurrence,
+            "state",
+        )
+        runtime.publish_legacy_latest(
+            selected,
+            selected_occurrence,
+            write_kind="state",
+            operation_id=selected_operation_id,
+            compatibility_publisher=publisher,
+        )
+        initial = b'{"answer":"newer authoritative-compatible value"}'
+        newer_occurrence = state_occurrence(
+            "state-newer-before-rollback",
+            2,
+            "2026-10-20T16:00:30Z",
+        )
+        runtime.publish_legacy_latest(
+            initial,
+            newer_occurrence,
+            write_kind="state",
+            compatibility_publisher=publisher,
+        )
+        self.assertEqual(latest_path.read_bytes(), initial)
+
+        selected_sha256 = hashlib.sha256(selected).hexdigest()
+        rollback_response_id = response_id_v1(
+            "9000",
+            "sprint-runtime-one",
+            "state-response",
+            "identity-state",
+            "rollback-selection-one",
+        )
+        common = {
+            "project_id": "9000",
+            "source_sprint_id": "sprint-runtime-one",
+            "source_response_id": rollback_response_id,
+            "occurrence_id": "rollback-selection-one",
+            "operation_id": "parop1-" + "3" * 32,
+            "selected_response_id": selected_occurrence.response_id,
+            "selected_operation_id": selected_operation_id,
+            "published_at": "2026-10-20T16:01:00Z",
+            "source_revision": 3,
+            "expected_content_sha256": selected_sha256,
+            "expected_content_size": len(selected),
+        }
+
+        with self.assertRaises(PromptArchiveStorageError) as unauthorized:
+            main.publish_prompt_archive_legacy_latest_rollback(
+                operator_gate="wrong-gate",
+                **common,
+            )
+        self.assertEqual(
+            unauthorized.exception.code,
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
+        )
+        self.assertEqual(latest_path.read_bytes(), initial)
+
+        with self.assertRaises(PromptArchiveStorageError) as mismatched:
+            main.publish_prompt_archive_legacy_latest_rollback(
+                operator_gate="prompt-archive-authoritative-v1",
+                **{**common, "expected_content_sha256": "0" * 64},
+            )
+        self.assertEqual(
+            mismatched.exception.code,
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        self.assertEqual(latest_path.read_bytes(), initial)
+
+        receipt = main.publish_prompt_archive_legacy_latest_rollback(
+            operator_gate="prompt-archive-authoritative-v1",
+            **common,
+        )
+        self.assertEqual(receipt["outcome"], "published")
+        self.assertEqual(latest_path.read_bytes(), selected)
+        operation_root = (
+            latest_path.parent
+            / "latest-response.json.nginx-qa-v1"
+            / "operations"
+            / "v1"
+            / rollback_response_id
+            / common["operation_id"]
+        )
+        plan = json.loads((operation_root / "plan.json").read_text(encoding="utf-8"))
+        journal = json.loads(
+            (operation_root / "journal.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(plan["operation_kind"], "legacy_latest_publish")
+        self.assertEqual(plan["write_kind"], "rollback")
+        self.assertEqual(journal["operation_kind"], "legacy_latest_publish")
+        self.assertEqual(journal["write_kind"], "rollback")
+        common_plan_path = next(
+            self.archive_root.rglob(f"{common['operation_id']}/plan.json")
+        )
+        common_plan = json.loads(common_plan_path.read_text(encoding="utf-8"))
+        self.assertEqual(common_plan["operation_kind"], "legacy_latest_publish")
+        self.assertEqual(common_plan["legacy_latest"]["write_kind"], "rollback")
+        self.assertEqual(
+            common_plan["legacy_latest"]["content_sha256"],
+            selected_sha256,
+        )
+        self.assertEqual(
+            common_plan["legacy_latest"]["content_size"],
+            len(selected),
+        )
+        self.assertIn("payload_root", common_plan["legacy_latest"])
+        selection_path = next(
+            self.archive_root.rglob(
+                f"rollback-selections/v1/{common['operation_id']}.json"
+            )
+        )
+        selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            selection["selected_response_id"],
+            selected_occurrence.response_id,
+        )
+        self.assertEqual(
+            selection["selected_operation_id"],
+            selected_operation_id,
         )
 
     def test_storage_errors_never_expose_oserror_path_or_canary(self) -> None:
@@ -1429,6 +2034,312 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
             occurrence_receipt_root=receipt_root,
         )
         self.assertFalse(receipt_root.exists())
+
+    def test_existing_legacy_archive_root_is_recovered_at_startup(self) -> None:
+        self.archive_root.mkdir()
+        configured = self.configure("legacy")
+        with patch.object(
+            configured,
+            "validate_and_recover",
+            return_value=1,
+        ) as recover:
+            selected = asyncio.run(
+                main.recover_prompt_archive_runtime_for_startup(
+                    configured,
+                    ("9000",),
+                )
+            )
+
+        self.assertIs(selected, configured)
+        recover.assert_called_once_with(("9000",))
+
+    def test_legacy_startup_without_native_prover_preserves_pending_for_authoritative_restart(
+        self,
+    ) -> None:
+        configured = self.configure("authoritative")
+        runtime = configured.for_project("9000")
+        occurrence = replace(
+            self.occurrence(self.response()),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        native_bytes = main.prompt_archive_canonical_json_bytes_v1(
+            {
+                "active_task": self.response()["active_task"],
+                "project_id": "9000",
+                "sprint_id": "sprint-runtime-one",
+            },
+            maximum=8 * 1024 * 1024,
+        )
+        project_directory = self.resolve_project_prompt_directory(
+            "9000",
+            create=True,
+        )
+        publisher = main.SequentialPromptArchiveCompatibilityPublisher(
+            project_id="9000",
+            transition_stub_path=(
+                project_directory
+                / f"{occurrence.response_kind}-{occurrence.response_id}.json"
+            ),
+            latest_path=project_directory / "latest-response.json",
+            archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+        )
+        fired = False
+
+        def fail_after_registration(stage: str) -> None:
+            nonlocal fired
+            if stage == "after_pending_registration" and not fired:
+                fired = True
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+
+        assert runtime.storage is not None
+        runtime.storage._fault_hook = fail_after_registration
+        with self.assertRaises(PromptArchiveStorageError) as interrupted:
+            runtime.publish_authoritative(
+                native_bytes,
+                occurrence,
+                compatibility_publisher=publisher,
+            )
+        self.assertEqual(interrupted.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
+        self.assertTrue(fired)
+
+        plans = list(self.archive_root.rglob("plan.json"))
+        self.assertEqual(len(plans), 1)
+        operation_root = plans[0].parent
+        self.assertFalse((operation_root / "journal.json").exists())
+        self.assertEqual(list(operation_root.rglob("journal-generations")), [])
+
+        def recovery_state() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.archive_root).as_posix(): path.read_bytes()
+                for path in self.archive_root.rglob("*")
+                if path.is_file() and not path.name.endswith(".lock")
+            }
+
+        before_legacy_startup = recovery_state()
+        legacy = self.configure("legacy")
+        with self.assertRaises(PromptArchiveStorageError) as denied:
+            asyncio.run(
+                main.recover_prompt_archive_runtime_for_startup(
+                    legacy,
+                    ("9000",),
+                )
+            )
+        self.assertEqual(denied.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
+        self.assertEqual(recovery_state(), before_legacy_startup)
+        self.assertFalse((operation_root / "journal.json").exists())
+
+        authoritative = self.configure("authoritative")
+        selected = asyncio.run(
+            main.recover_prompt_archive_runtime_for_startup(
+                authoritative,
+                ("9000",),
+            )
+        )
+        self.assertIs(selected, authoritative)
+        terminal = json.loads(
+            (operation_root / "journal.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(terminal["state"], "complete")
+        self.assertEqual(authoritative.for_project("9000").recover_pending(), 0)
+
+    def test_legacy_configured_prompt_base_drift_cannot_rebind_shared_latest(
+        self,
+    ) -> None:
+        first = self.response()
+        first_occurrence = replace(
+            self.occurrence(first),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        self.configure("authoritative")
+        first_compact = self.materialize(
+            first,
+            archive_occurrence=first_occurrence,
+        )
+        self.assertNotIn("response_storage_errors", first_compact)
+
+        first_latest = Path(first_compact["latest_response_file_path"])
+        self.assertTrue(first_latest.is_file())
+        first_latest_bytes = first_latest.read_bytes()
+        first_runtime = main.prompt_archive_runtime.for_project("9000")
+        self.assertIsNotNone(first_runtime.storage)
+        binding = first_runtime.storage.read_immutable_json(
+            first_runtime._legacy_latest_target_binding_path()
+        )
+        self.assertEqual(
+            binding["target_authority_id"],
+            ExternalLatestCoordinator(
+                first_latest,
+                project_id="9000",
+            ).target_authority_id,
+        )
+
+        self.configure("legacy")
+
+        def archive_snapshot() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.archive_root).as_posix(): path.read_bytes()
+                for path in self.archive_root.rglob("*")
+                if path.is_file() and not path.name.endswith(".lock")
+            }
+
+        before_drift = archive_snapshot()
+        second = copy.deepcopy(first)
+        second["answer"] = "A different response must not rebind latest"
+        second["transition_applied"]["transition_id"] = "transition-two"
+        second["transition_applied"]["resolved_at"] = (
+            "2026-10-11T18:02:00+02:00"
+        )
+        second_base = self.root / "configured-prompt-base-b"
+        second_authority = (
+            second_base
+            / "archive-fixture"
+            / ".nginx-qa-projects"
+            / "9000"
+        )
+        second_authority.mkdir(parents=True)
+
+        def resolve_second_authority(
+            project_id: str,
+            *,
+            create: bool = False,
+        ) -> Path:
+            self.assertEqual(project_id, "9000")
+            if create:
+                second_authority.mkdir(parents=True, exist_ok=True)
+            return second_authority
+
+        with patch.object(
+            main,
+            "_prompt_archive_project_prompt_directory",
+            side_effect=resolve_second_authority,
+        ):
+            second_compact = main.materialize_sequential_graph_response(
+                response=second,
+                directory_template=str(second_base / "{repository}"),
+                agent_latest_file_template=str(
+                    second_base
+                    / "agents"
+                    / "{repository}_{agent_phone}-latest.prompt"
+                ),
+                response_kind="transition-response",
+                request_agent_phone="4102",
+                archive_occurrence=self.occurrence(second),
+            )
+
+        self.assertEqual(
+            second_compact["response_storage_errors"]["project_latest"],
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        second_latest = second_base / "archive-fixture" / "latest-response.json"
+        self.assertFalse(second_latest.exists())
+        self.assertFalse(
+            (
+                second_base
+                / "archive-fixture"
+                / "latest-response.json.nginx-qa-v1"
+            ).exists()
+        )
+        self.assertEqual(list(second_authority.iterdir()), [])
+        self.assertEqual(first_latest.read_bytes(), first_latest_bytes)
+        self.assertEqual(archive_snapshot(), before_drift)
+
+    def test_shared_target_is_in_startup_set_and_resolves_same_latest_authority(
+        self,
+    ) -> None:
+        context = {
+            "git_context_key": "github.com/acme/archive-fixture",
+            "git_address": "https://github.com/acme/archive-fixture.git",
+            "project_name": "Archive Fixture",
+        }
+        target_id = main._prompt_archive_shared_target_project_id(**context)
+        directory = self.prompt_root / "archive-fixture"
+        directory.mkdir(exist_ok=True)
+        occurrence_id = "shared-target-recovery"
+        response_id = response_id_v1(
+            target_id,
+            "sprint-runtime-one",
+            "state-response",
+            "identity-state",
+            occurrence_id,
+        )
+        plan = {
+            "occurrence": {
+                "response_kind": "state-response",
+                "response_id": response_id,
+            }
+        }
+        with (
+            patch.object(
+                main,
+                "configured_git_contexts_from_config",
+                return_value=[context],
+            ),
+            patch.object(main, "read_git_config_file", return_value={"configured": True}),
+            patch.object(main, "git_config_file_lock", return_value=contextlib.nullcontext()),
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value={
+                    "directory_template": str(self.prompt_root / "{repository}"),
+                    "agent_latest_file_template": str(
+                        self.prompt_root
+                        / "agents"
+                        / "{repository}_{agent_phone}-latest.prompt"
+                    ),
+                },
+            ),
+        ):
+            self.assertIn(target_id, main.prompt_archive_startup_project_ids({}))
+            publisher = main.resolve_prompt_archive_compatibility_publisher(
+                target_id,
+                plan,
+            )
+
+        self.assertEqual(
+            publisher.coordinator.external_latest,
+            directory / "latest-response.json",
+        )
+        self.assertEqual(
+            publisher.target_authority_id,
+            ExternalLatestCoordinator(
+                directory / "latest-response.json",
+                project_id=target_id,
+            ).target_authority_id,
+        )
+
+    def test_existing_legacy_archive_root_recovery_failure_is_fail_closed(
+        self,
+    ) -> None:
+        self.archive_root.mkdir()
+        configured = self.configure("legacy")
+        with patch.object(
+            configured,
+            "validate_and_recover",
+            side_effect=PromptArchiveStorageError(
+                "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+            ),
+        ):
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                asyncio.run(
+                    main.recover_prompt_archive_runtime_for_startup(
+                        configured,
+                        ("9000",),
+                    )
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        self.assertIs(main.prompt_archive_runtime, configured)
 
     def test_shadow_recovery_failure_disables_writes_without_blocking_service(self) -> None:
         failures = (
@@ -2149,6 +3060,194 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
             "completed_assignment",
         ):
             self.assertEqual(compact[field], response[field])
+        self.assertEqual(compact["active_task"], response["active_task"])
+        self.assertNotIn("project_state", compact)
+
+    def test_psc_a11_identity_task_prompt_mode_matrix_is_hot_path_only(self) -> None:
+        for mode in ("legacy", "shadow", "authoritative"):
+            with self.subTest(mode=mode):
+                self.prompt_root = self.root / f"prompt-{mode}"
+                self.archive_root = self.root / f"archive-{mode}"
+                self.prompt_root.mkdir()
+                self.configure(mode)
+                response = self.response()
+                response["active_task"] = {
+                    "id": f"task-{mode}",
+                    "message": "Full task body remains executable.",
+                    "metadata": {
+                        "assignment_id": f"assignment-{mode}",
+                        "sprint_id": "sprint-runtime-one",
+                        "allowed_outcomes": ["DONE", "NEED_DECISION", "STOP"],
+                        "result_endpoint": "/api/v1/projects/9000/agents/4102/whoami",
+                        "future_nested_control": {
+                            "version": 7,
+                            "steps": [
+                                {"kind": "verify", "required": True},
+                                {"kind": "submit", "formats": ["json", "text"]},
+                            ],
+                        },
+                    },
+                    "future_task_field": {"must_survive": [1, {"deep": "value"}]},
+                }
+                response["project_state"] = {
+                    "history_with_patches": {"text": "must stay off hot path"},
+                    "activity_with_patches": [{"event": "heavy"}],
+                    "code_patches": [{"patch": "heavy"}],
+                }
+                with (
+                    patch.object(
+                        main,
+                        "project_state_json",
+                        side_effect=AssertionError("full project state built"),
+                    ) as state_builder,
+                    patch.object(
+                        main,
+                        "project_history_with_patches_context",
+                        side_effect=AssertionError("project history built"),
+                    ) as project_history_builder,
+                    patch.object(
+                        main,
+                        "history_with_patches_context",
+                        side_effect=AssertionError("history with patches built"),
+                    ) as history_builder,
+                    patch.object(
+                        main,
+                        "read_agent_work_history_file",
+                        side_effect=AssertionError("full agent history read"),
+                    ) as history_reader,
+                    patch(
+                        "nginx_qa.prompt_archive_incremental."
+                        "PromptArchiveIncremental.hydrate_archive_bytes",
+                        side_effect=AssertionError("archive blob hydrated"),
+                    ) as hydrator,
+                    patch(
+                        "nginx_qa.prompt_archive_runtime."
+                        "PromptArchiveRuntime.hydrate_content",
+                        side_effect=AssertionError("archive content hydrated"),
+                    ) as content_hydrator,
+                ):
+                    compact = main.materialize_sequential_graph_response(
+                        response=response,
+                        directory_template=str(self.prompt_root / "{repository}"),
+                        agent_latest_file_template=str(
+                            self.prompt_root
+                            / "agents"
+                            / "{repository}_{agent_phone}-latest.prompt"
+                        ),
+                        response_kind="identity-response",
+                        request_agent_phone="4102",
+                        archive_occurrence=None,
+                    )
+
+                state_builder.assert_not_called()
+                project_history_builder.assert_not_called()
+                history_builder.assert_not_called()
+                history_reader.assert_not_called()
+                hydrator.assert_not_called()
+                content_hydrator.assert_not_called()
+                self.assertEqual(compact["active_task"], response["active_task"])
+                self.assertNotIn("project_state", compact)
+                self.assertNotIn("response_storage_errors", compact)
+                prompt = json.loads(
+                    Path(compact["latest_agent_prompt_file_path"]).read_text(
+                        encoding="utf-8"
+                    )
+                )
+                self.assertEqual(prompt["active_task"], response["active_task"])
+                self.assertNotIn("project_state", prompt)
+
+        # The explicitly gated native writer is a separate path from ordinary
+        # read-only identity/task materialization.  Exercise it once with a
+        # durable identity occurrence and keep the same no-builder/no-hydrator
+        # invariant.
+        self.prompt_root = self.root / "prompt-authoritative-writer"
+        self.archive_root = self.root / "archive-authoritative-writer"
+        self.prompt_root.mkdir()
+        self.configure("authoritative")
+        response = self.response()
+        response["active_task"]["metadata"]["future_nested_control"] = {
+            "version": 8,
+            "steps": [{"kind": "submit", "required": True}],
+        }
+        occurrence_id = "assignment-authoritative-writer"
+        identity_occurrence = replace(
+            self.occurrence(response),
+            response_id=response_id_v1(
+                "9000",
+                "sprint-runtime-one",
+                "identity-response",
+                "identity-state",
+                occurrence_id,
+            ),
+            response_kind="identity-response",
+            occurrence_kind="identity-state",
+            occurrence_id=occurrence_id,
+            transition_id=None,
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": occurrence_id,
+            },
+            authorization={
+                "auth_model_version": "prompt-archive-authorization-v1",
+                "principal_kind": "legacy_local_principal",
+                "principal_id": "9000",
+                "binding_id": None,
+                "scope_source": "legacy_project_context",
+                "effective_scope_revision": None,
+                "effective_scope_sha256": None,
+                "decision_occurrence_id": occurrence_id,
+            },
+        )
+        with (
+            patch.object(
+                main,
+                "project_state_json",
+                side_effect=AssertionError("full project state built"),
+            ) as state_builder,
+            patch.object(
+                main,
+                "project_history_with_patches_context",
+                side_effect=AssertionError("project history built"),
+            ) as project_history_builder,
+            patch.object(
+                main,
+                "history_with_patches_context",
+                side_effect=AssertionError("history with patches built"),
+            ) as history_builder,
+            patch.object(
+                main,
+                "read_agent_work_history_file",
+                side_effect=AssertionError("full agent history read"),
+            ) as history_reader,
+            patch(
+                "nginx_qa.prompt_archive_incremental."
+                "PromptArchiveIncremental.hydrate_archive_bytes",
+                side_effect=AssertionError("archive blob hydrated"),
+            ) as hydrator,
+            patch(
+                "nginx_qa.prompt_archive_runtime."
+                "PromptArchiveRuntime.hydrate_content",
+                side_effect=AssertionError("archive content hydrated"),
+            ) as content_hydrator,
+        ):
+            compact = main.materialize_sequential_graph_response(
+                response=response,
+                directory_template=str(self.prompt_root / "{repository}"),
+                agent_latest_file_template=str(
+                    self.prompt_root
+                    / "agents"
+                    / "{repository}_{agent_phone}-latest.prompt"
+                ),
+                response_kind="identity-response",
+                request_agent_phone="4102",
+                archive_occurrence=identity_occurrence,
+            )
+        state_builder.assert_not_called()
+        project_history_builder.assert_not_called()
+        history_builder.assert_not_called()
+        history_reader.assert_not_called()
+        hydrator.assert_not_called()
+        content_hydrator.assert_not_called()
         self.assertEqual(compact["active_task"], response["active_task"])
         self.assertNotIn("project_state", compact)
 
@@ -3220,61 +4319,99 @@ class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("project_state_url", payload)
 
     async def test_managed_phone_identity_is_archive_mode_invariant(self) -> None:
-        harness = ManagedContinuityTests()
-        harness.setUp()
-        self.addCleanup(harness.tearDown)
-        sentinel_registry = Mock()
-        sentinel_registry.for_project.side_effect = AssertionError(
-            "managed identity must not access archive storage"
-        )
-        with (
-            patch.dict(
-                os.environ,
-                {
-                    "NGINX_QA_MANAGED_ROOT": "C:/managed-test-root",
-                    "NGINX_QA_PROMPT_ARCHIVE_MODE": "shadow",
-                },
-                clear=False,
-            ),
-            patch.object(main, "prompt_archive_runtime", sentinel_registry),
-            patch.object(main, "managed_continuity_runtime", harness.runtime),
-            patch.object(main, "read_git_config", AsyncMock(return_value={})),
-            patch.object(
-                main,
-                "managed_continuity_runtime_for_requests",
-                return_value=harness.runtime,
-            ),
-            patch.object(
-                main,
-                "project_state_json",
-                AsyncMock(side_effect=AssertionError("full state builder called")),
-            ),
-            patch.object(
-                main,
-                "history_with_patches_context",
-                side_effect=AssertionError("history builder called"),
-            ),
-            patch.object(
-                main,
-                "materialize_sequential_graph_response",
-                side_effect=AssertionError("legacy response writer called"),
-            ),
-            patch(
-                "nginx_qa.prompt_archive_state_view."
-                "hydrate_prompt_archive_state_view",
-                side_effect=AssertionError("managed identity hydrated full state"),
-            ),
-        ):
-            status_code, payload, _raw = await asgi_request(
-                "/api/v1/projects/project-id/agents/2861/whoami",
-                b'{"message":"who am I?"}',
-            )
+        for mode in ("legacy", "shadow", "authoritative"):
+            with self.subTest(mode=mode):
+                harness = ManagedContinuityTests()
+                harness.setUp()
+                try:
+                    sentinel_registry = Mock()
+                    sentinel_registry.config.mode = mode
+                    sentinel_registry.for_project.side_effect = AssertionError(
+                        "managed identity must not access archive storage"
+                    )
+                    with (
+                        patch.dict(
+                            os.environ,
+                            {
+                                "NGINX_QA_MANAGED_ROOT": "C:/managed-test-root",
+                                "NGINX_QA_PROMPT_ARCHIVE_MODE": mode,
+                            },
+                            clear=False,
+                        ),
+                        patch.object(
+                            main,
+                            "prompt_archive_runtime",
+                            sentinel_registry,
+                        ),
+                        patch.object(
+                            main,
+                            "managed_continuity_runtime",
+                            harness.runtime,
+                        ),
+                        patch.object(
+                            main,
+                            "read_git_config",
+                            AsyncMock(return_value={}),
+                        ),
+                        patch.object(
+                            main,
+                            "managed_continuity_runtime_for_requests",
+                            return_value=harness.runtime,
+                        ),
+                        patch.object(
+                            main,
+                            "project_state_json",
+                            AsyncMock(
+                                side_effect=AssertionError(
+                                    "full state builder called"
+                                )
+                            ),
+                        ),
+                        patch.object(
+                            main,
+                            "history_with_patches_context",
+                            side_effect=AssertionError(
+                                "history builder called"
+                            ),
+                        ),
+                        patch.object(
+                            main,
+                            "materialize_sequential_graph_response",
+                            side_effect=AssertionError(
+                                "legacy response writer called"
+                            ),
+                        ),
+                        patch(
+                            "nginx_qa.prompt_archive_incremental."
+                            "PromptArchiveIncremental.hydrate_archive_bytes",
+                            side_effect=AssertionError(
+                                "managed identity hydrated archive bytes"
+                            ),
+                        ),
+                        patch(
+                            "nginx_qa.prompt_archive_state_view."
+                            "hydrate_prompt_archive_state_view",
+                            side_effect=AssertionError(
+                                "managed identity hydrated full state"
+                            ),
+                        ),
+                    ):
+                        status_code, payload, _raw = await asgi_request(
+                            "/api/v1/projects/project-id/agents/2861/whoami",
+                            b'{"message":"who am I?"}',
+                        )
 
-        self.assertEqual(status_code, 200)
-        self.assertTrue(payload["managed"])
-        self.assertEqual(payload["workspace"]["actual_git_toplevel"], WORKSPACE_1_ROOT)
-        self.assertNotIn("prompt_archive", payload)
-        sentinel_registry.for_project.assert_not_called()
+                    self.assertEqual(status_code, 200)
+                    self.assertTrue(payload["managed"])
+                    self.assertEqual(
+                        payload["workspace"]["actual_git_toplevel"],
+                        WORKSPACE_1_ROOT,
+                    )
+                    self.assertNotIn("prompt_archive", payload)
+                    self.assertNotIn("response_storage_errors", payload)
+                    sentinel_registry.for_project.assert_not_called()
+                finally:
+                    harness.tearDown()
 
 
 if __name__ == "__main__":
