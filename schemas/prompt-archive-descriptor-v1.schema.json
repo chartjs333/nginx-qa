@@ -18,7 +18,8 @@
     "created_at",
     "descriptor_url",
     "manifest_url",
-    "content_url"
+    "content_url",
+    "state_url"
   ],
   "properties": {
     "schema_version": {"const": 1},
@@ -48,7 +49,8 @@
     "created_at": {"type": "string", "format": "date-time"},
     "descriptor_url": {"$ref": "#/$defs/descriptorUrl"},
     "manifest_url": {"$ref": "#/$defs/manifestUrl"},
-    "content_url": {"$ref": "#/$defs/contentUrl"}
+    "content_url": {"$ref": "#/$defs/contentUrl"},
+    "state_url": {"$ref": "#/$defs/stateUrl"}
   },
   "allOf": [
     {
@@ -61,7 +63,8 @@
           "agent_phone": {"type": "null"},
           "descriptor_url": {"$ref": "#/$defs/localDescriptorUrl"},
           "manifest_url": {"$ref": "#/$defs/localManifestUrl"},
-          "content_url": {"$ref": "#/$defs/localContentUrl"}
+          "content_url": {"$ref": "#/$defs/localContentUrl"},
+          "state_url": {"$ref": "#/$defs/localStateUrl"}
         }
       },
       "else": {
@@ -69,7 +72,8 @@
           "agent_phone": {"type": "string", "pattern": "^[0-9]{1,16}$"},
           "descriptor_url": {"$ref": "#/$defs/managedDescriptorUrl"},
           "manifest_url": {"$ref": "#/$defs/managedManifestUrl"},
-          "content_url": {"$ref": "#/$defs/managedContentUrl"}
+          "content_url": {"$ref": "#/$defs/managedContentUrl"},
+          "state_url": {"$ref": "#/$defs/managedStateUrl"}
         }
       }
     }
@@ -112,6 +116,12 @@
         {"$ref": "#/$defs/managedContentUrl"}
       ]
     },
+    "stateUrl": {
+      "oneOf": [
+        {"$ref": "#/$defs/localStateUrl"},
+        {"$ref": "#/$defs/managedStateUrl"}
+      ]
+    },
     "localDescriptorUrl": {
       "type": "string",
       "minLength": 1,
@@ -130,6 +140,12 @@
       "maxLength": 512,
       "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/content$"
     },
+    "localStateUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/state$"
+    },
     "managedDescriptorUrl": {
       "type": "string",
       "minLength": 1,
@@ -147,6 +163,12 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/content$"
+    },
+    "managedStateUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/state$"
     }
   },
   "additionalProperties": false

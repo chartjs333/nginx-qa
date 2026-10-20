@@ -1,4 +1,9 @@
-"""Analyze, migrate, reconstruct, or verify an isolated Prompt Archive tree."""
+"""Analyze or migrate explicit isolated legacy-inline response copies.
+
+This offline CLI does not authorize or hydrate authoritative descriptor stubs.
+Selected response files with a recognized descriptor kind, an unknown kind, or
+duplicate top-level kind members fail closed before durable planning.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +23,14 @@ from nginx_qa.prompt_archive_migration import (  # noqa: E402
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog=(
+            "INPUT CONTRACT: explicit isolated legacy-inline copies only. "
+            "Authoritative descriptor stubs and unknown/duplicate top-level "
+            "kind members are rejected; a local path is not authorization."
+        ),
+    )
     parser.add_argument(
         "command",
         choices=(

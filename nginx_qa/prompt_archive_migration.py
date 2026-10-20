@@ -41,6 +41,7 @@ from .prompt_archive_storage import (
     _windows_open_or_create_relative_directory,
     _windows_open_pinned_directory,
     _windows_path_from_handle,
+    PromptArchiveLimits,
     PromptArchiveStorage,
     PromptArchiveStorageError,
     canonical_json_bytes_v1,
@@ -104,6 +105,63 @@ _PROTECTED_ENV_NAMES: Final = (
     "NGINX_QA_PROMPT_ROOT",
     "NGINX_QA_PROMPT_ARCHIVE_ROOT",
 )
+
+
+class _JsonObjectPairs(list[tuple[str, Any]]):
+    """Retain object members while inspecting only the top-level kind."""
+
+
+def _reject_nonstandard_json_constant(_value: str) -> Any:
+    raise ValueError
+
+
+def _assert_legacy_input_bytes(raw: bytes, *, maximum: int) -> None:
+    """Fail closed when a selected legacy input carries a top-level kind.
+
+    Offline migration preserves legacy source bytes opaquely.  Invalid JSON is
+    therefore still valid legacy evidence, as it was before this discriminator
+    existed.  A syntactically valid JSON object with a top-level ``kind`` is
+    not opaque, however: it is either an authoritative descriptor/control
+    document or a future/unknown format.  Neither may be migrated as if its
+    local pathname authorized hydration of the referenced archive.
+
+    ``object_pairs_hook`` is intentional.  It preserves duplicate top-level
+    ``kind`` members while leaving duplicate non-control members untouched in
+    the original bytes.  The caller has already bounded the file read; this
+    helper repeats the bound so it is safe to use independently in tests.
+    """
+
+    if type(maximum) is not int or maximum <= 0 or len(raw) > maximum:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED")
+    try:
+        top_level = json.loads(
+            raw.decode("utf-8", errors="strict"),
+            object_pairs_hook=_JsonObjectPairs,
+            parse_constant=_reject_nonstandard_json_constant,
+        )
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        # Raw-byte migration has always retained malformed/opaque legacy
+        # evidence.  Do not turn this dispatch preflight into canonicalization.
+        return
+    except (RecursionError, MemoryError):
+        # Resource exhaustion is not proof that the input is opaque legacy
+        # evidence.  It must not turn an authoritative/unknown kind into the
+        # no-kind branch.
+        raise _error("PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED") from None
+    if not isinstance(top_level, _JsonObjectPairs):
+        # Non-object JSON has no top-level object discriminator.  It remains
+        # opaque legacy evidence under the existing preservation contract.
+        return
+    kind_members = [value for key, value in top_level if key == "kind"]
+    if kind_members:
+        # This includes the canonical descriptor kind, every unknown/non-string
+        # kind, and duplicate kind members.  The offline tool never follows a
+        # stub and never treats possession of its source path as authorization.
+        raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
 
 
 class PromptArchiveMigrationError(RuntimeError):
@@ -2264,18 +2322,40 @@ class PromptArchiveMigration:
             raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
         return raw
 
-    def _preflight_selected_hydration_limit(self, inventory: SourceInventory) -> None:
-        maximum = self.storage.limits.max_hydrated_bytes
+    def _preflight_hydration_maximum(self) -> int:
+        """Return the effective bound without bootstrapping archive storage."""
+
+        if self._storage is not None:
+            maximum = self._storage.limits.max_hydrated_bytes
+        else:
+            maximum = PromptArchiveLimits().max_hydrated_bytes
+        if type(maximum) is not int or maximum <= 0:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
+        return maximum
+
+    def _preflight_selected_legacy_inputs(
+        self, inventory: SourceInventory
+    ) -> None:
+        """Bound and discriminate selected files before any durable output."""
+
+        maximum = self._preflight_hydration_maximum()
         for entry in inventory.entries:
-            if (
-                _is_legacy_archive_candidate(entry.relative_path)
-                and entry.byte_size > maximum
-            ):
+            if not _is_legacy_archive_candidate(entry.relative_path):
+                continue
+            if entry.byte_size > maximum:
                 # Reject before the immutable batch reservation or journal is
                 # published.  Otherwise a source accepted by the 512 MiB
                 # inventory ceiling could become permanently unresumable under
                 # a lower configured hydration ceiling.
                 raise _error("PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED")
+            path = self.input_root.joinpath(*entry.relative_path.split("/"))
+            raw, _ = _read_regular_file(path, maximum=maximum)
+            if (
+                len(raw) != entry.byte_size
+                or hashlib.sha256(raw).hexdigest() != entry.sha256
+            ):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
+            _assert_legacy_input_bytes(raw, maximum=maximum)
 
     def _verify_completed_entry(
         self,
@@ -2457,6 +2537,7 @@ class PromptArchiveMigration:
 
         self._assert_source_read_ready()
         inventory = inventory_isolated_root(self.input_root)
+        self._preflight_selected_legacy_inputs(inventory)
         selected = [
             {
                 "ordinal": ordinal,
@@ -2547,7 +2628,7 @@ class PromptArchiveMigration:
         self._assert_migration_access_ready()
         pre = inventory_isolated_root(self.input_root)
         self._fault("after_full_pre_inventory")
-        self._preflight_selected_hydration_limit(pre)
+        self._preflight_selected_legacy_inputs(pre)
         # The immutable reservation is deliberately published outside the
         # batch lock: first-writer-wins resolves two fresh processes without
         # writing inventory/archive CAS under unpersisted random operation IDs.

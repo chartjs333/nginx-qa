@@ -2,9 +2,11 @@
 
 The archive runtime needs to resume an interrupted publication without trusting
 an in-memory occurrence or a mutable ``latest`` alias.  This module stores one
-small immutable receipt under the hash of a closed runtime locator.  The
+small immutable receipt under the hash of a closed runtime locator.  A shadow
 receipt contains occurrence metadata and a digest/size binding for the exact
-legacy response, but never contains its bytes or a filesystem path.
+legacy response.  A native receipt instead binds the occurrence to exact
+compact-response bytes and its immutable archive manifest.  Neither form
+contains payload bytes or a filesystem path.
 
 Lookup is direct.  No directory is enumerated and no receipt deletion API is
 provided.  The configured source reader receives only a safe logical response
@@ -42,6 +44,23 @@ _LOCATOR_MAX_BYTES: Final = 4 * 1024
 _RECEIPT_MAX_BYTES: Final = 64 * 1024
 _SOURCE_DOCUMENT_MAX_BYTES: Final = 16 * 1024
 _DEFAULT_MAX_SOURCE_BYTES: Final = 512 * 1024 * 1024
+_MAX_BLOB_UNCOMPRESSED_BYTES: Final = 16 * 1024 * 1024
+_MAX_BLOB_STORED_BYTES: Final = _MAX_BLOB_UNCOMPRESSED_BYTES + 64 * 1024
+_GZIP_THRESHOLD: Final = 1024
+_GZIP_CODEC: Final = "gzip-rfc1952-zlib-1.2.13-level9-v1"
+_MANIFEST_MEDIA_TYPE: Final = (
+    "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+)
+_LEGACY_RECEIPT_KIND: Final = "prompt_archive_runtime_occurrence_receipt"
+_LEGACY_RECEIPT_MEDIA_TYPE: Final = (
+    "application/vnd.nginx-qa.prompt-archive-runtime-"
+    "occurrence-receipt-v1+json"
+)
+_NATIVE_RECEIPT_KIND: Final = "prompt_archive_native_runtime_occurrence_receipt"
+_NATIVE_RECEIPT_MEDIA_TYPE: Final = (
+    "application/vnd.nginx-qa.prompt-archive-native-runtime-"
+    "occurrence-receipt-v1+json"
+)
 _REPARSE_POINT: Final = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 
 _SAFE_ID_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$", re.ASCII)
@@ -119,6 +138,25 @@ _RECEIPT_KEYS: Final = frozenset(
         "receipt_sha256",
     }
 )
+_NATIVE_SOURCE_KEYS: Final = frozenset(
+    {"byte_size", "sha256", "archive_id", "manifest_ref"}
+)
+_BLOB_REF_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "hash_algorithm",
+        "digest",
+        "logical_kind",
+        "media_type",
+        "content_encoding",
+        "encoding_parameters",
+        "uncompressed_size",
+        "stored_size",
+        "stored_sha256",
+    }
+)
+_BLOB_REF_REQUIRED_KEYS: Final = _BLOB_REF_KEYS - {"encoding_parameters"}
 _OCCURRENCE_KEYS: Final = frozenset(
     {
         "project_id",
@@ -157,6 +195,25 @@ class PromptArchiveOccurrenceProof:
     status: Literal["verified", "source_unavailable", "source_changed"]
     occurrence: ArchiveOccurrence
     source: PromptArchiveOccurrenceSource
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PromptArchiveNativeOccurrenceSource:
+    """Path-free binding for exact compact native bytes and archive identity."""
+
+    byte_size: int
+    sha256: str
+    archive_id: str
+    manifest_ref: Mapping[str, Any]
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PromptArchiveNativeOccurrenceProof:
+    """A durable native occurrence whose closed receipt verified exactly."""
+
+    status: Literal["verified"]
+    occurrence: ArchiveOccurrence
+    source: PromptArchiveNativeOccurrenceSource
 
 
 class PromptArchiveOccurrenceSourceReader(Protocol):
@@ -753,6 +810,92 @@ def _validate_occurrence_source(
     ):
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     return PromptArchiveOccurrenceSource(response_key, byte_size, digest)
+
+
+def _validate_manifest_ref(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    ref = _canonical_mapping(dict(value), maximum=_SOURCE_DOCUMENT_MAX_BYTES)
+    if (
+        not _BLOB_REF_REQUIRED_KEYS.issubset(ref)
+        or not set(ref).issubset(_BLOB_REF_KEYS)
+        or ref.get("schema_version") != 1
+        or ref.get("kind") != "prompt_archive_blob_ref"
+        or ref.get("hash_algorithm") != "sha256"
+        or ref.get("logical_kind") != "manifest"
+        or ref.get("media_type") != _MANIFEST_MEDIA_TYPE
+    ):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    digest = ref.get("digest")
+    stored_digest = ref.get("stored_sha256")
+    uncompressed_size = ref.get("uncompressed_size")
+    stored_size = ref.get("stored_size")
+    if (
+        type(digest) is not str
+        or _SHA256_RE.fullmatch(digest) is None
+        or type(stored_digest) is not str
+        or _SHA256_RE.fullmatch(stored_digest) is None
+        or type(uncompressed_size) is not int
+        or not 0 <= uncompressed_size <= _MAX_BLOB_UNCOMPRESSED_BYTES
+        or type(stored_size) is not int
+        or not 0 <= stored_size <= _MAX_BLOB_STORED_BYTES
+    ):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    encoding = ref.get("content_encoding")
+    if encoding == "identity":
+        if (
+            "encoding_parameters" in ref
+            or uncompressed_size >= _GZIP_THRESHOLD
+            or stored_size != uncompressed_size
+            or stored_digest != digest
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    elif encoding == "gzip":
+        if (
+            ref.get("encoding_parameters") != _GZIP_CODEC
+            or uncompressed_size < _GZIP_THRESHOLD
+            or stored_size <= 0
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    else:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return ref
+
+
+def _validate_native_occurrence_source(
+    value: Any,
+    *,
+    maximum_source_bytes: int,
+) -> PromptArchiveNativeOccurrenceSource:
+    if isinstance(value, PromptArchiveNativeOccurrenceSource):
+        source: Any = {
+            "byte_size": value.byte_size,
+            "sha256": value.sha256,
+            "archive_id": value.archive_id,
+            "manifest_ref": dict(value.manifest_ref),
+        }
+    else:
+        source = _canonical_mapping(value, maximum=_SOURCE_DOCUMENT_MAX_BYTES)
+    if set(source) != _NATIVE_SOURCE_KEYS:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    byte_size = source.get("byte_size")
+    digest = source.get("sha256")
+    archive_id = source.get("archive_id")
+    if (
+        type(byte_size) is not int
+        or not 0 <= byte_size <= maximum_source_bytes
+        or type(digest) is not str
+        or _SHA256_RE.fullmatch(digest) is None
+        or type(archive_id) is not str
+        or _ARCHIVE_ID_RE.fullmatch(archive_id) is None
+    ):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return PromptArchiveNativeOccurrenceSource(
+        byte_size=byte_size,
+        sha256=digest,
+        archive_id=archive_id,
+        manifest_ref=_validate_manifest_ref(source.get("manifest_ref")),
+    )
 
 
 class PromptArchiveOccurrenceReceiptStore:
@@ -1621,6 +1764,17 @@ class PromptArchiveOccurrenceReceiptStore:
             "sha256": source.sha256,
         }
 
+    @staticmethod
+    def _native_source_document(
+        source: PromptArchiveNativeOccurrenceSource,
+    ) -> dict[str, Any]:
+        return {
+            "byte_size": source.byte_size,
+            "sha256": source.sha256,
+            "archive_id": source.archive_id,
+            "manifest_ref": dict(source.manifest_ref),
+        }
+
     def _receipt_document(
         self,
         *,
@@ -1643,6 +1797,32 @@ class PromptArchiveOccurrenceReceiptStore:
             "locator": locator,
             "occurrence": self._occurrence_document(occurrence),
             "source": self._source_document(source),
+        }
+        core_raw = canonical_json_bytes_v1(core, maximum=_RECEIPT_MAX_BYTES)
+        return {
+            **core,
+            "receipt_sha256": hashlib.sha256(core_raw).hexdigest(),
+        }
+
+    def _native_receipt_document(
+        self,
+        *,
+        project_id: str,
+        locator: dict[str, Any],
+        locator_sha256: str,
+        occurrence: ArchiveOccurrence,
+        source: PromptArchiveNativeOccurrenceSource,
+    ) -> dict[str, Any]:
+        core = {
+            "schema_version": 1,
+            "kind": _NATIVE_RECEIPT_KIND,
+            "media_type": _NATIVE_RECEIPT_MEDIA_TYPE,
+            "hash_algorithm": "sha256-canonical-json-v1",
+            "project_id": project_id,
+            "locator_sha256": locator_sha256,
+            "locator": locator,
+            "occurrence": self._occurrence_document(occurrence),
+            "source": self._native_source_document(source),
         }
         core_raw = canonical_json_bytes_v1(core, maximum=_RECEIPT_MAX_BYTES)
         return {
@@ -1718,6 +1898,106 @@ class PromptArchiveOccurrenceReceiptStore:
         except (KeyError, TypeError, ValueError, OverflowError):
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
 
+    @staticmethod
+    def _receipt_kind(raw: bytes) -> str:
+        try:
+            receipt = parse_canonical_json_v1(raw, maximum=_RECEIPT_MAX_BYTES)
+            kind = receipt.get("kind")
+            if kind not in {_LEGACY_RECEIPT_KIND, _NATIVE_RECEIPT_KIND}:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return kind
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_UNAVAILABLE":
+                raise
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
+
+    def _decode_native_receipt(
+        self,
+        raw: bytes,
+        *,
+        project_id: str,
+        locator: dict[str, Any],
+        locator_sha256: str,
+    ) -> tuple[ArchiveOccurrence, PromptArchiveNativeOccurrenceSource]:
+        try:
+            receipt = parse_canonical_json_v1(raw, maximum=_RECEIPT_MAX_BYTES)
+            if (
+                set(receipt) != _RECEIPT_KEYS
+                or receipt.get("schema_version") != 1
+                or receipt.get("kind") != _NATIVE_RECEIPT_KIND
+                or receipt.get("media_type") != _NATIVE_RECEIPT_MEDIA_TYPE
+                or receipt.get("hash_algorithm") != "sha256-canonical-json-v1"
+                or receipt.get("project_id") != project_id
+                or receipt.get("locator_sha256") != locator_sha256
+                or receipt.get("locator") != locator
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            core = dict(receipt)
+            observed_receipt_sha256 = core.pop("receipt_sha256", None)
+            expected_receipt_sha256 = hashlib.sha256(
+                canonical_json_bytes_v1(core, maximum=_RECEIPT_MAX_BYTES)
+            ).hexdigest()
+            if (
+                type(observed_receipt_sha256) is not str
+                or not hmac.compare_digest(
+                    observed_receipt_sha256,
+                    expected_receipt_sha256,
+                )
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            occurrence = _validate_occurrence(
+                receipt.get("occurrence"),
+                project_id=project_id,
+            )
+            source = _validate_native_occurrence_source(
+                receipt.get("source"),
+                maximum_source_bytes=self._max_source_bytes,
+            )
+            if (
+                occurrence.source.get("source_kind") != "native_runtime"
+                or locator["runtime_occurrence_id"] != occurrence.occurrence_id
+                or locator["state_revision"] != occurrence.state_revision
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return occurrence, source
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_UNAVAILABLE":
+                raise
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
+        except (KeyError, TypeError, ValueError, OverflowError):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
+
+    def _decode_stored_receipt(
+        self,
+        raw: bytes,
+        *,
+        project_id: str,
+        locator: dict[str, Any],
+        locator_sha256: str,
+    ) -> tuple[
+        str,
+        ArchiveOccurrence,
+        PromptArchiveOccurrenceSource | PromptArchiveNativeOccurrenceSource,
+    ]:
+        kind = self._receipt_kind(raw)
+        if kind == _LEGACY_RECEIPT_KIND:
+            occurrence, source = self._decode_receipt(
+                raw,
+                project_id=project_id,
+                locator=locator,
+                locator_sha256=locator_sha256,
+            )
+        else:
+            occurrence, source = self._decode_native_receipt(
+                raw,
+                project_id=project_id,
+                locator=locator,
+                locator_sha256=locator_sha256,
+            )
+        return kind, occurrence, source
+
     def register_occurrence(
         self,
         *,
@@ -1776,7 +2056,67 @@ class PromptArchiveOccurrenceReceiptStore:
             if observed is None:
                 self._publish(target, expected)
                 return
-            self._decode_receipt(
+            self._decode_stored_receipt(
+                observed,
+                project_id=selected_project,
+                locator=frozen_locator,
+                locator_sha256=locator_digest,
+            )
+            if observed != expected:
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+
+    def register_native_occurrence(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        source: PromptArchiveNativeOccurrenceSource,
+    ) -> None:
+        """Create or verify a path-free immutable native occurrence receipt."""
+
+        selected_project = _validate_safe_id(project_id)
+        frozen_locator, _locator_raw, locator_digest = _validate_locator(locator)
+        frozen_occurrence = _validate_occurrence(
+            occurrence,
+            project_id=selected_project,
+        )
+        frozen_source = _validate_native_occurrence_source(
+            source,
+            maximum_source_bytes=self._max_source_bytes,
+        )
+        if (
+            frozen_occurrence.source.get("source_kind") != "native_runtime"
+            or any(
+                value is not None
+                for value in (
+                    occurrence.source_response_key,
+                    occurrence.source_byte_size,
+                    occurrence.source_sha256,
+                )
+            )
+            or frozen_locator["runtime_occurrence_id"]
+            != frozen_occurrence.occurrence_id
+            or frozen_locator["state_revision"]
+            != frozen_occurrence.state_revision
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        receipt = self._native_receipt_document(
+            project_id=selected_project,
+            locator=frozen_locator,
+            locator_sha256=locator_digest,
+            occurrence=frozen_occurrence,
+            source=frozen_source,
+        )
+        expected = canonical_json_bytes_v1(receipt, maximum=_RECEIPT_MAX_BYTES)
+        target, lock_path = self._derived_paths(selected_project, locator_digest)
+        with self._locked(lock_path):
+            self._assert_root()
+            observed = self._read_file(target)
+            if observed is None:
+                self._publish(target, expected)
+                return
+            self._decode_stored_receipt(
                 observed,
                 project_id=selected_project,
                 locator=frozen_locator,
@@ -1790,8 +2130,8 @@ class PromptArchiveOccurrenceReceiptStore:
         *,
         project_id: str,
         locator: Mapping[str, Any],
-    ) -> PromptArchiveOccurrenceProof | None:
-        """Load one exact receipt and verify its committed legacy source."""
+    ) -> PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof | None:
+        """Load one exact legacy or native occurrence proof."""
 
         selected_project = _validate_safe_id(project_id)
         frozen_locator, _locator_raw, locator_digest = _validate_locator(locator)
@@ -1799,12 +2139,18 @@ class PromptArchiveOccurrenceReceiptStore:
         observed = self._read_file(target)
         if observed is None:
             return None
-        occurrence, source = self._decode_receipt(
+        kind, occurrence, source = self._decode_stored_receipt(
             observed,
             project_id=selected_project,
             locator=frozen_locator,
             locator_sha256=locator_digest,
         )
+        if kind == _NATIVE_RECEIPT_KIND:
+            if not isinstance(source, PromptArchiveNativeOccurrenceSource):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return PromptArchiveNativeOccurrenceProof("verified", occurrence, source)
+        if not isinstance(source, PromptArchiveOccurrenceSource):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
         source_changed = False
         try:
             source_bytes = self._source_reader(
@@ -1858,6 +2204,8 @@ class PromptArchiveOccurrenceReceiptStore:
 
 
 __all__ = [
+    "PromptArchiveNativeOccurrenceProof",
+    "PromptArchiveNativeOccurrenceSource",
     "PromptArchiveOccurrenceProof",
     "PromptArchiveOccurrenceReceiptStore",
     "PromptArchiveOccurrenceSource",

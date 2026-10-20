@@ -37,6 +37,9 @@ SCHEMA_NAMES = {
     "prompt-archive-descriptor-stub-v1.schema.json",
     "prompt-archive-descriptor-v1.schema.json",
     "prompt-archive-error-v1.schema.json",
+    "prompt-archive-compact-response-v1.schema.json",
+    "prompt-archive-occurrence-document-v1.schema.json",
+    "prompt-archive-state-view-v1.schema.json",
 }
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -535,6 +538,7 @@ def descriptor_fixture() -> dict:
         "descriptor_url": base,
         "manifest_url": base + "/manifest",
         "content_url": base + "/content",
+        "state_url": base + "/state",
     }
 
 
@@ -549,7 +553,135 @@ def managed_descriptor_fixture() -> dict:
     value["descriptor_url"] = base
     value["manifest_url"] = base + "/manifest"
     value["content_url"] = base + "/content"
+    value["state_url"] = base + "/state"
     return value
+
+
+def compact_response_fixture() -> dict:
+    return {
+        "response_compact": True,
+        "active_task_message_complete": True,
+        "omitted_response_fields": ["project_state"],
+        "active_task": {
+            "id": "task-example-1",
+            "message": "Execute the complete bounded task.",
+            "metadata": {
+                "assignment_id": "assignment-example-1",
+                "allowed_outcomes": ["DONE", "STOP"],
+                "result_endpoint": "/api/v1/projects/9000/agents/2974/whoami",
+                "source_commit": "1" * 40,
+            },
+        },
+        "project_id": "9000",
+        "sprint_id": "sprint-example-1",
+        "response_id": RESPONSE_ID,
+        "response_kind": "transition-response",
+    }
+
+
+def occurrence_document_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_occurrence_document",
+        "media_type": (
+            "application/vnd.nginx-qa.prompt-archive-"
+            "occurrence-document-v1+json"
+        ),
+        "occurrence": {
+            "project_id": "9000",
+            "sprint_id": "sprint-example-1",
+            "response_id": RESPONSE_ID,
+            "response_kind": "transition-response",
+            "occurrence_kind": "transition",
+            "occurrence_id": "transition-example-1",
+            "transition_id": "transition-example-1",
+            "source": {
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-example-1",
+                "source_commit": "1" * 40,
+            },
+            "authorization": {
+                "auth_model_version": "prompt-archive-authorization-v1",
+                "principal_kind": "synthetic_test",
+                "principal_id": "contract-test",
+                "binding_id": None,
+                "scope_source": "synthetic_test",
+                "effective_scope_revision": None,
+                "effective_scope_sha256": None,
+                "decision_occurrence_id": "contract-test-decision",
+            },
+            "created_at": "2026-10-12T10:00:00Z",
+            "verified_at": "2026-10-12T10:00:01Z",
+            "state_revision": 42,
+        },
+        "execution_response": compact_response_fixture(),
+        "evidence_delta": {
+            "transition_applied": {
+                "transition_id": "transition-example-1",
+                "outcome": "DONE",
+            }
+        },
+    }
+
+
+def state_view_fixture() -> dict:
+    occurrence = occurrence_document_fixture()
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_state_view",
+        "media_type": (
+            "application/vnd.nginx-qa.prompt-archive-state-view-v1+json"
+        ),
+        "scope": {
+            "project_id": "9000",
+            "sprint_id": "sprint-example-1",
+            "root_archive_id": ARCHIVE_ID,
+            "head_archive_id": ARCHIVE_ID,
+            "head_response_id": RESPONSE_ID,
+            "occurrence_count": 1,
+        },
+        "integrity": {
+            "algorithm": "sha256",
+            "chain_sha256": SHA_B,
+            "aggregate_hydrated_bytes": 4096,
+        },
+        "occurrences": [
+            {
+                "ordinal": 0,
+                "archive_id": ARCHIVE_ID,
+                "pointer_id": "parptr1-" + "3" * 64,
+                "manifest_sha256": SHA_C,
+                "predecessor_archive_id": None,
+                "document": copy.deepcopy(occurrence),
+            }
+        ],
+        "state": {
+            "current": {
+                "occurrence_ordinal": 0,
+                "archive_id": ARCHIVE_ID,
+                "response_id": RESPONSE_ID,
+                "state_revision": 42,
+                "execution_response": copy.deepcopy(
+                    occurrence["execution_response"]
+                ),
+                "evidence_delta": copy.deepcopy(occurrence["evidence_delta"]),
+            },
+            "history": [
+                {
+                    "occurrence_ordinal": 0,
+                    "archive_id": ARCHIVE_ID,
+                    "response_id": RESPONSE_ID,
+                    "response_kind": "transition-response",
+                    "occurrence_kind": "transition",
+                    "occurrence_id": "transition-example-1",
+                    "transition_id": "transition-example-1",
+                    "state_revision": 42,
+                    "created_at": "2026-10-12T10:00:00Z",
+                    "evidence_keys": ["transition_applied"],
+                }
+            ],
+        },
+    }
 
 
 def archive_locator_fixture(
@@ -1079,6 +1211,163 @@ def publication_plan_fixture() -> dict:
         "compatibility_publication": {"mode": "none"},
         "frozen_timestamps": frozen_timestamps,
     }
+
+
+def native_publication_plan_fixture() -> dict:
+    """A schema-valid authoritative plan with an exact external-owner proof."""
+
+    plan = publication_plan_fixture()
+    operation_id = plan["operation_id"]
+    frozen_timestamps = plan["frozen_timestamps"]
+    occurrence_id = "transition-example-1"
+    manifest = manifest_fixture(native=True)
+    manifest["source"]["source_kind"] = "native_runtime"
+    manifest["publication"].update(
+        {
+            "mode": "authoritative",
+            "legacy_authoritative": False,
+            "operator_gate": "prompt-archive-authoritative-v1",
+        }
+    )
+    manifest.pop("legacy_comparison")
+    manifest_ref = blob_ref("manifest")
+    bind_ref_to_bytes(manifest_ref, canonical_control_bytes(manifest))
+    pointer = pointer_fixture(
+        manifest_ref,
+        published_at=frozen_timestamps["pointer_published_at"],
+    )
+    pointer_ref = blob_ref("pointer")
+    bind_ref_to_bytes(pointer_ref, canonical_control_bytes(pointer))
+    locator = archive_locator_fixture(
+        pointer,
+        manifest_ref,
+        published_at=frozen_timestamps["locator_published_at"],
+    )
+    locator_ref = blob_ref("archive_locator")
+    bind_ref_to_bytes(locator_ref, canonical_control_bytes(locator))
+    recovery_locator = {
+        "locator_version": "prompt-archive-publication-locator-v1",
+        "recovery_key": "parloc1-"
+        + pas1_id_digest(
+            "publication-locator",
+            [
+                ("project_id", "9000"),
+                ("sprint_id", "sprint-example-1"),
+                ("response_id", RESPONSE_ID),
+                ("occurrence_id", occurrence_id),
+                ("operation_id", operation_id),
+            ],
+        ),
+        "project_id": "9000",
+        "sprint_id": "sprint-example-1",
+        "response_id": RESPONSE_ID,
+        "occurrence_id": occurrence_id,
+        "operation_id": operation_id,
+    }
+    descriptor = descriptor_stub_fixture(pointer, manifest_ref)
+    descriptor.update(
+        {
+            "archive_format": manifest["archive_format"],
+            "scope": copy.deepcopy(manifest["scope"]),
+            "integrity": copy.deepcopy(manifest["integrity"]),
+        }
+    )
+    descriptor_ref = blob_ref("descriptor_stub")
+    descriptor_bytes = canonical_control_bytes(descriptor)
+    bind_ref_to_bytes(descriptor_ref, descriptor_bytes)
+    latest_intent = latest_intent_fixture(
+        operation_id=operation_id,
+        occurrence_id=occurrence_id,
+        content_kind="descriptor_stub",
+        content_sha256=hashlib.sha256(descriptor_bytes).hexdigest(),
+        content_size=len(descriptor_bytes),
+        descriptor_ref=descriptor_ref,
+    )
+    target_authority_id = "parlatestauthority1-" + "8" * 64
+    transition_stub_name = f"transition-response-{RESPONSE_ID}.json"
+    owner_projection = {
+        "project_id": "9000",
+        "sprint_id": "sprint-example-1",
+        "response_id": RESPONSE_ID,
+        "response_kind": "transition-response",
+        "operation_id": operation_id,
+        "recovery_key": recovery_locator["recovery_key"],
+        "archive_id": ARCHIVE_ID,
+        "pointer_id": pointer["pointer_id"],
+        "locator_id": locator["locator_id"],
+        "target_authority_id": target_authority_id,
+        "transition_stub_name": transition_stub_name,
+        "descriptor_stub_id": descriptor["stub_id"],
+    }
+    archive_owner = {
+        "protocol": "prompt-archive-latest-archive-owner-v1",
+        **owner_projection,
+        "outer_plan_identity_sha256": hashlib.sha256(
+            canonical_control_bytes(owner_projection)
+        ).hexdigest(),
+    }
+    plan.update(
+        {
+            "operation_kind": "native_publish",
+            "occurrence": {
+                "response_id": RESPONSE_ID,
+                "response_kind": "transition-response",
+                "occurrence_kind": "transition",
+                "occurrence_id": occurrence_id,
+                "transition_id": occurrence_id,
+            },
+            "recovery_locator": recovery_locator,
+            "pending_registry": pending_registry_plan_fixture(
+                recovery_locator,
+                operation_id,
+                published_at=frozen_timestamps["planned_at"],
+            ),
+            "source_locator": {
+                "locator_kind": "runtime_occurrence",
+                "locator_version": "prompt-archive-runtime-occurrence-locator-v1",
+                "runtime_instance_id": "instance-example-1",
+                "runtime_occurrence_id": occurrence_id,
+                "state_revision": 42,
+            },
+            "intended_manifest": {
+                "identity_version": "prompt-archive-intended-manifest-identity-v1",
+                "archive_id": ARCHIVE_ID,
+                "manifest_ref": manifest_ref,
+                "document": manifest,
+            },
+            "intended_pointer": {
+                "identity_version": "prompt-archive-intended-pointer-identity-v1",
+                "pointer_id": pointer["pointer_id"],
+                "pointer_ref": pointer_ref,
+                "document": pointer,
+            },
+            "intended_archive_locator": {
+                "identity_version": "prompt-archive-intended-locator-identity-v1",
+                "locator_id": locator["locator_id"],
+                "locator_ref": locator_ref,
+                "document": locator,
+            },
+            "compatibility_publication": {
+                "mode": "authoritative_descriptor_stubs",
+                "target_authority_id": target_authority_id,
+                "archive_owner": archive_owner,
+                "descriptor": {
+                    "identity_version": "prompt-archive-descriptor-stub-identity-v1",
+                    "descriptor_ref": descriptor_ref,
+                    "document": descriptor,
+                },
+                "transition_stub": {
+                    "publication_mode": "immutable_create_or_verify",
+                    "stub_id": descriptor["stub_id"],
+                    "response_id": RESPONSE_ID,
+                    "descriptor_ref": copy.deepcopy(descriptor_ref),
+                    "published_at": descriptor["published_at"],
+                },
+                "latest_intent": latest_intent,
+            },
+        }
+    )
+    return plan
 
 
 def legacy_latest_plan_fixture(write_kind: str = "transition") -> dict:
@@ -1898,6 +2187,39 @@ def publication_plan_semantic_issues(plan: dict) -> tuple[str, ...]:
         issues.append("pointer timestamp differs from frozen plan")
     if locator_document["published_at"] != timestamps["locator_published_at"]:
         issues.append("archive locator timestamp differs from frozen plan")
+    compatibility = plan["compatibility_publication"]
+    if compatibility["mode"] == "authoritative_descriptor_stubs":
+        owner = compatibility["archive_owner"]
+        owner_projection = {
+            "project_id": scope["project_id"],
+            "sprint_id": scope["sprint_id"],
+            "response_id": occurrence["response_id"],
+            "response_kind": occurrence["response_kind"],
+            "operation_id": plan["operation_id"],
+            "recovery_key": locator["recovery_key"],
+            "archive_id": plan["intended_manifest"]["archive_id"],
+            "pointer_id": pointer["pointer_id"],
+            "locator_id": archive_locator["locator_id"],
+            "target_authority_id": compatibility["target_authority_id"],
+            "transition_stub_name": (
+                f"{occurrence['response_kind']}-{occurrence['response_id']}.json"
+            ),
+            "descriptor_stub_id": compatibility["descriptor"]["document"][
+                "stub_id"
+            ],
+        }
+        if owner["protocol"] != "prompt-archive-latest-archive-owner-v1":
+            issues.append("archive owner protocol differs from contract")
+        for field, expected in owner_projection.items():
+            if owner[field] != expected:
+                issues.append(f"archive owner {field} differs from enclosing plan")
+        expected_owner_digest = hashlib.sha256(
+            canonical_control_bytes(owner_projection)
+        ).hexdigest()
+        if owner["outer_plan_identity_sha256"] != expected_owner_digest:
+            issues.append(
+                "archive owner identity digest differs from canonical plan projection"
+            )
     return tuple(issues)
 
 
@@ -2272,6 +2594,7 @@ def descriptor_semantic_issues(descriptor: dict) -> tuple[str, ...]:
         "descriptor_url": base,
         "manifest_url": base + "/manifest",
         "content_url": base + "/content",
+        "state_url": base + "/state",
     }
     return tuple(
         f"{name} differs from descriptor identity"
@@ -2288,14 +2611,28 @@ class PromptArchiveContractTests(unittest.TestCase):
             for name in SCHEMA_NAMES
         }
         registry = Registry()
-        for schema in cls.schemas.values():
+        for name, schema in cls.schemas.items():
+            resource = Resource.from_contents(schema)
             registry = registry.with_resource(
-                schema["$id"], Resource.from_contents(schema)
+                schema["$id"], resource
+            )
+            # Files are also resolvable by their repository-relative retrieval
+            # URI. A schema's canonical $id may intentionally remain stable
+            # across repository moves (the compact response predates PAS1).
+            registry = registry.with_resource(
+                "https://github.com/chartjs333/nginx-qa/schemas/" + name,
+                resource,
             )
         cls.registry = registry
         cls.schema_by_id = {
             schema["$id"]: schema for schema in cls.schemas.values()
         }
+        cls.schema_by_id.update(
+            {
+                "https://github.com/chartjs333/nginx-qa/schemas/" + name: schema
+                for name, schema in cls.schemas.items()
+            }
+        )
         cls.contract = CONTRACT_PATH.read_text(encoding="utf-8")
 
     def validator(self, name: str) -> Draft202012Validator:
@@ -2579,6 +2916,13 @@ class PromptArchiveContractTests(unittest.TestCase):
             ),
             "prompt-archive-descriptor-v1.schema.json": descriptor_fixture(),
             "prompt-archive-error-v1.schema.json": error_fixture(),
+            "prompt-archive-compact-response-v1.schema.json": (
+                compact_response_fixture()
+            ),
+            "prompt-archive-occurrence-document-v1.schema.json": (
+                occurrence_document_fixture()
+            ),
+            "prompt-archive-state-view-v1.schema.json": state_view_fixture(),
         }
         self.assertEqual(set(examples), SCHEMA_NAMES)
         for name, value in examples.items():
@@ -3651,6 +3995,99 @@ class PromptArchiveContractTests(unittest.TestCase):
             "5854e85a1e9da65f758bf957f402c7379de848c08c9420b95148e3536e8c8ffe",
         )
 
+    def test_authoritative_plan_cross_binds_archive_owner_and_latest_authority(
+        self,
+    ) -> None:
+        name = "prompt-archive-publication-plan-v1.schema.json"
+        plan = native_publication_plan_fixture()
+        self.validator(name).validate(plan)
+        self.assertEqual(publication_plan_semantic_issues(plan), ())
+
+        compatibility = plan["compatibility_publication"]
+        owner = compatibility["archive_owner"]
+        projection = {
+            key: owner[key]
+            for key in (
+                "project_id",
+                "sprint_id",
+                "response_id",
+                "response_kind",
+                "operation_id",
+                "recovery_key",
+                "archive_id",
+                "pointer_id",
+                "locator_id",
+                "target_authority_id",
+                "transition_stub_name",
+                "descriptor_stub_id",
+            )
+        }
+        self.assertEqual(
+            owner["outer_plan_identity_sha256"],
+            hashlib.sha256(canonical_control_bytes(projection)).hexdigest(),
+        )
+
+        valid_but_wrong = {
+            "project_id": "another-project",
+            "sprint_id": "another-sprint",
+            "response_id": "parresp1-" + "9" * 64,
+            "response_kind": "identity-response",
+            "operation_id": "parop1-" + "9" * 32,
+            "recovery_key": "parloc1-" + "9" * 64,
+            "archive_id": "par1-" + "9" * 64,
+            "pointer_id": "parptr1-" + "9" * 64,
+            "locator_id": "pararc1-" + "9" * 64,
+            "target_authority_id": "parlatestauthority1-" + "9" * 64,
+            "transition_stub_name": "identity-response-other.json",
+            "descriptor_stub_id": "parstub1-" + "9" * 64,
+        }
+        for field, replacement in valid_but_wrong.items():
+            changed = copy.deepcopy(plan)
+            changed["compatibility_publication"]["archive_owner"][field] = replacement
+            with self.subTest(owner_field=field):
+                self.validator(name).validate(changed)
+                self.assertIn(
+                    f"archive owner {field} differs from enclosing plan",
+                    publication_plan_semantic_issues(changed),
+                )
+
+        wrong_digest = copy.deepcopy(plan)
+        wrong_digest["compatibility_publication"]["archive_owner"][
+            "outer_plan_identity_sha256"
+        ] = "9" * 64
+        self.assertIn(
+            "archive owner identity digest differs from canonical plan projection",
+            publication_plan_semantic_issues(wrong_digest),
+        )
+
+        wrong_outer_target = copy.deepcopy(plan)
+        wrong_outer_target["compatibility_publication"]["target_authority_id"] = (
+            "parlatestauthority1-" + "9" * 64
+        )
+        self.validator(name).validate(wrong_outer_target)
+        self.assertIn(
+            "archive owner target_authority_id differs from enclosing plan",
+            publication_plan_semantic_issues(wrong_outer_target),
+        )
+
+        malformed_target = copy.deepcopy(plan)
+        malformed_target["compatibility_publication"]["target_authority_id"] = (
+            "latest-authority-unsafe"
+        )
+        self.assert_invalid(name, malformed_target)
+
+        path_in_stub_name = copy.deepcopy(plan)
+        path_in_stub_name["compatibility_publication"]["archive_owner"][
+            "transition_stub_name"
+        ] = "folder/transition.json"
+        self.assert_invalid(name, path_in_stub_name)
+
+        extra_owner_field = copy.deepcopy(plan)
+        extra_owner_field["compatibility_publication"]["archive_owner"]["path"] = (
+            "C:/forbidden"
+        )
+        self.assert_invalid(name, extra_owner_field)
+
     def test_scope_provenance_and_api_urls_are_closed(self) -> None:
         record_name = "prompt-archive-record-v1.schema.json"
         record = record_fixture()
@@ -3733,6 +4170,90 @@ class PromptArchiveContractTests(unittest.TestCase):
             self.contract,
         )
 
+    def test_compact_occurrence_and_state_view_schemas_close_response_contract(self) -> None:
+        compact_name = "prompt-archive-compact-response-v1.schema.json"
+        occurrence_name = "prompt-archive-occurrence-document-v1.schema.json"
+        state_name = "prompt-archive-state-view-v1.schema.json"
+
+        compact = compact_response_fixture()
+        self.validator(compact_name).validate(compact)
+
+        missing_complete_message = compact_response_fixture()
+        missing_complete_message["active_task"].pop("message")
+        self.assert_invalid(compact_name, missing_complete_message)
+
+        explicitly_incomplete = copy.deepcopy(missing_complete_message)
+        explicitly_incomplete["active_task_message_complete"] = False
+        self.validator(compact_name).validate(explicitly_incomplete)
+
+        partial_result_controls = compact_response_fixture()
+        partial_result_controls["active_task"]["metadata"].pop("result_endpoint")
+        self.assert_invalid(compact_name, partial_result_controls)
+
+        terminal = compact_response_fixture()
+        terminal["active_task"] = None
+        self.validator(compact_name).validate(terminal)
+
+        archived_compact = compact_response_fixture()
+        archived_compact["response_archive_available"] = True
+        archived_compact["prompt_archive"] = descriptor_fixture()
+        self.validator(compact_name).validate(archived_compact)
+
+        for missing_field in (
+            "descriptor_url",
+            "manifest_url",
+            "content_url",
+            "state_url",
+            "route_context",
+            "scope",
+            "integrity",
+            "created_at",
+        ):
+            with self.subTest(incomplete_prompt_archive=missing_field):
+                incomplete = copy.deepcopy(archived_compact)
+                incomplete["prompt_archive"].pop(missing_field)
+                self.assert_invalid(compact_name, incomplete)
+
+        descriptor_with_extra = copy.deepcopy(archived_compact)
+        descriptor_with_extra["prompt_archive"]["path"] = "C:/forbidden"
+        self.assert_invalid(compact_name, descriptor_with_extra)
+
+        contradictory_descriptor = copy.deepcopy(archived_compact)
+        contradictory_descriptor["response_archive_available"] = False
+        self.assert_invalid(compact_name, contradictory_descriptor)
+
+        for cumulative_key in (
+            "project_state",
+            "work_history",
+            "history_with_patches",
+            "activity_with_patches",
+            "code_patches",
+            "recent_activity",
+            "execution_audit",
+        ):
+            with self.subTest(cumulative_key=cumulative_key):
+                cumulative_compact = compact_response_fixture()
+                cumulative_compact[cumulative_key] = {}
+                self.assert_invalid(compact_name, cumulative_compact)
+
+        occurrence = occurrence_document_fixture()
+        self.validator(occurrence_name).validate(occurrence)
+        cumulative = occurrence_document_fixture()
+        cumulative["execution_response"]["project_state"] = {"history": []}
+        self.assert_invalid(occurrence_name, cumulative)
+        extra_evidence = occurrence_document_fixture()
+        extra_evidence["evidence_delta"]["history_with_patches"] = {}
+        self.assert_invalid(occurrence_name, extra_evidence)
+
+        state = state_view_fixture()
+        self.validator(state_name).validate(state)
+        missing_chain_proof = state_view_fixture()
+        missing_chain_proof["integrity"].pop("chain_sha256")
+        self.assert_invalid(state_name, missing_chain_proof)
+        malformed_document = state_view_fixture()
+        malformed_document["occurrences"][0]["document"]["kind"] = "future-kind"
+        self.assert_invalid(state_name, malformed_document)
+
     def test_stable_error_envelope_has_no_unbounded_context(self) -> None:
         name = "prompt-archive-error-v1.schema.json"
         codes = self.schemas[name]["properties"]["detail"]["properties"][
@@ -3768,6 +4289,9 @@ class PromptArchiveContractTests(unittest.TestCase):
             "must not call `project_state_json()`",
             "GET /api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}",
             "GET /api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}",
+            "/prompt-archives/{archive_id}/state",
+            "prompt-archive-state.json",
+            "Chain length is capped at 256 occurrences",
             "X-Nginx-QA-Scope-Token",
             "Content-Disposition: attachment",
             "X-Content-Type-Options: nosniff",

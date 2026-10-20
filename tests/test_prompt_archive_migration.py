@@ -682,6 +682,64 @@ class PromptArchiveMigrationTests(unittest.TestCase):
         self.assertFalse(self.archive.exists())
         self.assertFalse(self.private_evidence.exists())
 
+    def test_legacy_input_preflight_rejects_control_kinds_before_any_output(self) -> None:
+        rejected = (
+            (
+                "recognized-descriptor",
+                b'{"schema_version":1,"kind":"prompt_archive_descriptor_stub"}',
+            ),
+            ("unknown-kind", b'{"kind":"future_prompt_archive_format"}'),
+            (
+                "duplicate-kind",
+                b'{"kind":"legacy","payload":true,'
+                b'"kind":"prompt_archive_descriptor_stub"}',
+            ),
+        )
+        for name, raw in rejected:
+            with self.subTest(name=name):
+                source = self.base / f"source-{name}"
+                archive = self.base / f"archive-{name}"
+                private_evidence = self.base / f"private-{name}.json"
+                source.mkdir()
+                (source / "latest-response.json").write_bytes(raw)
+                migration = PromptArchiveMigration(
+                    input_root=source,
+                    archive_root=archive,
+                    project_id=PROJECT_ID,
+                    source_root_handle_id=f"isolated-{name}",
+                    operator_gate=OFFLINE_OPERATOR_GATE,
+                    operator_principal_id="operator-psc-005",
+                    private_evidence_file=private_evidence,
+                    protected_roots=(),
+                    clock=lambda: STAMP,
+                )
+
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID",
+                    migration.migrate,
+                )
+
+                self.assertIsNone(migration._storage)
+                self.assertIsNone(migration._runtime)
+                self.assertFalse(archive.exists())
+                self.assertFalse(private_evidence.exists())
+
+    def test_analyze_rejects_authoritative_stub_without_opening_archive(self) -> None:
+        (self.source / "latest-response.json").write_bytes(
+            b'{"kind":"prompt_archive_descriptor_stub"}'
+        )
+        migration = self.migration()
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID",
+            migration.analyze,
+        )
+
+        self.assertIsNone(migration._storage)
+        self.assertIsNone(migration._runtime)
+        self.assertFalse(self.archive.exists())
+        self.assertFalse(self.private_evidence.exists())
+
     def test_oversized_plan_and_private_witness_map_to_stable_limit_error(self) -> None:
         self.write_fixture()
         migration = self.migration()

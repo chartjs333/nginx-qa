@@ -1,0 +1,274 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-occurrence-document-v1.schema.json",
+  "title": "Prompt archive authoritative occurrence document v1",
+  "description": "One immutable, non-cumulative response occurrence. The complete executable response is separated from response-scoped evidence.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "occurrence",
+    "execution_response",
+    "evidence_delta"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_occurrence_document"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-occurrence-document-v1+json"
+    },
+    "occurrence": {"$ref": "#/$defs/occurrence"},
+    "execution_response": {
+      "allOf": [
+        {"$ref": "prompt-archive-compact-response-v1.schema.json"},
+        {
+          "not": {
+            "anyOf": [
+              {"required": ["project_state"]},
+              {"required": ["work_history"]},
+              {"required": ["assignments"]},
+              {"required": ["completed_assignments"]},
+              {"required": ["history_with_patches"]},
+              {"required": ["activity_with_patches"]},
+              {"required": ["code_patches"]},
+              {"required": ["recent_activity"]},
+              {"required": ["execution_audit"]},
+              {"required": ["result"]},
+              {"required": ["feedback"]},
+              {"required": ["review"]},
+              {"required": ["reviews"]},
+              {"required": ["review_context"]},
+              {"required": ["transition"]},
+              {"required": ["pending_transition"]},
+              {"required": ["last_transition"]},
+              {"required": ["transition_applied"]},
+              {"required": ["completed_assignment"]},
+              {"required": ["source_commit"]},
+              {"required": ["from_commit"]},
+              {"required": ["git_commit"]},
+              {"required": ["git_branch"]}
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "principal_kind": {"const": "legacy_local_principal"}
+            },
+            "required": ["principal_kind"]
+          },
+          "then": {
+            "properties": {
+              "scope_source": {"const": "legacy_project_context"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"principal_kind": {"const": "offline_operator"}},
+            "required": ["principal_kind"]
+          },
+          "then": {
+            "properties": {
+              "scope_source": {"const": "offline_operator_gate"}
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {"principal_kind": {"const": "synthetic_test"}},
+            "required": ["principal_kind"]
+          },
+          "then": {
+            "properties": {"scope_source": {"const": "synthetic_test"}}
+          }
+        }
+      ]
+    },
+    "evidence_delta": {"$ref": "#/$defs/evidenceDelta"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "gitObjectId": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "nullableSafeId": {
+      "oneOf": [
+        {"$ref": "#/$defs/safeId"},
+        {"type": "null"}
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "source": {
+      "type": "object",
+      "required": ["source_kind"],
+      "properties": {
+        "source_kind": {"const": "native_runtime"},
+        "source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "assignment_id": {"$ref": "#/$defs/safeId"},
+        "review_id": {"$ref": "#/$defs/safeId"},
+        "result_key": {"$ref": "#/$defs/safeId"},
+        "predecessor_archive_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "authorization": {
+      "type": "object",
+      "required": [
+        "auth_model_version",
+        "principal_kind",
+        "principal_id",
+        "binding_id",
+        "scope_source",
+        "effective_scope_revision",
+        "effective_scope_sha256",
+        "decision_occurrence_id"
+      ],
+      "properties": {
+        "auth_model_version": {"const": "prompt-archive-authorization-v1"},
+        "principal_kind": {
+          "enum": [
+            "managed_agent",
+            "legacy_local_principal",
+            "offline_operator",
+            "synthetic_test"
+          ]
+        },
+        "principal_id": {"$ref": "#/$defs/safeId"},
+        "binding_id": {"$ref": "#/$defs/nullableSafeId"},
+        "scope_source": {
+          "enum": [
+            "managed_effective_scope",
+            "legacy_project_context",
+            "offline_operator_gate",
+            "synthetic_test"
+          ]
+        },
+        "effective_scope_revision": {
+          "oneOf": [
+            {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+            {"type": "null"}
+          ]
+        },
+        "effective_scope_sha256": {"$ref": "#/$defs/nullableSha256"},
+        "decision_occurrence_id": {"$ref": "#/$defs/safeId"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"principal_kind": {"const": "managed_agent"}},
+            "required": ["principal_kind"]
+          },
+          "then": {
+            "properties": {
+              "scope_source": {"const": "managed_effective_scope"},
+              "binding_id": {"$ref": "#/$defs/safeId"},
+              "effective_scope_revision": {"type": "integer", "minimum": 0},
+              "effective_scope_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "binding_id": {"type": "null"},
+              "effective_scope_revision": {"type": "null"},
+              "effective_scope_sha256": {"type": "null"}
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "required": [
+        "project_id",
+        "sprint_id",
+        "response_id",
+        "response_kind",
+        "occurrence_kind",
+        "occurrence_id",
+        "transition_id",
+        "source",
+        "authorization",
+        "created_at",
+        "verified_at",
+        "state_revision"
+      ],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {"$ref": "#/$defs/safeId"},
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "response_kind": {
+          "enum": ["identity-response", "transition-response", "state-response"]
+        },
+        "occurrence_kind": {"enum": ["transition", "identity-state"]},
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "transition_id": {"$ref": "#/$defs/nullableSafeId"},
+        "source": {"$ref": "#/$defs/source"},
+        "authorization": {"$ref": "#/$defs/authorization"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "verified_at": {"type": "string", "format": "date-time"},
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"occurrence_kind": {"const": "transition"}},
+            "required": ["occurrence_kind"]
+          },
+          "then": {"properties": {"transition_id": {"$ref": "#/$defs/safeId"}}},
+          "else": {"properties": {"transition_id": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "evidenceDelta": {
+      "type": "object",
+      "properties": {
+        "result": {},
+        "feedback": {},
+        "review": {},
+        "reviews": {},
+        "review_context": {},
+        "transition": {},
+        "pending_transition": {},
+        "last_transition": {},
+        "transition_applied": {},
+        "completed_assignment": {},
+        "source_commit": {},
+        "from_commit": {},
+        "git_commit": {},
+        "git_branch": {}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

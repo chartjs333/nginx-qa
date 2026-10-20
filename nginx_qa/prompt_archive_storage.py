@@ -2473,6 +2473,14 @@ class PromptArchiveStorage:
         ):
             return "publication_plan"
         if (
+            len(components) == 5
+            and components[0:2] == ("operations", "v1")
+            and _RESPONSE_ID_RE.fullmatch(components[2]) is not None
+            and _OPERATION_ID_RE.fullmatch(components[3]) is not None
+            and components[4] == "compatibility-result.json"
+        ):
+            return "compatibility_result"
+        if (
             len(components) == 6
             and components[0:2] == ("operations", "v1")
             and _RESPONSE_ID_RE.fullmatch(components[2]) is not None

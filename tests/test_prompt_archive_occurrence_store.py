@@ -12,6 +12,8 @@ from unittest import mock
 import nginx_qa.prompt_archive_occurrence_store as occurrence_store_module
 from nginx_qa.prompt_archive_incremental import ArchiveOccurrence, response_id_v1
 from nginx_qa.prompt_archive_occurrence_store import (
+    PromptArchiveNativeOccurrenceProof,
+    PromptArchiveNativeOccurrenceSource,
     PromptArchiveOccurrenceReceiptStore,
     PromptArchiveOccurrenceSource,
 )
@@ -26,6 +28,9 @@ SPRINT_ID = "sprint-occurrence-store"
 OCCURRENCE_ID = "transition-occurrence-store-1"
 SOURCE_KEY = "deadbeef0123456789ab"
 PAYLOAD = b'{"committed":true,"value":37}\n'
+NATIVE_PAYLOAD = b'{"active_task":{"message":"bounded native response"}}'
+MANIFEST_BYTES = b'{"kind":"prompt_archive_manifest","schema_version":1}'
+ARCHIVE_ID = "par1-" + "c" * 64
 
 
 def occurrence(*, state_revision=37, assignment_id="assignment-store-1"):
@@ -85,6 +90,51 @@ def source(payload):
         response_key=SOURCE_KEY,
         byte_size=len(payload),
         sha256=hashlib.sha256(payload).hexdigest(),
+    )
+
+
+def native_occurrence(*, state_revision=37, assignment_id="assignment-store-1"):
+    return dataclasses.replace(
+        occurrence(
+            state_revision=state_revision,
+            assignment_id=assignment_id,
+        ),
+        source={
+            "source_kind": "native_runtime",
+            "source_commit": "a" * 40,
+            "assignment_id": assignment_id,
+            "review_id": "review-store-1",
+            "result_key": "result-store-1",
+            "predecessor_archive_id": "par1-" + "b" * 64,
+        },
+        source_response_key=None,
+        source_byte_size=None,
+        source_sha256=None,
+    )
+
+
+def manifest_ref():
+    digest = hashlib.sha256(MANIFEST_BYTES).hexdigest()
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_blob_ref",
+        "hash_algorithm": "sha256",
+        "digest": digest,
+        "logical_kind": "manifest",
+        "media_type": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json",
+        "content_encoding": "identity",
+        "uncompressed_size": len(MANIFEST_BYTES),
+        "stored_size": len(MANIFEST_BYTES),
+        "stored_sha256": digest,
+    }
+
+
+def native_source(payload=NATIVE_PAYLOAD):
+    return PromptArchiveNativeOccurrenceSource(
+        byte_size=len(payload),
+        sha256=hashlib.sha256(payload).hexdigest(),
+        archive_id=ARCHIVE_ID,
+        manifest_ref=manifest_ref(),
     )
 
 
@@ -167,6 +217,14 @@ class PromptArchiveOccurrenceReceiptStoreTests(unittest.TestCase):
             source=selected_source or source(self.payload),
         )
 
+    def register_native(self, *, selected_occurrence=None, selected_source=None):
+        self.store.register_native_occurrence(
+            project_id=PROJECT_ID,
+            locator=locator(),
+            occurrence=selected_occurrence or native_occurrence(),
+            source=selected_source or native_source(),
+        )
+
     def test_round_trip_restores_every_occurrence_field_and_verifies_source(self):
         expected = occurrence()
         expected_source = source(self.payload)
@@ -193,6 +251,118 @@ class PromptArchiveOccurrenceReceiptStoreTests(unittest.TestCase):
                 "transition-response",
                 1024 * 1024,
             ),
+        )
+
+    def test_native_round_trip_binds_content_and_manifest_without_source_read(self):
+        expected_occurrence = native_occurrence()
+        expected_source = native_source()
+        self.register_native(
+            selected_occurrence=expected_occurrence,
+            selected_source=expected_source,
+        )
+
+        with mock.patch.object(
+            self.store,
+            "_source_reader",
+            side_effect=AssertionError("native proof must not read legacy source"),
+        ):
+            proof = self.store.load_occurrence(
+                project_id=PROJECT_ID,
+                locator=locator(),
+            )
+
+        self.assertIsInstance(proof, PromptArchiveNativeOccurrenceProof)
+        self.assertEqual(proof.status, "verified")
+        self.assertEqual(proof.occurrence, expected_occurrence)
+        self.assertEqual(proof.source, expected_source)
+        self.assertEqual(proof.source.archive_id, ARCHIVE_ID)
+        self.assertEqual(proof.source.manifest_ref, manifest_ref())
+        self.assertEqual(self.reader.calls, [])
+
+        raw = self._receipt_path().read_bytes()
+        document = json.loads(raw)
+        self.assertEqual(
+            document["kind"],
+            "prompt_archive_native_runtime_occurrence_receipt",
+        )
+        self.assertEqual(
+            set(document["source"]),
+            {"byte_size", "sha256", "archive_id", "manifest_ref"},
+        )
+        self.assertNotIn(NATIVE_PAYLOAD, raw)
+        self.assertNotIn(str(self.source_path).encode(), raw)
+        self.assertNotIn(SOURCE_KEY.encode(), raw)
+
+    def test_native_create_or_verify_is_idempotent_and_divergence_conflicts(self):
+        self.register_native()
+        before = self._receipt_path().read_bytes()
+        self.register_native()
+        self.assertEqual(self._receipt_path().read_bytes(), before)
+
+        changed = dataclasses.replace(
+            native_source(),
+            sha256="d" * 64,
+        )
+        with self.assertRaises(PromptArchiveStorageError) as divergent_error:
+            self.register_native(selected_source=changed)
+        self.assertEqual(
+            divergent_error.exception.code,
+            "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+        )
+        self.assertEqual(self._receipt_path().read_bytes(), before)
+
+        with self.assertRaises(PromptArchiveStorageError) as cross_kind_error:
+            self.register()
+        self.assertEqual(
+            cross_kind_error.exception.code,
+            "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+        )
+        self.assertEqual(self._receipt_path().read_bytes(), before)
+
+    def test_native_registration_rejects_legacy_transport_and_malformed_manifest_ref(self):
+        with self.assertRaises(PromptArchiveStorageError) as legacy_error:
+            self.store.register_native_occurrence(
+                project_id=PROJECT_ID,
+                locator=locator(),
+                occurrence=occurrence(),
+                source=native_source(),
+            )
+        self.assertEqual(
+            legacy_error.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        )
+
+        bad_ref = {**manifest_ref(), "logical_kind": "journal"}
+        with self.assertRaises(PromptArchiveStorageError) as ref_error:
+            self.register_native(
+                selected_source=dataclasses.replace(
+                    native_source(),
+                    manifest_ref=bad_ref,
+                )
+            )
+        self.assertEqual(
+            ref_error.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        )
+        self.assertFalse(self._receipt_path().exists())
+
+    def test_native_tampering_is_rejected_and_winner_remains_immutable(self):
+        self.register_native()
+        target = self._receipt_path()
+        document = json.loads(target.read_bytes())
+        document["source"]["sha256"] = "e" * 64
+        target.write_bytes(
+            canonical_json_bytes_v1(document, maximum=64 * 1024)
+        )
+
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            self.store.load_occurrence(
+                project_id=PROJECT_ID,
+                locator=locator(),
+            )
+        self.assertEqual(
+            raised.exception.code,
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
         )
 
     def test_missing_receipt_and_source_statuses_are_distinct(self):

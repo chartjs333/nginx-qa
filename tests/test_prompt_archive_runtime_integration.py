@@ -1,14 +1,27 @@
 import asyncio
+import copy
+import hashlib
+import io
 import json
 import os
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import ValidationError
 
 import main
 from nginx_qa.prompt_archive_incremental import ArchiveOccurrence, response_id_v1
+from nginx_qa.prompt_archive_latest import ExternalLatestCoordinator
+from nginx_qa.prompt_archive_runtime import (
+    PromptArchivePublication,
+    PromptArchiveRuntimeConfig,
+    PromptArchiveRuntimeRegistry,
+)
 from nginx_qa.prompt_archive_storage import PromptArchiveStorageError
 from tests.test_managed_continuity import (
     ManagedContinuityTests,
@@ -16,6 +29,10 @@ from tests.test_managed_continuity import (
     asgi_request,
 )
 from nginx_qa.execution_observability import append_execution_checkpoint
+from tests.test_prompt_archive_contract import (
+    PromptArchiveContractTests,
+    descriptor_fixture,
+)
 
 
 class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
@@ -27,19 +44,47 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         self.prompt_root.mkdir()
         self.original_runtime = main.prompt_archive_runtime
         self.original_receipt_path = main.prompt_archive_occurrence_receipt_path
+        self.project_prompt_resolver = patch.object(
+            main,
+            "_prompt_archive_project_prompt_directory",
+            side_effect=self.resolve_project_prompt_directory,
+        )
+        self.project_prompt_resolver.start()
 
     def tearDown(self) -> None:
         main.prompt_archive_runtime = self.original_runtime
         main.prompt_archive_occurrence_receipt_path = self.original_receipt_path
+        self.project_prompt_resolver.stop()
         self.temporary.cleanup()
 
+    def resolve_project_prompt_directory(
+        self,
+        project_id: str,
+        *,
+        create: bool = False,
+    ) -> Path:
+        selected = (
+            self.prompt_root
+            / "archive-fixture"
+            / ".nginx-qa-projects"
+            / project_id
+        )
+        if create:
+            selected.mkdir(parents=True, exist_ok=True)
+        return selected
+
     def environment(self, mode: str) -> dict[str, str]:
-        return {
+        environment = {
             "NGINX_QA_PROMPT_ARCHIVE_MODE": mode,
             "NGINX_QA_PROMPT_ARCHIVE_ROOT": str(self.archive_root),
             "NGINX_QA_PROMPT_ROOT": str(self.prompt_root),
             "NGINX_QA_PROTECTED_ROOTS": "[]",
         }
+        if mode == "authoritative":
+            environment["NGINX_QA_PROMPT_ARCHIVE_OPERATOR_GATE"] = (
+                "prompt-archive-authoritative-v1"
+            )
+        return environment
 
     def source_reader(
         self,
@@ -184,6 +229,8 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         compact = self.materialize()
 
         descriptor = compact["prompt_archive"]
+        self.assertTrue(compact["response_archive_available"])
+        self.assertIn("state_url", descriptor)
         response_path = Path(compact["response_file_path"])
         committed = response_path.read_bytes()
         self.assertNotIn("prompt_archive", json.loads(committed))
@@ -205,6 +252,616 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
             compact["active_task"]["metadata"]["allowed_outcomes"],
             ["DONE", "STOP"],
         )
+
+    def test_authoritative_actor_reviewer_consumer_uses_authorized_dispatch(self) -> None:
+        response = self.response()
+        response["completed_assignment"] = {
+            "assignment_id": "assignment-one",
+            "kind": "graph_node",
+            "node_id": "implementation",
+            "agent_id": "agent-one",
+            "agent_phone": "4102",
+            "status": "completed",
+        }
+        response["agent"] = {
+            "id": "reviewer-one",
+            "name": "Reviewer One",
+            "phone": "4103",
+        }
+        response["active_task"] = {
+            "id": "review-one",
+            "message": "Review the completed actor result through PAS1.",
+            "metadata": {
+                "assignment_id": "review-assignment-one",
+                "source_assignment_id": "assignment-one",
+                "sprint_id": "sprint-runtime-one",
+                "allowed_outcomes": ["APPROVE", "REJECT"],
+                "result_endpoint": "/review-result",
+                "source_commit": "1" * 40,
+            },
+        }
+
+        class ForbiddenCumulativeState(dict):
+            def __deepcopy__(self, _memo):
+                raise AssertionError("cumulative project_state copied")
+
+        response["project_state"] = ForbiddenCumulativeState(
+            {"history_with_patches": {"text": "must not serialize"}}
+        )
+        occurrence = replace(
+            self.occurrence(response),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        with (
+            patch.object(
+                self,
+                "source_reader",
+                side_effect=AssertionError("native receipt read legacy source"),
+            ) as source_reader,
+            patch(
+                "nginx_qa.prompt_archive_incremental."
+                "PromptArchiveIncremental.hydrate_archive_bytes",
+                side_effect=AssertionError("authoritative hot path hydrated"),
+            ),
+        ):
+            self.configure("authoritative")
+            compact = self.materialize(
+                response,
+                archive_occurrence=occurrence,
+            )
+
+        source_reader.assert_not_called()
+        self.assertNotIn("project_state", compact)
+        self.assertTrue(compact["response_archive_available"])
+        self.assertIn("state_url", compact["prompt_archive"])
+        self.assertEqual(compact["active_task"], response["active_task"])
+        response_path = Path(compact["response_file_path"])
+        latest_path = Path(compact["latest_response_file_path"])
+        self.assertEqual(latest_path.parent.name, "9000")
+        self.assertEqual(latest_path.parent.parent.name, ".nginx-qa-projects")
+        self.assertEqual(response_path.read_bytes(), latest_path.read_bytes())
+        stub = json.loads(response_path.read_bytes())
+        self.assertEqual(stub["kind"], "prompt_archive_descriptor_stub")
+        self.assertNotIn("project_state", stub)
+        self.assertTrue(
+            (latest_path.parent / "latest-response.json.nginx-qa-v1").is_dir()
+        )
+
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        authorization_calls: list[tuple[str, str, str]] = []
+
+        def authorize_archive(
+            project_id: str,
+            sprint_id: str,
+            archive_id: str,
+        ) -> bool:
+            authorization_calls.append((project_id, sprint_id, archive_id))
+            return (
+                project_id,
+                sprint_id,
+                archive_id,
+            ) == (
+                "9000",
+                "sprint-runtime-one",
+                compact["prompt_archive"]["archive_id"],
+            )
+
+        hydrated = runtime.read_inline_or_archive(
+            response_path.read_bytes(),
+            authorize_archive=authorize_archive,
+        )
+        self.assertEqual(
+            authorization_calls,
+            [
+                (
+                    "9000",
+                    "sprint-runtime-one",
+                    compact["prompt_archive"]["archive_id"],
+                )
+            ],
+        )
+        archived = json.loads(hydrated)
+        self.assertEqual(
+            archived["kind"],
+            "prompt_archive_occurrence_document",
+        )
+        self.assertEqual(archived["occurrence"]["response_id"], occurrence.response_id)
+        expected_execution = dict(compact)
+        expected_execution.pop("prompt_archive")
+        expected_execution.pop("response_archive_available", None)
+        expected_execution.pop("completed_assignments", None)
+        for evidence_key in (
+            "result",
+            "feedback",
+            "review",
+            "reviews",
+            "review_context",
+            "transition",
+            "pending_transition",
+            "last_transition",
+            "transition_applied",
+            "completed_assignment",
+            "source_commit",
+            "from_commit",
+            "git_commit",
+            "git_branch",
+        ):
+            expected_execution.pop(evidence_key, None)
+        expected_execution["response_kind"] = occurrence.response_kind
+        self.assertEqual(archived["execution_response"], expected_execution)
+        self.assertEqual(
+            archived["evidence_delta"]["transition_applied"],
+            response["transition_applied"],
+        )
+        self.assertEqual(
+            archived["execution_response"]["active_task"]["id"],
+            "review-one",
+        )
+        self.assertEqual(
+            archived["evidence_delta"]["completed_assignment"]["agent_id"],
+            "agent-one",
+        )
+        self.assertNotIn("project_state", archived)
+        self.assertNotIn("work_history", archived)
+        prompt_path = Path(compact["latest_agent_prompt_file_path"])
+        self.assertEqual(json.loads(prompt_path.read_bytes()), compact)
+
+        PromptArchiveContractTests.setUpClass()
+        contract = PromptArchiveContractTests(
+            "test_durable_publication_plan_is_replayable_and_path_free"
+        )
+        archive_plan_path = next(self.archive_root.rglob("plan.json"))
+        archive_journal_path = next(self.archive_root.rglob("journal.json"))
+        contract.validator(
+            "prompt-archive-publication-plan-v1.schema.json"
+        ).validate(json.loads(archive_plan_path.read_text(encoding="utf-8")))
+        contract.validator("prompt-archive-journal-v1.schema.json").validate(
+            json.loads(archive_journal_path.read_text(encoding="utf-8"))
+        )
+
+        # Exact replay is idempotent at the immutable transition stub and the
+        # shared external latest authority.
+        replayed = self.materialize(response, archive_occurrence=occurrence)
+        self.assertEqual(replayed, compact)
+
+        # A subsequent read-only identity heartbeat has no new durable
+        # occurrence.  It must not advertise invented response files, but it
+        # retains the prior descriptor after reopening and verifying the
+        # immutable archive for the same active assignment.
+        heartbeat = main.materialize_sequential_graph_response(
+            response=response,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="transition-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+        self.assertEqual(heartbeat["prompt_archive"], compact["prompt_archive"])
+        self.assertTrue(heartbeat["response_archive_available"])
+        self.assertNotIn("response_file_path", heartbeat)
+        self.assertNotIn("latest_response_file_path", heartbeat)
+
+    def test_authoritative_read_only_identity_writes_only_compact_prompt(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        response["newly_assigned"] = False
+        compact = main.materialize_sequential_graph_response(
+            response=response,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="transition-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+
+        self.assertEqual(compact["active_task"], response["active_task"])
+        self.assertNotIn("project_state", compact)
+        self.assertTrue(Path(compact["latest_agent_prompt_file_path"]).is_file())
+        self.assertFalse(compact["response_archive_available"])
+        self.assertNotIn("response_file_path", compact)
+        self.assertNotIn("latest_response_file_path", compact)
+        self.assertEqual(list(self.archive_root.rglob("*.json")), [])
+
+    def test_legacy_after_authoritative_reuses_project_latest_authority(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        authoritative = self.materialize(
+            response,
+            archive_occurrence=occurrence,
+        )
+        authoritative_latest = Path(authoritative["latest_response_file_path"])
+        self.assertEqual(authoritative_latest.parent.name, "9000")
+
+        self.configure("legacy")
+        legacy_response = self.response()
+        legacy_response["answer"] = "Explicit legacy-mode response after disable"
+        legacy = main.materialize_sequential_graph_response(
+            response=legacy_response,
+            directory_template=str(self.prompt_root / "{repository}"),
+            agent_latest_file_template=str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+            response_kind="transition-response",
+            request_agent_phone="4102",
+            archive_occurrence=None,
+        )
+
+        rollback_latest = Path(legacy["latest_response_file_path"])
+        self.assertEqual(rollback_latest, authoritative_latest)
+        self.assertEqual(
+            json.loads(rollback_latest.read_text(encoding="utf-8"))["answer"],
+            legacy_response["answer"],
+        )
+        shared_base_latest = (
+            self.prompt_root / "archive-fixture" / "latest-response.json"
+        )
+        self.assertFalse(shared_base_latest.exists())
+        self.assertTrue(
+            (rollback_latest.parent / "latest-response.json.nginx-qa-v1").is_dir()
+        )
+
+    def test_storage_errors_never_expose_oserror_path_or_canary(self) -> None:
+        self.configure("legacy")
+        real_write = main.write_prompt_text_if_changed
+        raw_canary = "RAW-STORAGE-CANARY-DO-NOT-RETURN"
+        raw_path = str(self.root / "operator-secret" / "response.json")
+
+        def fail_transition_write(target_path: Path, prompt: str) -> None:
+            if target_path.name.startswith("transition-response-"):
+                raise OSError(f"{raw_canary}: cannot write {raw_path}")
+            real_write(target_path, prompt)
+
+        with (
+            patch.object(
+                main,
+                "write_prompt_text_if_changed",
+                side_effect=fail_transition_write,
+            ),
+            patch.object(
+                main.ExternalLatestCoordinator,
+                "publish",
+                side_effect=OSError(
+                    f"{raw_canary}: cannot replace {raw_path}.latest"
+                ),
+            ),
+        ):
+            compact = self.materialize()
+
+        self.assertEqual(
+            set(compact["response_storage_errors"]),
+            {"response_archive", "project_latest"},
+        )
+        self.assertEqual(
+            compact["response_storage_errors"]["response_archive"],
+            "SEQUENTIAL_RESPONSE_STORAGE_UNAVAILABLE",
+        )
+        for code in compact["response_storage_errors"].values():
+            self.assertRegex(code, r"^[A-Z][A-Z0-9_]{1,95}$")
+        projected_errors = json.dumps(
+            compact["response_storage_errors"],
+            ensure_ascii=False,
+        )
+        self.assertNotIn(raw_canary, projected_errors)
+        self.assertNotIn(raw_path, projected_errors)
+        agent_prompt = Path(compact["latest_agent_prompt_file_path"])
+        self.assertTrue(agent_prompt.is_file())
+        self.assertEqual(
+            json.loads(agent_prompt.read_text(encoding="utf-8")),
+            compact,
+        )
+
+    def test_enrolled_resolver_failure_keeps_legacy_compact_and_skips_fallback_latest(
+        self,
+    ) -> None:
+        enrolled = (
+            self.prompt_root
+            / "archive-fixture"
+            / ".nginx-qa-projects"
+            / "9000"
+        )
+        enrolled.mkdir(parents=True)
+        fallback_latest = (
+            self.prompt_root / "archive-fixture" / "latest-response.json"
+        )
+
+        for mode in ("legacy", "shadow"):
+            with self.subTest(mode=mode):
+                self.configure(mode)
+                response = self.response()
+                response["answer"] = f"usable compact response in {mode}"
+                with (
+                    patch.object(
+                        main,
+                        "_prompt_archive_project_prompt_directory",
+                        side_effect=PromptArchiveStorageError(
+                            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                        ),
+                    ),
+                    patch.object(
+                        main.ExternalLatestCoordinator,
+                        "publish",
+                    ) as latest_publish,
+                ):
+                    compact = main.materialize_sequential_graph_response(
+                        response=response,
+                        directory_template=str(self.prompt_root / "{repository}"),
+                        agent_latest_file_template=str(
+                            self.prompt_root
+                            / "agents"
+                            / "{repository}_{agent_phone}-latest.prompt"
+                        ),
+                        response_kind="transition-response",
+                        request_agent_phone="4102",
+                        archive_occurrence=None,
+                    )
+
+                latest_publish.assert_not_called()
+                self.assertEqual(
+                    compact["response_storage_errors"]["project_latest"],
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+                )
+                self.assertFalse(fallback_latest.exists())
+                self.assertTrue(Path(compact["response_file_path"]).is_file())
+                prompt_path = Path(compact["latest_agent_prompt_file_path"])
+                self.assertTrue(prompt_path.is_file())
+                self.assertEqual(
+                    json.loads(prompt_path.read_text(encoding="utf-8")),
+                    compact,
+                )
+                self.assertEqual(compact["active_task"], response["active_task"])
+
+    def test_authoritative_resolver_failure_is_fail_closed_without_fallback(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        fallback_latest = (
+            self.prompt_root / "archive-fixture" / "latest-response.json"
+        )
+        agent_prompt = (
+            self.prompt_root / "agents" / "archive-fixture_4199-latest.prompt"
+        )
+
+        with (
+            patch.object(
+                main,
+                "_prompt_archive_project_prompt_directory",
+                side_effect=PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                ),
+            ),
+            patch.object(
+                main.ExternalLatestCoordinator,
+                "publish",
+            ) as latest_publish,
+        ):
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                main.materialize_sequential_graph_response(
+                    response=response,
+                    directory_template=str(self.prompt_root / "{repository}"),
+                    agent_latest_file_template=str(
+                        self.prompt_root
+                        / "agents"
+                        / "{repository}_{agent_phone}-latest.prompt"
+                    ),
+                    response_kind="transition-response",
+                    request_agent_phone="4199",
+                    archive_occurrence=occurrence,
+                )
+
+        self.assertEqual(
+            caught.exception.code,
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        latest_publish.assert_not_called()
+        self.assertFalse(fallback_latest.exists())
+        self.assertFalse(agent_prompt.exists())
+
+    def test_authoritative_cross_component_boundaries_recover_exactly_once(
+        self,
+    ) -> None:
+        scenarios = (
+            ("latest-current-intent", "after_current_intent_publish", "latest"),
+            ("transition-stub", "after_transition_stub_publish", "latest"),
+            ("external-latest", "after_external_content_publish", "latest"),
+            ("latest-current-slot", "after_current_slot_publish", "latest"),
+            ("latest-terminal", "after_terminal_journal_publish", "latest"),
+            (
+                "archive-compatibility-receipt",
+                "after_compatibility_publication",
+                "archive",
+            ),
+        )
+
+        def file_snapshot(*roots: Path) -> dict[str, str]:
+            return {
+                f"{ordinal}:{path.relative_to(root).as_posix()}": hashlib.sha256(
+                    path.read_bytes()
+                ).hexdigest()
+                for ordinal, root in enumerate(roots)
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+
+        for label, fault_stage, fault_owner in scenarios:
+            with self.subTest(boundary=label):
+                scenario_root = self.root / f"cross-component-{label}"
+                archive_root = scenario_root / "archive"
+                prompt_root = scenario_root / "prompt"
+                prompt_root.mkdir(parents=True)
+                latest_path = prompt_root / "latest-response.json"
+                config = PromptArchiveRuntimeConfig(
+                    mode="authoritative",
+                    root=archive_root,
+                    max_hydrated_bytes=8 * 1024 * 1024,
+                    operator_gate="prompt-archive-authoritative-v1",
+                )
+                occurrence = replace(
+                    self.occurrence(self.response()),
+                    source={
+                        "source_kind": "native_runtime",
+                        "assignment_id": "assignment-one",
+                        "source_commit": "1" * 40,
+                    },
+                )
+                transition_path = prompt_root / (
+                    f"{occurrence.response_kind}-{occurrence.response_id}.json"
+                )
+                native_bytes = main.prompt_archive_canonical_json_bytes_v1(
+                    {
+                        "active_task": self.response()["active_task"],
+                        "project_id": "9000",
+                        "sprint_id": "sprint-runtime-one",
+                    },
+                    maximum=8 * 1024 * 1024,
+                )
+                fired = False
+
+                def inject(observed: str) -> None:
+                    nonlocal fired
+                    if observed == fault_stage and not fired:
+                        fired = True
+                        if fault_owner == "archive":
+                            raise PromptArchiveStorageError(
+                                "PROMPT_ARCHIVE_UNAVAILABLE"
+                            )
+                        raise RuntimeError(f"injected {fault_stage}")
+
+                def publisher(runtime, *, fault_hook=None):
+                    selected = main.SequentialPromptArchiveCompatibilityPublisher(
+                        project_id="9000",
+                        transition_stub_path=transition_path,
+                        latest_path=latest_path,
+                        archive_owner_verifier=(
+                            runtime.verify_authoritative_archive_owner
+                        ),
+                    )
+                    if fault_hook is not None:
+                        selected.coordinator = ExternalLatestCoordinator(
+                            latest_path,
+                            project_id="9000",
+                            fault_hook=fault_hook,
+                            archive_owner_verifier=(
+                                runtime.verify_authoritative_archive_owner
+                            ),
+                        )
+                    return selected
+
+                failing_registry = PromptArchiveRuntimeRegistry(config)
+                failing_runtime = failing_registry.for_project("9000")
+                if fault_owner == "archive":
+                    assert failing_runtime.storage is not None
+                    failing_runtime.storage._fault_hook = inject
+                    failing_publisher = publisher(failing_runtime)
+                else:
+                    failing_publisher = publisher(
+                        failing_runtime, fault_hook=inject
+                    )
+
+                with self.assertRaises(PromptArchiveStorageError) as caught:
+                    failing_runtime.publish_authoritative(
+                        native_bytes,
+                        occurrence,
+                        compatibility_publisher=failing_publisher,
+                    )
+                self.assertEqual(
+                    caught.exception.code,
+                    "PROMPT_ARCHIVE_UNAVAILABLE",
+                )
+                self.assertTrue(fired)
+
+                restarted_registry = PromptArchiveRuntimeRegistry(
+                    config,
+                    compatibility_resolver=lambda project_id, _plan: publisher(
+                        restarted_registry.for_project(project_id)
+                    ),
+                )
+                self.assertEqual(
+                    restarted_registry.validate_and_recover(("9000",)),
+                    1,
+                )
+                restarted = restarted_registry.for_project("9000")
+
+                plans = list(archive_root.rglob("plan.json"))
+                journals = list(archive_root.rglob("journal.json"))
+                compatibility_results = list(
+                    archive_root.rglob("compatibility-result.json")
+                )
+                self.assertEqual(len(plans), 1)
+                self.assertEqual(len(journals), 1)
+                self.assertEqual(len(compatibility_results), 1)
+                plan = json.loads(plans[0].read_text(encoding="utf-8"))
+                journal = json.loads(journals[0].read_text(encoding="utf-8"))
+                self.assertEqual(journal["state"], "complete")
+                self.assertEqual(journal["journal_generation"], 6)
+                self.assertNotEqual(journal["compatibility_result"], "pending")
+
+                descriptor_bytes = main.prompt_archive_canonical_json_bytes_v1(
+                    plan["compatibility_publication"]["descriptor"]["document"],
+                    maximum=64 * 1024,
+                )
+                self.assertEqual(transition_path.read_bytes(), descriptor_bytes)
+                self.assertEqual(latest_path.read_bytes(), descriptor_bytes)
+
+                sidecar = prompt_root / "latest-response.json.nginx-qa-v1"
+                latest_journals = list(sidecar.rglob("journal.json"))
+                self.assertEqual(len(latest_journals), 1)
+                self.assertEqual(
+                    json.loads(latest_journals[0].read_text(encoding="utf-8"))[
+                        "state"
+                    ],
+                    "complete",
+                )
+
+                selected = restarted.lookup_archive(
+                    sprint_id="sprint-runtime-one",
+                    archive_id=plan["intended_manifest"]["archive_id"],
+                )
+                self.assertEqual(restarted.hydrate_content(selected), native_bytes)
+
+                before_replay = file_snapshot(archive_root, prompt_root)
+                replayed = restarted.publish_authoritative(
+                    native_bytes,
+                    occurrence,
+                    compatibility_publisher=publisher(restarted),
+                )
+                self.assertEqual(
+                    replayed.archive_id,
+                    plan["intended_manifest"]["archive_id"],
+                )
+                self.assertEqual(
+                    file_snapshot(archive_root, prompt_root),
+                    before_replay,
+                )
+                self.assertEqual(restarted.recover_pending(), 0)
 
     def test_durable_receipt_aborts_missing_source_at_intent(self) -> None:
         registry = self.configure("shadow")
@@ -330,6 +987,29 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
                         self.occurrence(self.response()),
                     )
                 )
+
+    def test_authoritative_recovery_failure_does_not_degrade_to_legacy(self) -> None:
+        configured = self.configure("authoritative")
+        with patch.object(
+            configured,
+            "validate_and_recover",
+            side_effect=PromptArchiveStorageError(
+                "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+            ),
+        ):
+            with self.assertRaises(PromptArchiveStorageError) as caught:
+                asyncio.run(
+                    main.recover_prompt_archive_runtime_for_startup(
+                        configured,
+                        ("9000",),
+                    )
+                )
+        self.assertEqual(
+            caught.exception.code,
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        self.assertIs(main.prompt_archive_runtime, configured)
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "authoritative")
 
     def test_recovery_disabled_legacy_registry_rejects_prompt_root_overlap(self) -> None:
         configured = self.configure("shadow")
@@ -980,6 +1660,442 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
 
 
 class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_storage_error_fallback_never_exposes_oserror_path_or_canary(
+        self,
+    ) -> None:
+        raw_canary = "RAW-MATERIALIZER-CANARY-DO-NOT-RETURN"
+        raw_path = r"C:\operator-private\latest-response.json"
+        registry = Mock()
+        registry.config.mode = "legacy"
+        with (
+            patch.object(main, "prompt_archive_runtime", registry),
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value={
+                    "directory_template": r"C:\prompt\{repository}",
+                    "agent_latest_file_template": (
+                        r"C:\prompt\agents\{repository}_{agent_phone}-latest.prompt"
+                    ),
+                },
+            ),
+            patch.object(
+                main,
+                "materialize_sequential_graph_response",
+                side_effect=OSError(f"{raw_canary}: {raw_path}"),
+            ),
+        ):
+            compact = await main.attach_sequential_graph_response_storage(
+                {
+                    "answer": "usable fallback",
+                    "active_task": {
+                        "id": "task-storage-fallback",
+                        "message": "complete task",
+                    },
+                },
+                response_kind="identity-response",
+                request_agent_phone="4102",
+            )
+
+        self.assertEqual(
+            compact["response_storage_error"],
+            "SEQUENTIAL_RESPONSE_STORAGE_UNAVAILABLE",
+        )
+        serialized = json.dumps(compact, ensure_ascii=False)
+        self.assertNotIn(raw_canary, serialized)
+        self.assertNotIn(raw_path, serialized)
+
+    def test_history_tail_reader_bounds_bytes_records_and_identity_call_sites(
+        self,
+    ) -> None:
+        context_key = "github.com/acme/archive-fixture"
+        agent = {"id": "agent-hot-path", "phone": "4102", "name": "Agent"}
+        records = [
+            {
+                "id": f"history-{index}",
+                "timestamp": f"2026-10-11T18:00:0{index}+00:00",
+                "event": f"tail-{index}",
+                "metadata": {
+                    "git_context_key": context_key,
+                    "to_agent_id": "agent-hot-path",
+                },
+            }
+            for index in range(6)
+        ]
+        payload = (
+            b"x" * 8192
+            + b"\n"
+            + b"\n".join(
+                json.dumps(record, separators=(",", ":")).encode("utf-8")
+                for record in records
+            )
+            + b"\n"
+        )
+
+        class RecordingBytesIO(io.BytesIO):
+            def __init__(self, value: bytes) -> None:
+                super().__init__(value)
+                self.read_sizes: list[int] = []
+
+            def read(self, size: int = -1) -> bytes:
+                self.read_sizes.append(size)
+                return super().read(size)
+
+        class BoundedHistoryPath:
+            def __init__(self, value: bytes) -> None:
+                self.value = value
+                self.handles: list[RecordingBytesIO] = []
+
+            def exists(self) -> bool:
+                return True
+
+            def stat(self) -> SimpleNamespace:
+                return SimpleNamespace(st_size=len(self.value))
+
+            def open(self, mode: str) -> RecordingBytesIO:
+                self.assert_binary_mode(mode)
+                handle = RecordingBytesIO(self.value)
+                self.handles.append(handle)
+                return handle
+
+            @staticmethod
+            def assert_binary_mode(mode: str) -> None:
+                if mode != "rb":
+                    raise AssertionError(f"unbounded history mode used: {mode}")
+
+        bounded_path = BoundedHistoryPath(payload)
+        with patch.object(main, "history_path", bounded_path):
+            selected = main.read_agent_work_history_tail_file(
+                agent,
+                context_key,
+                max_records=3,
+                max_scan_bytes=4096,
+            )
+
+        self.assertEqual(
+            [record["event"] for record in selected],
+            ["tail-3", "tail-4", "tail-5"],
+        )
+        self.assertEqual(len(bounded_path.handles), 1)
+        self.assertEqual(bounded_path.handles[0].read_sizes, [4096])
+        for identity_callable in (
+            main.identify_sequential_project_agent,
+            main.sequential_runtime_agent_message_reminder,
+            main.identify_project_agent,
+        ):
+            with self.subTest(identity_callable=identity_callable.__name__):
+                self.assertNotIn(
+                    "read_agent_work_history_file",
+                    identity_callable.__code__.co_names,
+                )
+                self.assertIn(
+                    "read_agent_work_history_tail_file",
+                    identity_callable.__code__.co_names,
+                )
+
+    async def test_authoritative_result_uses_bounded_review_context_without_git_io(
+        self,
+    ) -> None:
+        submitted_result = "RESULT-BEGIN\n" + ("R" * 8192) + "\nRESULT-END"
+        submitted_feedback = "FEEDBACK-BEGIN\n" + ("F" * 2048) + "\nFEEDBACK-END"
+        from_commit = "1" * 40
+        git_commit = "2" * 40
+        git_branch = "agent/hot-path-review-context"
+        assignment = {
+            "status": "active",
+            "pending_transition": {
+                "transition_id": "transition-hot-path",
+                "status": "reviewing",
+            },
+            "assignments": [],
+        }
+        committed = {
+            "project_id": "9000",
+            "project_phone": "9000",
+            "sprint_id": "sprint-hot-path",
+            "context_key": "github.com/acme/archive-fixture",
+            "project": {
+                "project_name": "Archive Fixture",
+                "git_address": "https://github.com/acme/archive-fixture.git",
+                "git_context_key": "github.com/acme/archive-fixture",
+            },
+            "queue_context": {
+                "git_address": "https://github.com/acme/archive-fixture.git",
+                "git_context_key": "github.com/acme/archive-fixture",
+            },
+            "completed_agent": {
+                "id": "agent-hot-path",
+                "name": "Hot Path Agent",
+                "phone": "4102",
+                "git_branch": git_branch,
+            },
+            "completed_assignment": {
+                "assignment_id": "assignment-hot-path",
+                "kind": "graph_node",
+                "status": "completed",
+            },
+            "assignment": assignment,
+            "agent": None,
+            "blocked": False,
+        }
+        captured_context: dict[str, object] = {}
+
+        async def transaction(function, *args):
+            if function is main.sequential_agent_assignment_transaction:
+                return committed
+            if function is main.attach_transition_review_context_transaction:
+                captured_context.update(args[2])
+                return assignment
+            raise AssertionError(f"unexpected transaction: {function}")
+
+        request = main.Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "scheme": "http",
+                "path": "/api/v1/projects/9000/agents/4102/whoami",
+                "root_path": "",
+                "query_string": b"",
+                "headers": [],
+                "client": ("127.0.0.1", 50000),
+                "server": ("127.0.0.1", 18032),
+            }
+        )
+        registry = Mock()
+        registry.config.mode = "authoritative"
+        with (
+            patch.object(
+                main,
+                "run_group_write_transaction",
+                side_effect=transaction,
+            ),
+            patch.object(
+                main,
+                "remove_project_actor_queue_items",
+                AsyncMock(return_value=[]),
+            ),
+            patch.object(main, "append_history", AsyncMock()),
+            patch.object(
+                main,
+                "attach_prompt_archive_sprint_identity",
+                AsyncMock(side_effect=lambda value: value),
+            ),
+            patch.object(
+                main,
+                "prompt_archive_occurrence_from_sequential_result",
+                return_value=None,
+            ),
+            patch.object(
+                main,
+                "project_history_with_patches_context",
+                AsyncMock(side_effect=AssertionError("cumulative history built")),
+            ) as history_builder,
+            patch.object(
+                main,
+                "resolve_git_patch",
+                side_effect=AssertionError("Git patch resolved"),
+            ) as patch_resolver,
+            patch.object(
+                main,
+                "read_agent_work_history_file",
+                side_effect=AssertionError("full history reader used"),
+            ),
+            patch.object(main, "prompt_archive_runtime", registry),
+        ):
+            response = await main.identify_sequential_project_agent(
+                "9000",
+                "4102",
+                "done",
+                True,
+                request,
+                identity_payload={
+                    "assignment_id": "assignment-hot-path",
+                    "status": "DONE",
+                    "result": submitted_result,
+                    "feedback": submitted_feedback,
+                    "from_commit": from_commit,
+                    "git_commit": git_commit,
+                    "git_branch": git_branch,
+                },
+            )
+
+        history_builder.assert_not_awaited()
+        patch_resolver.assert_not_called()
+        self.assertTrue(response["all_completed"])
+        self.assertEqual(captured_context["schema_version"], 2)
+        self.assertEqual(captured_context["text"], submitted_result)
+        self.assertEqual(captured_context["patches"], [])
+        self.assertEqual(captured_context["patch_count"], 0)
+        self.assertEqual(
+            captured_context["submission"],
+            {
+                "assignment_id": "assignment-hot-path",
+                "outcome": "DONE",
+                "from_commit": from_commit,
+                "git_commit": git_commit,
+                "git_branch": git_branch,
+            },
+        )
+        evidence = captured_context["timeline"][0]
+        self.assertEqual(evidence["result"], submitted_result)
+        self.assertEqual(evidence["feedback"], submitted_feedback)
+
+    def test_phone_whoami_openapi_declares_and_validates_compact_response(
+        self,
+    ) -> None:
+        response_schema = main.app.openapi()["paths"][
+            "/api/v1/projects/{project_id}/agents/{agent_phone}/whoami"
+        ]["post"]["responses"]["200"]["content"]["application/json"][
+            "schema"
+        ]
+        compact_schema = next(
+            option
+            for option in response_schema["oneOf"]
+            if option.get("$id", "").endswith(
+                "/prompt-archive-compact-response-v1.schema.json"
+            )
+        )
+        representative = main.compact_sequential_agent_prompt_response(
+            {
+                "answer": "continue",
+                "active_task": {
+                    "id": "task-compact-contract",
+                    "message": "This complete task body must remain executable.",
+                    "metadata": {
+                        "assignment_id": "assignment-compact-contract",
+                        "allowed_outcomes": ["DONE", "STOP"],
+                        "result_endpoint": (
+                            "/api/v1/projects/9000/agents/4102/whoami"
+                        ),
+                    },
+                },
+                "assignment": {
+                    "status": "active",
+                    "current_assignment_id": "assignment-compact-contract",
+                    "revision": 9,
+                },
+                "project_state": {
+                    "history_with_patches": {"text": "must be omitted"}
+                },
+                "history_with_patches": {"text": "legacy top-level history"},
+                "activity_with_patches": [{"event": "legacy"}],
+                "code_patches": [{"patch": "legacy"}],
+                "recent_activity": [{"event": "legacy"}],
+                "execution_audit": [{"event": "legacy"}],
+                "response_archive_available": False,
+            }
+        )
+
+        self.assertEqual(
+            compact_schema["$id"],
+            "https://nginx-qa.local/schemas/"
+            "prompt-archive-compact-response-v1.schema.json",
+        )
+        self.assertEqual(
+            representative["active_task"]["metadata"]["result_endpoint"],
+            "/api/v1/projects/9000/agents/4102/whoami",
+        )
+        self.assertNotIn("project_state", representative)
+        for cumulative_key in (
+            "history_with_patches",
+            "activity_with_patches",
+            "code_patches",
+            "recent_activity",
+            "execution_audit",
+        ):
+            self.assertNotIn(cumulative_key, representative)
+        Draft202012Validator(compact_schema).validate(representative)
+        Draft202012Validator(response_schema).validate(representative)
+
+        self.assertEqual(
+            compact_schema["properties"]["prompt_archive"]["$ref"],
+            "#/$defs/promptArchiveDescriptorV1",
+        )
+        embedded_descriptor = compact_schema["$defs"][
+            "promptArchiveDescriptorV1"
+        ]
+        self.assertFalse(embedded_descriptor["additionalProperties"])
+        self.assertTrue(
+            {
+                "descriptor_url",
+                "manifest_url",
+                "content_url",
+                "state_url",
+                "route_context",
+                "scope",
+                "integrity",
+                "created_at",
+            }.issubset(embedded_descriptor["required"])
+        )
+
+        def nested_refs(value):
+            if isinstance(value, dict):
+                for key, nested in value.items():
+                    if key == "$ref":
+                        yield nested
+                    else:
+                        yield from nested_refs(nested)
+            elif isinstance(value, list):
+                for nested in value:
+                    yield from nested_refs(nested)
+
+        self.assertTrue(
+            all(
+                isinstance(reference, str) and reference.startswith("#")
+                for reference in nested_refs(compact_schema)
+            )
+        )
+        PromptArchiveContractTests.setUpClass()
+        contract = PromptArchiveContractTests(
+            "test_compact_occurrence_and_state_view_schemas_close_response_contract"
+        )
+        # The served response union is a complete offline bundle.  Deliberately
+        # validate it without the contract registry (and therefore without any
+        # pre-registered network IDs) to prove local OpenAPI resolution.
+        response_validator = Draft202012Validator(response_schema)
+        descriptor_data = descriptor_fixture()
+        materialized_descriptor = main.prompt_archive_local_descriptor(
+            PromptArchivePublication(
+                project_id="9000",
+                sprint_id="sprint-example-1",
+                archive_id=descriptor_data["archive_id"],
+                archive_format=descriptor_data["archive_format"],
+                scope=descriptor_data["scope"],
+                integrity=descriptor_data["integrity"],
+                created_at=descriptor_data["created_at"],
+                pointer_id="parptr1-" + "b" * 64,
+                manifest_ref={},
+                locator={},
+            ),
+            correlation_id=descriptor_data["correlation_id"],
+        )
+        self.assertEqual(materialized_descriptor, descriptor_data)
+        contract.validator(
+            "prompt-archive-descriptor-v1.schema.json"
+        ).validate(materialized_descriptor)
+
+        archived = copy.deepcopy(representative)
+        archived["response_archive_available"] = True
+        archived["prompt_archive"] = materialized_descriptor
+        contract.validator(
+            "prompt-archive-compact-response-v1.schema.json"
+        ).validate(archived)
+        response_validator.validate(archived)
+
+        incomplete_descriptor = copy.deepcopy(archived)
+        incomplete_descriptor["prompt_archive"].pop("state_url")
+        with self.assertRaises(ValidationError):
+            response_validator.validate(incomplete_descriptor)
+
+        cumulative = copy.deepcopy(representative)
+        cumulative["project_state"] = {"history_with_patches": {}}
+        with self.assertRaises(ValidationError):
+            response_validator.validate(cumulative)
+
+        # Existing non-managed submission receipts retain the third union
+        # branch; tightening the compact branch cannot capture or reject them.
+        response_validator.validate({"accepted": True, "result_key": "legacy"})
+
     async def test_default_sequential_identity_does_not_build_full_state(self) -> None:
         response = {
             "answer": "identity",
@@ -1048,6 +2164,11 @@ class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
             patch(
                 "nginx_qa.prompt_archive_incremental.PromptArchiveIncremental.hydrate_archive_bytes",
                 side_effect=AssertionError("identity path hydrated an archive"),
+            ),
+            patch(
+                "nginx_qa.prompt_archive_state_view."
+                "hydrate_prompt_archive_state_view",
+                side_effect=AssertionError("identity path hydrated full state"),
             ),
         ):
             status_code, payload, _raw = await asgi_request(
@@ -1165,6 +2286,11 @@ class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
                 main,
                 "materialize_sequential_graph_response",
                 side_effect=AssertionError("legacy response writer called"),
+            ),
+            patch(
+                "nginx_qa.prompt_archive_state_view."
+                "hydrate_prompt_archive_state_view",
+                side_effect=AssertionError("managed identity hydrated full state"),
             ),
         ):
             status_code, payload, _raw = await asgi_request(

@@ -104,6 +104,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "pending_sprints_lock": main.pending_sprints_lock,
             "group_task_submission_lock": main.group_task_submission_lock,
             "sequential_prompt_storage_lock": main.sequential_prompt_storage_lock,
+            "prompt_archive_runtime": main.prompt_archive_runtime,
             "project_state_patch_cache": main.project_state_patch_cache,
             "queues": main.queues,
             "locks": main.locks,
@@ -120,6 +121,13 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
         main.pending_sprints_lock = asyncio.Lock()
         main.group_task_submission_lock = asyncio.Lock()
         main.sequential_prompt_storage_lock = asyncio.Lock()
+        # This suite freezes the pre-PAS1 inline response contract.  Tests that
+        # parse response_file_path as an inline object must never pass merely
+        # because the process happened to start in its default mode.
+        main.prompt_archive_runtime = main.PromptArchiveRuntimeRegistry(
+            main.PromptArchiveRuntimeConfig(mode="legacy")
+        )
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         main.project_state_patch_cache = {}
         main.queues = {name: deque() for name in main.QUEUE_DEFINITIONS}
         main.locks = {name: asyncio.Lock() for name in main.QUEUE_DEFINITIONS}
@@ -2218,6 +2226,7 @@ class ProjectActorImportTests(unittest.IsolatedAsyncioTestCase):
             "review_context",
             first_review["assignment"]["pending_transition"],
         )
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         archived_first_review = json.loads(
             Path(first_review["response_file_path"]).read_text(
                 encoding="utf-8"

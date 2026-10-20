@@ -13,9 +13,9 @@ fixed shard targets and resumes each registered operation idempotently.  The
 legacy response remains authoritative in shadow mode even if archive work
 fails; archive discovery appears only after the journaled locator boundary.
 
-This module intentionally does not implement the native-delta authoritative
-writer.  Configuring ``authoritative`` therefore fails closed instead of
-quietly rebuilding a cumulative legacy response and claiming an O(delta) path.
+The separately gated ``authoritative`` mode accepts only a bounded native
+response document.  It publishes the same immutable PAS1 graph without a
+legacy comparison and never falls back to the cumulative legacy writer.
 """
 
 from __future__ import annotations
@@ -41,9 +41,12 @@ from .prompt_archive_incremental import (
     sprint_storage_key_v1,
 )
 from .prompt_archive_occurrence_store import (
+    PromptArchiveNativeOccurrenceProof,
+    PromptArchiveNativeOccurrenceSource,
     PromptArchiveOccurrenceProof,
     PromptArchiveOccurrenceSource,
 )
+from .prompt_archive_response import dispatch_prompt_archive_response
 from .prompt_archive_metrics import PromptArchiveMetrics
 from .prompt_archive_storage import (
     PromptArchiveCancellationToken,
@@ -72,6 +75,13 @@ _INVENTORY_ID_RE: Final = re.compile(r"^parinv1-[0-9a-f]{64}$", re.ASCII)
 _MIGRATION_BATCH_ID_RE: Final = re.compile(r"^parmb1-[0-9a-f]{64}$", re.ASCII)
 _MIGRATION_ENTRY_ID_RE: Final = re.compile(r"^parme1-[0-9a-f]{64}$", re.ASCII)
 _STUB_ID_RE: Final = re.compile(r"^parstub1-[0-9a-f]{64}$", re.ASCII)
+_LATEST_INTENT_ID_RE: Final = re.compile(
+    r"^parlatestintent1-[0-9a-f]{64}$", re.ASCII
+)
+_LATEST_SLOT_ID_RE: Final = re.compile(r"^parlatest1-[0-9a-f]{64}$", re.ASCII)
+_TARGET_AUTHORITY_ID_RE: Final = re.compile(
+    r"^parlatestauthority1-[0-9a-f]{64}$", re.ASCII
+)
 _OPERATION_ID_RE: Final = re.compile(r"^parop1-[0-9a-f]{32}$", re.ASCII)
 _RECOVERY_KEY_RE: Final = re.compile(r"^parloc1-[0-9a-f]{64}$", re.ASCII)
 _JOURNAL_ID_RE: Final = re.compile(r"^parjournal1-[0-9a-f]{64}$", re.ASCII)
@@ -89,6 +99,10 @@ _MANIFEST_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-manifest-v1+js
 _POINTER_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
 _LOCATOR_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
 _STUB_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+_LATEST_SLOT_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-latest-slot-v1+json"
+_COMPATIBILITY_RESULT_MEDIA: Final = (
+    "application/vnd.nginx-qa.prompt-archive-compatibility-result-v1+json"
+)
 _PLAN_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
 _JOURNAL_MEDIA: Final = "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
 _PENDING_MEDIA: Final = (
@@ -312,11 +326,8 @@ class PromptArchiveRuntimeConfig:
         if self.mode == "authoritative":
             if self.operator_gate != "prompt-archive-authoritative-v1":
                 raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
-            # The accepted graph layer can encode authoritative manifests, but
-            # this integration has no durable native-delta occurrence source or
-            # journaled compatibility writer yet.  Never claim readiness by
-            # silently routing through cumulative legacy construction.
-            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+            if self.root is None:
+                raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
 
     @classmethod
     def from_environment(
@@ -424,12 +435,21 @@ class PromptArchiveOccurrenceProver(Protocol):
         source: PromptArchiveOccurrenceSource,
     ) -> None: ...
 
+    def register_native_occurrence(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        source: PromptArchiveNativeOccurrenceSource,
+    ) -> None: ...
+
     def load_occurrence(
         self,
         *,
         project_id: str,
         locator: Mapping[str, Any],
-    ) -> PromptArchiveOccurrenceProof | None: ...
+    ) -> PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof | None: ...
 
 
 class PromptArchiveOfflineInventoryVerifier(Protocol):
@@ -444,6 +464,34 @@ class PromptArchiveOfflineInventoryVerifier(Protocol):
     def __call__(self, locator: Mapping[str, Any]) -> str: ...
 
 
+class PromptArchiveCompatibilityPublisher(Protocol):
+    """Trusted adapter for the path-free authoritative compatibility plan."""
+
+    @property
+    def target_authority_id(self) -> str: ...
+
+    def prepare_authoritative(
+        self,
+        *,
+        descriptor_bytes: bytes,
+        descriptor_ref: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        published_at: str,
+    ) -> Mapping[str, Any]: ...
+
+    def publish_authoritative(
+        self,
+        compatibility_publication: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+    def verify_authoritative(
+        self,
+        compatibility_publication: Mapping[str, Any],
+        publication: Mapping[str, Any],
+    ) -> Mapping[str, Any]: ...
+
+
 class PromptArchiveRuntime:
     """One project-bound Prompt Archive runtime."""
 
@@ -453,6 +501,10 @@ class PromptArchiveRuntime:
         project_id: str,
         storage: PromptArchiveStorage | None,
         occurrence_prover: PromptArchiveOccurrenceProver | None = None,
+        compatibility_resolver: Callable[
+            [str, Mapping[str, Any]], PromptArchiveCompatibilityPublisher | None
+        ]
+        | None = None,
         metrics: PromptArchiveMetrics | None = None,
     ) -> None:
         if not isinstance(config, PromptArchiveRuntimeConfig):
@@ -464,14 +516,28 @@ class PromptArchiveRuntime:
         if occurrence_prover is not None and (
             not callable(getattr(occurrence_prover, "register_occurrence", None))
             or not callable(getattr(occurrence_prover, "load_occurrence", None))
+            or (
+                config.mode == "authoritative"
+                and not callable(
+                    getattr(occurrence_prover, "register_native_occurrence", None)
+                )
+            )
         ):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if metrics is not None and not isinstance(metrics, PromptArchiveMetrics):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if compatibility_resolver is not None and not callable(
+            compatibility_resolver
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         self.storage = storage
         self._occurrence_prover = occurrence_prover
+        self._compatibility_resolver = compatibility_resolver
         self.metrics = metrics if metrics is not None else PromptArchiveMetrics()
-        self._live_occurrence_proofs: dict[bytes, PromptArchiveOccurrenceProof] = {}
+        self._live_occurrence_proofs: dict[
+            bytes,
+            PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof,
+        ] = {}
         self._stream_lock = threading.Lock()
         self._predecessor_archives: OrderedDict[str, str] = OrderedDict()
 
@@ -483,6 +549,62 @@ class PromptArchiveRuntime:
         if self.storage is None:
             raise _error("PROMPT_ARCHIVE_NOT_FOUND")
         return self.storage
+
+    @staticmethod
+    def _require_compatibility_publisher(
+        value: PromptArchiveCompatibilityPublisher | None,
+        *,
+        expected_target_authority_id: str | None = None,
+    ) -> PromptArchiveCompatibilityPublisher:
+        if value is None or not callable(
+            getattr(value, "prepare_authoritative", None)
+        ) or not callable(
+            getattr(value, "publish_authoritative", None)
+        ) or not callable(getattr(value, "verify_authoritative", None)):
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        target_authority_id = getattr(value, "target_authority_id", None)
+        if (
+            type(target_authority_id) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(target_authority_id) is None
+            or (
+                expected_target_authority_id is not None
+                and target_authority_id != expected_target_authority_id
+            )
+        ):
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        return value
+
+    def _resolve_compatibility_publisher(
+        self,
+        plan: Mapping[str, Any],
+        supplied: PromptArchiveCompatibilityPublisher | None,
+    ) -> PromptArchiveCompatibilityPublisher:
+        compatibility = plan.get("compatibility_publication")
+        expected_target = (
+            compatibility.get("target_authority_id")
+            if isinstance(compatibility, Mapping)
+            else None
+        )
+        if supplied is not None:
+            return self._require_compatibility_publisher(
+                supplied,
+                expected_target_authority_id=expected_target,
+            )
+        if self._compatibility_resolver is None:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        try:
+            resolved = self._compatibility_resolver(
+                self.project_id,
+                copy.deepcopy(dict(plan)),
+            )
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        return self._require_compatibility_publisher(
+            resolved,
+            expected_target_authority_id=expected_target,
+        )
 
     @staticmethod
     def _occurrence_locator_key(locator: Mapping[str, Any]) -> bytes:
@@ -571,11 +693,63 @@ class PromptArchiveRuntime:
             and comparison.get("sha256") == source.sha256
         )
 
+    def _native_source_for_plan(
+        self,
+        plan: Mapping[str, Any],
+    ) -> PromptArchiveNativeOccurrenceSource:
+        intended = plan.get("intended_manifest")
+        if type(intended) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        manifest = intended.get("document")
+        if type(manifest) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        integrity = manifest.get("integrity")
+        if (
+            plan.get("operation_kind") != "native_publish"
+            or type(integrity) is not dict
+            or type(integrity.get("hydrated_size")) is not int
+            or not 0 <= integrity["hydrated_size"] <= self.max_hydrated_bytes
+            or type(integrity.get("hydrated_sha256")) is not str
+            or _SHA256_RE.fullmatch(integrity["hydrated_sha256"]) is None
+            or type(intended.get("archive_id")) is not str
+            or _ARCHIVE_ID_RE.fullmatch(intended["archive_id"]) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        manifest_ref = _closed_ref(
+            intended.get("manifest_ref"),
+            logical_kind="manifest",
+            media_type=_MANIFEST_MEDIA,
+        )
+        return PromptArchiveNativeOccurrenceSource(
+            byte_size=integrity["hydrated_size"],
+            sha256=integrity["hydrated_sha256"],
+            archive_id=intended["archive_id"],
+            manifest_ref=manifest_ref,
+        )
+
+    def _native_source_matches_plan(
+        self,
+        plan: Mapping[str, Any],
+        source: Any,
+    ) -> bool:
+        if not isinstance(source, PromptArchiveNativeOccurrenceSource):
+            return False
+        try:
+            return source == self._native_source_for_plan(plan)
+        except PromptArchiveStorageError:
+            return False
+
     def _proof_matches_plan(
         self,
         plan: Mapping[str, Any],
         proof: Any,
     ) -> bool:
+        if isinstance(proof, PromptArchiveNativeOccurrenceProof):
+            return bool(
+                proof.status == "verified"
+                and self._occurrence_matches_plan(plan, proof.occurrence)
+                and self._native_source_matches_plan(plan, proof.source)
+            )
         if not isinstance(proof, PromptArchiveOccurrenceProof):
             return False
         if proof.status not in {
@@ -637,28 +811,35 @@ class PromptArchiveRuntime:
         ):
             return False
 
+        persisted_source = manifest.get("source")
+        source_matches = frozen.source == persisted_source
+        if (
+            not source_matches
+            and type(persisted_source) is dict
+            and "predecessor_archive_id" not in frozen.source
+            and "predecessor_archive_id" in persisted_source
+        ):
+            # The runtime may select and durably freeze the verified stream
+            # head after the caller supplied its occurrence.
+            source_without_runtime_predecessor = copy.deepcopy(persisted_source)
+            del source_without_runtime_predecessor["predecessor_archive_id"]
+            source_matches = frozen.source == source_without_runtime_predecessor
+        if not source_matches:
+            return False
+
+        if plan.get("operation_kind") == "native_publish":
+            return bool(
+                type(persisted_source) is dict
+                and persisted_source.get("source_kind") == "native_runtime"
+                and manifest.get("publication", {}).get("mode") == "authoritative"
+                and manifest.get("publication", {}).get("legacy_authoritative") is False
+            )
+
         try:
             source = self._occurrence_source(frozen)
         except PromptArchiveStorageError:
             return False
-        if not self._source_matches_plan(plan, source):
-            return False
-
-        persisted_source = manifest.get("source")
-        if frozen.source == persisted_source:
-            return True
-        if (
-            type(persisted_source) is not dict
-            or "predecessor_archive_id" in frozen.source
-            or "predecessor_archive_id" not in persisted_source
-        ):
-            return False
-        # The runtime may select and durably freeze the verified stream head
-        # after the caller supplied its occurrence.  A restarted source adapter
-        # can therefore return the original occurrence without that sole field.
-        source_without_runtime_predecessor = copy.deepcopy(persisted_source)
-        del source_without_runtime_predecessor["predecessor_archive_id"]
-        return frozen.source == source_without_runtime_predecessor
+        return self._source_matches_plan(plan, source)
 
     def _register_runtime_occurrence(
         self,
@@ -710,6 +891,55 @@ class PromptArchiveRuntime:
         if not self._proof_matches_plan(plan, registered):
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
 
+    def _register_native_runtime_occurrence(
+        self,
+        plan: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        source: PromptArchiveNativeOccurrenceSource,
+    ) -> None:
+        frozen = self._freeze_occurrence(occurrence)
+        if (
+            not self._occurrence_matches_plan(plan, frozen)
+            or not self._native_source_matches_plan(plan, source)
+        ):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        locator = _copy_document(
+            plan["source_locator"],
+            maximum=_CONTROL_MAX_BYTES,
+        )
+        key = self._occurrence_locator_key(locator)
+        prover = self._occurrence_prover
+        if prover is None:
+            existing = self._live_occurrence_proofs.get(key)
+            if existing is not None and not self._proof_matches_plan(plan, existing):
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            proof = PromptArchiveNativeOccurrenceProof("verified", frozen, source)
+            if existing is not None and existing != proof:
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            self._live_occurrence_proofs[key] = proof
+            return
+
+        existing = prover.load_occurrence(
+            project_id=self.project_id,
+            locator=copy.deepcopy(locator),
+        )
+        if existing is not None and not self._proof_matches_plan(plan, existing):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        prover.register_native_occurrence(
+            project_id=self.project_id,
+            locator=copy.deepcopy(locator),
+            occurrence=frozen,
+            source=source,
+        )
+        registered = prover.load_occurrence(
+            project_id=self.project_id,
+            locator=copy.deepcopy(locator),
+        )
+        if registered is None:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        if not self._proof_matches_plan(plan, registered):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+
     def _runtime_occurrence_abort_reason(
         self,
         plan: Mapping[str, Any],
@@ -732,6 +962,8 @@ class PromptArchiveRuntime:
             return "source_unavailable"
         if not self._proof_matches_plan(plan, observed):
             return "source_changed"
+        if isinstance(observed, PromptArchiveNativeOccurrenceProof):
+            return None
         if observed.status == "source_unavailable":
             return "source_unavailable"
         if observed.status == "source_changed":
@@ -1239,8 +1471,10 @@ class PromptArchiveRuntime:
         storage = self._require_storage()
         with self._stream_lock:
             with storage.account_cas_writes() as cas_writes:
-                publication = self._publish_shadow_serialized(
-                    committed_bytes, occurrence
+                publication = self._publish_runtime_serialized(
+                    committed_bytes,
+                    occurrence,
+                    publication_mode="shadow",
                 )
             if publication is not None:
                 outcomes = cas_writes.snapshot()
@@ -1250,6 +1484,271 @@ class PromptArchiveRuntime:
                     dedup_hits=outcomes.dedup_hits,
                 )
             return publication
+
+    def publish_authoritative(
+        self,
+        native_bytes: bytes | bytearray | memoryview,
+        occurrence: ArchiveOccurrence,
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
+    ) -> PromptArchivePublication:
+        """Publish one operator-gated native PAS1 occurrence.
+
+        ``native_bytes`` is the bounded compact response assembled from the
+        committed transaction facts.  It is not a legacy cumulative snapshot.
+        Unlike shadow mode, failures are propagated and there is deliberately
+        no legacy fallback.
+        """
+
+        if self.config.mode != "authoritative":
+            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+        if self.config.operator_gate != "prompt-archive-authoritative-v1":
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if not isinstance(occurrence, ArchiveOccurrence):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if occurrence.project_id != self.project_id or occurrence.sprint_id is None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        storage = self._require_storage()
+        with self._stream_lock:
+            with storage.account_cas_writes() as cas_writes:
+                publication = self._publish_runtime_serialized(
+                    native_bytes,
+                    occurrence,
+                    publication_mode="authoritative",
+                    compatibility_publisher=compatibility_publisher,
+                )
+            outcomes = cas_writes.snapshot()
+            self.metrics.record_publication(
+                logical_bytes=publication.integrity["hydrated_size"],
+                new_physical_bytes=outcomes.new_stored_bytes,
+                dedup_hits=outcomes.dedup_hits,
+            )
+            return publication
+
+    def descriptor_stub(
+        self,
+        publication: PromptArchivePublication,
+    ) -> dict[str, Any]:
+        """Return the canonical route-neutral stub for one publication."""
+
+        if (
+            not isinstance(publication, PromptArchivePublication)
+            or publication.project_id != self.project_id
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        scope = _copy_document(publication.scope, maximum=_CONTROL_MAX_BYTES)
+        manifest_ref = _closed_ref(
+            publication.manifest_ref,
+            logical_kind="manifest",
+            media_type=_MANIFEST_MEDIA,
+        )
+        published_at = _require_rfc3339(
+            publication.locator.get("published_at")
+        )
+        stub: dict[str, Any] = {
+            "schema_version": 1,
+            "kind": "prompt_archive_descriptor_stub",
+            "media_type": _STUB_MEDIA,
+            "id_algorithm": "PAS1-ID-v1",
+            "stub_id": "",
+            "archive_id": publication.archive_id,
+            "archive_format": publication.archive_format,
+            "scope": scope,
+            "integrity": _copy_document(
+                publication.integrity,
+                maximum=_CONTROL_MAX_BYTES,
+            ),
+            "pointer_id": publication.pointer_id,
+            "manifest_ref": copy.deepcopy(manifest_ref),
+            "created_at": _require_rfc3339(publication.created_at),
+            "published_at": published_at,
+        }
+        stub["stub_id"] = "parstub1-" + pas1_id_v1(
+            "descriptor-stub-id",
+            (
+                ("project_id", self.project_id),
+                ("sprint_id", publication.sprint_id),
+                ("response_id", scope.get("response_id")),
+                ("archive_id", publication.archive_id),
+                ("pointer_id", publication.pointer_id),
+                ("manifest_sha256", manifest_ref["digest"]),
+                ("created_at", publication.created_at),
+                ("published_at", published_at),
+            ),
+        )
+        return self._validate_stub(stub)
+
+    def descriptor_stub_artifact(
+        self,
+        publication: PromptArchivePublication,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Persist and return the route-neutral stub plus its typed CAS ref."""
+
+        stub = self.descriptor_stub(publication)
+        raw = canonical_json_bytes_v1(stub, maximum=_CONTROL_MAX_BYTES)
+        reference = self._require_storage().put_blob(
+            raw,
+            logical_kind="descriptor_stub",
+            media_type=_STUB_MEDIA,
+        )
+        return stub, reference
+
+    @staticmethod
+    def publication_operation_id(occurrence: ArchiveOccurrence) -> str:
+        """Expose the deterministic retry key shared with latest publication."""
+
+        if not isinstance(occurrence, ArchiveOccurrence):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        return PromptArchiveRuntime._operation_id(occurrence)
+
+    def verify_authoritative_archive_owner(
+        self,
+        archive_owner: Mapping[str, Any],
+        latest_intent: Mapping[str, Any],
+    ) -> bool:
+        """Read-only proof that an external latest intent owns this archive.
+
+        This callback is invoked while the external-target latest lock is held.
+        It consequently takes only the exact archive operation lock and never
+        the stream or pending-registry locks.  It also disables retained
+        successor adoption so verification has no recovery side effect.
+        """
+
+        owner_keys = {
+            "protocol",
+            "project_id",
+            "sprint_id",
+            "response_id",
+            "response_kind",
+            "operation_id",
+            "recovery_key",
+            "outer_plan_identity_sha256",
+            "archive_id",
+            "pointer_id",
+            "locator_id",
+            "target_authority_id",
+            "transition_stub_name",
+            "descriptor_stub_id",
+        }
+        if type(archive_owner) is not dict or set(archive_owner) != owner_keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        owner = _copy_document(archive_owner, maximum=_CONTROL_MAX_BYTES)
+        if (
+            owner.get("protocol") != "prompt-archive-latest-archive-owner-v1"
+            or owner.get("project_id") != self.project_id
+            or type(owner.get("sprint_id")) is not str
+            or _SAFE_ID_RE.fullmatch(owner["sprint_id"]) is None
+            or type(owner.get("response_id")) is not str
+            or _RESPONSE_ID_RE.fullmatch(owner["response_id"]) is None
+            or owner.get("response_kind")
+            not in {"identity-response", "transition-response", "state-response"}
+            or type(owner.get("operation_id")) is not str
+            or _OPERATION_ID_RE.fullmatch(owner["operation_id"]) is None
+            or type(owner.get("recovery_key")) is not str
+            or _RECOVERY_KEY_RE.fullmatch(owner["recovery_key"]) is None
+            or type(owner.get("archive_id")) is not str
+            or _ARCHIVE_ID_RE.fullmatch(owner["archive_id"]) is None
+            or type(owner.get("pointer_id")) is not str
+            or _POINTER_ID_RE.fullmatch(owner["pointer_id"]) is None
+            or type(owner.get("locator_id")) is not str
+            or _LOCATOR_ID_RE.fullmatch(owner["locator_id"]) is None
+            or type(owner.get("target_authority_id")) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(owner["target_authority_id"])
+            is None
+            or type(owner.get("descriptor_stub_id")) is not str
+            or _STUB_ID_RE.fullmatch(owner["descriptor_stub_id"]) is None
+            or owner.get("transition_stub_name")
+            != f"{owner['response_kind']}-{owner['response_id']}.json"
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        projection = {
+            key: owner[key]
+            for key in (
+                "project_id",
+                "sprint_id",
+                "response_id",
+                "response_kind",
+                "operation_id",
+                "recovery_key",
+                "archive_id",
+                "pointer_id",
+                "locator_id",
+                "target_authority_id",
+                "transition_stub_name",
+                "descriptor_stub_id",
+            )
+        }
+        projection_digest = hashlib.sha256(
+            canonical_json_bytes_v1(projection, maximum=_CONTROL_MAX_BYTES)
+        ).hexdigest()
+        if owner.get("outer_plan_identity_sha256") != projection_digest:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        intent = _copy_document(latest_intent, maximum=_CONTROL_MAX_BYTES)
+
+        storage = self._require_storage()
+        plan_path = (
+            "operations",
+            "v1",
+            owner["response_id"],
+            owner["operation_id"],
+            "plan.json",
+        )
+        plan_value = storage.read_immutable_json(plan_path)
+        plan_raw = canonical_json_bytes_v1(plan_value, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.describe_blob(
+            plan_raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        if storage.read_blob(plan_ref, max_output_bytes=_PLAN_MAX_BYTES) != plan_raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        plan = self._validate_plan(plan_value, plan_ref)
+        compatibility = plan["compatibility_publication"]
+        if (
+            plan["operation_kind"] != "native_publish"
+            or compatibility.get("mode") != "authoritative_descriptor_stubs"
+            or compatibility.get("archive_owner") != owner
+            or compatibility.get("target_authority_id")
+            != owner["target_authority_id"]
+            or compatibility.get("latest_intent") != intent
+            or compatibility.get("descriptor", {}).get("document", {}).get(
+                "stub_id"
+            )
+            != owner["descriptor_stub_id"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+
+        with storage.control_lock(self._operation_lock_path(plan)):
+            current = self._load_journal_chain_locked(
+                plan,
+                plan_ref,
+                adopt_retained_successor=False,
+            )
+        if current is None or current[0].get("journal_generation", -1) < 4:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        sprint_key = sprint_storage_key_v1(self.project_id, owner["sprint_id"])
+        pointer = storage.read_immutable_json(
+            (
+                "sprints",
+                sprint_key,
+                "pointers",
+                "v1",
+                f"{owner['response_id']}.json",
+            )
+        )
+        if pointer != plan["intended_pointer"]["document"]:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        locator = storage.read_immutable_json(
+            (
+                "sprints",
+                sprint_key,
+                "archives",
+                "v1",
+                f"{owner['archive_id']}.json",
+            )
+        )
+        if locator != plan["intended_archive_locator"]["document"]:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return True
 
     def _publish_shadow_serialized(
         self,
@@ -1265,7 +1764,23 @@ class PromptArchiveRuntime:
 
         if self.config.mode == "legacy":
             return None
-        if self.config.mode != "shadow":
+        return self._publish_runtime_serialized(
+            committed_bytes,
+            occurrence,
+            publication_mode="shadow",
+        )
+
+    def _publish_runtime_serialized(
+        self,
+        committed_bytes: bytes | bytearray | memoryview,
+        occurrence: ArchiveOccurrence,
+        *,
+        publication_mode: str,
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
+    ) -> PromptArchivePublication:
+        if publication_mode not in {"shadow", "authoritative"}:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if self.config.mode != publication_mode:
             raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
         if not isinstance(occurrence, ArchiveOccurrence):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
@@ -1273,14 +1788,16 @@ class PromptArchiveRuntime:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         storage = self._require_storage()
         frozen = _freeze_bytes(committed_bytes, maximum=self.max_hydrated_bytes)
-        occurrence_source = self._occurrence_source(
-            occurrence,
-            committed_bytes=frozen,
+        occurrence_source = (
+            self._occurrence_source(occurrence, committed_bytes=frozen)
+            if publication_mode == "shadow"
+            else None
         )
         resumed = self._resume_existing_occurrence(
             frozen,
             occurrence,
             occurrence_source,
+            compatibility_publisher=compatibility_publisher,
         )
         if resumed is not None:
             return resumed
@@ -1297,19 +1814,50 @@ class PromptArchiveRuntime:
             effective_occurrence,
             previous_roots=previous_roots,
             previous_manifest_ref=previous_manifest_ref,
-            publication_mode="shadow",
-            legacy_committed_bytes=frozen,
+            publication_mode=publication_mode,
+            operator_gate=(
+                self.config.operator_gate
+                if publication_mode == "authoritative"
+                else None
+            ),
+            legacy_committed_bytes=(
+                frozen if publication_mode == "shadow" else None
+            ),
         )
         # Verify the complete closed graph before creating any discoverable
         # pointer.  Unreachable CAS created during planning is harmless.
-        hydrated = incremental.hydrate_archive_bytes(
-            built.manifest_ref,
-            max_output_bytes=self.max_hydrated_bytes,
-        )
-        if hydrated != frozen:
-            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if publication_mode == "shadow":
+            hydrated = incremental.hydrate_archive_bytes(
+                built.manifest_ref,
+                max_output_bytes=self.max_hydrated_bytes,
+            )
+            if hydrated != frozen:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
 
-        plan = self._build_shadow_plan(incremental, built, effective_occurrence)
+        plan = self._build_shadow_plan(
+            incremental,
+            built,
+            effective_occurrence,
+            publication_mode=publication_mode,
+            compatibility_publisher=compatibility_publisher,
+        )
+        native_source: PromptArchiveNativeOccurrenceSource | None = None
+        if publication_mode == "authoritative":
+            native_source = self._native_source_for_plan(plan)
+            if (
+                native_source.byte_size != len(frozen)
+                or native_source.sha256 != hashlib.sha256(frozen).hexdigest()
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            # The compact native occurrence is durably receipted before its
+            # publication plan becomes a recovery root.  A crash can therefore
+            # leave harmless unreachable CAS/receipt data, but never a planned
+            # operation whose native source proof is missing.
+            self._register_native_runtime_occurrence(
+                plan,
+                effective_occurrence,
+                native_source,
+            )
         plan_raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
         plan_ref = storage.put_blob(
             plan_raw,
@@ -1322,11 +1870,12 @@ class PromptArchiveRuntime:
             expected_sha256=hashlib.sha256(plan_raw).hexdigest(),
         )
         storage._fault("after_publication_plan")
-        self._register_runtime_occurrence(
-            plan,
-            effective_occurrence,
-            occurrence_source,
-        )
+        if occurrence_source is not None:
+            self._register_runtime_occurrence(
+                plan,
+                effective_occurrence,
+                occurrence_source,
+            )
         with storage.control_lock(self._operation_lock_path(plan)):
             existing_journal = self._load_journal_chain_locked(plan, plan_ref)
         terminal_state: str
@@ -1342,7 +1891,11 @@ class PromptArchiveRuntime:
         else:
             self._register_planned(plan, plan_ref)
             storage._fault("after_pending_registration")
-            terminal_state = self._drive_operation(plan, plan_ref)
+            terminal_state = self._drive_operation(
+                plan,
+                plan_ref,
+                compatibility_publisher=compatibility_publisher,
+            )
         if terminal_state == "aborted":
             raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
 
@@ -1372,7 +1925,9 @@ class PromptArchiveRuntime:
         self,
         committed_bytes: bytes,
         occurrence: ArchiveOccurrence,
-        occurrence_source: PromptArchiveOccurrenceSource,
+        occurrence_source: PromptArchiveOccurrenceSource | None,
+        *,
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
     ) -> PromptArchivePublication | None:
         storage = self._require_storage()
         operation_id = self._operation_id(occurrence)
@@ -1410,11 +1965,34 @@ class PromptArchiveRuntime:
         ):
             raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
         self._verify_plan_graph(plan)
-        self._register_runtime_occurrence(
-            plan,
-            occurrence,
-            occurrence_source,
-        )
+        if plan["operation_kind"] == "shadow_publish":
+            if occurrence_source is None:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            self._register_runtime_occurrence(
+                plan,
+                occurrence,
+                occurrence_source,
+            )
+        elif plan["operation_kind"] == "native_publish":
+            if occurrence_source is not None:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            persisted_source = manifest.get("source")
+            if type(persisted_source) is not dict:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            effective_occurrence = dataclasses.replace(
+                occurrence,
+                source=_copy_document(
+                    persisted_source,
+                    maximum=16 * 1024,
+                ),
+            )
+            self._register_native_runtime_occurrence(
+                plan,
+                effective_occurrence,
+                self._native_source_for_plan(plan),
+            )
+        elif occurrence_source is not None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         with storage.control_lock(self._operation_lock_path(plan)):
             existing_journal = self._load_journal_chain_locked(plan, plan_ref)
         terminal_state: str
@@ -1426,7 +2004,11 @@ class PromptArchiveRuntime:
             terminal_state = existing_journal[0]["state"]
         else:
             self._register_planned(plan, plan_ref)
-            terminal_state = self._drive_operation(plan, plan_ref)
+            terminal_state = self._drive_operation(
+                plan,
+                plan_ref,
+                compatibility_publisher=compatibility_publisher,
+            )
         if terminal_state == "aborted":
             raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
         archive_id = plan["intended_manifest"]["archive_id"]
@@ -1841,12 +2423,53 @@ class PromptArchiveRuntime:
         )
         return "parop1-" + digest[:32]
 
+    def _authoritative_archive_owner(
+        self,
+        *,
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        recovery_key: str,
+        archive_id: str,
+        pointer_id: str,
+        locator_id: str,
+        target_authority_id: str,
+        transition_stub_name: str,
+        descriptor_stub_id: str,
+    ) -> dict[str, Any]:
+        """Freeze the path-free, non-circular identity of the outer plan."""
+
+        projection = {
+            "project_id": self.project_id,
+            "sprint_id": occurrence.sprint_id,
+            "response_id": occurrence.response_id,
+            "response_kind": occurrence.response_kind,
+            "operation_id": operation_id,
+            "recovery_key": recovery_key,
+            "archive_id": archive_id,
+            "pointer_id": pointer_id,
+            "locator_id": locator_id,
+            "target_authority_id": target_authority_id,
+            "transition_stub_name": transition_stub_name,
+            "descriptor_stub_id": descriptor_stub_id,
+        }
+        raw = canonical_json_bytes_v1(projection, maximum=_CONTROL_MAX_BYTES)
+        return {
+            "protocol": "prompt-archive-latest-archive-owner-v1",
+            **projection,
+            "outer_plan_identity_sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
     def _build_shadow_plan(
         self,
         incremental: PromptArchiveIncremental,
         built: Any,
         occurrence: ArchiveOccurrence,
+        *,
+        publication_mode: str = "shadow",
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
     ) -> dict[str, Any]:
+        if publication_mode not in {"shadow", "authoritative"}:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         operation_id = self._operation_id(occurrence)
         planned_at = _require_rfc3339(occurrence.verified_at)
         source_observed_at = _require_rfc3339(occurrence.created_at)
@@ -1938,13 +2561,94 @@ class PromptArchiveRuntime:
             or not 0 <= revision <= 9_223_372_036_854_775_807
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        compatibility_publication: dict[str, Any] = {"mode": "none"}
+        if publication_mode == "authoritative":
+            publisher = self._require_compatibility_publisher(
+                compatibility_publisher
+            )
+            target_authority_id = publisher.target_authority_id
+            provisional = PromptArchivePublication(
+                project_id=self.project_id,
+                sprint_id=occurrence.sprint_id,
+                archive_id=built.archive_id,
+                archive_format=manifest["archive_format"],
+                scope=copy.deepcopy(manifest["scope"]),
+                integrity=copy.deepcopy(manifest["integrity"]),
+                created_at=manifest["created_at"],
+                pointer_id=pointer["pointer_id"],
+                manifest_ref=copy.deepcopy(manifest_ref),
+                locator=copy.deepcopy(locator),
+            )
+            descriptor = self.descriptor_stub(provisional)
+            descriptor_bytes = canonical_json_bytes_v1(
+                descriptor,
+                maximum=_CONTROL_MAX_BYTES,
+            )
+            descriptor_ref = self._require_storage().put_blob(
+                descriptor_bytes,
+                logical_kind="descriptor_stub",
+                media_type=_STUB_MEDIA,
+            )
+            transition_stub = {
+                "publication_mode": "immutable_create_or_verify",
+                "stub_id": descriptor["stub_id"],
+                "response_id": occurrence.response_id,
+                "descriptor_ref": copy.deepcopy(descriptor_ref),
+                "published_at": descriptor["published_at"],
+            }
+            archive_owner = self._authoritative_archive_owner(
+                occurrence=occurrence,
+                operation_id=operation_id,
+                recovery_key=recovery_key,
+                archive_id=built.archive_id,
+                pointer_id=pointer["pointer_id"],
+                locator_id=locator["locator_id"],
+                target_authority_id=target_authority_id,
+                transition_stub_name=(
+                    f"{occurrence.response_kind}-{occurrence.response_id}.json"
+                ),
+                descriptor_stub_id=descriptor["stub_id"],
+            )
+            try:
+                latest_intent = publisher.prepare_authoritative(
+                    descriptor_bytes=descriptor_bytes,
+                    descriptor_ref=copy.deepcopy(descriptor_ref),
+                    occurrence=occurrence,
+                    operation_id=operation_id,
+                    published_at=timestamps["compatibility_published_at"],
+                )
+            except PromptArchiveStorageError:
+                raise
+            except Exception:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            compatibility_publication = {
+                "mode": "authoritative_descriptor_stubs",
+                "target_authority_id": target_authority_id,
+                "archive_owner": archive_owner,
+                "descriptor": {
+                    "identity_version": (
+                        "prompt-archive-descriptor-stub-identity-v1"
+                    ),
+                    "descriptor_ref": copy.deepcopy(descriptor_ref),
+                    "document": descriptor,
+                },
+                "transition_stub": transition_stub,
+                "latest_intent": _copy_document(
+                    latest_intent,
+                    maximum=_CONTROL_MAX_BYTES,
+                ),
+            }
         return {
             "schema_version": 1,
             "kind": "prompt_archive_publication_plan",
             "media_type": _PLAN_MEDIA,
             "id_algorithm": "PAS1-ID-v1",
             "operation_id": operation_id,
-            "operation_kind": "shadow_publish",
+            "operation_kind": (
+                "shadow_publish"
+                if publication_mode == "shadow"
+                else "native_publish"
+            ),
             "scope": {
                 "project_id": self.project_id,
                 "sprint_id": occurrence.sprint_id,
@@ -2010,7 +2714,7 @@ class PromptArchiveRuntime:
                 "expected_generation": 0,
                 "previous_pointer_id": None,
             },
-            "compatibility_publication": {"mode": "none"},
+            "compatibility_publication": compatibility_publication,
             "frozen_timestamps": timestamps,
         }
 
@@ -2212,6 +2916,183 @@ class PromptArchiveRuntime:
             plan["operation_id"],
             "journal.json",
         )
+
+    @staticmethod
+    def _compatibility_result_path(plan: Mapping[str, Any]) -> tuple[str, ...]:
+        return (
+            "operations",
+            "v1",
+            plan["occurrence"]["response_id"],
+            plan["operation_id"],
+            "compatibility-result.json",
+        )
+
+    def _validate_compatibility_result(
+        self,
+        plan: Mapping[str, Any],
+        value: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        result = dict(value)
+        intent = plan["compatibility_publication"]["latest_intent"]
+        if set(result) != {
+            "schema_version",
+            "kind",
+            "media_type",
+            "operation_id",
+            "intent_id",
+            "result_latest_slot_id",
+            "result_latest_slot_ref",
+            "result_latest_slot_generation",
+            "latest_slot_outcome",
+            "content_sha256",
+            "content_size",
+            "source_revision",
+            "published_at",
+        } or (
+            result.get("schema_version") != 1
+            or result.get("kind") != "prompt_archive_compatibility_result"
+            or result.get("media_type") != _COMPATIBILITY_RESULT_MEDIA
+            or result.get("operation_id") != plan["operation_id"]
+            or result.get("intent_id") != intent["intent_id"]
+            or type(result.get("result_latest_slot_id")) is not str
+            or _LATEST_SLOT_ID_RE.fullmatch(result["result_latest_slot_id"])
+            is None
+            or type(result.get("result_latest_slot_generation")) is not int
+            or not 1
+            <= result["result_latest_slot_generation"]
+            <= 9_223_372_036_854_775_807
+            or result.get("latest_slot_outcome")
+            not in {"published", "superseded"}
+            or result.get("content_sha256") != intent["content_sha256"]
+            or result.get("content_size") != intent["content_size"]
+            or result.get("source_revision")
+            != intent["ordering"]["source_revision"]
+            or result.get("published_at")
+            != plan["frozen_timestamps"]["compatibility_published_at"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        result["result_latest_slot_ref"] = _closed_ref(
+            result["result_latest_slot_ref"],
+            logical_kind="latest_slot",
+            media_type=_LATEST_SLOT_MEDIA,
+        )
+        return result
+
+    @staticmethod
+    def _compatibility_receipt_as_publication(
+        receipt: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        return {
+            "outcome": receipt["latest_slot_outcome"],
+            "intent_id": receipt["intent_id"],
+            "latest_slot_id": receipt["result_latest_slot_id"],
+            "latest_slot_ref": copy.deepcopy(receipt["result_latest_slot_ref"]),
+            "source_revision": receipt["source_revision"],
+            "generation": receipt["result_latest_slot_generation"],
+            "content_sha256": receipt["content_sha256"],
+            "content_size": receipt["content_size"],
+            "recovered": True,
+        }
+
+    def _load_compatibility_result(
+        self,
+        plan: Mapping[str, Any],
+    ) -> dict[str, Any] | None:
+        try:
+            value = self._require_storage().read_immutable_json(
+                self._compatibility_result_path(plan)
+            )
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_NOT_FOUND":
+                return None
+            raise
+        return self._validate_compatibility_result(plan, value)
+
+    def _ensure_authoritative_compatibility(
+        self,
+        plan: Mapping[str, Any],
+        publisher: PromptArchiveCompatibilityPublisher,
+    ) -> dict[str, Any]:
+        existing = self._load_compatibility_result(plan)
+        if existing is not None:
+            try:
+                reverified = publisher.verify_authoritative(
+                    copy.deepcopy(plan["compatibility_publication"]),
+                    self._compatibility_receipt_as_publication(existing),
+                )
+            except PromptArchiveStorageError:
+                raise
+            except Exception:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            if not isinstance(reverified, Mapping):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            normalized = self._compatibility_receipt_as_publication(existing)
+            normalized["recovered"] = reverified.get("recovered")
+            if any(
+                reverified.get(key) != value
+                for key, value in normalized.items()
+                if key != "outcome"
+            ) or reverified.get("outcome") not in {
+                existing["latest_slot_outcome"],
+                "idempotent"
+                if existing["latest_slot_outcome"] == "published"
+                else existing["latest_slot_outcome"],
+            }:
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return existing
+        try:
+            published = publisher.publish_authoritative(
+                copy.deepcopy(plan["compatibility_publication"])
+            )
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        if not isinstance(published, Mapping):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            verified = publisher.verify_authoritative(
+                copy.deepcopy(plan["compatibility_publication"]),
+                copy.deepcopy(dict(published)),
+            )
+        except PromptArchiveStorageError:
+            raise
+        except Exception:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        if not isinstance(verified, Mapping):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        intent = plan["compatibility_publication"]["latest_intent"]
+        outcome = verified.get("outcome")
+        normalized_outcome = "published" if outcome == "idempotent" else outcome
+        receipt = self._validate_compatibility_result(
+            plan,
+            {
+                "schema_version": 1,
+                "kind": "prompt_archive_compatibility_result",
+                "media_type": _COMPATIBILITY_RESULT_MEDIA,
+                "operation_id": plan["operation_id"],
+                "intent_id": verified.get("intent_id"),
+                "result_latest_slot_id": verified.get("latest_slot_id"),
+                "result_latest_slot_ref": verified.get("latest_slot_ref"),
+                "result_latest_slot_generation": verified.get("generation"),
+                "latest_slot_outcome": normalized_outcome,
+                "content_sha256": verified.get("content_sha256"),
+                "content_size": verified.get("content_size"),
+                "source_revision": verified.get("source_revision"),
+                "published_at": intent["published_at"],
+            },
+        )
+        raw = canonical_json_bytes_v1(receipt, maximum=_CONTROL_MAX_BYTES)
+        self._require_storage().publish_immutable_bytes(
+            self._compatibility_result_path(plan),
+            raw,
+            expected_sha256=hashlib.sha256(raw).hexdigest(),
+        )
+        self._require_storage()._fault("after_compatibility_publication")
+        observed = self._load_compatibility_result(plan)
+        if observed != receipt:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return receipt
 
     @staticmethod
     def _journal_generation_path(
@@ -2559,6 +3440,20 @@ class PromptArchiveRuntime:
             }
             for ordinal, item_state in enumerate(_JOURNAL_STATES[: generation + 1])
         ]
+        compatibility = plan["compatibility_publication"]
+        compatibility_mode = compatibility["mode"]
+        compatibility_receipt = (
+            self._load_compatibility_result(plan)
+            if generation >= 5
+            and compatibility_mode == "authoritative_descriptor_stubs"
+            else None
+        )
+        if (
+            generation >= 5
+            and compatibility_mode == "authoritative_descriptor_stubs"
+            and compatibility_receipt is None
+        ):
+            raise _error("PROMPT_ARCHIVE_NOT_FOUND")
         return {
             "schema_version": 1,
             "kind": "prompt_archive_journal",
@@ -2593,9 +3488,17 @@ class PromptArchiveRuntime:
             "manifest_ref": copy.deepcopy(plan["intended_manifest"]["manifest_ref"]),
             "pointer_ref": copy.deepcopy(pointer["pointer_ref"]),
             "archive_locator_ref": copy.deepcopy(locator["locator_ref"]),
-            "compatibility_mode": "none",
-            "compatibility_descriptor_ref": None,
-            "latest_intent": None,
+            "compatibility_mode": compatibility_mode,
+            "compatibility_descriptor_ref": (
+                None
+                if compatibility_mode == "none"
+                else copy.deepcopy(compatibility["descriptor"]["descriptor_ref"])
+            ),
+            "latest_intent": (
+                None
+                if compatibility_mode == "none"
+                else copy.deepcopy(compatibility["latest_intent"])
+            ),
             "expected_pointer_generation": 0,
             "previous_pointer_id": None,
             "journal_generation": generation,
@@ -2611,10 +3514,36 @@ class PromptArchiveRuntime:
             "result_archive_locator_id": (
                 locator["locator_id"] if generation >= 4 else None
             ),
-            "result_latest_slot_id": None,
-            "result_latest_slot_ref": None,
-            "latest_slot_outcome": "not_applicable" if generation >= 5 else "pending",
-            "compatibility_result": "none" if generation >= 5 else "pending",
+            "result_latest_slot_id": (
+                None
+                if compatibility_receipt is None
+                else compatibility_receipt["result_latest_slot_id"]
+            ),
+            "result_latest_slot_ref": (
+                None
+                if compatibility_receipt is None
+                else copy.deepcopy(
+                    compatibility_receipt["result_latest_slot_ref"]
+                )
+            ),
+            "latest_slot_outcome": (
+                "pending"
+                if generation < 5
+                else (
+                    "not_applicable"
+                    if compatibility_mode == "none"
+                    else compatibility_receipt["latest_slot_outcome"]
+                )
+            ),
+            "compatibility_result": (
+                "pending"
+                if generation < 5
+                else (
+                    "none"
+                    if compatibility_mode == "none"
+                    else compatibility_receipt["latest_slot_outcome"]
+                )
+            ),
             "frozen_timestamps": copy.deepcopy(plan["frozen_timestamps"]),
             "state": state,
             "events": events,
@@ -2675,6 +3604,225 @@ class PromptArchiveRuntime:
         }
         return journal
 
+    @staticmethod
+    def _latest_intent_id(intent: Mapping[str, Any]) -> str:
+        ordering = intent["ordering"]
+        authority = ordering["revision_authority"]
+        bootstrap = intent["bootstrap_precondition"]
+        descriptor_ref = intent["descriptor_ref"]
+        return "parlatestintent1-" + pas1_id_v1(
+            "latest-content-intent-id",
+            (
+                ("project_id", intent["project_id"]),
+                ("slot_id", intent["slot_id"]),
+                ("revision_protocol", authority["protocol"]),
+                ("revision_epoch", str(authority["epoch"])),
+                ("revision_reset_policy", authority["reset_policy"]),
+                ("source_revision", str(ordering["source_revision"])),
+                ("occurrence_id", ordering["occurrence_id"]),
+                ("operation_id", ordering["operation_id"]),
+                ("bootstrap_kind", bootstrap["kind"]),
+                ("bootstrap_sha256", bootstrap.get("sha256")),
+                (
+                    "bootstrap_byte_size",
+                    None
+                    if bootstrap.get("byte_size") is None
+                    else str(bootstrap["byte_size"]),
+                ),
+                ("content_kind", intent["content_kind"]),
+                ("content_sha256", intent["content_sha256"]),
+                ("content_size", str(intent["content_size"])),
+                ("descriptor_digest", descriptor_ref["digest"]),
+                ("source_sprint_id", intent["source_sprint_id"]),
+                ("source_response_id", intent["source_response_id"]),
+                ("published_at", intent["published_at"]),
+            ),
+        )
+
+    def _validate_authoritative_compatibility(
+        self,
+        plan: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        compatibility = plan.get("compatibility_publication")
+        if type(compatibility) is not dict or set(compatibility) != {
+            "mode",
+            "target_authority_id",
+            "archive_owner",
+            "descriptor",
+            "transition_stub",
+            "latest_intent",
+        } or compatibility.get("mode") != "authoritative_descriptor_stubs":
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        target_authority_id = compatibility["target_authority_id"]
+        if (
+            type(target_authority_id) is not str
+            or _TARGET_AUTHORITY_ID_RE.fullmatch(target_authority_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        descriptor_artifact = compatibility["descriptor"]
+        if type(descriptor_artifact) is not dict or set(descriptor_artifact) != {
+            "identity_version",
+            "descriptor_ref",
+            "document",
+        } or descriptor_artifact.get("identity_version") != (
+            "prompt-archive-descriptor-stub-identity-v1"
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        descriptor = self._validate_stub(descriptor_artifact["document"])
+        descriptor_raw = canonical_json_bytes_v1(
+            descriptor,
+            maximum=_CONTROL_MAX_BYTES,
+        )
+        descriptor_ref = _closed_ref(
+            descriptor_artifact["descriptor_ref"],
+            logical_kind="descriptor_stub",
+            media_type=_STUB_MEDIA,
+        )
+        if self._require_storage().read_blob(
+            descriptor_ref,
+            max_output_bytes=_CONTROL_MAX_BYTES,
+        ) != descriptor_raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        transition = compatibility["transition_stub"]
+        if type(transition) is not dict or set(transition) != {
+            "publication_mode",
+            "stub_id",
+            "response_id",
+            "descriptor_ref",
+            "published_at",
+        } or (
+            transition.get("publication_mode") != "immutable_create_or_verify"
+            or transition.get("stub_id") != descriptor["stub_id"]
+            or transition.get("response_id") != plan["occurrence"]["response_id"]
+            or transition.get("descriptor_ref") != descriptor_ref
+            or transition.get("published_at") != descriptor["published_at"]
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+
+        intent = compatibility["latest_intent"]
+        required_intent_keys = {
+            "identity_version",
+            "intent_id",
+            "project_id",
+            "slot_scope",
+            "slot_id",
+            "publication_protocol",
+            "ordering",
+            "bootstrap_precondition",
+            "content_kind",
+            "content_sha256",
+            "content_size",
+            "descriptor_ref",
+            "source_sprint_id",
+            "source_response_id",
+            "published_at",
+        }
+        if type(intent) is not dict or set(intent) != required_intent_keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        authority = {
+            "protocol": "prompt-archive-durable-project-latest-revision-v1",
+            "epoch": 1,
+            "reset_policy": "restore_high_water_mark_or_fail_closed",
+        }
+        ordering = intent.get("ordering")
+        bootstrap = intent.get("bootstrap_precondition")
+        bootstrap_base = {
+            "protocol": "prompt-archive-project-global-bootstrap-enrollment-v1",
+            "lock_scope": "project",
+            "slot_id": "latest-response",
+            "registry_shard_count": 256,
+            "writer_lock_policy": "all-latest-writers-pre-and-post-enrollment-v1",
+            "lock_location_policy": "external-latest-colocated-stable-lock-v1",
+            "registration_order": "observe-mark-unlock-register-relock-reconcile-v1",
+            "bootstrap_completion_barrier": (
+                "durable-marker-before-unlock-content-slot-before-final-unlock-v1"
+            ),
+        }
+        if type(ordering) is not dict or set(ordering) != {
+            "revision_authority",
+            "source_revision",
+            "occurrence_id",
+            "operation_id",
+        } or (
+            ordering.get("revision_authority") != authority
+            or type(ordering.get("source_revision")) is not int
+            or not 0 <= ordering["source_revision"] <= 9_223_372_036_854_775_807
+            or ordering.get("occurrence_id")
+            != plan["occurrence"]["occurrence_id"]
+            or ordering.get("operation_id") != plan["operation_id"]
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if type(bootstrap) is not dict or bootstrap.get("kind") not in {
+            "enrolled",
+            "absent",
+            "legacy_bytes",
+        } or any(bootstrap.get(key) != value for key, value in bootstrap_base.items()):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        bootstrap_keys = set(bootstrap_base) | {"kind"}
+        if bootstrap["kind"] == "legacy_bytes":
+            bootstrap_keys |= {"sha256", "byte_size"}
+            if (
+                type(bootstrap.get("sha256")) is not str
+                or _SHA256_RE.fullmatch(bootstrap["sha256"]) is None
+                or type(bootstrap.get("byte_size")) is not int
+                or not 0 <= bootstrap["byte_size"] <= 512 * _MIB
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if set(bootstrap) != bootstrap_keys:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if (
+            intent.get("identity_version")
+            != "prompt-archive-latest-content-intent-v1"
+            or intent.get("project_id") != self.project_id
+            or intent.get("slot_scope") != "project"
+            or intent.get("slot_id") != "latest-response"
+            or intent.get("publication_protocol")
+            != "prompt-archive-project-global-ordered-latest-intent-v1"
+            or intent.get("content_kind") != "descriptor_stub"
+            or intent.get("content_sha256")
+            != hashlib.sha256(descriptor_raw).hexdigest()
+            or intent.get("content_size") != len(descriptor_raw)
+            or intent.get("descriptor_ref") != descriptor_ref
+            or intent.get("source_sprint_id") != plan["scope"]["sprint_id"]
+            or intent.get("source_response_id")
+            != plan["occurrence"]["response_id"]
+            or intent.get("published_at")
+            != plan["frozen_timestamps"]["compatibility_published_at"]
+            or type(intent.get("intent_id")) is not str
+            or _LATEST_INTENT_ID_RE.fullmatch(intent["intent_id"]) is None
+            or intent["intent_id"] != self._latest_intent_id(intent)
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        owner_projection = {
+            "project_id": self.project_id,
+            "sprint_id": plan["scope"]["sprint_id"],
+            "response_id": plan["occurrence"]["response_id"],
+            "response_kind": plan["occurrence"]["response_kind"],
+            "operation_id": plan["operation_id"],
+            "recovery_key": plan["recovery_locator"]["recovery_key"],
+            "archive_id": plan["intended_manifest"]["archive_id"],
+            "pointer_id": plan["intended_pointer"]["pointer_id"],
+            "locator_id": plan["intended_archive_locator"]["locator_id"],
+            "target_authority_id": target_authority_id,
+            "transition_stub_name": (
+                f"{plan['occurrence']['response_kind']}-"
+                f"{plan['occurrence']['response_id']}.json"
+            ),
+            "descriptor_stub_id": descriptor["stub_id"],
+        }
+        owner_raw = canonical_json_bytes_v1(
+            owner_projection,
+            maximum=_CONTROL_MAX_BYTES,
+        )
+        expected_owner = {
+            "protocol": "prompt-archive-latest-archive-owner-v1",
+            **owner_projection,
+            "outer_plan_identity_sha256": hashlib.sha256(owner_raw).hexdigest(),
+        }
+        if compatibility["archive_owner"] != expected_owner:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return compatibility
+
     def _validate_plan(
         self,
         value: Mapping[str, Any],
@@ -2706,10 +3854,10 @@ class PromptArchiveRuntime:
             or plan.get("kind") != "prompt_archive_publication_plan"
             or plan.get("media_type") != _PLAN_MEDIA
             or plan.get("id_algorithm") != "PAS1-ID-v1"
-            or operation_kind not in {"shadow_publish", "offline_migration"}
+            or operation_kind
+            not in {"shadow_publish", "native_publish", "offline_migration"}
             or type(plan.get("operation_id")) is not str
             or _OPERATION_ID_RE.fullmatch(plan["operation_id"]) is None
-            or plan.get("compatibility_publication") != {"mode": "none"}
             or plan.get("pointer_precondition")
             != {"expected_generation": 0, "previous_pointer_id": None}
         ):
@@ -2723,7 +3871,7 @@ class PromptArchiveRuntime:
             or set(scope) != {"project_id", "sprint_id"}
             or scope.get("project_id") != self.project_id
             or (
-                operation_kind == "shadow_publish"
+                operation_kind in {"shadow_publish", "native_publish"}
                 and (
                     type(scope.get("sprint_id")) is not str
                     or _SAFE_ID_RE.fullmatch(scope["sprint_id"]) is None
@@ -2774,7 +3922,7 @@ class PromptArchiveRuntime:
                 )
             )
             or (
-                operation_kind == "shadow_publish"
+                operation_kind in {"shadow_publish", "native_publish"}
                 and occurrence.get("occurrence_kind") == "migration"
             )
         ):
@@ -2813,7 +3961,7 @@ class PromptArchiveRuntime:
         offline_descriptor: dict[str, Any] | None = None
         offline_base_locator: dict[str, Any] | None = None
         offline_binding: dict[str, Any] | None = None
-        if operation_kind == "shadow_publish":
+        if operation_kind in {"shadow_publish", "native_publish"}:
             if (
                 type(source) is not dict
                 or set(source)
@@ -2979,13 +4127,28 @@ class PromptArchiveRuntime:
             )
             if proven_binding != offline_binding:
                 raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
-        elif (
-            manifest.get("archive_format") != "incremental_transition_v1"
-            or manifest_source.get("source_kind") != "runtime_shadow"
-            or publication.get("mode") != "shadow"
-            or publication.get("legacy_authoritative") is not True
-        ):
-            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        else:
+            expected_mode = (
+                "shadow" if operation_kind == "shadow_publish" else "authoritative"
+            )
+            expected_source_kind = (
+                "runtime_shadow"
+                if operation_kind == "shadow_publish"
+                else "native_runtime"
+            )
+            if (
+                manifest.get("archive_format") != "incremental_transition_v1"
+                or manifest_source.get("source_kind") != expected_source_kind
+                or publication.get("mode") != expected_mode
+                or publication.get("legacy_authoritative")
+                is not (operation_kind == "shadow_publish")
+                or (
+                    operation_kind == "native_publish"
+                    and publication.get("operator_gate")
+                    != "prompt-archive-authoritative-v1"
+                )
+            ):
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         pointer = self._validate_pointer(
             intended_pointer["document"],
             project_id=self.project_id,
@@ -3045,6 +4208,25 @@ class PromptArchiveRuntime:
             "planned_reachable_set"
         ):
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if operation_kind == "native_publish":
+            compatibility = self._validate_authoritative_compatibility(plan)
+            descriptor = compatibility["descriptor"]["document"]
+            provisional = PromptArchivePublication(
+                project_id=self.project_id,
+                sprint_id=scope["sprint_id"],
+                archive_id=manifest["archive_id"],
+                archive_format=manifest["archive_format"],
+                scope=copy.deepcopy(manifest["scope"]),
+                integrity=copy.deepcopy(manifest["integrity"]),
+                created_at=manifest["created_at"],
+                pointer_id=pointer["pointer_id"],
+                manifest_ref=copy.deepcopy(manifest_ref),
+                locator=copy.deepcopy(archive_locator),
+            )
+            if descriptor != self.descriptor_stub(provisional):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        elif plan.get("compatibility_publication") != {"mode": "none"}:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return plan
 
     def _load_plan(self, entry: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -3082,6 +4264,8 @@ class PromptArchiveRuntime:
         self,
         plan: Mapping[str, Any],
         plan_ref: Mapping[str, Any],
+        *,
+        adopt_retained_successor: bool = True,
     ) -> tuple[dict[str, Any], dict[str, Any]] | None:
         storage = self._require_storage()
         current = storage.read_current_json(self._journal_current_path(plan))
@@ -3166,14 +4350,15 @@ class PromptArchiveRuntime:
             max_output_bytes=_JOURNAL_MAX_BYTES,
         ) != current_raw:
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
-        retained_successor = self._retained_journal_successor_locked(
-            plan,
-            plan_ref,
-            current,
-            current_ref,
-        )
-        if retained_successor is not None:
-            return retained_successor
+        if adopt_retained_successor:
+            retained_successor = self._retained_journal_successor_locked(
+                plan,
+                plan_ref,
+                current,
+                current_ref,
+            )
+            if retained_successor is not None:
+                return retained_successor
         return current, current_ref
 
     def _retained_journal_successor_locked(
@@ -3204,6 +4389,18 @@ class PromptArchiveRuntime:
             or not 0 <= generation < len(_JOURNAL_STATES) - 1
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
+        # Generation five is defined by the immutable compatibility receipt.
+        # Before that receipt exists there cannot be a valid retained
+        # successor to adopt, and constructing one would incorrectly turn a
+        # recoverable cross-component pause into a missing-object failure.
+        if (
+            state == "locator_published"
+            and plan["compatibility_publication"]["mode"]
+            == "authoritative_descriptor_stubs"
+            and self._load_compatibility_result(plan) is None
+        ):
+            return None
 
         candidates = [
             self._journal_document(
@@ -3407,6 +4604,22 @@ class PromptArchiveRuntime:
         refs = incremental.reachable_refs(manifest_ref)
         if _reachable_set_document(refs) != plan["planned_reachable_set"]:
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        if plan.get("operation_kind") == "native_publish":
+            # The native builder verified the bounded source against its
+            # render plan before the immutable manifest/plan were admitted.
+            # Recovery verifies the complete reachable graph above, but must
+            # not hydrate the archived response on the authoritative hot path.
+            integrity = manifest.get("integrity")
+            if (
+                type(integrity) is not dict
+                or integrity.get("semantics") != "native-byte-equality"
+                or type(integrity.get("hydrated_size")) is not int
+                or type(integrity.get("hydrated_sha256")) is not str
+                or _SHA256_RE.fullmatch(integrity["hydrated_sha256"]) is None
+                or manifest.get("legacy_comparison") is not None
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            return
         hydrated = incremental.hydrate_archive_bytes(
             manifest_ref, max_output_bytes=self.max_hydrated_bytes
         )
@@ -3463,6 +4676,7 @@ class PromptArchiveRuntime:
         *,
         offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
         | None = None,
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
     ) -> str | None:
         storage = self._require_storage()
         state = journal["state"]
@@ -3530,7 +4744,18 @@ class PromptArchiveRuntime:
             )
             storage._fault("after_locator_publication")
             return None
-        if state in {"locator_published", "compatibility_published"}:
+        if state == "locator_published":
+            compatibility = plan["compatibility_publication"]
+            if compatibility["mode"] == "authoritative_descriptor_stubs":
+                publisher = self._resolve_compatibility_publisher(
+                    plan,
+                    compatibility_publisher,
+                )
+                self._ensure_authoritative_compatibility(plan, publisher)
+            elif compatibility != {"mode": "none"}:
+                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+            return None
+        if state == "compatibility_published":
             return None
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
 
@@ -3541,6 +4766,7 @@ class PromptArchiveRuntime:
         *,
         offline_inventory_verifier: PromptArchiveOfflineInventoryVerifier
         | None = None,
+        compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
     ) -> str:
         storage = self._require_storage()
         while True:
@@ -3563,6 +4789,7 @@ class PromptArchiveRuntime:
                 plan,
                 journal,
                 offline_inventory_verifier=offline_inventory_verifier,
+                compatibility_publisher=compatibility_publisher,
             )
             with storage.control_lock(self._operation_lock_path(plan)):
                 latest = self._load_journal_chain_locked(plan, plan_ref)
@@ -3627,7 +4854,7 @@ class PromptArchiveRuntime:
     def recover_pending(self) -> int:
         """Replay pending operations found through exactly 256 fixed shards."""
 
-        if self.config.mode != "shadow":
+        if self.config.mode not in {"shadow", "authoritative"}:
             return 0
         storage = self._require_storage()
         pending: list[dict[str, Any]] = []
@@ -3983,6 +5210,36 @@ class PromptArchiveRuntime:
             max_output_bytes=self.max_hydrated_bytes,
         )
 
+    def hydrate_state_view(
+        self,
+        *,
+        sprint_id: str,
+        archive_id: str,
+        max_output_bytes: int | None = None,
+        cancellation: PromptArchiveCancellationToken | None = None,
+    ) -> bytes:
+        """Hydrate a bounded root-to-head authoritative PAS1 state view.
+
+        This is an explicit cold-path seam.  HTTP adapters must complete their
+        operator or phone-specific managed authorization and admission before
+        invoking it; project/sprint/archive identifiers are not capabilities.
+        Keeping the implementation in a lazily imported module also prevents
+        identity, active-task, publication, and ``.prompt`` paths from loading
+        or accidentally invoking the full-chain reader.
+        """
+
+        from nginx_qa.prompt_archive_state_view import (
+            hydrate_prompt_archive_state_view,
+        )
+
+        return hydrate_prompt_archive_state_view(
+            self,
+            sprint_id=sprint_id,
+            archive_id=archive_id,
+            max_output_bytes=max_output_bytes,
+            cancellation=cancellation,
+        )
+
     def read_inline_or_archive(
         self,
         raw_bytes: bytes | bytearray | memoryview,
@@ -4056,7 +5313,42 @@ class PromptArchiveRuntime:
             or stub["published_at"] != selected.pointer["published_at"]
         ):
             raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
-        return self.hydrate_content(selected)
+        hydrated = self.hydrate_content(selected)
+        try:
+            hydrated_top_level = json.loads(
+                hydrated.decode("utf-8", errors="strict"),
+                object_pairs_hook=_JsonObjectPairs,
+            )
+        except (
+            UnicodeError,
+            json.JSONDecodeError,
+            ValueError,
+            RecursionError,
+            MemoryError,
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        if not isinstance(hydrated_top_level, _JsonObjectPairs):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        hydrated_kinds = [
+            member for key, member in hydrated_top_level if key == "kind"
+        ]
+        if len(hydrated_kinds) > 1:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if not hydrated_kinds:
+            # Compatibility for PAS1 artifacts created before the bounded
+            # occurrence-document wrapper was introduced.  The enclosing stub,
+            # pointer, locator, and manifest were already fully cross-checked.
+            return hydrated
+        if hydrated_kinds[0] != "prompt_archive_occurrence_document":
+            raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
+        dispatch_prompt_archive_response(
+            raw,
+            archive_reader=(
+                lambda *, descriptor_stub, maximum_bytes: hydrated
+            ),
+            maximum_bytes=self.max_hydrated_bytes,
+        )
+        return hydrated
 
     def _validate_stub(self, value: Mapping[str, Any]) -> dict[str, Any]:
         stub = dict(value)
@@ -4135,6 +5427,10 @@ class PromptArchiveRuntimeRegistry:
         config: PromptArchiveRuntimeConfig,
         *,
         occurrence_prover: PromptArchiveOccurrenceProver | None = None,
+        compatibility_resolver: Callable[
+            [str, Mapping[str, Any]], PromptArchiveCompatibilityPublisher | None
+        ]
+        | None = None,
         metrics: PromptArchiveMetrics | None = None,
     ) -> None:
         if not isinstance(config, PromptArchiveRuntimeConfig):
@@ -4146,8 +5442,13 @@ class PromptArchiveRuntimeRegistry:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if metrics is not None and not isinstance(metrics, PromptArchiveMetrics):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if compatibility_resolver is not None and not callable(
+            compatibility_resolver
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         self.config = config
         self._occurrence_prover = occurrence_prover
+        self._compatibility_resolver = compatibility_resolver
         self.metrics = metrics if metrics is not None else PromptArchiveMetrics()
         self._lock = threading.Lock()
         self._projects: dict[str, PromptArchiveRuntime] = {}
@@ -4159,6 +5460,10 @@ class PromptArchiveRuntimeRegistry:
         *,
         protected_roots: Sequence[str | os.PathLike[str]] = (),
         occurrence_prover: PromptArchiveOccurrenceProver | None = None,
+        compatibility_resolver: Callable[
+            [str, Mapping[str, Any]], PromptArchiveCompatibilityPublisher | None
+        ]
+        | None = None,
         metrics: PromptArchiveMetrics | None = None,
     ) -> "PromptArchiveRuntimeRegistry":
         return cls(
@@ -4167,6 +5472,7 @@ class PromptArchiveRuntimeRegistry:
                 protected_roots=protected_roots,
             ),
             occurrence_prover=occurrence_prover,
+            compatibility_resolver=compatibility_resolver,
             metrics=metrics,
         )
 
@@ -4194,6 +5500,7 @@ class PromptArchiveRuntimeRegistry:
                 project_id,
                 storage,
                 occurrence_prover=self._occurrence_prover,
+                compatibility_resolver=self._compatibility_resolver,
                 metrics=self.metrics,
             )
             self._projects[project_id] = runtime
@@ -4218,7 +5525,7 @@ class PromptArchiveRuntimeRegistry:
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         if self.config.mode == "legacy":
             return 0
-        if self.config.mode != "shadow" or self.config.root is None:
+        if self.config.mode not in {"shadow", "authoritative"} or self.config.root is None:
             raise _error("PROMPT_ARCHIVE_VERSION_UNSUPPORTED")
         # Even an empty project registry must preflight/create the configured
         # root and prove protected-root separation before the server starts.
@@ -4244,5 +5551,6 @@ __all__ = [
     "PromptArchiveRuntime",
     "PromptArchiveRuntimeConfig",
     "PromptArchiveOccurrenceProver",
+    "PromptArchiveCompatibilityPublisher",
     "PromptArchiveRuntimeRegistry",
 ]

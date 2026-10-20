@@ -281,11 +281,20 @@ class PromptArchiveResponseShapeContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary_directory.name)
+        self.original_prompt_archive_runtime = main.prompt_archive_runtime
+        # This exact-byte fixture intentionally specifies the historical
+        # no-kind inline format.  Pin it instead of relying on the default.
+        main.prompt_archive_runtime = main.PromptArchiveRuntimeRegistry(
+            main.PromptArchiveRuntimeConfig(mode="legacy")
+        )
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
 
     def tearDown(self) -> None:
+        main.prompt_archive_runtime = self.original_prompt_archive_runtime
         self.temporary_directory.cleanup()
 
     def materialize(self, *, settled: bool) -> tuple[dict[str, Any], bytes, StrictJsonSpanParser, dict[str, Any]]:
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         compact = main.materialize_sequential_graph_response(
             response=representative_response(settled=settled),
             directory_template=str(self.root / "prompts" / "{repository}"),

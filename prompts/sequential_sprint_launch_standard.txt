@@ -54,10 +54,17 @@ response_compact=true и active_task присутствует, считай от
 не сообщай пользователю об обрезке. Не открывай полный архив только ради
 agent/active_task.
 
-response_file_path и latest_response_file_path содержат полный диагностический
-JSON, включая project_state. Открывай их только когда задача действительно
-требует полной истории или diff; для актуального состояния предпочитай
-project_state_url.
+Если response_file_path или latest_response_file_path присутствует, применяй
+точное правило dispatch. Отсутствие верхнеуровневого kind означает legacy
+inline JSON. Ровно одно строковое kind=prompt_archive_descriptor_stub означает
+маленький неизменяемый указатель, а не inline-историю: читай один occurrence
+через авторизованный prompt_archive.content_url, полный bounded archive/state
+view через prompt_archive.state_url, manifest через manifest_url или используй
+штатный bounded reader. Повторяющийся kind, неизвестный kind и нестроковый kind должны
+завершаться fail closed: не считай такой файл legacy и не интерпретируй его
+поля как inline-ответ. Для актуального состояния предпочитай project_state_url.
+Если response_archive_available=false, файловый архив для этого read-only
+ответа намеренно не публиковался; не угадывай путь.
 
 В начале компактного JSON находятся response_id, пути сохранённых файлов и
 инструкция по восстановлению. Источником истины для текущей работы являются

@@ -14,6 +14,7 @@ from nginx_qa.prompt_archive_incremental import (
     response_id_v1,
     sprint_storage_key_v1,
 )
+from nginx_qa.prompt_archive_latest import ExternalLatestCoordinator
 from nginx_qa.prompt_archive_occurrence_store import (
     PromptArchiveOccurrenceProof,
     PromptArchiveOccurrenceSource,
@@ -95,6 +96,68 @@ class ClosedOccurrenceProver:
         return None if observed is None else self._copy_proof(observed)
 
 
+class ClosedCompatibilityPublisher:
+    def __init__(self, root: Path, runtime: PromptArchiveRuntime) -> None:
+        root.mkdir(parents=True, exist_ok=True)
+        self.root = root
+        self.transition_path = root / "unprepared.json"
+        self.coordinator = ExternalLatestCoordinator(
+            root / "latest-response.json",
+            project_id=PROJECT_ID,
+            archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+        )
+
+    @property
+    def target_authority_id(self):
+        return self.coordinator.target_authority_id
+
+    def prepare_authoritative(
+        self,
+        *,
+        descriptor_bytes,
+        descriptor_ref,
+        occurrence,
+        operation_id,
+        published_at,
+    ):
+        self.transition_path = self.root / (
+            f"{occurrence.response_kind}-{occurrence.response_id}.json"
+        )
+        return self.coordinator.prepare_descriptor_intent(
+            descriptor_bytes,
+            transition_stub_path=self.transition_path,
+            occurrence_id=occurrence.occurrence_id,
+            operation_id=operation_id,
+            published_at=published_at,
+            source_response_id=occurrence.response_id,
+            source_sprint_id=occurrence.sprint_id,
+            source_revision=occurrence.state_revision,
+            descriptor_ref=descriptor_ref,
+        )
+
+    def publish_authoritative(self, compatibility_publication):
+        descriptor = compatibility_publication["descriptor"]["document"]
+        raw = canonical_json_bytes_v1(descriptor, maximum=64 * 1024)
+        result = self.coordinator.publish_prepared_descriptor(
+            raw,
+            prepared_intent=compatibility_publication["latest_intent"],
+            transition_stub_path=self.transition_path,
+            archive_owner=compatibility_publication["archive_owner"],
+            expected_target_authority_id=compatibility_publication[
+                "target_authority_id"
+            ],
+        )
+        return dataclasses.asdict(result)
+
+    def verify_authoritative(self, compatibility_publication, publication):
+        result = self.coordinator.verify_prepared_publication(
+            prepared_intent=compatibility_publication["latest_intent"],
+            publication=publication,
+            archive_owner=compatibility_publication["archive_owner"],
+        )
+        return dataclasses.asdict(result)
+
+
 class PromptArchiveRuntimeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -166,6 +229,11 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
                 mode=mode,
                 root=self.root,
                 max_hydrated_bytes=8 * 1024 * 1024,
+                operator_gate=(
+                    "prompt-archive-authoritative-v1"
+                    if mode == "authoritative"
+                    else None
+                ),
             ),
             occurrence_prover=occurrence_prover,
         )
@@ -175,7 +243,7 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
             operation()
         self.assertEqual(raised.exception.code, code)
 
-    def test_default_legacy_is_inert_and_authoritative_fails_closed(self) -> None:
+    def test_default_legacy_is_inert_and_authoritative_requires_exact_gate(self) -> None:
         config = PromptArchiveRuntimeConfig.from_environment({})
         self.assertEqual(config.mode, "legacy")
         self.assertIsNone(config.root)
@@ -190,17 +258,59 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
             ),
         )
         self.assert_code(
-            "PROMPT_ARCHIVE_VERSION_UNSUPPORTED",
+            "PROMPT_ARCHIVE_REQUEST_INVALID",
             lambda: PromptArchiveRuntimeConfig.from_environment(
                 {
                     "NGINX_QA_PROMPT_ARCHIVE_MODE": "authoritative",
                     "NGINX_QA_PROMPT_ARCHIVE_ROOT": str(self.root),
-                    "NGINX_QA_PROMPT_ARCHIVE_OPERATOR_GATE": (
-                        "prompt-archive-authoritative-v1"
-                    ),
                 }
             ),
         )
+        authoritative = PromptArchiveRuntimeConfig.from_environment(
+            {
+                "NGINX_QA_PROMPT_ARCHIVE_MODE": "authoritative",
+                "NGINX_QA_PROMPT_ARCHIVE_ROOT": str(self.root),
+                "NGINX_QA_PROMPT_ARCHIVE_OPERATOR_GATE": (
+                    "prompt-archive-authoritative-v1"
+                ),
+            }
+        )
+        self.assertEqual(authoritative.mode, "authoritative")
+
+    def test_authoritative_native_publish_is_discoverable_without_hot_path_hydration(
+        self,
+    ) -> None:
+        runtime = self.registry(mode="authoritative").for_project(PROJECT_ID)
+        raw = b'{"active_task":{"message":"bounded native response"},"response_compact":true}'
+        occurrence = dataclasses.replace(
+            self.occurrence(),
+            source={"source_kind": "native_runtime", "assignment_id": "assignment-one"},
+            source_response_key=None,
+            source_byte_size=None,
+            source_sha256=None,
+        )
+        with mock.patch.object(
+            PromptArchiveIncremental,
+            "hydrate_archive_bytes",
+            side_effect=AssertionError("authoritative hot path hydrated content"),
+        ):
+            publication = runtime.publish_authoritative(
+                raw,
+                occurrence,
+                compatibility_publisher=ClosedCompatibilityPublisher(
+                    self.base / "prompt", runtime
+                ),
+            )
+        selected = runtime.lookup_archive(
+            sprint_id=SPRINT_ID,
+            archive_id=publication.archive_id,
+        )
+        manifest = runtime.read_manifest(selected)
+        self.assertEqual(manifest["publication"]["mode"], "authoritative")
+        self.assertFalse(manifest["publication"]["legacy_authoritative"])
+        self.assertNotIn("legacy_comparison", manifest)
+        self.assertEqual(runtime.hydrate_content(selected), raw)
+        self.assertEqual(runtime.descriptor_stub(publication)["archive_id"], publication.archive_id)
 
     def test_shadow_publish_is_exact_discoverable_and_idempotent(self) -> None:
         runtime = self.registry().for_project(PROJECT_ID)

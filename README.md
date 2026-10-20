@@ -256,16 +256,22 @@ the proposed transition and returns the source node for rework with the review
 feedback. This gate also applies to transitions into terminal nodes.
 
 Every sequential identity and transition produces a compact HTTP response and
-matching per-agent `.prompt`, plus a full diagnostic UTF-8 JSON archive. The
-response starts with `latest_agent_prompt_file_path` for the caller's stable
-compact file, `response_file_path` for the full exact-step archive, and
-`latest_response_file_path` for the full project-wide latest step. The compact
-payload is marked with `response_compact=true`; absence of `project_state` is
-intentional and must not be reported as truncation. A transition result is
-written under the phone from the request URL, not under the phone of the next
-reviewer returned in the response. The per-agent file is attempted before
-either archive target, so an archive failure does not remove the primary
-recovery copy.
+matching per-agent `.prompt`. In the default `legacy` and opt-in `shadow` modes,
+`response_file_path` and `latest_response_file_path` still contain the full
+diagnostic UTF-8 JSON objects. In explicitly gated `authoritative` mode those
+same compatibility paths contain small route-neutral
+`kind=prompt_archive_descriptor_stub` objects; one response-scoped occurrence
+is read through `prompt_archive.content_url`, while the complete bounded
+root-to-head PAS1 state is reconstructed on demand through
+`prompt_archive.state_url`. Both use the authorized archive API. Consumers must inspect the
+top-level `kind`: an object without `kind` is legacy inline JSON, the recognized
+descriptor stub is dispatched through the authorized archive reader, and every
+unknown kind fails closed. The compact payload is marked with
+`response_compact=true`; absence of cumulative `project_state` is intentional
+and must not be reported as truncation. A transition result is written under
+the phone from the request URL, not under the phone of the next reviewer
+returned in the response. Compact `.prompt` publication remains usable after a
+legacy/shadow archive error; authoritative archive publication fails closed.
 
 Submit a node result to the `whoami_endpoint` from the active queue item:
 

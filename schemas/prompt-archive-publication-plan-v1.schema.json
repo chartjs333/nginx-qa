@@ -800,6 +800,78 @@
       },
       "additionalProperties": false
     },
+    "archiveOwner": {
+      "description": "A closed, path-free proof binding descriptor/latest publication to one exact authoritative outer archive plan and one physical latest-response authority. outer_plan_identity_sha256 is SHA-256 over the canonical JSON projection of every field below except protocol and the digest itself; transition_stub_name must additionally equal <response_kind>-<response_id>.json.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "project_id",
+        "sprint_id",
+        "response_id",
+        "response_kind",
+        "operation_id",
+        "recovery_key",
+        "outer_plan_identity_sha256",
+        "archive_id",
+        "pointer_id",
+        "locator_id",
+        "target_authority_id",
+        "transition_stub_name",
+        "descriptor_stub_id"
+      ],
+      "properties": {
+        "protocol": {"const": "prompt-archive-latest-archive-owner-v1"},
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {"$ref": "#/$defs/safeId"},
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "response_kind": {
+          "enum": [
+            "identity-response",
+            "transition-response",
+            "state-response"
+          ]
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        },
+        "recovery_key": {
+          "type": "string",
+          "pattern": "^parloc1-[0-9a-f]{64}$"
+        },
+        "outer_plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "archive_id": {
+          "type": "string",
+          "pattern": "^par1-[0-9a-f]{64}$"
+        },
+        "pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
+        "transition_stub_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "descriptor_stub_id": {
+          "type": "string",
+          "pattern": "^parstub1-[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
     "latestOrdering": {
       "description": "A deterministic total order compared lexicographically by source_revision, occurrence_id, then operation_id, but only after revision_authority exactly matches. The source revision is allocated from a durable project/slot high-water mark that is never reset by a process, launcher, or runtime-root restart. If that continuity cannot be restored, publication fails closed instead of allocating a lower revision.",
       "type": "object",
@@ -996,9 +1068,21 @@
     },
     "authoritativeCompatibility": {
       "type": "object",
-      "required": ["mode", "descriptor", "transition_stub", "latest_intent"],
+      "required": [
+        "mode",
+        "target_authority_id",
+        "archive_owner",
+        "descriptor",
+        "transition_stub",
+        "latest_intent"
+      ],
       "properties": {
         "mode": {"const": "authoritative_descriptor_stubs"},
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
+        "archive_owner": {"$ref": "#/$defs/archiveOwner"},
         "descriptor": {"$ref": "#/$defs/descriptorArtifact"},
         "transition_stub": {"$ref": "#/$defs/transitionStub"},
         "latest_intent": {"$ref": "#/$defs/descriptorLatestIntent"}

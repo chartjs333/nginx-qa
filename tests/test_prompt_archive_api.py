@@ -20,6 +20,49 @@ ARCHIVE_ID = "par1-" + "2" * 64
 RESPONSE_ID = "parresp1-" + "3" * 64
 AGENT_PHONE = "2974"
 CONTENT = b'{"hello":"archive"}'
+STATE_DOCUMENT = {
+    "schema_version": 1,
+    "kind": "prompt_archive_state_view",
+    "media_type": "application/vnd.nginx-qa.prompt-archive-state-view-v1+json",
+    "scope": {
+        "project_id": PROJECT_ID,
+        "sprint_id": SPRINT_ID,
+        "root_archive_id": ARCHIVE_ID,
+        "head_archive_id": ARCHIVE_ID,
+        "head_response_id": RESPONSE_ID,
+        "occurrence_count": 1,
+    },
+    "integrity": {
+        "algorithm": "sha256",
+        "chain_sha256": "5" * 64,
+        "aggregate_hydrated_bytes": len(CONTENT),
+    },
+    "occurrences": [],
+    "state": {"current": {}, "history": []},
+}
+STATE_CONTENT = json.dumps(
+    STATE_DOCUMENT,
+    ensure_ascii=False,
+    allow_nan=False,
+    sort_keys=True,
+    separators=(",", ":"),
+).encode("utf-8")
+
+
+class DeterministicFloorClock:
+    def __init__(self):
+        self.value = 0.0
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.value
+
+    async def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.value += seconds
+
+    def advance(self, seconds):
+        self.value += seconds
 
 
 class FakeArchiveRuntime:
@@ -29,8 +72,14 @@ class FakeArchiveRuntime:
         self.legacy_lookup_calls = []
         self.manifest_calls = []
         self.hydrate_calls = []
+        self.state_calls = []
         self.lookup_error = None
         self.hydrate_error = None
+        self.state_error = None
+        self.state_hydrate_started = None
+        self.state_hydrate_exited = None
+        self.slow_state_hydration_chunks = 0
+        self.state_hydrated_chunks = 0
         self.hydrate_started = None
         self.hydrate_release = None
         self.hydrate_exited = None
@@ -101,6 +150,32 @@ class FakeArchiveRuntime:
         finally:
             if self.hydrate_exited is not None:
                 self.hydrate_exited.set()
+
+    def hydrate_state_view(
+        self,
+        *,
+        sprint_id,
+        archive_id,
+        max_output_bytes=None,
+        cancellation=None,
+    ):
+        self.state_calls.append((sprint_id, archive_id, max_output_bytes))
+        if self.state_hydrate_started is not None:
+            self.state_hydrate_started.set()
+        try:
+            for _index in range(self.slow_state_hydration_chunks):
+                if cancellation is not None:
+                    cancellation.check()
+                self.state_hydrated_chunks += 1
+                threading.Event().wait(0.005)
+            if self.state_error is not None:
+                raise self.state_error
+            if cancellation is not None:
+                cancellation.check()
+            return STATE_CONTENT
+        finally:
+            if self.state_hydrate_exited is not None:
+                self.state_hydrate_exited.set()
 
 
 class FakeRegistry:
@@ -284,6 +359,7 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(descriptor["descriptor_url"], self.operator_base)
         self.assertEqual(descriptor["manifest_url"], self.operator_base + "/manifest")
         self.assertEqual(descriptor["content_url"], self.operator_base + "/content")
+        self.assertEqual(descriptor["state_url"], self.operator_base + "/state")
         self.assertEqual(descriptor["correlation_id"], headers["x-correlation-id"])
         self.assertEqual(self.registry.calls, [PROJECT_ID])
 
@@ -303,12 +379,121 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(descriptor["route_context"], "managed_agent")
         self.assertEqual(descriptor["agent_phone"], AGENT_PHONE)
         self.assertEqual(descriptor["descriptor_url"], self.managed_base)
+        self.assertEqual(descriptor["state_url"], self.managed_base + "/state")
         self.assertEqual(descriptor["correlation_id"], headers["x-correlation-id"])
         self.assertEqual(
             self.managed.calls[-1],
             (PROJECT_ID, SPRINT_ID, AGENT_PHONE, "scope-token"),
         )
         self.assertEqual(self.registry.calls, [PROJECT_ID])
+
+    async def test_managed_not_found_paths_share_deterministic_floor_without_unauthorized_lookup(self):
+        clock = DeterministicFloorClock()
+        self.host = SimpleNamespace(
+            app=FastAPI(),
+            prompt_archive_runtime=self.registry,
+            prompt_archive_runtime_metrics=PromptArchiveMetrics(),
+            managed_continuity_runtime=self.managed,
+            scope_api_operator=lambda _request: "operator",
+            pending_sprints_request_is_local=lambda _request: True,
+            prompt_archive_managed_not_found_floor_seconds=1.0,
+            prompt_archive_managed_not_found_monotonic=clock.monotonic,
+            prompt_archive_managed_not_found_sleep=clock.sleep,
+        )
+        register_prompt_archive_api(self.host)
+
+        normalized_details = []
+        elapsed = []
+
+        async def request_not_found(*, headers=None):
+            started = clock.monotonic()
+            status, body, response_headers = await self.request(
+                self.managed_base,
+                headers=headers,
+            )
+            elapsed.append(clock.monotonic() - started)
+            self.assertEqual(status, 404)
+            detail = json.loads(body)["detail"]
+            self.assertEqual(
+                detail["correlation_id"], response_headers["x-correlation-id"]
+            )
+            normalized_details.append(
+                {
+                    key: value
+                    for key, value in detail.items()
+                    if key != "correlation_id"
+                }
+            )
+            self.assertNotIn("scope-token", body.decode())
+            self.assertNotIn("timing-secret-canary", body.decode())
+
+        # Missing and invalid tokens, plus a stale binding decision, must stop
+        # before the archive registry or locator is touched.
+        await request_not_found()
+        await request_not_found(
+            headers={"X-Nginx-QA-Scope-Token": "timing-secret-canary"}
+        )
+        self.managed.authorized = False
+        await request_not_found(
+            headers={"X-Nginx-QA-Scope-Token": "scope-token"}
+        )
+        self.managed.authorized = True
+
+        # A cross-scope authorization snapshot is also denied before lookup.
+        exact_authorize = self.managed.authorize_prompt_archive_read
+
+        def cross_scope_authorize(*args, **kwargs):
+            snapshot = exact_authorize(*args, **kwargs)
+            assert snapshot is not None
+            return {**snapshot, "sprint_id": "msv1-cross-scope"}
+
+        self.managed.authorize_prompt_archive_read = cross_scope_authorize
+        await request_not_found(
+            headers={"X-Nginx-QA-Scope-Token": "scope-token"}
+        )
+        self.managed.authorize_prompt_archive_read = exact_authorize
+
+        self.assertEqual(self.registry.calls, [])
+        self.assertEqual(self.runtime.lookup_calls, [])
+
+        # Only the authorized absent case may reach the bounded locator lookup.
+        # Simulate lookup work consuming part of the floor without sleeping in
+        # real time; the response must wait only the exact remainder.
+        exact_lookup = self.runtime.lookup_archive_metadata
+
+        def absent_lookup(**kwargs):
+            clock.advance(0.4)
+            return exact_lookup(**kwargs)
+
+        self.runtime.lookup_archive_metadata = absent_lookup
+        self.runtime.lookup_error = PromptArchiveStorageError(
+            "PROMPT_ARCHIVE_NOT_FOUND"
+        )
+        await request_not_found(
+            headers={"X-Nginx-QA-Scope-Token": "scope-token"}
+        )
+
+        self.assertEqual(self.registry.calls, [PROJECT_ID])
+        self.assertEqual(
+            self.runtime.lookup_calls,
+            [(SPRINT_ID, ARCHIVE_ID)],
+        )
+        self.assertTrue(
+            all(item == normalized_details[0] for item in normalized_details)
+        )
+        for measured in elapsed:
+            self.assertAlmostEqual(measured, 1.0)
+        self.assertEqual(len(clock.sleeps), 5)
+        for measured, expected in zip(
+            clock.sleeps,
+            [1.0, 1.0, 1.0, 1.0, 0.6],
+            strict=True,
+        ):
+            self.assertAlmostEqual(measured, expected)
+        self.assertEqual(
+            self.host.app.state.prompt_archive_managed_not_found_floor_seconds,
+            1.0,
+        )
 
     async def test_managed_runtime_request_resolver_is_supported(self):
         self.host.managed_continuity_runtime = None
@@ -377,6 +562,116 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(failed_metrics.hydration_success_count, 1)
         self.assertEqual(failed_metrics.hydration_failure_count, 1)
         self.assertEqual(failed_metrics.corruption_failures, 1)
+
+    async def test_state_view_is_authorized_bounded_verified_json_attachment(self):
+        status, body, _ = await self.request(self.managed_base + "/state")
+        self.assertEqual(status, 404)
+        self.assertEqual(json.loads(body)["detail"]["error"], "PROMPT_ARCHIVE_NOT_FOUND")
+        self.assertEqual(self.registry.calls, [])
+        self.assertEqual(self.runtime.state_calls, [])
+
+        status, body, headers = await self.request(
+            self.operator_base + "/state", headers=self.operator_headers()
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, STATE_CONTENT)
+        self.assertEqual(json.loads(body), STATE_DOCUMENT)
+        self.assertEqual(
+            self.runtime.state_calls,
+            [(SPRINT_ID, ARCHIVE_ID, 256 * 1024 * 1024)],
+        )
+        self.assertEqual(headers["content-type"], "application/json")
+        self.assertEqual(
+            headers["content-disposition"],
+            'attachment; filename="prompt-archive-state.json"',
+        )
+        self.assertEqual(headers["cache-control"], "private, no-store")
+        self.assertEqual(headers["x-content-type-options"], "nosniff")
+
+        status, body, _ = await self.request(
+            self.managed_base + "/state",
+            headers={"X-Nginx-QA-Scope-Token": "scope-token"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body, STATE_CONTENT)
+        self.assertEqual(
+            self.managed.calls[-1],
+            (PROJECT_ID, SPRINT_ID, AGENT_PHONE, "scope-token"),
+        )
+
+        # A non-canonical runtime result fails before any attachment headers or
+        # body bytes from that result can be committed.
+        original = self.runtime.hydrate_state_view
+        self.runtime.hydrate_state_view = lambda **_kwargs: (
+            json.dumps(STATE_DOCUMENT, indent=2).encode("utf-8")
+        )
+        try:
+            status, body, headers = await self.request(
+                self.operator_base + "/state", headers=self.operator_headers()
+            )
+        finally:
+            self.runtime.hydrate_state_view = original
+        self.assertEqual(status, 409)
+        self.assertEqual(
+            json.loads(body)["detail"]["error"],
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        )
+        self.assertNotIn("content-disposition", headers)
+
+        cross_scope = json.loads(json.dumps(STATE_DOCUMENT))
+        cross_scope["scope"]["sprint_id"] = "sprint-other"
+        cross_scope_bytes = json.dumps(
+            cross_scope,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        self.runtime.hydrate_state_view = lambda **_kwargs: cross_scope_bytes
+        try:
+            status, body, headers = await self.request(
+                self.managed_base + "/state",
+                headers={"X-Nginx-QA-Scope-Token": "scope-token"},
+            )
+        finally:
+            self.runtime.hydrate_state_view = original
+        self.assertEqual(status, 404)
+        self.assertEqual(
+            json.loads(body)["detail"]["error"],
+            "PROMPT_ARCHIVE_NOT_FOUND",
+        )
+        self.assertNotIn("content-disposition", headers)
+
+    async def test_state_view_timeout_cooperatively_stops_worker_without_headers_or_leaks(self):
+        self.runtime.state_hydrate_started = threading.Event()
+        self.runtime.state_hydrate_exited = threading.Event()
+        self.runtime.slow_state_hydration_chunks = 10_000
+        admission = self.host.app.state.prompt_archive_hydration_admission
+        admission.wall_seconds = 0.03
+
+        status, body, headers = await asyncio.wait_for(
+            self.request(
+                self.operator_base + "/state",
+                headers=self.operator_headers(),
+            ),
+            timeout=2,
+        )
+
+        self.assertEqual(status, 503)
+        self.assertEqual(
+            json.loads(body)["detail"]["error"],
+            "PROMPT_ARCHIVE_UNAVAILABLE",
+        )
+        self.assertNotIn("content-disposition", headers)
+        self.assertTrue(self.runtime.state_hydrate_started.is_set())
+        self.assertTrue(self.runtime.state_hydrate_exited.is_set())
+        self.assertLess(
+            self.runtime.state_hydrated_chunks,
+            self.runtime.slow_state_hydration_chunks,
+        )
+        self.assertEqual(len(admission._waiters), 0)
+        self.assertEqual(admission._active_global, 0)
+        self.assertEqual(admission._reserved_bytes, 0)
+        self.assertEqual(admission._working_global, 0)
+        self.assertEqual(admission._working_bytes, 0)
 
     async def test_range_and_query_are_stable_400_after_auth_without_lookup(self):
         for headers, query in (
@@ -554,15 +849,17 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(body)["detail"]["error"], "PROMPT_ARCHIVE_NOT_FOUND")
 
-    async def test_openapi_declares_six_routes_security_bounds_and_no_auth_leaks(self):
+    async def test_openapi_declares_eight_routes_security_bounds_and_no_auth_leaks(self):
         document = self.host.app.openapi()
         expected_paths = {
             "/api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}",
             "/api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/manifest",
             "/api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/content",
+            "/api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/state",
             "/api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}",
             "/api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/manifest",
             "/api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/content",
+            "/api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/state",
         }
         self.assertEqual(set(document["paths"]), expected_paths)
         for path in expected_paths:
@@ -610,13 +907,53 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Content-Disposition", content["headers"])
         self.assertIn("X-Content-Type-Options", content["headers"])
         self.assertIn("Cache-Control", content["headers"])
+        content_schema = content["content"]["application/json"]["schema"]
+        self.assertEqual(len(content_schema["oneOf"]), 2)
         self.assertEqual(
-            content["content"]["application/json"]["schema"]["type"],
-            "string",
+            content_schema["oneOf"][0]["properties"]["kind"]["const"],
+            "prompt_archive_occurrence_document",
+        )
+        compact_in_content = content_schema["oneOf"][0]["properties"][
+            "execution_response"
+        ]["allOf"][0]
+        descriptor_in_compact = compact_in_content["properties"]["prompt_archive"]
+        self.assertEqual(descriptor_in_compact["additionalProperties"], False)
+        self.assertTrue(
+            {
+                "descriptor_url",
+                "manifest_url",
+                "content_url",
+                "state_url",
+                "route_context",
+                "scope",
+                "integrity",
+                "created_at",
+            }.issubset(descriptor_in_compact["required"])
+        )
+        self.assertEqual(content_schema["oneOf"][1]["type"], "object")
+        self.assertEqual(
+            content_schema["oneOf"][1]["not"],
+            {"required": ["kind"]},
+        )
+        state = document["paths"][
+            self.operator_base.replace(PROJECT_ID, "{project_id}")
+            .replace(SPRINT_ID, "{sprint_id}")
+            .replace(ARCHIVE_ID, "{archive_id}")
+            + "/state"
+        ]["get"]["responses"]["200"]
+        self.assertEqual(
+            state["content"]["application/json"]["schema"]["type"],
+            "object",
         )
         self.assertEqual(
-            content["content"]["application/json"]["schema"]["format"],
-            "binary",
+            state["content"]["application/json"]["schema"]["properties"][
+                "kind"
+            ]["const"],
+            "prompt_archive_state_view",
+        )
+        self.assertEqual(
+            state["headers"]["Content-Disposition"]["schema"]["const"],
+            'attachment; filename="prompt-archive-state.json"',
         )
         profile = document["paths"][
             self.operator_base.replace(PROJECT_ID, "{project_id}")
@@ -624,6 +961,13 @@ class PromptArchiveApiTests(unittest.IsolatedAsyncioTestCase):
             .replace(ARCHIVE_ID, "{archive_id}")
             + "/content"
         ]["get"]["x-nginx-qa-prompt-archive-admission"]
+        state_profile = document["paths"][
+            self.operator_base.replace(PROJECT_ID, "{project_id}")
+            .replace(SPRINT_ID, "{sprint_id}")
+            .replace(ARCHIVE_ID, "{archive_id}")
+            + "/state"
+        ]["get"]["x-nginx-qa-prompt-archive-admission"]
+        self.assertEqual(state_profile, profile)
         self.assertEqual(profile, self.host.app.state.prompt_archive_hydration_profile)
         self.assertEqual(profile["global_concurrent_hydrations"], 4)
         self.assertEqual(profile["per_project_concurrent_hydrations"], 2)

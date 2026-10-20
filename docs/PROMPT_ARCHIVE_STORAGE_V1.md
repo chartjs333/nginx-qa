@@ -829,6 +829,7 @@ lines and digest
 
 Stable locations are exactly
 `projects/<project_storage_key>/operations/v1/<response_id>/<operation_id>/plan.json`,
+`.../compatibility-result.json`,
 `.../journal-generations/<generation>-<journal_sha256>.json`, the CAS-updated
 `.../journal.json`,
 `.../operation.lock`,
@@ -847,6 +848,17 @@ and flushes its immutable retained generation, then atomically replaces the
 stable shard file with those exact bytes. The stable file must equal its named
 retained generation; missing, mismatched, skipped, or forked generations fail
 closed.
+
+For authoritative publication, `compatibility-result.json` is an immutable,
+payload-free receipt written only after the target-colocated latest protocol
+has reached a terminal `published` or `superseded` result. It binds the exact
+latest intent to the retained latest-slot ID/ref/generation and is the
+deterministic input to archive journal generations five and six. Creation and
+replay both ask the target authority to re-prove the immutable external plan,
+terminal journal, typed retained slot, transition stub, and current external
+bytes; a locally plausible receipt alone is never authority. Absence or an
+unverifiable receipt leaves the operation at `locator_published`; divergent
+replay is corruption.
 
 The compatibility authority is deliberately not under the archive root. Let
 `<external_latest>` be the resolved external `latest-response.json` target used
@@ -914,6 +926,21 @@ If that intent belongs to an authoritative native archive and its owning
 archive plan/journal cannot be resolved and verified, a default or legacy
 writer fails closed; it may not partially advance external content or the slot.
 
+Every descriptor intent carries a closed, path-free `archive_owner` and a
+`target_authority_id`. The target ID is derived from the canonical external
+latest parent plus its normative leaf and is frozen in both plans. The owner
+binds project, sprint, response ID/kind, operation/recovery key, archive,
+pointer, locator, exact transition-stub leaf, descriptor-stub ID, and target.
+`outer_plan_identity_sha256` is SHA-256 of the canonical owner projection (all
+those fields except protocol and the digest itself); it is intentionally not a
+circular hash of the outer plan that contains the latest intent. While holding
+`latest.lock`, the coordinator calls a read-only owner verifier with both the
+owner and exact intent. That verifier may take only the archive operation lock,
+does not recover or mutate a journal, and proves the exact outer plan plus
+current journal at or beyond `locator_published` and exact immutable pointer and
+locator bytes. Target drift, a wrong safe transition leaf, mixed owner/intent,
+or missing owner authority fails before any compatibility mutation.
+
 The colocated `operations` and fixed 256-shard `pending` trees are the complete
 recovery authority for `legacy_latest_publish` after enrollment, so a default
 legacy launcher does not need an archive root to finish or discover such work.
@@ -954,6 +981,15 @@ atomic-write semantics. Creating the lock-only control directory is not
 enrollment. Once a valid current-intent marker or slot exists, every transition,
 identity, state, and rollback write is a colocated, registered, journaled
 `legacy_latest_publish`; there is no fallback to the pre-enrollment overwrite.
+
+Authoritative outputs use the trusted project-specific target below
+`.nginx-qa-projects/<project_id>`. After that target's sidecar exists, disabling
+authoritative mode or selecting legacy/shadow mode does not return the project
+to a shared base target: every later writer for that durable project resolves
+the same project target first. A corrupt sidecar or unavailable archive-owner
+proof fails closed and never causes fallback to the base
+`latest-response.json`. Projects which have never enrolled a project-specific
+target retain the pre-enrollment legacy base-path behavior.
 
 Startup reads at most the 256 fixed pending-shard paths for each configured
 project and never enumerates historical operation directories. Registry entries
@@ -1320,6 +1356,7 @@ The authenticated local operator/UI endpoints are:
 GET /api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}
 GET /api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/manifest
 GET /api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/content
+GET /api/v1/projects/{project_id}/sprints/{sprint_id}/prompt-archives/{archive_id}/state
 ```
 
 They retain the existing authenticated loopback operator boundary, including
@@ -1331,16 +1368,31 @@ operator routes. Its routes are explicitly phone-specific:
 GET /api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}
 GET /api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/manifest
 GET /api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/content
+GET /api/v1/projects/{project_id}/agents/{agent_phone}/sprints/{sprint_id}/prompt-archives/{archive_id}/state
 X-Nginx-QA-Scope-Token: <protected role token for agent_phone>
 ```
 
 The base route returns `prompt-archive-descriptor-v1`; `/manifest` returns the
 committed `prompt-archive-manifest-v1`; `/content` returns the exact declared
 JSON bytes after verifying the complete reachable graph before response headers
-are committed. HTTP-exposed hydrated content is restricted to
+are committed. `/state` is the explicit cold path for a native authoritative
+archive: it follows only the immutable, directly addressed predecessor chain,
+verifies every locator/pointer/manifest/occurrence cross-binding, and returns a
+schema-versioned root-to-head `prompt_archive_state_view` with the complete
+occurrence documents, current execution/evidence state, and ordered history.
+Chain length is capped at 256 occurrences; aggregate hydrated bytes,
+individual hydration, and final output share the configured response bound.
+Cycles, legacy/shadow artifacts, scope drift, and broken lineage fail closed.
+It is never invoked by identity, active-task, `.prompt`, or archive publication
+paths. Authentication and bounded admission precede every archive lookup;
+disconnect or timeout cooperatively cancels traversal before its work/byte
+lease is released. HTTP-exposed hydrated content is restricted to
 `application/json`; an arbitrary manifest media type is never reflected into a
-header. Every successful content response also sets exactly
-`Content-Disposition: attachment; filename="prompt-archive.json"`,
+header. A successful `/content` response sets
+`Content-Disposition: attachment; filename="prompt-archive.json"`; a successful
+`/state` response sets
+`Content-Disposition: attachment; filename="prompt-archive-state.json"`.
+Both set exactly
 `X-Content-Type-Options: nosniff`, and
 `Cache-Control: private, no-store`. The server may use an isolated bounded spool
 to avoid partial delivery after late corruption.
@@ -1375,12 +1427,12 @@ from the caller.
 recursive expansion, and caller-selected roots are not part of V1. Range
 requests are rejected until their integrity semantics are separately frozen.
 
-The descriptor exposes distinct `descriptor_url`, `manifest_url`, and
-`content_url`; a semantic validator requires their operator or phone-specific
+The descriptor exposes distinct `descriptor_url`, `manifest_url`,
+`content_url`, and `state_url`; a semantic validator requires their operator or phone-specific
 route kind, project, agent phone when present, sprint, and archive values to
 match the authenticated request and descriptor fields. The descriptor and
 errors use the committed schemas. OpenAPI must declare both route families,
-descriptor/manifest JSON, `application/json` attachment content, mandatory
+descriptor/manifest/state-view JSON, `application/json` attachment content, mandatory
 security/cache headers, bounded size behavior, and every stable error status.
 It must not describe refs as general JSON values.
 
@@ -1519,6 +1571,22 @@ continue through the inline reader, `kind=prompt_archive_descriptor_stub` goes
 only through the authorized PAS1 reader, and an unknown kind fails closed. No reader
 may assume that either path always contains inline `project_state`, and the
 runtime recovery instruction must describe the active mode accurately.
+
+The exact candidate inventory is
+[`PROMPT_ARCHIVE_CONSUMER_INVENTORY_V1.md`](PROMPT_ARCHIVE_CONSUMER_INVENTORY_V1.md).
+Its PSC-004 implementation inventory is **complete**: bounded dispatch and the
+authorized API are joined by exact runtime instructions, mode-neutral UI,
+fail-closed offline-tool boundaries, explicitly pinned legacy fixtures, and an
+authoritative actor/reviewer consumer regression. Operational enablement still
+requires isolated exact-candidate qualification, including the documented
+backup/restore drill; it must not be inferred from writer-shape tests alone.
+
+The PAS1-specific cold-backup and fail-closed restore procedure is
+[`PROMPT_ARCHIVE_AUTHORITATIVE_BACKUP_RECOVERY_V1.md`](PROMPT_ARCHIVE_AUTHORITATIVE_BACKUP_RECOVERY_V1.md).
+It defines the complete cross-authority recovery unit; the legacy Scope Control
+rollout copy is explicitly not a PAS1 backup. The procedure is documentation,
+not evidence that a backup/restore drill ran and not authorization to access a
+live root or enable authoritative mode.
 
 The immutable transition-specific stub and ordered latest intent/content/slot
 are the durable authoritative handoff after locator/pointer commit. Fault

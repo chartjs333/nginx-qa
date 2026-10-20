@@ -13,6 +13,7 @@ from copy import deepcopy
 import inspect
 import ipaddress
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -28,6 +29,7 @@ from .legacy_scope_control import ADMIN_TOKEN_HEADER, ROLE_TOKEN_HEADER
 from .prompt_archive_storage import (
     PromptArchiveCancellationToken,
     PromptArchiveStorageError,
+    canonical_json_bytes_v1,
 )
 
 
@@ -37,6 +39,11 @@ _PHONE_RE = re.compile(r"[0-9]{1,16}", re.ASCII)
 _ERROR_MESSAGE = "Prompt archive is unavailable for this request."
 _CONTENT_HEADERS = {
     "Content-Disposition": 'attachment; filename="prompt-archive.json"',
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "private, no-store",
+}
+_STATE_HEADERS = {
+    "Content-Disposition": 'attachment; filename="prompt-archive-state.json"',
     "X-Content-Type-Options": "nosniff",
     "Cache-Control": "private, no-store",
 }
@@ -78,12 +85,14 @@ _DEFAULT_QUEUE_LIMIT = 16
 _DEFAULT_SPOOL_BYTES = 1024 * 1024 * 1024
 _DEFAULT_WALL_SECONDS = 120.0
 _DEFAULT_MAX_HYDRATED_BYTES = 256 * 1024 * 1024
+_DEFAULT_MANAGED_NOT_FOUND_FLOOR_SECONDS = 0.025
 
 _HARD_GLOBAL_HYDRATIONS = 32
 _HARD_PROJECT_HYDRATIONS = 8
 _HARD_QUEUE_LIMIT = 128
 _HARD_SPOOL_BYTES = 8 * 1024 * 1024 * 1024
 _HARD_WALL_SECONDS = 600.0
+_HARD_MANAGED_NOT_FOUND_FLOOR_SECONDS = 1.0
 
 _SCOPE_TOKEN = APIKeyHeader(
     name=ROLE_TOKEN_HEADER,
@@ -98,6 +107,54 @@ _SCOPE_TOKEN = APIKeyHeader(
 
 class _ArchiveNotAuthorized(RuntimeError):
     """Internal marker which must always become the generic 404 envelope."""
+
+
+class _ManagedNotFoundFloor:
+    """Apply one bounded minimum response time to every managed 404.
+
+    Authentication still completes before any archive lookup.  The floor only
+    delays the generic response; it never performs dummy locator/filesystem
+    work.  Clock and sleeper injection exists for deterministic instrumentation
+    tests and is deliberately configured only from the trusted application
+    host, never from request data.
+    """
+
+    def __init__(
+        self,
+        *,
+        seconds: float = _DEFAULT_MANAGED_NOT_FOUND_FLOOR_SECONDS,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleeper: Callable[[float], Any] = asyncio.sleep,
+    ) -> None:
+        if (
+            not isinstance(seconds, (int, float))
+            or isinstance(seconds, bool)
+            or not math.isfinite(float(seconds))
+            or not 0 < float(seconds) <= _HARD_MANAGED_NOT_FOUND_FLOOR_SECONDS
+        ):
+            raise ValueError("Managed prompt archive 404 floor is invalid")
+        if not callable(monotonic) or not callable(sleeper):
+            raise ValueError("Managed prompt archive 404 timing hooks are invalid")
+        self.seconds = float(seconds)
+        self._monotonic = monotonic
+        self._sleeper = sleeper
+
+    def started(self) -> float:
+        value = self._monotonic()
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(float(value))
+        ):
+            raise RuntimeError("Managed prompt archive monotonic clock is invalid")
+        return float(value)
+
+    async def wait(self, started: float) -> None:
+        now = self.started()
+        elapsed = max(0.0, now - started)
+        remaining = self.seconds - elapsed
+        if remaining > 0:
+            await _maybe_await(self._sleeper(remaining))
 
 
 class _AdmissionLease:
@@ -425,8 +482,17 @@ def _error_response(
     )
 
 
-def _response_headers(correlation_id: str, *, content: bool = False) -> dict[str, str]:
-    headers = dict(_CONTENT_HEADERS if content else _JSON_HEADERS)
+def _response_headers(
+    correlation_id: str,
+    *,
+    content: bool = False,
+    state: bool = False,
+) -> dict[str, str]:
+    if content and state:
+        raise ValueError("Prompt archive response header profile is ambiguous")
+    headers = dict(
+        _STATE_HEADERS if state else (_CONTENT_HEADERS if content else _JSON_HEADERS)
+    )
     headers["X-Correlation-ID"] = correlation_id
     return headers
 
@@ -705,6 +771,77 @@ def _hydrate_verified_content(
     return content
 
 
+def _hydrate_verified_state(
+    host: Any,
+    project_id: str,
+    sprint_id: str,
+    archive_id: str,
+    reservation: int,
+    cancellation: PromptArchiveCancellationToken,
+) -> bytes:
+    """Build one bounded, canonical and scope-bound state view.
+
+    Authorization and admission are intentionally owned by the HTTP adapter
+    and happen before this worker resolves a project runtime.  The runtime
+    owns archive traversal and verifies every immutable archive edge.  This
+    final adapter check prevents an implementation error from publishing a
+    cross-scope, non-JSON, non-canonical, or oversized response.
+    """
+
+    cancellation.check()
+    registry = getattr(host, "prompt_archive_runtime", None)
+    factory = getattr(registry, "for_project", None)
+    if not callable(factory):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+    runtime = factory(project_id)
+    if runtime is None or str(getattr(runtime, "project_id", project_id)) != project_id:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_NOT_FOUND")
+    hydrate = getattr(runtime, "hydrate_state_view", None)
+    if not callable(hydrate):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+    content = hydrate(
+        sprint_id=sprint_id,
+        archive_id=archive_id,
+        max_output_bytes=reservation,
+        cancellation=cancellation,
+    )
+    if not isinstance(content, bytes):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if len(content) > reservation:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+    try:
+        document = json.loads(content.decode("utf-8", errors="strict"))
+    except (UnicodeError, json.JSONDecodeError, RecursionError, MemoryError):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    if not isinstance(document, dict):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    scope = document.get("scope")
+    if (
+        document.get("schema_version") != 1
+        or document.get("kind") != "prompt_archive_state_view"
+        or document.get("media_type")
+        != "application/vnd.nginx-qa.prompt-archive-state-view-v1+json"
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+    if (
+        not isinstance(scope, Mapping)
+        or scope.get("project_id") != project_id
+        or scope.get("sprint_id") != sprint_id
+        or scope.get("head_archive_id") != archive_id
+    ):
+        # Match the shallow archive lookup contract: a cross-scope result is
+        # indistinguishable from absence, including on managed routes.
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_NOT_FOUND")
+    try:
+        canonical = canonical_json_bytes_v1(document, maximum=reservation)
+    except (TypeError, ValueError, UnicodeError, OverflowError, MemoryError):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    if content != canonical:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+    cancellation.check()
+    return content
+
+
 def _descriptor(
     read: Any,
     *,
@@ -741,6 +878,7 @@ def _descriptor(
         "descriptor_url": base,
         "manifest_url": base + "/manifest",
         "content_url": base + "/content",
+        "state_url": base + "/state",
     }
 
 
@@ -779,9 +917,28 @@ def _inline_schema(filename: str) -> dict[str, Any]:
         reference = value.get("$ref")
         if isinstance(reference, str):
             file_part, _, fragment = reference.partition("#")
-            if urllib.parse.urlsplit(file_part).scheme:
-                raise RuntimeError("OpenAPI schema reference must be local")
-            target_path = (current.parent / file_part).resolve() if file_part else current
+            parsed = urllib.parse.urlsplit(file_part)
+            if parsed.scheme:
+                canonical_prefix = "/chartjs333/nginx-qa/schemas/"
+                if not (
+                    parsed.scheme == "https"
+                    and parsed.netloc == "github.com"
+                    and parsed.path.startswith(canonical_prefix)
+                    and not parsed.query
+                    and not parsed.username
+                    and not parsed.password
+                ):
+                    raise RuntimeError("OpenAPI schema reference must be local")
+                schema_name = parsed.path.removeprefix(canonical_prefix)
+                if not schema_name or "/" in schema_name:
+                    raise RuntimeError("OpenAPI schema reference is invalid")
+                target_path = (schema_root / schema_name).resolve()
+            else:
+                target_path = (
+                    (current.parent / file_part).resolve()
+                    if file_part
+                    else current
+                )
             key = (target_path, fragment)
             if key in stack:
                 raise RuntimeError("OpenAPI schema reference cycle is unsupported")
@@ -808,6 +965,8 @@ def _openapi_responses(host: Any, *, kind: str) -> dict[int, Any]:
     )
     descriptor = loader("prompt-archive-descriptor-v1.schema.json")
     manifest = loader("prompt-archive-manifest-v1.schema.json")
+    occurrence = loader("prompt-archive-occurrence-document-v1.schema.json")
+    state = loader("prompt-archive-state-view-v1.schema.json")
     error = loader("prompt-archive-error-v1.schema.json")
     success_headers: dict[str, Any] = {
         "Cache-Control": {
@@ -829,11 +988,43 @@ def _openapi_responses(host: Any, *, kind: str) -> dict[int, Any]:
     elif kind == "manifest":
         schema = manifest
         description = "Verified immutable prompt archive manifest."
+    elif kind == "state":
+        schema = state
+        description = (
+            "Bounded verified root-to-head archive state view as canonical JSON; "
+            "at most 256 immutable occurrences are traversed."
+        )
+        success_headers.update(
+            {
+                "Content-Disposition": {
+                    "description": "Fixed safe attachment filename.",
+                    "schema": {
+                        "type": "string",
+                        "const": (
+                            'attachment; filename="prompt-archive-state.json"'
+                        ),
+                    },
+                },
+            }
+        )
     else:
         schema = {
-            "type": "string",
-            "format": "binary",
-            "description": "Exact fully verified archived JSON response.",
+            "oneOf": [
+                occurrence,
+                {
+                    "type": "object",
+                    "description": (
+                        "Verified legacy inline JSON response without a "
+                        "versioned top-level kind."
+                    ),
+                    "not": {"required": ["kind"]},
+                    "additionalProperties": True,
+                },
+            ],
+            "description": (
+                "Exact fully verified authoritative occurrence document or "
+                "legacy inline JSON response."
+            ),
         }
         description = "Fully verified JSON attachment; ranges are unsupported."
         success_headers.update(
@@ -888,8 +1079,28 @@ def register_prompt_archive_api(host: Any) -> None:
 
     app: FastAPI = host.app
     admission = _admission_from_host(host)
+    managed_not_found_floor = _ManagedNotFoundFloor(
+        seconds=getattr(
+            host,
+            "prompt_archive_managed_not_found_floor_seconds",
+            _DEFAULT_MANAGED_NOT_FOUND_FLOOR_SECONDS,
+        ),
+        monotonic=getattr(
+            host,
+            "prompt_archive_managed_not_found_monotonic",
+            time.monotonic,
+        ),
+        sleeper=getattr(
+            host,
+            "prompt_archive_managed_not_found_sleep",
+            asyncio.sleep,
+        ),
+    )
     # Exposed for bounded instrumentation and deterministic isolated tests.
     app.state.prompt_archive_hydration_admission = admission
+    app.state.prompt_archive_managed_not_found_floor_seconds = (
+        managed_not_found_floor.seconds
+    )
     admission_profile = {
         "profile": "prompt-archive-http-admission-v1",
         "global_concurrent_hydrations": admission.global_limit,
@@ -914,6 +1125,7 @@ def register_prompt_archive_api(host: Any) -> None:
     descriptor_responses = _openapi_responses(host, kind="descriptor")
     manifest_responses = _openapi_responses(host, kind="manifest")
     content_responses = _openapi_responses(host, kind="content")
+    state_responses = _openapi_responses(host, kind="state")
 
     async def authorize_and_validate(
         request: Request,
@@ -970,8 +1182,17 @@ def register_prompt_archive_api(host: Any) -> None:
         kind: str,
     ) -> Response:
         correlation_id = _correlation_id()
+        managed_not_found_started = (
+            managed_not_found_floor.started() if agent_phone is not None else None
+        )
+
+        async def managed_not_found_response() -> JSONResponse:
+            if managed_not_found_started is not None:
+                await managed_not_found_floor.wait(managed_not_found_started)
+            return _error_response("PROMPT_ARCHIVE_NOT_FOUND", correlation_id)
+
         try:
-            if kind == "content":
+            if kind in {"content", "state"}:
                 # Authentication, route validation and admission all precede
                 # locator, pointer, manifest, or graph access.
                 await authorize_and_validate(
@@ -994,9 +1215,14 @@ def register_prompt_archive_api(host: Any) -> None:
                     admission.wall_seconds
                 )
                 hydration_started_ns = time.perf_counter_ns()
+                hydrator = (
+                    _hydrate_verified_content
+                    if kind == "content"
+                    else _hydrate_verified_state
+                )
                 hydration = asyncio.create_task(
                     asyncio.to_thread(
-                        _hydrate_verified_content,
+                        hydrator,
                         host,
                         project_id,
                         sprint_id,
@@ -1024,7 +1250,11 @@ def register_prompt_archive_api(host: Any) -> None:
                     response = _AccountedContentResponse(
                         content=content,
                         work_lease=work_lease,
-                        headers=_response_headers(correlation_id, content=True),
+                        headers=_response_headers(
+                            correlation_id,
+                            content=kind == "content",
+                            state=kind == "state",
+                        ),
                     )
                     response_owns_release = True
                     return response
@@ -1103,8 +1333,13 @@ def register_prompt_archive_api(host: Any) -> None:
                 )
             raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
         except _ArchiveNotAuthorized:
-            return _error_response("PROMPT_ARCHIVE_NOT_FOUND", correlation_id)
+            return await managed_not_found_response()
         except PromptArchiveStorageError as exc:
+            if (
+                agent_phone is not None
+                and exc.code == "PROMPT_ARCHIVE_NOT_FOUND"
+            ):
+                return await managed_not_found_response()
             if exc.code in {
                 "PROMPT_ARCHIVE_BLOB_CORRUPT",
                 "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
@@ -1156,6 +1391,20 @@ def register_prompt_archive_api(host: Any) -> None:
             agent_phone=None,
             scope_token=None,
             kind="content",
+        )
+
+    @app.get(operator_base + "/state", responses=deepcopy(state_responses))
+    async def operator_prompt_archive_state(
+        project_id: str, sprint_id: str, archive_id: str, request: Request
+    ) -> Response:
+        return await dispatch(
+            request,
+            project_id,
+            sprint_id,
+            archive_id,
+            agent_phone=None,
+            scope_token=None,
+            kind="state",
         )
 
     @app.get(managed_base, responses=deepcopy(descriptor_responses))
@@ -1215,13 +1464,34 @@ def register_prompt_archive_api(host: Any) -> None:
             kind="content",
         )
 
+    @app.get(managed_base + "/state", responses=deepcopy(state_responses))
+    async def managed_prompt_archive_state(
+        project_id: str,
+        agent_phone: str,
+        sprint_id: str,
+        archive_id: str,
+        request: Request,
+        scope_token: str | None = Security(_SCOPE_TOKEN),
+    ) -> Response:
+        return await dispatch(
+            request,
+            project_id,
+            sprint_id,
+            archive_id,
+            agent_phone=agent_phone,
+            scope_token=scope_token,
+            kind="state",
+        )
+
     archive_paths = {
         operator_base,
         operator_base + "/manifest",
         operator_base + "/content",
+        operator_base + "/state",
         managed_base,
         managed_base + "/manifest",
         managed_base + "/content",
+        managed_base + "/state",
     }
     previous_openapi = app.openapi
 
@@ -1262,7 +1532,7 @@ def register_prompt_archive_api(host: Any) -> None:
                 responses = operation.get("responses")
                 if isinstance(responses, dict):
                     responses.pop("422", None)
-                if path.endswith("/content"):
+                if path.endswith(("/content", "/state")):
                     operation["x-nginx-qa-prompt-archive-admission"] = deepcopy(
                         admission_profile
                     )
