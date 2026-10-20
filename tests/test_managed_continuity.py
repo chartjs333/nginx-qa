@@ -7,6 +7,7 @@ import unittest
 import urllib.parse
 from contextlib import nullcontext
 from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -14,6 +15,7 @@ import main
 from jsonschema import Draft202012Validator
 
 from nginx_qa.branch_leases import BranchLeaseRequest, BranchLeaseStore
+from nginx_qa.git_provider import ManagedGitError
 from nginx_qa.managed_continuity import (
     ManagedContinuityError,
     ManagedContinuityRuntime,
@@ -34,7 +36,11 @@ from nginx_qa.sprint_types import (
     recovery_request_fingerprint,
     review_request_fingerprint,
 )
-from nginx_qa.workspace_manager import ManagedWorkspace, WorkspaceRequest
+from nginx_qa.workspace_manager import (
+    ManagedWorkspace,
+    WorkspaceError,
+    WorkspaceRequest,
+)
 from tests.test_sprint_type_contract import (
     COMMIT,
     SPRINT_ID,
@@ -2415,11 +2421,35 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(occurrence["state"], "active")
         self.assertEqual(journal["state"], "REVIEWS_ACCEPTED")
         self.assertEqual(journal["disposition"], "accepted")
+        successor_workspace = next(
+            item
+            for item in recovered["workspaces"]
+            if item["workspace_id"] == successor["workspace_id"]
+        )
+        self.assertIsNone(
+            self.runtime._continuation_publication_predecessor(
+                recovered,
+                successor,
+                successor_workspace,
+                provider=provider,
+                repository=provider.ensure_mirror.return_value,
+            )
+        )
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
 
     def test_dirty_result_routes_to_coordinator_and_continues_without_receipt(
         self,
     ) -> None:
+        predecessor_initial = "d" * 40
+        failed_workspace_head = "b" * 40
+
+        resumed = self.store.runtime_state("project-id", SPRINT_ID)
+        resumed["assignments"][0]["initial_head_commit"] = predecessor_initial
+        resumed["workspaces"][0]["initial_head_commit"] = predecessor_initial
+        resumed["branch_leases"][0]["initial_head_commit"] = predecessor_initial
+        self.assertEqual(managed_activation_invariant_issues(resumed), ())
+        self.replace_state(resumed)
+
         class DirtyVerification:
             def __enter__(self):
                 raise ManagedContinuityError(
@@ -2431,11 +2461,14 @@ class ManagedContinuityTests(unittest.TestCase):
 
         self.runtime.result_verifier = lambda *_args: DirtyVerification()
         with self.assertRaises(ManagedContinuityError) as caught:
-            self.submit_result()
+            self.submit_result(
+                from_commit=predecessor_initial,
+                git_commit=failed_workspace_head,
+            )
         self.assertEqual(caught.exception.code, "WORKSPACE_DIRTY")
         self.runtime.result_verifier = lambda *_args: nullcontext()
         with self.assertRaises(ManagedContinuityError) as fenced:
-            self.submit_result()
+            self.submit_result(from_commit=predecessor_initial)
         self.assertEqual(fenced.exception.code, RESULT_CONFLICT)
 
         staged = self.store.runtime_state("project-id", SPRINT_ID)
@@ -2448,6 +2481,29 @@ class ManagedContinuityTests(unittest.TestCase):
         identity = self.runtime.current_identity("project-id", "2860")
         self.assertEqual(identity["assignment"]["assignment_id"], context["context_id"])
         self.assertEqual(managed_activation_invariant_issues(staged), ())
+        with self.assertRaises(ManagedContinuityError) as stale_source:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(
+                    {
+                        "assignment_id": context["context_id"],
+                        "idempotency_key": "continue-dirty-stale-source",
+                        "action": "CONTINUE_NODE",
+                        "parameters": {
+                            "node_id": "build",
+                            "source_commit": "b" * 40,
+                        },
+                    }
+                ),
+                "continue-dirty-stale-source",
+            )
+        self.assertEqual(stale_source.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(stale_source.exception.http_status, 409)
+        self.assertEqual(
+            self.store.runtime_state("project-id", SPRINT_ID)["recovery_records"],
+            [],
+        )
         prepared = self.prepared_continuation(
             staged,
             assignment_id="assignment-dirty-continue",
@@ -2459,11 +2515,109 @@ class ManagedContinuityTests(unittest.TestCase):
         workspace_manager.publish_write_workspace.return_value = (
             prepared.verified_workspace
         )
+        failed_workspace = replace(
+            prepared.verified_workspace,
+            workspace_id=str(staged["workspaces"][0]["workspace_id"]),
+            assignment_id=str(staged["assignments"][0]["assignment_id"]),
+            expected_root=Path(str(staged["workspaces"][0]["expected_root"])),
+            actual_git_toplevel=Path(
+                str(staged["workspaces"][0]["actual_git_toplevel"])
+            ),
+            actual_git_dir=Path(str(staged["workspaces"][0]["actual_git_dir"])),
+            initial_head_commit=predecessor_initial,
+            head_commit=failed_workspace_head,
+            # The durable context proves the historical WORKSPACE_DIRTY
+            # rejection.  A later ignore-only cleanup must not erase the
+            # authenticated failed HEAD needed for recovery.
+            working_tree_state="clean",
+            branch_lease_id=str(staged["assignments"][0]["branch_lease_id"]),
+        )
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            failed_workspace
+        )
+        branch = str(staged["workspaces"][0]["assigned_branch"])
+        provider.branch_heads.return_value = {
+            f"refs/heads/{branch}": predecessor_initial,
+            f"refs/remotes/origin/{branch}": failed_workspace_head,
+        }
+        provider.is_ancestor.return_value = True
         request = {
             "assignment_id": context["context_id"],
             "idempotency_key": "continue-dirty-1",
             "action": "CONTINUE_NODE",
             "parameters": {"node_id": "build", "source_commit": COMMIT},
+        }
+        unbound_head = "c" * 40
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            replace(
+                failed_workspace,
+                initial_head_commit=unbound_head,
+                head_commit=unbound_head,
+            )
+        )
+        provider.branch_heads.return_value = {
+            f"refs/heads/{branch}": predecessor_initial,
+            f"refs/remotes/origin/{branch}": unbound_head,
+        }
+        unbound_request = deepcopy(request)
+        unbound_request["idempotency_key"] = "continue-dirty-unbound"
+        with patch.object(
+            self.importer,
+            "provider_for_durable_repository",
+            return_value=provider,
+        ), patch.object(
+            self.importer,
+            "_workspace_manager",
+            workspace_manager,
+        ), self.assertRaises(ManagedContinuityError) as unbound:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(unbound_request),
+                "continue-dirty-unbound",
+            )
+        self.assertEqual(unbound.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(
+            self.store.runtime_state("project-id", SPRINT_ID)["recovery_records"],
+            [],
+        )
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            replace(
+                failed_workspace,
+                initial_head_commit=predecessor_initial,
+                head_commit=COMMIT,
+            )
+        )
+        context_mismatch_request = deepcopy(request)
+        context_mismatch_request["idempotency_key"] = (
+            "continue-dirty-context-head-mismatch"
+        )
+        with patch.object(
+            self.importer,
+            "provider_for_durable_repository",
+            return_value=provider,
+        ), patch.object(
+            self.importer,
+            "_workspace_manager",
+            workspace_manager,
+        ), self.assertRaises(ManagedContinuityError) as context_mismatch:
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(context_mismatch_request),
+                "continue-dirty-context-head-mismatch",
+            )
+        self.assertEqual(context_mismatch.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(
+            self.store.runtime_state("project-id", SPRINT_ID)["recovery_records"],
+            [],
+        )
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            failed_workspace
+        )
+        provider.branch_heads.return_value = {
+            f"refs/heads/{branch}": predecessor_initial,
+            f"refs/remotes/origin/{branch}": failed_workspace_head,
         }
         with (
             patch.object(self.runtime, "_prepare_assignment", return_value=prepared),
@@ -2492,6 +2646,93 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(completed.response["status"], "RECOVERY_COMPLETED")
         self.assertEqual(recovered["assignments"][0]["status"], "failed")
         self.assertEqual(recovered["assignments"][1]["status"], "active")
+        workspace_manager.inspect_failed_write_workspace.side_effect = AssertionError(
+            "durable predecessor proof must not reopen the failed workspace"
+        )
+        with patch.object(
+            self.importer, "_workspace_manager", workspace_manager
+        ):
+            predecessor = self.runtime._continuation_publication_predecessor(
+                recovered,
+                recovered["assignments"][1],
+                recovered["workspaces"][1],
+                provider=provider,
+                repository=provider.ensure_mirror.return_value,
+            )
+        self.assertIsNotNone(predecessor)
+        self.assertEqual(
+            predecessor.assignment_id,
+            recovered["assignments"][0]["assignment_id"],
+        )
+        self.assertEqual(
+            predecessor.publication_id,
+            recovered["assignments"][0]["branch_lease_id"],
+        )
+        self.assertEqual(
+            predecessor.selected_head,
+            recovered["assignments"][0]["initial_head_commit"],
+        )
+        self.assertEqual(
+            predecessor.failed_workspace_head, failed_workspace_head
+        )
+        provider.ensure_local_branch_publication.reset_mock()
+        provider.ensure_local_branch_publication.side_effect = None
+        provider.ensure_local_branch_publication.return_value = (
+            "refs/nginx-qa/publications/successor"
+        )
+        with patch.object(
+            self.importer,
+            "provider_for_durable_repository",
+            return_value=provider,
+        ), patch.object(
+            self.importer,
+            "_workspace_manager",
+            workspace_manager,
+        ):
+            self.runtime._publish_prepared_assignment(recovered, prepared)
+        self.assertEqual(
+            provider.ensure_local_branch_publication.call_args.kwargs[
+                "predecessor"
+            ],
+            predecessor,
+        )
+        self.assertEqual(provider.ensure_local_branch_publication.call_count, 1)
+
+        legacy_replay = deepcopy(recovered)
+        legacy_recovery = legacy_replay["recovery_records"][0]
+        legacy_recovery["evidence"].pop("publication_predecessor")
+        workspace_manager.inspect_failed_write_workspace.side_effect = WorkspaceError(
+            "WORKSPACE_ROOT_MISMATCH", "failed workspace is unavailable"
+        )
+        provider.ensure_local_branch_publication.reset_mock()
+        self.runtime._ensure_assignment_branch_publication(
+            legacy_replay,
+            legacy_replay["assignments"][1],
+            legacy_replay["workspaces"][1],
+            provider=provider,
+            repository=provider.ensure_mirror.return_value,
+            branch=branch,
+            selected_head=COMMIT,
+            publication_id=str(
+                legacy_replay["assignments"][1]["branch_lease_id"]
+            ),
+            assignment_id=str(legacy_replay["assignments"][1]["assignment_id"]),
+            source_commit=COMMIT,
+        )
+        replay_call = provider.ensure_local_branch_publication.call_args
+        self.assertIsNone(replay_call.kwargs["predecessor"])
+        self.assertTrue(replay_call.kwargs["require_predecessor_or_receipt"])
+        self.assertEqual(provider.ensure_local_branch_publication.call_count, 1)
+
+        self.assertIsNone(
+            self.runtime._continuation_publication_predecessor(
+                recovered,
+                recovered["assignments"][0],
+                recovered["workspaces"][0],
+                provider=provider,
+                repository=provider.ensure_mirror.return_value,
+            )
+        )
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
 
     def test_terminal_after_failed_continue_node_source_is_idempotent(
@@ -2564,6 +2805,25 @@ class ManagedContinuityTests(unittest.TestCase):
         workspace_manager = Mock(unsafe=True)
         workspace_manager.publish_write_workspace.return_value = (
             prepared.verified_workspace
+        )
+        source_assignment = staged["assignments"][0]
+        source_workspace = staged["workspaces"][0]
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            replace(
+                prepared.verified_workspace,
+                workspace_id=str(source_workspace["workspace_id"]),
+                assignment_id=str(source_assignment["assignment_id"]),
+                node_id=str(source_assignment["node_id"]),
+                expected_root=Path(str(source_workspace["expected_root"])),
+                actual_git_toplevel=Path(
+                    str(source_workspace["actual_git_toplevel"])
+                ),
+                actual_git_dir=Path(str(source_workspace["actual_git_dir"])),
+                initial_head_commit=COMMIT,
+                head_commit=COMMIT,
+                working_tree_state="clean",
+                branch_lease_id=str(source_assignment["branch_lease_id"]),
+            )
         )
         continue_request = {
             "assignment_id": context["context_id"],

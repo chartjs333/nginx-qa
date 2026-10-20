@@ -10,7 +10,12 @@ from nginx_qa.branch_leases import (
     BranchLeaseStore,
     deterministic_branch_lease_id,
 )
-from nginx_qa.git_provider import ManagedGitError, ManagedGitProvider, RepositorySpec
+from nginx_qa.git_provider import (
+    BranchPublicationPredecessor,
+    ManagedGitError,
+    ManagedGitProvider,
+    RepositorySpec,
+)
 from nginx_qa.sprint_types import mirror_storage_key
 from nginx_qa.workspace_manager import (
     ManagedWorkspaceManager,
@@ -677,6 +682,413 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
             publication_ref,
         )
 
+    def test_continuation_publication_accepts_receipted_predecessor_descendant(
+        self,
+    ) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/continued-dirty-workspace"
+        predecessor_assignment = "assignment-dirty-predecessor"
+        predecessor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, predecessor_assignment
+        )
+        _predecessor_intent, predecessor_receipt = self.publication_refs(
+            mirror, predecessor_publication_id
+        )
+        predecessor_initial = self.commit(
+            "resumed predecessor initial\n", "resumed predecessor initial"
+        )
+        self.git(
+            "push",
+            "upstream",
+            f"{predecessor_initial}:refs/heads/predecessor-object-seed",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=predecessor_initial,
+            publication_id=predecessor_publication_id,
+            assignment_id=predecessor_assignment,
+            policy="create",
+            source_commit=self.source_commit,
+            expected_branch_head=None,
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, predecessor_receipt),
+            predecessor_initial,
+        )
+
+        descendant = self.commit("dirty predecessor work\n", "predecessor work")
+        self.git(
+            "push",
+            "upstream",
+            f"HEAD:refs/heads/{branch}",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        successor_assignment = "assignment-dirty-successor"
+        successor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, successor_assignment
+        )
+        successor_intent, successor_receipt = self.publication_refs(
+            mirror, successor_publication_id
+        )
+        predecessor = BranchPublicationPredecessor(
+            assignment_id=predecessor_assignment,
+            publication_id=predecessor_publication_id,
+            selected_head=predecessor_initial,
+            failed_workspace_head=descendant,
+        )
+
+        original_create_ref = self.provider._create_internal_ref
+        injected = False
+
+        def fail_before_successor_receipt(
+            repository, ref, commit, *, error_code  # type: ignore[no-untyped-def]
+        ):
+            nonlocal injected
+            if not injected and ref == successor_receipt:
+                injected = True
+                raise SimulatedPublicationCrash(
+                    "injected crash after special intent and before receipt"
+                )
+            return original_create_ref(
+                repository, ref, commit, error_code=error_code
+            )
+
+        with patch.object(
+            self.provider,
+            "_create_internal_ref",
+            side_effect=fail_before_successor_receipt,
+        ), self.assertRaises(SimulatedPublicationCrash):
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=successor_publication_id,
+                assignment_id=successor_assignment,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+                predecessor=predecessor,
+            )
+        self.assertTrue(injected)
+        self.assertIsNotNone(self.provider._read_ref(mirror, successor_intent))
+        self.assertIsNone(self.provider._read_ref(mirror, successor_receipt))
+
+        published = self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=self.source_commit,
+            publication_id=successor_publication_id,
+            assignment_id=successor_assignment,
+            policy="resume",
+            source_commit=self.source_commit,
+            expected_branch_head=None,
+            require_predecessor_or_receipt=True,
+        )
+
+        self.assertEqual(published, successor_receipt)
+        self.assertEqual(
+            self.provider._read_ref(mirror, f"refs/heads/{branch}"),
+            self.source_commit,
+        )
+        self.assertEqual(
+            self.provider._read_ref(
+                mirror, f"refs/remotes/origin/{branch}"
+            ),
+            descendant,
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, successor_receipt),
+            self.source_commit,
+        )
+
+        successor_checkout = self.base / "continued-successor"
+        self.git("clone", str(self.remote), str(successor_checkout))
+        self.git(
+            "switch",
+            "--create",
+            branch,
+            self.source_commit,
+            cwd=successor_checkout,
+        )
+        self.git("config", "user.name", "Successor", cwd=successor_checkout)
+        self.git(
+            "config",
+            "user.email",
+            "successor@example.invalid",
+            cwd=successor_checkout,
+        )
+        self.git("fetch", "origin", cwd=successor_checkout)
+        self.git(
+            "merge",
+            "--ff-only",
+            f"origin/{branch}",
+            cwd=successor_checkout,
+        )
+        self.assertEqual(
+            self.git("rev-parse", "HEAD", cwd=successor_checkout), descendant
+        )
+        (successor_checkout / "tracked.txt").write_text(
+            "continued successor work\n", encoding="utf-8"
+        )
+        self.git("add", "tracked.txt", cwd=successor_checkout)
+        self.git("commit", "-m", "continued successor work", cwd=successor_checkout)
+        later_descendant = self.git("rev-parse", "HEAD", cwd=successor_checkout)
+        self.git(
+            "push",
+            "origin",
+            f"HEAD:refs/heads/{branch}",
+            cwd=successor_checkout,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        self.assertEqual(
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=successor_publication_id,
+                assignment_id=successor_assignment,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+                require_predecessor_or_receipt=True,
+            ),
+            successor_receipt,
+        )
+        self.assertEqual(
+            self.provider._read_ref(mirror, f"refs/heads/{branch}"),
+            self.source_commit,
+        )
+        self.assertEqual(
+            self.provider._read_ref(
+                mirror, f"refs/remotes/origin/{branch}"
+            ),
+            later_descendant,
+        )
+
+    def test_continuation_publication_rejects_unreceipted_predecessor_descendant(
+        self,
+    ) -> None:
+        branch = "agent/unreceipted-dirty-workspace"
+        descendant = self.commit("unowned predecessor work\n", "unowned work")
+        self.git(
+            "push",
+            "upstream",
+            f"HEAD:refs/heads/{branch}",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        predecessor_assignment = "assignment-unreceipted-predecessor"
+        predecessor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, predecessor_assignment
+        )
+        successor_assignment = "assignment-unreceipted-successor"
+        successor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, successor_assignment
+        )
+        successor_intent, successor_receipt = self.publication_refs(
+            mirror, successor_publication_id
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=successor_publication_id,
+                assignment_id=successor_assignment,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+                predecessor=BranchPublicationPredecessor(
+                    assignment_id=predecessor_assignment,
+                    publication_id=predecessor_publication_id,
+                    selected_head=self.source_commit,
+                    failed_workspace_head=descendant,
+                ),
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertIsNone(self.provider._read_ref(mirror, successor_intent))
+        self.assertIsNone(self.provider._read_ref(mirror, successor_receipt))
+        self.assertEqual(
+            self.provider._read_ref(
+                mirror, f"refs/remotes/origin/{branch}"
+            ),
+            descendant,
+        )
+
+    def test_continuation_publication_rejects_missing_frozen_failed_head(
+        self,
+    ) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/missing-frozen-failed-head"
+        predecessor_assignment = "assignment-missing-head-predecessor"
+        predecessor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, predecessor_assignment
+        )
+        self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=self.source_commit,
+            publication_id=predecessor_publication_id,
+            assignment_id=predecessor_assignment,
+            policy="create",
+            source_commit=self.source_commit,
+            expected_branch_head=None,
+        )
+        failed_workspace_head = self.commit(
+            "frozen failed head\n", "frozen failed head"
+        )
+        self.git(
+            "push",
+            "upstream",
+            f"{failed_workspace_head}:refs/heads/missing-head-object-seed",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        successor_assignment = "assignment-missing-head-successor"
+        successor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, successor_assignment
+        )
+        successor_intent, successor_receipt = self.publication_refs(
+            mirror, successor_publication_id
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=successor_publication_id,
+                assignment_id=successor_assignment,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+                predecessor=BranchPublicationPredecessor(
+                    assignment_id=predecessor_assignment,
+                    publication_id=predecessor_publication_id,
+                    selected_head=self.source_commit,
+                    failed_workspace_head=failed_workspace_head,
+                ),
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertIsNone(self.provider._read_ref(mirror, successor_intent))
+        self.assertIsNone(self.provider._read_ref(mirror, successor_receipt))
+        self.assertIsNone(
+            self.provider._read_ref(mirror, f"refs/remotes/origin/{branch}")
+        )
+
+    def test_continuation_publication_rejects_later_head_before_receipt(
+        self,
+    ) -> None:
+        mirror = self.provider.ensure_mirror("primary")
+        branch = "agent/continued-head-moved"
+        predecessor_assignment = "assignment-moved-predecessor"
+        predecessor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, predecessor_assignment
+        )
+        self.provider.ensure_local_branch_publication(
+            mirror,
+            branch,
+            selected_head=self.source_commit,
+            publication_id=predecessor_publication_id,
+            assignment_id=predecessor_assignment,
+            policy="create",
+            source_commit=self.source_commit,
+            expected_branch_head=None,
+        )
+        failed_workspace_head = self.commit(
+            "failed workspace head\n", "failed workspace head"
+        )
+        later_head = self.commit("later branch head\n", "later branch head")
+        self.git(
+            "push",
+            "upstream",
+            f"HEAD:refs/heads/{branch}",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        successor_assignment = "assignment-moved-successor"
+        successor_publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, successor_assignment
+        )
+        successor_intent, successor_receipt = self.publication_refs(
+            mirror, successor_publication_id
+        )
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=successor_publication_id,
+                assignment_id=successor_assignment,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+                predecessor=BranchPublicationPredecessor(
+                    assignment_id=predecessor_assignment,
+                    publication_id=predecessor_publication_id,
+                    selected_head=self.source_commit,
+                    failed_workspace_head=failed_workspace_head,
+                ),
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertIsNone(self.provider._read_ref(mirror, successor_intent))
+        self.assertIsNone(self.provider._read_ref(mirror, successor_receipt))
+        self.assertEqual(
+            self.provider._read_ref(
+                mirror, f"refs/remotes/origin/{branch}"
+            ),
+            later_head,
+        )
+
+    def test_resume_publication_rejects_descendant_without_continuation_proof(
+        self,
+    ) -> None:
+        branch = "agent/unproven-descendant"
+        descendant = self.commit("unproven descendant\n", "unproven descendant")
+        self.git(
+            "push",
+            "upstream",
+            f"HEAD:refs/heads/{branch}",
+            cwd=self.source,
+        )
+        mirror = self.provider.ensure_mirror("primary")
+        assignment_id = "assignment-unproven-descendant"
+        publication_id = deterministic_branch_lease_id(
+            mirror.mirror_storage_key, branch, assignment_id
+        )
+        intent_ref, receipt_ref = self.publication_refs(mirror, publication_id)
+
+        with self.assertRaises(ManagedGitError) as raised:
+            self.provider.ensure_local_branch_publication(
+                mirror,
+                branch,
+                selected_head=self.source_commit,
+                publication_id=publication_id,
+                assignment_id=assignment_id,
+                policy="resume",
+                source_commit=self.source_commit,
+                expected_branch_head=None,
+            )
+
+        self.assertEqual(raised.exception.code, "BRANCH_DIVERGED")
+        self.assertIsNone(self.provider._read_ref(mirror, intent_ref))
+        self.assertIsNone(self.provider._read_ref(mirror, receipt_ref))
+        self.assertEqual(
+            self.provider._read_ref(
+                mirror, f"refs/remotes/origin/{branch}"
+            ),
+            descendant,
+        )
+
     def test_resume_publication_still_rejects_divergent_reused_branch(self) -> None:
         descendant = self.commit("two\n", "accepted continuation")
         self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
@@ -1295,6 +1707,69 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
             self.git("-C", str(workspace.expected_root), "status", "--porcelain=v1"),
             before_status,
         )
+
+    def test_failed_write_workspace_inspection_authenticates_head_after_cleanup(
+        self,
+    ) -> None:
+        request = self.write_request(
+            "writer-failed-inspection", branch="agent/failed-inspection"
+        )
+        workspace = self.manager.prepare(request)
+        self.git("config", "user.name", "Worker", cwd=workspace.expected_root)
+        self.git(
+            "config",
+            "user.email",
+            "worker@example.invalid",
+            cwd=workspace.expected_root,
+        )
+        (workspace.expected_root / "worker.txt").write_text(
+            "committed work\n", encoding="utf-8"
+        )
+        self.git("add", "worker.txt", cwd=workspace.expected_root)
+        self.git("commit", "-m", "failed result head", cwd=workspace.expected_root)
+        failed_head = self.git("rev-parse", "HEAD", cwd=workspace.expected_root)
+        untracked = workspace.expected_root / "dirty-evidence.txt"
+        untracked.write_bytes(b"preserve dirty evidence\r\n")
+        before_status = self.git(
+            "-C", str(workspace.expected_root), "status", "--porcelain=v1"
+        )
+        mirror = self.provider.ensure_mirror("primary", fetch=False)
+
+        with self.manager.inspect_failed_write_workspace(
+            request,
+            mirror,
+            expected_root=workspace.expected_root,
+            branch_lease_id=str(workspace.branch_lease_id),
+        ) as inspected:
+            self.assertEqual(inspected.head_commit, failed_head)
+            self.assertEqual(inspected.initial_head_commit, failed_head)
+            self.assertEqual(inspected.working_tree_state, "dirty")
+            self.assertEqual(inspected.assigned_branch, "agent/failed-inspection")
+
+        self.assertEqual(untracked.read_bytes(), b"preserve dirty evidence\r\n")
+        self.assertEqual(
+            self.git("-C", str(workspace.expected_root), "status", "--porcelain=v1"),
+            before_status,
+        )
+
+        exclude = workspace.expected_root / ".git" / "info" / "exclude"
+        with exclude.open("a", encoding="utf-8", newline="\n") as stream:
+            stream.write("dirty-evidence.txt\n")
+        self.assertEqual(
+            self.git("-C", str(workspace.expected_root), "status", "--porcelain=v1"),
+            "",
+        )
+        with self.manager.inspect_failed_write_workspace(
+            request,
+            mirror,
+            expected_root=workspace.expected_root,
+            branch_lease_id=str(workspace.branch_lease_id),
+        ) as inspected:
+            self.assertEqual(inspected.head_commit, failed_head)
+            self.assertEqual(inspected.initial_head_commit, failed_head)
+            self.assertEqual(inspected.working_tree_state, "clean")
+
+        self.assertEqual(untracked.read_bytes(), b"preserve dirty evidence\r\n")
 
     def test_changed_workspace_head_is_not_reset_or_checked_out(self) -> None:
         request = self.write_request("writer-head", branch="agent/head")

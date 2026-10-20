@@ -469,6 +469,53 @@ class ManagedWorkspaceManager:
                 "WORKSPACE_LOCK_TIMEOUT", "timed out waiting for the workspace lock"
             ) from None
 
+    @contextmanager
+    def inspect_failed_write_workspace(
+        self,
+        request: WorkspaceRequest,
+        repository: ManagedRepository,
+        *,
+        expected_root: Path,
+        branch_lease_id: str,
+    ) -> Iterator[ManagedWorkspace]:
+        """Inspect an owned failed workspace without accepting a result.
+
+        This read-only fence exists solely to authenticate the exact HEAD of a
+        ``WORKSPACE_DIRTY`` failure before a continued assignment may tolerate
+        that same commit on the reused remote branch.  The working tree may
+        since have become clean through an ignore-only operator action; the
+        durable failure context, exact HEAD and ownership facts remain binding.
+        """
+
+        if request.access != "write":
+            raise WorkspaceError(
+                "WORKSPACE_ACCESS_INVALID",
+                "failed workspace inspection requires write access",
+            )
+        canonical_root = self.expected_root(request)
+        if os.path.normcase(str(canonical_root)) != os.path.normcase(
+            str(expected_root.resolve(strict=False))
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_ROOT_MISMATCH",
+                "durable workspace root differs from its canonical assignment root",
+            )
+        lock_path = self._workspace_lock_path(canonical_root)
+        try:
+            with ManagedFileLock(lock_path, timeout=self.workspace_lock_timeout):
+                yield self.verify(
+                    request,
+                    repository,
+                    expected_root=canonical_root,
+                    expected_initial_head=None,
+                    branch_lease_id=branch_lease_id,
+                    expected_working_tree_state="any",
+                )
+        except FileLockTimeout:
+            raise WorkspaceError(
+                "WORKSPACE_LOCK_TIMEOUT", "timed out waiting for the workspace lock"
+            ) from None
+
     @staticmethod
     def _assert_no_parent_repository(
         candidate: Path,
@@ -1012,11 +1059,15 @@ class ManagedWorkspaceManager:
         repository: ManagedRepository,
         *,
         expected_root: Path,
-        expected_initial_head: str,
+        expected_initial_head: str | None,
         branch_lease_id: str | None,
         expected_workspace_id_root: Path | None = None,
+        expected_working_tree_state: str = "clean",
     ) -> ManagedWorkspace:
         """Verify all ownership facts; never modifies an existing workspace."""
+
+        if expected_working_tree_state not in {"any", "clean", "dirty"}:
+            raise ValueError("expected working tree state is invalid")
 
         if not expected_root.is_dir() or expected_root.is_symlink():
             raise WorkspaceError(
@@ -1176,7 +1227,10 @@ class ManagedWorkspaceManager:
             raise WorkspaceError(
                 "BRANCH_DIVERGED", "workspace is not on its assigned branch"
             )
-        if head_commit != expected_initial_head:
+        if (
+            expected_initial_head is not None
+            and head_commit != expected_initial_head
+        ):
             raise WorkspaceError(
                 "BRANCH_DIVERGED", "workspace HEAD differs from its frozen initial head"
             )
@@ -1192,14 +1246,27 @@ class ManagedWorkspaceManager:
             ),
             error_code="WORKSPACE_ROOT_MISMATCH",
         )
-        if status_result.stdout:
+        working_tree_state = "dirty" if status_result.stdout else "clean"
+        if (
+            expected_working_tree_state == "clean"
+            and working_tree_state != "clean"
+        ):
             raise WorkspaceError(
                 "WORKSPACE_DIRTY",
                 "workspace has tracked, staged, untracked, or submodule changes",
             )
+        if (
+            expected_working_tree_state == "dirty"
+            and working_tree_state != "dirty"
+        ):
+            raise WorkspaceError(
+                "WORKSPACE_STATE_MISMATCH",
+                "failed workspace no longer contains dirty-state evidence",
+            )
 
         identity_root = expected_workspace_id_root or expected_root
         workspace_id = _workspace_id(request)
+        frozen_initial_head = expected_initial_head or head_commit
         return ManagedWorkspace(
             workspace_id=workspace_id,
             project_id=request.project_id,
@@ -1213,11 +1280,11 @@ class ManagedWorkspaceManager:
             actual_git_toplevel=resolved_root,
             actual_git_dir=actual_git_dir,
             source_commit=request.source_commit,
-            initial_head_commit=expected_initial_head,
+            initial_head_commit=frozen_initial_head,
             head_commit=head_commit,
             assigned_branch=request.assigned_branch,
             access=request.access,
-            working_tree_state="clean",
+            working_tree_state=working_tree_state,
             branch_lease_id=branch_lease_id,
         )
 

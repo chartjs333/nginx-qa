@@ -85,6 +85,22 @@ def deterministic_branch_publication_id(
     return f"branch-lease-{digest}"
 
 
+@dataclass(frozen=True)
+class BranchPublicationPredecessor:
+    """Frozen ownership proof for one continued logical branch.
+
+    The continuity runtime may use this only after a completed ``CONTINUE_NODE``
+    transition.  The provider independently verifies the predecessor's
+    assignment-bound publication receipt before it preserves a descendant that
+    is already visible on the reused branch.
+    """
+
+    assignment_id: str
+    publication_id: str
+    selected_head: str
+    failed_workspace_head: str
+
+
 class ManagedGitError(RuntimeError):
     """A transport-neutral, redacted Git provider failure."""
 
@@ -2562,6 +2578,8 @@ class ManagedGitProvider:
         policy: str,
         source_commit: str,
         expected_branch_head: str | None,
+        predecessor: BranchPublicationPredecessor | None = None,
+        require_predecessor_or_receipt: bool = False,
     ) -> str:
         """Publish a branch from a lease-bound intent, then record completion.
 
@@ -2604,6 +2622,59 @@ class ManagedGitProvider:
         publication_ref = f"refs/nginx-qa/publications/{publication_digest}"
         intent_ref = f"refs/nginx-qa/intents/{publication_digest}"
         branch_ref = f"refs/heads/{branch}"
+
+        def validate_predecessor(
+            candidate: BranchPublicationPredecessor,
+        ) -> str:
+            if (
+                not candidate.assignment_id
+                or len(candidate.assignment_id) > 200
+                or candidate.assignment_id == assignment_id
+                or not candidate.publication_id
+                or len(candidate.publication_id) > 512
+            ):
+                raise ManagedGitError(
+                    "GIT_REF_INVALID",
+                    "branch publication predecessor identity is invalid",
+                )
+            expected_predecessor_id = deterministic_branch_publication_id(
+                repository.mirror_storage_key,
+                branch,
+                candidate.assignment_id,
+            )
+            if candidate.publication_id != expected_predecessor_id:
+                raise ManagedGitError(
+                    "GIT_REF_INVALID",
+                    "branch publication predecessor is not assignment-bound",
+                )
+            self.assert_commit(repository, candidate.selected_head)
+            self.assert_commit(repository, candidate.failed_workspace_head)
+            if not self.is_ancestor(
+                repository, selected_head, candidate.selected_head
+            ):
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "predecessor branch selection does not descend from the continuation",
+                )
+            if not self.is_ancestor(
+                repository,
+                candidate.selected_head,
+                candidate.failed_workspace_head,
+            ):
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "failed predecessor workspace does not descend from the continuation",
+                )
+            predecessor_digest = hashlib.sha256(
+                (
+                    f"{repository.canonical_remote}\0"
+                    f"{candidate.publication_id}"
+                ).encode("utf-8")
+            ).hexdigest()
+            return f"refs/nginx-qa/publications/{predecessor_digest}"
+
+        if predecessor is not None:
+            validate_predecessor(predecessor)
         lock_path = self.locks_root / f"{repository.mirror_storage_key}.lock"
         self._assert_internal_path(self.locks_root)
         self._assert_internal_path(lock_path)
@@ -2620,10 +2691,27 @@ class ManagedGitProvider:
             "selected_head": selected_head,
             "source_commit": source_commit,
         }
+        if predecessor is not None:
+            stable_ownership.update(
+                {
+                    "predecessor_assignment_id": predecessor.assignment_id,
+                    "predecessor_publication_id": predecessor.publication_id,
+                    "predecessor_selected_head": predecessor.selected_head,
+                    "predecessor_failed_workspace_head": (
+                        predecessor.failed_workspace_head
+                    ),
+                }
+            )
         requested_intent = {
             **stable_ownership,
             "expected_branch_head": expected_branch_head,
             "policy": policy,
+        }
+        predecessor_keys = {
+            "predecessor_assignment_id",
+            "predecessor_publication_id",
+            "predecessor_selected_head",
+            "predecessor_failed_workspace_head",
         }
 
         def serialize_intent(
@@ -2642,7 +2730,9 @@ class ManagedGitProvider:
                 separators=(",", ":"),
             ).encode("utf-8")
 
-        def read_intent(object_id: str) -> Mapping[str, object]:
+        def read_intent(
+            object_id: str,
+        ) -> tuple[Mapping[str, object], BranchPublicationPredecessor | None]:
             raw = self._read_internal_blob(
                 repository,
                 object_id,
@@ -2678,10 +2768,14 @@ class ManagedGitProvider:
                 "observed_local_head",
                 "observed_remote_head",
             }
+            actual_keys = set(payload) if isinstance(payload, dict) else set()
+            allowed_key_sets = {frozenset(expected_keys)}
+            if predecessor is None:
+                allowed_key_sets.add(frozenset(expected_keys | predecessor_keys))
             if (
                 raw != canonical
                 or not isinstance(payload, dict)
-                or set(payload) != expected_keys
+                or frozenset(actual_keys) not in allowed_key_sets
             ):
                 raise ManagedGitError(
                     "REPOSITORY_MIRROR_INVALID",
@@ -2721,7 +2815,27 @@ class ManagedGitProvider:
                             "branch publication predecessor is invalid",
                         )
                     self.assert_commit(repository, observed)
-            return payload
+            stored_predecessor: BranchPublicationPredecessor | None = None
+            if predecessor_keys <= actual_keys:
+                predecessor_values = [
+                    payload.get("predecessor_assignment_id"),
+                    payload.get("predecessor_publication_id"),
+                    payload.get("predecessor_selected_head"),
+                    payload.get("predecessor_failed_workspace_head"),
+                ]
+                if not all(isinstance(value, str) for value in predecessor_values):
+                    raise ManagedGitError(
+                        "REPOSITORY_MIRROR_INVALID",
+                        "branch publication predecessor intent is invalid",
+                    )
+                stored_predecessor = BranchPublicationPredecessor(
+                    assignment_id=str(predecessor_values[0]),
+                    publication_id=str(predecessor_values[1]),
+                    selected_head=str(predecessor_values[2]),
+                    failed_workspace_head=str(predecessor_values[3]),
+                )
+                validate_predecessor(stored_predecessor)
+            return payload, stored_predecessor
 
         def validate_frozen_policy(
             local_head: str | None,
@@ -2729,6 +2843,7 @@ class ManagedGitProvider:
             *,
             frozen_policy: str,
             frozen_expected_branch_head: str | None,
+            allow_proven_remote_descendant: bool = False,
         ) -> None:
             if frozen_policy in {"create", "reject_if_exists"} and (
                 local_head is not None or remote_head is not None
@@ -2737,7 +2852,11 @@ class ManagedGitProvider:
                     "BRANCH_ALREADY_EXISTS",
                     "branch appeared before publication intent was committed",
                 )
-            if local_head is not None and local_head != selected_head:
+            if (
+                local_head is not None
+                and local_head != selected_head
+                and not allow_proven_remote_descendant
+            ):
                 if frozen_policy != "resume" or not self.is_ancestor(
                     repository, local_head, selected_head
                 ):
@@ -2750,6 +2869,7 @@ class ManagedGitProvider:
                     remote_head is not None
                     and remote_head != selected_head
                     and not self.is_ancestor(repository, remote_head, selected_head)
+                    and not allow_proven_remote_descendant
                 )
                 or (
                     local_head is None
@@ -2771,6 +2891,37 @@ class ManagedGitProvider:
                     "exact branch head changed before publication intent was committed",
                 )
 
+        def has_proven_failed_workspace_head(
+            local_head: str | None,
+            remote_head: str | None,
+            effective_predecessor: BranchPublicationPredecessor | None,
+        ) -> bool:
+            """Validate the exact failed-workspace head frozen by continuity.
+
+            The local service branch remains at the successor's selected head;
+            only the exact remote head authenticated from the failed managed
+            workspace is tolerated.  This is deliberately not a generic
+            descendant relaxation.
+            """
+
+            if effective_predecessor is None:
+                return False
+            if remote_head != effective_predecessor.failed_workspace_head:
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "continued branch no longer matches the failed workspace",
+                )
+            if local_head not in {
+                None,
+                selected_head,
+                effective_predecessor.selected_head,
+            }:
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED",
+                    "continued local branch moved beyond the successor selection",
+                )
+            return True
+
         try:
             with ManagedFileLock(lock_path, timeout=self.lock_timeout):
                 receipt = self._read_ref(repository, publication_ref)
@@ -2778,21 +2929,74 @@ class ManagedGitProvider:
                 heads = self.branch_heads(repository, branch)
                 current = heads.get(branch_ref)
                 remote = heads.get(f"refs/remotes/origin/{branch}")
-                if receipt is not None:
-                    if intent_object_id is not None:
-                        read_intent(intent_object_id)
+                intent: Mapping[str, object] | None = None
+                effective_predecessor = predecessor
+                if intent_object_id is not None:
+                    intent, stored_predecessor = read_intent(intent_object_id)
+                    if stored_predecessor is not None:
+                        if (
+                            predecessor is not None
+                            and stored_predecessor != predecessor
+                        ):
+                            raise ManagedGitError(
+                                "BRANCH_DIVERGED",
+                                "branch publication intent changed predecessor proof",
+                            )
+                        effective_predecessor = stored_predecessor
+                if effective_predecessor is not None:
+                    effective_predecessor_ref = validate_predecessor(
+                        effective_predecessor
+                    )
                     if (
-                        receipt != selected_head
-                        or current is None
-                        or not self.is_ancestor(
-                            repository, selected_head, current
-                        )
+                        self._read_ref(repository, effective_predecessor_ref)
+                        != effective_predecessor.selected_head
                     ):
                         raise ManagedGitError(
                             "BRANCH_DIVERGED",
-                            "branch publication receipt disagrees with durable state",
+                            "continued branch predecessor publication is missing",
+                        )
+                if (
+                    require_predecessor_or_receipt
+                    and receipt is None
+                    and effective_predecessor is None
+                ):
+                    raise ManagedGitError(
+                        "BRANCH_DIVERGED",
+                        "continued branch has no durable predecessor proof",
                     )
+                if receipt is not None:
+                    receipt_valid = receipt == selected_head and current is not None
+                    if receipt_valid and effective_predecessor is not None:
+                        receipt_valid = bool(
+                            (
+                                current == selected_head
+                                or self.is_ancestor(
+                                    repository,
+                                    effective_predecessor.failed_workspace_head,
+                                    current,
+                                )
+                            )
+                            and remote is not None
+                            and self.is_ancestor(
+                                repository,
+                                effective_predecessor.failed_workspace_head,
+                                remote,
+                            )
+                        )
+                    elif receipt_valid:
+                        receipt_valid = self.is_ancestor(
+                            repository, selected_head, current
+                        )
+                    if not receipt_valid:
+                        raise ManagedGitError(
+                            "BRANCH_DIVERGED",
+                            "branch publication receipt disagrees with durable state",
+                        )
                     return publication_ref
+
+                proven_failed_workspace_head = has_proven_failed_workspace_head(
+                    current, remote, effective_predecessor
+                )
 
                 if intent_object_id is None:
                     validate_frozen_policy(
@@ -2800,6 +3004,9 @@ class ManagedGitProvider:
                         remote,
                         frozen_policy=policy,
                         frozen_expected_branch_head=expected_branch_head,
+                        allow_proven_remote_descendant=(
+                            proven_failed_workspace_head
+                        ),
                     )
                     intent_raw = serialize_intent(current, remote)
                     intent_object_id = self._write_internal_blob(
@@ -2813,9 +3020,15 @@ class ManagedGitProvider:
                         intent_object_id,
                         error_code="BRANCH_DIVERGED",
                     )
-                    intent = read_intent(intent_object_id)
-                else:
-                    intent = read_intent(intent_object_id)
+                    intent, stored_predecessor = read_intent(intent_object_id)
+                    if stored_predecessor is not None:
+                        effective_predecessor = stored_predecessor
+
+                if intent is None:
+                    raise ManagedGitError(
+                        "REPOSITORY_MIRROR_INVALID",
+                        "branch publication intent is missing",
+                    )
 
                 observed_local = intent.get("observed_local_head")
                 observed_remote = intent.get("observed_remote_head")
@@ -2827,11 +3040,15 @@ class ManagedGitProvider:
                 assert frozen_expected_head is None or isinstance(
                     frozen_expected_head, str
                 )
+                frozen_failed_workspace_head = has_proven_failed_workspace_head(
+                    observed_local, observed_remote, effective_predecessor
+                )
                 validate_frozen_policy(
                     observed_local,
                     observed_remote,
                     frozen_policy=frozen_policy,
                     frozen_expected_branch_head=frozen_expected_head,
+                    allow_proven_remote_descendant=frozen_failed_workspace_head,
                 )
 
                 if remote != observed_remote:
@@ -3175,6 +3392,7 @@ def _resolve_from_nearest_existing(path: Path) -> Path:
 
 
 __all__ = [
+    "BranchPublicationPredecessor",
     "FileLockTimeout",
     "GitCommandResult",
     "GitCommandRunner",

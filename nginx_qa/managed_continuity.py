@@ -29,7 +29,13 @@ from .branch_leases import (
     BranchLeaseStore,
     deterministic_branch_lease_id,
 )
-from .git_provider import ManagedFileLock, ManagedGitError, ManagedRepository
+from .git_provider import (
+    BranchPublicationPredecessor,
+    ManagedFileLock,
+    ManagedGitError,
+    ManagedGitProvider,
+    ManagedRepository,
+)
 from .managed_import import (
     ManagedImportError,
     ManagedImportStore,
@@ -3055,6 +3061,79 @@ class ManagedContinuityRuntime:
                 RECOVERY_CONFLICT, 409, correlation_id
             )
 
+        continuation_predecessor: BranchPublicationPredecessor | None = None
+        if existing is None and action == "CONTINUE_NODE":
+            source_assignment = _records_by(
+                state, "assignments", "assignment_id"
+            ).get(str(context.get("failed_assignment_id") or ""))
+            source_journals = [
+                item
+                for item in state.get("transition_journal", [])
+                if isinstance(item, Mapping)
+                and isinstance(source_assignment, Mapping)
+                and item.get("assignment_id")
+                == source_assignment.get("assignment_id")
+            ]
+            source_journal = source_journals[0] if len(source_journals) == 1 else None
+            source_approvals = [
+                item
+                for item in state.get("reviews", [])
+                if isinstance(item, Mapping)
+                and isinstance(source_journal, Mapping)
+                and item.get("result_key") == source_journal.get("result_key")
+                and item.get("decision") == "APPROVE"
+            ]
+            if (
+                not isinstance(source_assignment, Mapping)
+                or source_assignment.get("status")
+                not in {"active", "reviews_pending", "failed", "blocked"}
+                or parameters.get("node_id") != source_assignment.get("node_id")
+                or parameters.get("source_commit")
+                not in {
+                    source_assignment.get("source_commit"),
+                    source_assignment.get("result_commit"),
+                }
+                or len(source_journals) > 1
+                or (
+                    len(source_journals) == 1
+                    and (
+                        source_journals[0].get("state") != "REVIEWS_PENDING"
+                        or source_journals[0].get("disposition") != "open"
+                        or len(source_approvals) != 2
+                    )
+                )
+                or (
+                    not source_journals
+                    and source_assignment.get("result_commit") is not None
+                )
+            ):
+                # Reject a semantically stale or mismatched continuation before
+                # it becomes a durable pending recovery record.
+                raise ManagedContinuityError(
+                    RECOVERY_CONFLICT, 409, correlation_id
+                )
+            assert isinstance(source_assignment, Mapping)
+            try:
+                continuation_predecessor = (
+                    self._prevalidate_dirty_continuation_predecessor(
+                        project_id,
+                        state,
+                        context,
+                        source_assignment,
+                        successor_selected_head=str(parameters["source_commit"]),
+                    )
+                )
+            except (
+                ManagedGitError,
+                WorkspaceError,
+                LookupError,
+                RuntimeError,
+                ValueError,
+            ) as exc:
+                raise ManagedContinuityError(
+                    RECOVERY_CONFLICT, 409, correlation_id
+                ) from exc
+
         if action == "RETRY_IMPORT":
             incoming_parameters = deepcopy(dict(parameters))
         else:
@@ -3235,7 +3314,20 @@ class ManagedContinuityRuntime:
                         "produced_record_ids": [],
                         "response": None,
                         "normalized_error": None,
-                        "evidence": {},
+                        "evidence": (
+                            {
+                                "publication_predecessor": {
+                                    "assignment_id": continuation_predecessor.assignment_id,
+                                    "publication_id": continuation_predecessor.publication_id,
+                                    "selected_head": continuation_predecessor.selected_head,
+                                    "failed_workspace_head": (
+                                        continuation_predecessor.failed_workspace_head
+                                    ),
+                                }
+                            }
+                            if continuation_predecessor is not None
+                            else {}
+                        ),
                         "status": "pending",
                         "created_at": created_at,
                         "completed_at": None,
@@ -3784,15 +3876,26 @@ class ManagedContinuityRuntime:
                     "produced_record_ids": produced_ids,
                     "deduplicated": False,
                 }
+                pending_evidence = current_recovery.get("evidence")
+                publication_predecessor = (
+                    pending_evidence.get("publication_predecessor")
+                    if isinstance(pending_evidence, Mapping)
+                    else None
+                )
+                completed_evidence: dict[str, Any] = {
+                    "context_id": context_id,
+                    "source_assignment_id": str(assignment_id),
+                }
+                if isinstance(publication_predecessor, Mapping):
+                    completed_evidence["publication_predecessor"] = deepcopy(
+                        dict(publication_predecessor)
+                    )
                 current_recovery.update(
                     {
                         "produced_record_ids": produced_ids,
                         "response": deepcopy(response),
                         "normalized_error": None,
-                        "evidence": {
-                            "context_id": context_id,
-                            "source_assignment_id": str(assignment_id),
-                        },
+                        "evidence": completed_evidence,
                         "status": "completed",
                         "completed_at": completed_at,
                     }
@@ -3815,7 +3918,7 @@ class ManagedContinuityRuntime:
             except Exception:
                 pass
         try:
-            self._publish_prepared_assignment(state, prepared)
+            self._publish_prepared_assignment(_state, prepared)
         except Exception:
             pass
         self._resume_after_durable_ack(project_id, sprint_id, reconcile=True)
@@ -5202,15 +5305,17 @@ class ManagedContinuityRuntime:
             repository = provider.ensure_mirror(
                 str(state["repository"]["repository_id"]), fetch=False
             )
-            provider.ensure_local_branch_publication(
-                repository,
-                str(prepared.branch_request.branch),
+            self._ensure_assignment_branch_publication(
+                state,
+                prepared.assignment,
+                prepared.workspace,
+                provider=provider,
+                repository=repository,
+                branch=str(prepared.branch_request.branch),
                 selected_head=str(prepared.branch_request.initial_head_commit),
                 publication_id=str(prepared.branch_request.lease_id),
                 assignment_id=str(prepared.branch_request.assignment_id),
-                policy="resume",
                 source_commit=str(prepared.branch_request.source_commit),
-                expected_branch_head=None,
             )
         if prepared.processes and self.process_supervisor is not None:
             self.process_supervisor.start_background()
@@ -5289,18 +5394,434 @@ class ManagedContinuityRuntime:
                 transactional_lease=lease,
                 publish_mirror_ref=False,
             )
-            provider.ensure_local_branch_publication(
-                repository,
-                branch,
+            self._ensure_assignment_branch_publication(
+                state,
+                assignment,
+                workspace,
+                provider=provider,
+                repository=repository,
+                branch=branch,
                 selected_head=str(assignment["initial_head_commit"]),
                 publication_id=lease_id,
                 assignment_id=str(lease.assignment_id),
-                policy="resume",
                 source_commit=str(assignment["source_commit"]),
-                expected_branch_head=None,
             )
             recovered += 1
         return recovered
+
+    def _ensure_assignment_branch_publication(
+        self,
+        state: Mapping[str, Any],
+        assignment: Mapping[str, Any],
+        workspace: Mapping[str, Any],
+        *,
+        provider: ManagedGitProvider,
+        repository: ManagedRepository,
+        branch: str,
+        selected_head: str,
+        publication_id: str,
+        assignment_id: str,
+        source_commit: str,
+    ) -> None:
+        publication = {
+            "selected_head": selected_head,
+            "publication_id": publication_id,
+            "assignment_id": assignment_id,
+            "policy": "resume",
+            "source_commit": source_commit,
+            "expected_branch_head": None,
+        }
+        try:
+            predecessor = self._continuation_publication_predecessor(
+                state,
+                assignment,
+                workspace,
+                provider=provider,
+                repository=repository,
+            )
+        except WorkspaceError:
+            # A predecessor-bearing intent is sufficient after a crash even if
+            # the old workspace has since disappeared.  This replay-only path
+            # must never create an ordinary no-proof publication.
+            provider.ensure_local_branch_publication(
+                repository,
+                branch,
+                predecessor=None,
+                require_predecessor_or_receipt=True,
+                **publication,
+            )
+            return
+        provider.ensure_local_branch_publication(
+            repository, branch, predecessor=predecessor, **publication
+        )
+
+    @staticmethod
+    def _failed_head_matches_context(
+        state: Mapping[str, Any],
+        context: Mapping[str, Any],
+        source: Mapping[str, Any],
+        failed_workspace_head: str,
+    ) -> bool:
+        source_assignment_id = source.get("assignment_id")
+        if not isinstance(source_assignment_id, str):
+            return False
+        matching_outcomes = [
+            outcome
+            for outcome in source.get("allowed_outcomes", [])
+            if isinstance(outcome, str)
+            and _stable_id(
+                "context-assignment",
+                state["sprint_id"],
+                context["graph_revision"],
+                source_assignment_id,
+                managed_result_key(
+                    source_assignment_id, outcome, failed_workspace_head
+                ),
+                "WORKSPACE_DIRTY",
+                compact=True,
+            )
+            == context["context_id"]
+        ]
+        return len(matching_outcomes) == 1
+
+    def _authenticate_failed_workspace_predecessor(
+        self,
+        state: Mapping[str, Any],
+        context: Mapping[str, Any],
+        source: Mapping[str, Any],
+        source_workspace: Mapping[str, Any],
+        source_lease: Mapping[str, Any],
+        *,
+        successor_selected_head: str,
+        provider: ManagedGitProvider,
+        repository: ManagedRepository,
+    ) -> BranchPublicationPredecessor | None:
+        source_assignment_id = source.get("assignment_id")
+        branch = source_workspace.get("assigned_branch")
+        publication_id = source_lease.get("lease_id")
+        selected_head = source_lease.get("initial_head_commit")
+        if not all(
+            isinstance(value, str)
+            for value in (
+                source_assignment_id,
+                branch,
+                publication_id,
+                selected_head,
+                successor_selected_head,
+            )
+        ):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+        source_request = WorkspaceRequest(
+            project_id=str(source_workspace["project_id"]),
+            sprint_id=str(source_workspace["sprint_id"]),
+            node_id=str(source["node_id"]),
+            assignment_id=str(source_assignment_id),
+            repository_id=str(source_workspace["repository_id"]),
+            source_commit=str(source["source_commit"]),
+            access="write",
+            assigned_branch=str(branch),
+            existing_branch_policy="resume",
+        )
+        with self.importer.workspace_manager.inspect_failed_write_workspace(
+            source_request,
+            repository,
+            expected_root=Path(str(source_workspace["expected_root"])),
+            branch_lease_id=str(publication_id),
+        ) as failed_workspace:
+            failed_workspace_head = str(failed_workspace.head_commit)
+        if (
+            not provider.is_ancestor(
+                repository, successor_selected_head, selected_head
+            )
+            or not provider.is_ancestor(
+                repository, selected_head, failed_workspace_head
+            )
+        ):
+            raise ManagedGitError(
+                "BRANCH_DIVERGED",
+                "failed managed workspace does not descend from the continuation",
+            )
+        if not self._failed_head_matches_context(
+            state, context, source, failed_workspace_head
+        ):
+            raise ManagedGitError(
+                "BRANCH_DIVERGED",
+                "failed workspace head is not bound to the rejected result",
+            )
+        if failed_workspace_head == successor_selected_head:
+            return None
+        branch_heads = provider.branch_heads(repository, str(branch))
+        if (
+            branch_heads.get(f"refs/remotes/origin/{branch}")
+            != failed_workspace_head
+            or branch_heads.get(f"refs/heads/{branch}")
+            not in {None, successor_selected_head, selected_head}
+        ):
+            raise ManagedGitError(
+                "BRANCH_DIVERGED",
+                "continued branch does not match the failed managed workspace",
+            )
+        return BranchPublicationPredecessor(
+            assignment_id=str(source_assignment_id),
+            publication_id=str(publication_id),
+            selected_head=str(selected_head),
+            failed_workspace_head=failed_workspace_head,
+        )
+
+    def _prevalidate_dirty_continuation_predecessor(
+        self,
+        project_id: str,
+        state: Mapping[str, Any],
+        context: Mapping[str, Any],
+        source: Mapping[str, Any],
+        *,
+        successor_selected_head: str,
+    ) -> BranchPublicationPredecessor | None:
+        if (
+            context.get("failure_scope") != "assignment"
+            or context.get("reason_code") != "WORKSPACE_DIRTY"
+            or context.get("normalized_error")
+            != {"code": "WORKSPACE_DIRTY", "phase": "RESULT_VERIFICATION"}
+        ):
+            return None
+        workspaces = _records_by(state, "workspaces", "workspace_id")
+        leases = _records_by(state, "branch_leases", "lease_id")
+        source_workspace = workspaces.get(str(source.get("workspace_id")))
+        source_lease = leases.get(str(source.get("branch_lease_id")))
+        repository_record = state.get("repository")
+        branch = (
+            source_workspace.get("assigned_branch")
+            if isinstance(source_workspace, Mapping)
+            else None
+        )
+        if (
+            source.get("status") != "active"
+            or source.get("result_commit") is not None
+            or source.get("assignment_id") != context.get("failed_assignment_id")
+            or not isinstance(source_workspace, Mapping)
+            or source_workspace.get("assignment_id") != source.get("assignment_id")
+            or source_workspace.get("project_id") != project_id
+            or source_workspace.get("sprint_id") != state.get("sprint_id")
+            or source_workspace.get("node_id") != source.get("node_id")
+            or source_workspace.get("assigned_branch") != context.get("assigned_branch")
+            or context.get("source_commit") != source.get("source_commit")
+            or context.get("result_commit") is not None
+            or context.get("workspace_status") != source_workspace
+            or not isinstance(source_lease, Mapping)
+            or source_lease.get("assignment_id") != source.get("assignment_id")
+            or source_lease.get("status") != "active"
+            or source_lease.get("mode") != "write"
+            or source_lease.get("branch") != branch
+            or source_lease.get("repository_id")
+            != source_workspace.get("repository_id")
+            or source_lease.get("repository_key")
+            != source_workspace.get("repository_remote")
+            or source_lease.get("source_commit") != source.get("source_commit")
+            or not isinstance(repository_record, Mapping)
+            or source_workspace.get("repository_id")
+            != repository_record.get("repository_id")
+            or source_workspace.get("repository_remote")
+            != repository_record.get("canonical_remote")
+            or source_lease.get("mirror_storage_key")
+            != repository_record.get("mirror_storage_key")
+        ):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+        provider = self.importer.provider_for_durable_repository(repository_record)
+        repository = provider.ensure_mirror(
+            str(repository_record["repository_id"]), fetch=False
+        )
+        return self._authenticate_failed_workspace_predecessor(
+            state,
+            context,
+            source,
+            source_workspace,
+            source_lease,
+            successor_selected_head=successor_selected_head,
+            provider=provider,
+            repository=repository,
+        )
+
+    def _continuation_publication_predecessor(
+        self,
+        state: Mapping[str, Any],
+        assignment: Mapping[str, Any],
+        workspace: Mapping[str, Any],
+        *,
+        provider: ManagedGitProvider,
+        repository: ManagedRepository,
+    ) -> BranchPublicationPredecessor | None:
+        """Return proof for a branch reused by a completed continuation only."""
+
+        assignment_id = assignment.get("assignment_id")
+        if not isinstance(assignment_id, str):
+            raise RuntimeError("managed assignment identity is corrupt")
+        recoveries = [
+            recovery
+            for recovery in state.get("recovery_records", [])
+            if isinstance(recovery, Mapping)
+            and recovery.get("action") == "CONTINUE_NODE"
+            and recovery.get("status") == "completed"
+            and isinstance(recovery.get("produced_record_ids"), list)
+            and assignment_id in recovery["produced_record_ids"]
+        ]
+        if not recoveries:
+            return None
+        if len(recoveries) != 1:
+            raise RuntimeError("managed continuation publication proof is ambiguous")
+        recovery = recoveries[0]
+        parameters = recovery.get("parameters")
+        evidence = recovery.get("evidence")
+        source_assignment_id = recovery.get("assignment_id")
+        if (
+            not isinstance(parameters, Mapping)
+            or not isinstance(evidence, Mapping)
+            or not isinstance(source_assignment_id, str)
+            or evidence.get("source_assignment_id") != source_assignment_id
+            or parameters.get("node_id") != assignment.get("node_id")
+            or parameters.get("source_commit") != assignment.get("source_commit")
+        ):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+
+        assignments = _records_by(state, "assignments", "assignment_id")
+        workspaces = _records_by(state, "workspaces", "workspace_id")
+        leases = _records_by(state, "branch_leases", "lease_id")
+        contexts = _records_by(
+            state, "coordinator_contexts", "context_id"
+        )
+        source = assignments.get(source_assignment_id)
+        source_workspace = (
+            workspaces.get(str(source.get("workspace_id")))
+            if isinstance(source, Mapping)
+            else None
+        )
+        source_lease = (
+            leases.get(str(source.get("branch_lease_id")))
+            if isinstance(source, Mapping)
+            else None
+        )
+        context = contexts.get(str(recovery.get("context_id") or ""))
+        repository_record = state.get("repository")
+        branch = workspace.get("assigned_branch")
+        if not isinstance(context, Mapping):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+        if (
+            context.get("failure_scope") != "assignment"
+            or context.get("reason_code") != "WORKSPACE_DIRTY"
+            or context.get("normalized_error")
+            != {"code": "WORKSPACE_DIRTY", "phase": "RESULT_VERIFICATION"}
+        ):
+            # Ordinary CONTINUE_NODE recoveries retain the normal publication
+            # policy.  Only the narrowly authenticated dirty-result case may
+            # tolerate an already-published descendant on the reused branch.
+            return None
+        if (
+            not isinstance(source, Mapping)
+            or source.get("status") != "failed"
+            or source.get("node_id") != assignment.get("node_id")
+            or source.get("occurrence_id") != assignment.get("occurrence_id")
+            or source.get("graph_revision") != assignment.get("graph_revision")
+            or source.get("source_kind") != assignment.get("source_kind")
+            or source.get("source_result_keys")
+            != assignment.get("source_result_keys")
+            or source.get("integration_id") != assignment.get("integration_id")
+            or source.get("rework_cycle") != assignment.get("rework_cycle")
+            or parameters.get("source_commit")
+            not in {source.get("source_commit"), source.get("result_commit")}
+            or not isinstance(source_workspace, Mapping)
+            or source_workspace.get("assignment_id") != source_assignment_id
+            or source_workspace.get("project_id") != workspace.get("project_id")
+            or source_workspace.get("sprint_id") != workspace.get("sprint_id")
+            or source_workspace.get("node_id") != source.get("node_id")
+            or source_workspace.get("repository_id")
+            != workspace.get("repository_id")
+            or source_workspace.get("repository_remote")
+            != workspace.get("repository_remote")
+            or source_workspace.get("assigned_branch") != branch
+            or not isinstance(branch, str)
+            or not isinstance(source_lease, Mapping)
+            or source_lease.get("assignment_id") != source_assignment_id
+            or source_lease.get("branch") != branch
+            or source_lease.get("mode") != "write"
+            or source_lease.get("status") != "released"
+            or source_lease.get("repository_id")
+            != source_workspace.get("repository_id")
+            or source_lease.get("repository_key")
+            != source_workspace.get("repository_remote")
+            or source_lease.get("source_commit") != source.get("source_commit")
+            or source_lease.get("initial_head_commit")
+            != source.get("initial_head_commit")
+            or not isinstance(repository_record, Mapping)
+            or source_lease.get("mirror_storage_key")
+            != repository_record.get("mirror_storage_key")
+            or context.get("failed_assignment_id") != source_assignment_id
+            or context.get("context_id") != recovery.get("context_id")
+            or context.get("assigned_branch") != branch
+            or context.get("source_commit") != source.get("source_commit")
+            or context.get("result_commit") != source.get("result_commit")
+            or context.get("workspace_status") != source_workspace
+        ):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+        publication_id = source_lease.get("lease_id")
+        selected_head = source_lease.get("initial_head_commit")
+        if not isinstance(publication_id, str) or not isinstance(
+            selected_head, str
+        ):
+            raise RuntimeError("managed continuation publication proof is corrupt")
+        successor_selected_head = str(assignment.get("initial_head_commit") or "")
+        frozen = evidence.get("publication_predecessor")
+        if frozen is not None:
+            expected_keys = {
+                "assignment_id",
+                "publication_id",
+                "selected_head",
+                "failed_workspace_head",
+            }
+            if (
+                not isinstance(frozen, Mapping)
+                or set(frozen) != expected_keys
+                or not all(isinstance(frozen.get(key), str) for key in expected_keys)
+            ):
+                raise RuntimeError("managed continuation publication proof is corrupt")
+            predecessor = BranchPublicationPredecessor(
+                assignment_id=str(frozen["assignment_id"]),
+                publication_id=str(frozen["publication_id"]),
+                selected_head=str(frozen["selected_head"]),
+                failed_workspace_head=str(frozen["failed_workspace_head"]),
+            )
+            if (
+                predecessor.assignment_id != source_assignment_id
+                or predecessor.publication_id != publication_id
+                or predecessor.selected_head != selected_head
+                or predecessor.failed_workspace_head == successor_selected_head
+                or not self._failed_head_matches_context(
+                    state,
+                    context,
+                    source,
+                    predecessor.failed_workspace_head,
+                )
+                or not provider.is_ancestor(
+                    repository,
+                    successor_selected_head,
+                    predecessor.selected_head,
+                )
+                or not provider.is_ancestor(
+                    repository,
+                    predecessor.selected_head,
+                    predecessor.failed_workspace_head,
+                )
+            ):
+                raise RuntimeError("managed continuation publication proof is corrupt")
+            return predecessor
+        return self._authenticate_failed_workspace_predecessor(
+            state,
+            context,
+            source,
+            source_workspace,
+            source_lease,
+            successor_selected_head=successor_selected_head,
+            provider=provider,
+            repository=repository,
+        )
 
     @staticmethod
     def _inbound_parent_ids(
