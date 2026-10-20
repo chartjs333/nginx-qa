@@ -200,6 +200,33 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             "prompt-archive-migration-private-evidence-v1.schema.json", private
         )
 
+    def test_compatible_code_update_resumes_retained_v1_plan(self) -> None:
+        payloads = self.write_fixture()
+        original = self.migration().migrate()
+        retained_source_sha = original["tool_source_sha256"]
+        replacement_source_sha = (
+            "f" * 64 if retained_source_sha != "f" * 64 else "e" * 64
+        )
+
+        with mock.patch.object(
+            migration_module,
+            "_tool_source_sha256",
+            return_value=replacement_source_sha,
+        ):
+            recovered = self.migration().migrate()
+            verified = self.migration().verify_rollback()
+            reconstructed = self.base / "cross-version-reconstructed"
+            reconstruction = self.migration().reconstruct(reconstructed)
+
+        self.assertEqual(recovered, original)
+        self.assertEqual(recovered["tool_source_sha256"], retained_source_sha)
+        self.assertEqual(verified["status"], "verified")
+        self.assertTrue(reconstruction["raw_files_equal"])
+        for relative, raw in payloads.items():
+            self.assertEqual(
+                reconstructed.joinpath(*relative.split("/")).read_bytes(), raw
+            )
+
     def test_crash_after_manifest_publication_resumes_without_duplicate_result(self) -> None:
         self.write_fixture()
         fired = False
@@ -504,6 +531,24 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             (reconstructed / "latest-response.json").read_bytes(), b'{"other":true}'
         )
 
+    def test_reconstruct_rejects_unowned_target_before_any_output(self) -> None:
+        self.write_fixture()
+        migration = self.migration()
+        migration.migrate()
+        reconstructed = self.base / "reconstructed-unowned"
+        reconstructed.mkdir()
+        sentinel = reconstructed / "zz-operator-owned.txt"
+        sentinel.write_bytes(b"do-not-touch")
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+            lambda: migration.reconstruct(reconstructed),
+        )
+
+        self.assertEqual(sentinel.read_bytes(), b"do-not-touch")
+        self.assertFalse((reconstructed / "latest-response.json").exists())
+        self.assertFalse((reconstructed / "transitions").exists())
+
     def test_input_output_overlap_and_configured_protected_roots_are_rejected(self) -> None:
         self.write_fixture()
         self.assert_code(
@@ -555,6 +600,120 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             )
         self.assertFalse(protected.exists())
         self.assertFalse(archive.exists())
+
+    def test_persisted_prompt_templates_are_protected_with_launcher_env_unset(self) -> None:
+        settings = self.base / "runtime" / "sequential-prompt-settings.json"
+        settings.parent.mkdir()
+        custom_prompt = self.base / "custom-live-prompt"
+        settings.write_text(
+            json.dumps(
+                {
+                    "directory_template": str(custom_prompt / "{repository}"),
+                    "agent_latest_file_template": str(
+                        custom_prompt
+                        / "agents"
+                        / "{repository}_{agent_phone}-latest.prompt"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        environment = {
+            name: ""
+            for name in (
+                *migration_module._PROTECTED_ENV_NAMES,
+                "NGINX_QA_PROTECTED_ROOTS",
+            )
+        }
+        with (
+            mock.patch.dict(os.environ, environment, clear=False),
+            mock.patch.object(
+                migration_module,
+                "_persisted_prompt_settings_path",
+                return_value=settings,
+            ),
+        ):
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP",
+                lambda: PromptArchiveMigration(
+                    input_root=custom_prompt / "fixture-copy",
+                    archive_root=self.archive,
+                    project_id=PROJECT_ID,
+                    source_root_handle_id=HANDLE_ID,
+                    operator_gate=OFFLINE_OPERATOR_GATE,
+                    operator_principal_id="operator-psc-005",
+                ),
+            )
+
+        self.assertFalse(custom_prompt.exists())
+        self.assertFalse(self.archive.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction contract")
+    def test_protected_root_junction_alias_fails_closed(self) -> None:
+        real_live = self.base / "real-live"
+        candidate = real_live / "fixture-copy"
+        candidate.mkdir(parents=True)
+        (candidate / "latest-response.json").write_bytes(b"{}")
+        alias = self.base / "live-alias"
+        created = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(real_live)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0 or not alias.exists():
+            self.skipTest("directory junction creation unavailable")
+        migration = PromptArchiveMigration(
+            input_root=candidate,
+            archive_root=self.archive,
+            project_id=PROJECT_ID,
+            source_root_handle_id=HANDLE_ID,
+            operator_gate=OFFLINE_OPERATOR_GATE,
+            operator_principal_id="operator-psc-005",
+            protected_roots=(alias,),
+        )
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+            migration.analyze,
+        )
+
+        self.assertFalse(self.archive.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows junction contract")
+    def test_nonexistent_protected_leaf_below_junction_fails_closed(self) -> None:
+        self.write_fixture()
+        real_live = self.base / "real-live-future"
+        real_live.mkdir()
+        alias = self.base / "live-alias-future"
+        created = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(real_live)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if created.returncode != 0 or not alias.exists():
+            self.skipTest("directory junction creation unavailable")
+        protected = alias / "future-live"
+        archive = real_live / "future-live" / "archive"
+        migration = PromptArchiveMigration(
+            input_root=self.source,
+            archive_root=archive,
+            project_id=PROJECT_ID,
+            source_root_handle_id=HANDLE_ID,
+            operator_gate=OFFLINE_OPERATOR_GATE,
+            operator_principal_id="operator-psc-005",
+            private_evidence_file=self.private_evidence,
+            protected_roots=(protected,),
+        )
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+            migration.migrate,
+        )
+
+        self.assertFalse(archive.exists())
+        self.assertFalse(protected.exists())
 
     def test_hardlink_and_symlink_sources_are_rejected(self) -> None:
         original = self.source / "a.json"
@@ -666,6 +825,153 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             lambda: migration_module._absolute_root(r"C:\ISOLAT~1\source"),
         )
 
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_source_root_and_nested_directory_ads_fail_closed(self) -> None:
+        self.write_fixture()
+        root_stream = Path(str(self.source) + ":psc-audit")
+        root_stream.write_bytes(b"root-stream")
+        try:
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                lambda: inventory_isolated_root(self.source),
+            )
+        finally:
+            root_stream.unlink(missing_ok=True)
+
+        nested = self.source / "nested-ads"
+        nested.mkdir()
+        nested_stream = Path(str(nested) + ":psc-audit")
+        nested_stream.write_bytes(b"nested-stream")
+        try:
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                lambda: inventory_isolated_root(self.source),
+            )
+        finally:
+            nested_stream.unlink(missing_ok=True)
+
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_preexisting_archive_root_ads_fails_before_publication(self) -> None:
+        self.write_fixture()
+        self.archive.mkdir()
+        archive_stream = Path(str(self.archive) + ":psc-audit")
+        archive_stream.write_bytes(b"archive-stream")
+        try:
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                self.migration().migrate,
+            )
+        finally:
+            archive_stream.unlink(missing_ok=True)
+
+        self.assertEqual(list(self.archive.iterdir()), [])
+        self.assertFalse(self.private_evidence.exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows ADS contract")
+    def test_private_evidence_ads_fails_before_archive_bootstrap(self) -> None:
+        self.write_fixture()
+        witness_raw = b"operator-owned-witness"
+        self.private_evidence.write_bytes(witness_raw)
+        witness_stream = Path(str(self.private_evidence) + ":psc-audit")
+        stream_raw = b"private-stream"
+        witness_stream.write_bytes(stream_raw)
+        try:
+            self.assert_code(
+                "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+                self.migration().migrate,
+            )
+            self.assertEqual(self.private_evidence.read_bytes(), witness_raw)
+            self.assertEqual(witness_stream.read_bytes(), stream_raw)
+        finally:
+            witness_stream.unlink(missing_ok=True)
+
+        self.assertFalse(self.archive.exists())
+
+    def test_private_evidence_alias_shapes_fail_before_archive_bootstrap(self) -> None:
+        self.write_fixture()
+        operator_file = self.base / "operator-witness"
+        witness_raw = b"operator-owned-witness"
+        operator_file.write_bytes(witness_raw)
+        try:
+            os.link(operator_file, self.private_evidence)
+        except OSError as exc:
+            self.skipTest(f"hard links unavailable: {exc}")
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+            self.migration().migrate,
+        )
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(operator_file.read_bytes(), witness_raw)
+        self.assertEqual(self.private_evidence.read_bytes(), witness_raw)
+
+        self.private_evidence.unlink()
+        operator_file.unlink()
+        self.private_evidence.mkdir()
+        sentinel = self.private_evidence / "operator-sentinel"
+        sentinel.write_bytes(witness_raw)
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+            self.migration().migrate,
+        )
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(sentinel.read_bytes(), witness_raw)
+
+    def test_private_evidence_below_regular_file_fails_before_archive_bootstrap(
+        self,
+    ) -> None:
+        self.write_fixture()
+        operator_file = self.base / "operator-parent"
+        operator_raw = b"operator-owned-parent"
+        operator_file.write_bytes(operator_raw)
+        impossible_private_evidence = operator_file / "private-evidence.json"
+        migration = PromptArchiveMigration(
+            input_root=self.source,
+            archive_root=self.archive,
+            project_id=PROJECT_ID,
+            source_root_handle_id=HANDLE_ID,
+            operator_gate=OFFLINE_OPERATOR_GATE,
+            operator_principal_id="operator-psc-005",
+            private_evidence_file=impossible_private_evidence,
+            protected_roots=(),
+            clock=lambda: STAMP,
+        )
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE",
+            migration.migrate,
+        )
+
+        self.assertFalse(self.archive.exists())
+        self.assertEqual(operator_file.read_bytes(), operator_raw)
+
+    def test_missing_private_evidence_parent_fails_before_archive_bootstrap(
+        self,
+    ) -> None:
+        self.write_fixture()
+        missing_parent = self.base / "operator-must-create-parent"
+        private_evidence = missing_parent / "private-evidence.json"
+        migration = PromptArchiveMigration(
+            input_root=self.source,
+            archive_root=self.archive,
+            project_id=PROJECT_ID,
+            source_root_handle_id=HANDLE_ID,
+            operator_gate=OFFLINE_OPERATOR_GATE,
+            operator_principal_id="operator-psc-005",
+            private_evidence_file=private_evidence,
+            protected_roots=(),
+            clock=lambda: STAMP,
+        )
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID",
+            migration.migrate,
+        )
+
+        self.assertFalse(self.archive.exists())
+        self.assertFalse(missing_parent.exists())
+
     def test_selected_file_hydration_limit_fails_before_durable_plan(self) -> None:
         (self.source / "latest-response.json").write_bytes(b"0123456789")
         migration = self.migration()
@@ -679,6 +985,20 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             migration.migrate,
         )
 
+        self.assertFalse(self.archive.exists())
+        self.assertFalse(self.private_evidence.exists())
+
+    def test_no_candidate_migrate_has_zero_output_side_effects(self) -> None:
+        (self.source / "active.prompt").write_bytes(b"compact task")
+        migration = self.migration()
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID",
+            migration.migrate,
+        )
+
+        self.assertIsNone(migration._storage)
+        self.assertIsNone(migration._runtime)
         self.assertFalse(self.archive.exists())
         self.assertFalse(self.private_evidence.exists())
 

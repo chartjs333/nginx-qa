@@ -1610,6 +1610,11 @@ caused merely by a mode toggle and never deletes CAS data or rewrites an
 immutable authoritative occurrence. Offline migration requires explicit
 isolated input/output roots, a durable journal, full-file pre/post inventory,
 idempotent resume, and the same raw digest proof. Live roots are rejected in V1.
+The batch plan's `tool_source_sha256` is writer provenance; compatible resume,
+reconstruction, and rollback are gated by the exact contract/tool versions so
+that a code-only safety fix cannot strand a durable v1 operation. Reconstruction
+preflights the complete destination before its first file write and accepts only
+exact outputs or deterministic plan-owned temporary leaves.
 
 ## 8. Required evidence for later nodes
 

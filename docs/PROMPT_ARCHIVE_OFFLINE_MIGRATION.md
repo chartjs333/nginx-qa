@@ -26,10 +26,20 @@ SUBST, mapped-drive, reparse-point, symlink, hard-link, alternate-data-stream,
 case-collision, reserved-device, and trailing-dot/space ambiguity fails closed.
 Do not point this tool at a live nginx-qa root.
 
+The deny set also includes the owning bases from the persisted
+`runtime_state/sequential-prompt-settings.json`, even when launcher environment
+variables are unset. Existing explicitly configured deny roots are checked for
+alias/reparse ambiguity without resolving through an alias. Existing source,
+archive, private-evidence parent, and reconstruction directories reject NTFS
+alternate streams before publication. A lexical overlap is rejected before
+the protected tree is probed.
+
 The public archive stores only path-free hashes, IDs, counts, provenance, and
 journal state. The exact pre/post paths and filesystem identities exist only in
 the explicitly selected private evidence file. Protect that file as sensitive
-operator evidence; do not publish it with the archive.
+operator evidence; do not publish it with the archive. Its safe parent
+directory must already exist; the migration tool never creates that
+operator-selected directory.
 
 ## PowerShell commands
 
@@ -61,6 +71,14 @@ python tools\prompt_archive_migrate.py analyze `
 Migrate publishes an immutable batch reservation, an append-only journal chain,
 accepted per-entry PAS1 artifacts, byte-exact content, public evidence, and the
 separate private witness. A repeated command is idempotent.
+
+`tool_source_sha256` is immutable writer provenance. Compatible recovery is
+gated by the exact `contract_version` and `tool_version`, not by requiring the
+current Python file to have the writer's digest; an incompatible implementation
+must bump one of those explicit versions. This permits a code-only safety fix
+to finish or verify an already durable v1 journal without weakening plan,
+inventory, reservation, or raw-byte validation. A source with no selected
+legacy response candidates fails before archive storage is initialized.
 
 Each accepted offline PAS1 `source_locator` contains a `migration_binding` with
 the batch ID, canonical SHA-256 of the immutable batch plan, and the full exact
@@ -106,6 +124,13 @@ the normal recovery path.
 
 Reconstruct uses the accepted archive plus private witness. It does not read the
 source tree and never overwrites a different existing file.
+
+Before writing its first file, reconstruction inventories the complete target.
+The target must be empty or contain only byte-exact already-published outputs
+and deterministic partial temporary files owned by operation IDs in the durable
+batch plan. Any unrelated file or directory fails closed before additional
+output is published. This makes a retry idempotent without treating an
+arbitrary pre-existing file as migration-owned.
 
 ```powershell
 python tools\prompt_archive_migrate.py reconstruct `
@@ -154,3 +179,14 @@ The machine-readable contracts are:
 Keep the source copy, archive root, and private witness until an independently
 authorized retention decision. This release performs no source cleanup, archive
 GC, live cutover, or deletion.
+
+## Qualification note
+
+The selected legacy file is bounded, but the v1 top-level `kind` preflight
+currently materializes its bytes and uses the standard JSON decoder to
+discriminate valid control documents. PSC-006 must measure peak RSS with a
+realistic generated archive (including the motivating approximately 71 MiB
+class) before making a performance PASS claim. This is not permission to use
+`D:\Prompt`; generate the fixture under an isolated test root. A future
+streaming discriminator may reduce that peak, but it must retain duplicate-key,
+unknown-kind, malformed opaque legacy, and fail-closed resource semantics.

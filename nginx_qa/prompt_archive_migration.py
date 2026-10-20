@@ -105,6 +105,13 @@ _PROTECTED_ENV_NAMES: Final = (
     "NGINX_QA_PROMPT_ROOT",
     "NGINX_QA_PROMPT_ARCHIVE_ROOT",
 )
+_PERSISTED_PROMPT_SETTINGS_MAX_BYTES: Final = 64 * 1024
+_PROMPT_TEMPLATE_PLACEHOLDERS: Final = {
+    "repository",
+    "project",
+    "git_context_key",
+    "agent_phone",
+}
 
 
 class _JsonObjectPairs(list[tuple[str, Any]]):
@@ -393,6 +400,114 @@ def _overlap(left: Path, right: Path) -> bool:
     return common in {left_key, right_key}
 
 
+def _prompt_template_protected_base(
+    value: Any,
+    *,
+    file_template: bool,
+) -> Path | None:
+    """Return the owning root for one valid persisted prompt template.
+
+    Invalid persisted fields fall back to the built-in ``D:\\Prompt`` in the
+    runtime reader, which is already unconditionally protected below.  A valid
+    custom field must additionally protect its non-variable owning prefix.
+    """
+
+    if type(value) is not str or not value.strip() or len(value) > 1000:
+        return None
+    template = value.strip()
+    if "\0" in template:
+        return None
+    placeholders = set(re.findall(r"\{([^{}]+)\}", template))
+    allowed = (
+        _PROMPT_TEMPLATE_PLACEHOLDERS
+        if file_template
+        else _PROMPT_TEMPLATE_PLACEHOLDERS - {"agent_phone"}
+    )
+    if placeholders - allowed:
+        return None
+    remainder = template
+    for placeholder in _PROMPT_TEMPLATE_PLACEHOLDERS:
+        remainder = remainder.replace("{" + placeholder + "}", "")
+    if "{" in remainder or "}" in remainder:
+        return None
+    expanded = os.path.expandvars(os.path.expanduser(template))
+    if any(part == ".." for part in re.split(r"[\\/]", expanded)):
+        return None
+    if file_template:
+        filename = re.split(r"[\\/]", expanded)[-1]
+        if (
+            "{agent_phone}" not in filename
+            or not filename.casefold().endswith(".prompt")
+        ):
+            return None
+    marker = "__nginx_qa_prompt_template_value__"
+    concrete = expanded
+    for placeholder in _PROMPT_TEMPLATE_PLACEHOLDERS:
+        concrete = concrete.replace("{" + placeholder + "}", marker)
+    path = Path(concrete)
+    if not path.is_absolute():
+        return None
+    for index, component in enumerate(path.parts):
+        if marker in component:
+            if index == 0:
+                return None
+            return _absolute_root(Path(*path.parts[:index]))
+    return _absolute_root(path.parent if file_template else path)
+
+
+def _persisted_prompt_settings_path() -> Path:
+    return (
+        Path(__file__).absolute().parents[1]
+        / "runtime_state"
+        / "sequential-prompt-settings.json"
+    )
+
+
+def _persisted_prompt_protected_roots() -> tuple[Path, ...]:
+    """Read only the local persisted prompt-template configuration snapshot."""
+
+    settings_path = _persisted_prompt_settings_path()
+    try:
+        metadata = settings_path.lstat()
+    except FileNotFoundError:
+        return ()
+    except OSError:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID") from None
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or _is_redirected(settings_path)
+        or metadata.st_size > _PERSISTED_PROMPT_SETTINGS_MAX_BYTES
+    ):
+        raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
+    try:
+        raw, _observed = _read_regular_file(
+            settings_path,
+            maximum=_PERSISTED_PROMPT_SETTINGS_MAX_BYTES,
+        )
+        document = json.loads(raw.decode("utf-8", errors="strict"))
+    except PromptArchiveMigrationError:
+        raise
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        # The runtime falls back to D:\Prompt for malformed settings.  That
+        # default is already protected, so no custom base is trusted here.
+        return ()
+    if type(document) is not dict:
+        return ()
+    roots = []
+    for name, file_template in (
+        ("directory_template", False),
+        ("agent_latest_file_template", True),
+    ):
+        root = _prompt_template_protected_base(
+            document.get(name),
+            file_template=file_template,
+        )
+        if root is not None:
+            roots.append(root)
+    return tuple(roots)
+
+
 def _assert_existing_chain_safe(path: Path) -> None:
     absolute = _absolute_root(path)
     anchor = Path(absolute.anchor)
@@ -411,14 +526,16 @@ def _assert_existing_chain_safe(path: Path) -> None:
 
 def _configured_protected_roots(
     explicit: Sequence[str | os.PathLike[str]],
-) -> tuple[Path, ...]:
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
     if isinstance(explicit, (str, bytes)) or not isinstance(explicit, Sequence):
         raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
-    raw_values: list[str | os.PathLike[str]] = list(explicit)
+    raw_values: list[tuple[str | os.PathLike[str], bool]] = [
+        (value, True) for value in explicit
+    ]
     for name in _PROTECTED_ENV_NAMES:
         value = os.environ.get(name)
         if value:
-            raw_values.append(value)
+            raw_values.append((value, True))
     combined = os.environ.get("NGINX_QA_PROTECTED_ROOTS")
     if combined:
         try:
@@ -429,15 +546,19 @@ def _configured_protected_roots(
             not isinstance(value, str) or not value.strip() for value in values
         ):
             raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
-        raw_values.extend(value.strip() for value in values)
+        raw_values.extend((value.strip(), True) for value in values)
     # The known legacy live root is denied lexically; it is never opened merely
     # to decide whether an isolated request is allowed.
     if os.name == "nt":
-        raw_values.append(r"D:\Prompt")
-    raw_values.append(Path(__file__).absolute().parents[1])
+        raw_values.append((r"D:\Prompt", False))
+    raw_values.extend(
+        (value, True) for value in _persisted_prompt_protected_roots()
+    )
+    raw_values.append((Path(__file__).absolute().parents[1], True))
     roots: list[Path] = []
-    seen: set[str] = set()
-    for raw in raw_values:
+    alias_sensitive: list[Path] = []
+    seen: dict[str, int] = {}
+    for raw, inspect_alias in raw_values:
         root = _absolute_root(raw)
         if os.name == "nt" and any("~" in component for component in root.parts):
             # A deny root supplied only through a legacy alias cannot be
@@ -445,9 +566,11 @@ def _configured_protected_roots(
             raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
         key = _path_key(root)
         if key not in seen:
-            seen.add(key)
+            seen[key] = len(roots)
             roots.append(root)
-    return tuple(roots)
+        if inspect_alias and all(_path_key(value) != key for value in alias_sensitive):
+            alias_sensitive.append(root)
+    return tuple(roots), tuple(alias_sensitive)
 
 
 def _assert_roots_isolated(
@@ -500,8 +623,20 @@ def _canonical_candidate_path(path: Path) -> Path:
     except OSError:
         raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
     if not stat.S_ISDIR(cursor_metadata.st_mode):
+        if suffix:
+            # A missing candidate below an existing regular/special leaf can
+            # never be created safely.  Reject during access preflight rather
+            # than letting storage publication occur before the impossible
+            # output shape is discovered.
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        # A private-evidence leaf is itself an output authority.  Reject its
+        # ADS ambiguity during canonical access preflight, before archive
+        # storage can be bootstrapped or a plan/inventory can be published.
+        _windows_reject_named_streams(cursor)
+        suffix.append(cursor.name)
         cursor = cursor.parent
-        suffix.append(path.name)
+        _assert_existing_chain_safe(cursor)
+    _windows_reject_named_streams(cursor, directory=True)
     with _RootPin(cursor) as pinned:
         if pinned.resolved_path is None:
             raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE")
@@ -513,15 +648,34 @@ def _canonical_candidate_path(path: Path) -> Path:
 def _assert_canonical_candidates_isolated(
     candidates: Sequence[Path],
     protected: Sequence[Path],
+    alias_sensitive_protected: Sequence[Path] = (),
 ) -> None:
     if os.name != "nt":
         return
+    # Preserve the no-touch lexical deny path: a candidate visibly nested in a
+    # protected root is rejected before any protected-root metadata probe.
+    for left in candidates:
+        for denied in protected:
+            if _overlap(left, denied):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
     canonical = tuple(_canonical_candidate_path(path) for path in candidates)
+    # Canonicalize through the nearest existing parent even when the deny leaf
+    # does not yet exist.  Otherwise ``junction\future-live`` could be skipped
+    # and a candidate using the junction target spelling could create that
+    # supposedly protected subtree.  _canonical_candidate_path never resolves
+    # through a reparse point; it fails closed on that ancestor.
+    canonical_denied = [
+        _canonical_candidate_path(denied)
+        for denied in alias_sensitive_protected
+    ]
     for index, left in enumerate(canonical):
         for right in canonical[index + 1 :]:
             if _overlap(left, right):
                 raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
         for denied in protected:
+            if _overlap(left, denied):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
+        for denied in canonical_denied:
             if _overlap(left, denied):
                 raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
 
@@ -761,7 +915,19 @@ def _file_identity(metadata: os.stat_result) -> dict[str, Any]:
     }
 
 
-def _windows_reject_named_streams(path: Path) -> None:
+def _windows_reject_named_streams(
+    path: Path,
+    *,
+    directory: bool = False,
+) -> None:
+    """Reject NTFS alternate streams on one file or directory.
+
+    ``FindFirstStreamW`` reports ``ERROR_HANDLE_EOF`` for a directory with no
+    streams on supported Windows filesystems.  That is the sole safe empty
+    result for a directory.  A regular file must expose exactly its unnamed
+    data stream; every additional/other stream is rejected.
+    """
+
     if os.name != "nt":
         return
     from ctypes import wintypes
@@ -785,6 +951,8 @@ def _windows_reject_named_streams(path: Path) -> None:
     data = FindStreamData()
     handle = first(str(path), 0, ctypes.byref(data), 0)
     if handle == ctypes.c_void_p(-1).value:
+        if directory and ctypes.get_last_error() == 38:  # ERROR_HANDLE_EOF
+            return
         raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE")
     streams: list[str] = []
     try:
@@ -796,7 +964,7 @@ def _windows_reject_named_streams(path: Path) -> None:
             raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE")
     finally:
         close(handle)
-    if streams != ["::$DATA"]:
+    if (directory and streams) or (not directory and streams != ["::$DATA"]):
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
 
 
@@ -929,6 +1097,7 @@ def _validate_source_tree(root: Path) -> None:
         raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
     if not stat.S_ISDIR(metadata.st_mode) or _is_redirected(root):
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+    _windows_reject_named_streams(root, directory=True)
     _assert_existing_chain_safe(root)
 
 
@@ -986,6 +1155,7 @@ def inventory_isolated_root(root: str | os.PathLike[str]) -> SourceInventory:
                 raise _error("PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED")
             if _is_redirected(directory):
                 raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+            _windows_reject_named_streams(directory, directory=True)
             try:
                 with _RootPin(
                     directory,
@@ -1152,6 +1322,7 @@ def inventory_isolated_root(root: str | os.PathLike[str]) -> SourceInventory:
                         before.st_mtime_ns,
                     ):
                         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
+                    _windows_reject_named_streams(directory, directory=True)
                     directory_pin.assert_stable()
             except OSError:
                 raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
@@ -1260,7 +1431,33 @@ class PromptArchiveMigration:
             if private_evidence_file is None
             else _absolute_root(private_evidence_file)
         )
-        self.protected_roots = _configured_protected_roots(protected_roots)
+        if isinstance(protected_roots, (str, bytes)) or not isinstance(
+            protected_roots, Sequence
+        ):
+            raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
+        explicit_protected = tuple(
+            _absolute_root(value) for value in protected_roots
+        )
+        # Honor a visible explicit deny before reading even the local persisted
+        # settings snapshot.  In particular, an input nested in a protected
+        # root must be rejected without probing that tree.
+        _assert_roots_isolated(
+            self.input_root,
+            self.archive_root,
+            explicit_protected,
+        )
+        if self.private_evidence_file is not None:
+            for root in (
+                self.input_root,
+                self.archive_root,
+                *explicit_protected,
+            ):
+                if _overlap(self.private_evidence_file, root):
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
+        (
+            self.protected_roots,
+            self._alias_sensitive_protected_roots,
+        ) = _configured_protected_roots(protected_roots)
         _assert_roots_isolated(
             self.input_root, self.archive_root, self.protected_roots
         )
@@ -1291,13 +1488,22 @@ class PromptArchiveMigration:
         _assert_canonical_candidates_isolated(
             (self.input_root,),
             self.protected_roots,
+            self._alias_sensitive_protected_roots,
         )
 
     def _assert_migration_access_ready(self) -> None:
         candidates = [self.input_root, self.archive_root]
         if self.private_evidence_file is not None:
             candidates.append(self.private_evidence_file)
-        _assert_canonical_candidates_isolated(candidates, self.protected_roots)
+        _assert_canonical_candidates_isolated(
+            candidates,
+            self.protected_roots,
+            self._alias_sensitive_protected_roots,
+        )
+        if self.private_evidence_file is not None:
+            _preflight_private_evidence_leaf_identity(
+                self.private_evidence_file
+            )
 
     def _assert_resume_access_ready(self) -> None:
         # Source-free recovery intentionally does not inspect input_root, but
@@ -1306,6 +1512,7 @@ class PromptArchiveMigration:
         _assert_canonical_candidates_isolated(
             (self.archive_root,),
             self.protected_roots,
+            self._alias_sensitive_protected_roots,
         )
 
     @property
@@ -1453,9 +1660,13 @@ class PromptArchiveMigration:
             or value.get("operation_kind") != "offline_migration_batch"
             or value.get("contract_version") != CONTRACT_VERSION
             or value.get("tool_version") != TOOL_VERSION
+            # The source digest is immutable provenance for the writer, not a
+            # recovery compatibility gate.  Compatible code-only fixes keep
+            # the frozen contract/tool version and must be able to finish a
+            # retained v1 journal.  An incompatible change must instead bump
+            # one of those explicit versions.
             or type(value.get("tool_source_sha256")) is not str
             or _SHA256_RE.fullmatch(value["tool_source_sha256"]) is None
-            or value.get("tool_source_sha256") != _tool_source_sha256()
             or value.get("project_id") != self.project_id
             or value.get("sprint_id") is not None
             or value.get("source_root_handle_id") != self.source_root_handle_id
@@ -1664,9 +1875,11 @@ class PromptArchiveMigration:
             or value.get("operation_kind") != "offline_migration_batch"
             or value.get("contract_version") != CONTRACT_VERSION
             or value.get("tool_version") != TOOL_VERSION
+            # See _validate_plan_envelope: the retained source digest records
+            # which writer made the plan, while the explicit versions govern
+            # whether this reader may resume it.
             or type(value.get("tool_source_sha256")) is not str
             or _SHA256_RE.fullmatch(value["tool_source_sha256"]) is None
-            or value.get("tool_source_sha256") != _tool_source_sha256()
             or value.get("project_id") != self.project_id
             or value.get("sprint_id") is not None
             or value.get("source_root_handle_id") != self.source_root_handle_id
@@ -2629,6 +2842,13 @@ class PromptArchiveMigration:
         pre = inventory_isolated_root(self.input_root)
         self._fault("after_full_pre_inventory")
         self._preflight_selected_legacy_inputs(pre)
+        if not any(
+            _is_legacy_archive_candidate(entry.relative_path)
+            for entry in pre.entries
+        ):
+            # Do not bootstrap the archive root merely to discover that this
+            # explicit source has no migratable legacy response.
+            raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
         # The immutable reservation is deliberately published outside the
         # batch lock: first-writer-wins resolves two fresh processes without
         # writing inventory/archive CAS under unpersisted random operation IDs.
@@ -3195,6 +3415,7 @@ class PromptArchiveMigration:
         _assert_canonical_candidates_isolated(
             canonical_candidates,
             self.protected_roots,
+            self._alias_sensitive_protected_roots,
         )
         if self.private_evidence_file is not None and _overlap(
             target, self.private_evidence_file
@@ -3234,6 +3455,14 @@ class PromptArchiveMigration:
                     # cannot turn reconstruction into an in-place rewrite.
                     raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
                 target_pin.assert_stable()
+            reconstruction_specs = [
+                (
+                    self._entry_for_reservation(inventory, reservation),
+                    reservation["operation_id"],
+                )
+                for reservation in plan["reservations"]
+            ]
+            _preflight_reconstruction_root(target, reconstruction_specs)
             reconstructed_entries: list[dict[str, Any]] = []
             expected_entries: list[InventoryEntry] = []
             for reservation, result in zip(
@@ -3308,6 +3537,7 @@ def _validate_pinned_mutation_directory(
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED") from None
     if not stat.S_ISDIR(metadata.st_mode) or _is_redirected(intended):
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+    _windows_reject_named_streams(intended, directory=True)
     if os.name != "nt":
         try:
             opened = os.fstat(pinned.descriptor)
@@ -3452,6 +3682,56 @@ def _read_private_evidence_file(path: Path, *, maximum: int) -> bytes:
     if metadata.st_nlink != 1:
         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
     return raw
+
+
+def _preflight_private_evidence_leaf_identity(path: Path) -> None:
+    """Require an existing witness target to be one unaliased regular leaf.
+
+    This role-only check intentionally runs before archive storage bootstrap.
+    Exact witness bytes are compared later once the durable plan is known.
+    """
+
+    _validate_component(path.name)
+    # The writer deliberately never creates the operator-selected parent.  Pin
+    # and validate it now so a missing/unsafe parent cannot be discovered only
+    # after the archive reservation has been published.
+    try:
+        parent_metadata = path.parent.lstat()
+    except FileNotFoundError:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID") from None
+    except OSError:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
+    if not stat.S_ISDIR(parent_metadata.st_mode) or _is_redirected(path.parent):
+        raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+    with _open_pinned_mutation_directory(path.parent) as parent:
+        try:
+            metadata = (
+                path.lstat()
+                if os.name == "nt"
+                else os.stat(
+                    path.name,
+                    dir_fd=parent.descriptor,
+                    follow_symlinks=False,
+                )
+            )
+        except FileNotFoundError:
+            _validate_pinned_mutation_directory(parent, path.parent)
+            return
+        except OSError:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(
+                _REPARSE_POINT
+                and getattr(metadata, "st_file_attributes", 0) & _REPARSE_POINT
+            )
+            or (os.name == "nt" and _is_redirected(path))
+        ):
+            raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+        _windows_reject_named_streams(path)
+        _validate_pinned_mutation_directory(parent, path.parent)
 
 
 def _windows_open_relative_file(
@@ -3886,6 +4166,186 @@ def _ensure_reconstruction_root(root: Path) -> None:
             _validate_pinned_mutation_directory(child, root)
         finally:
             child.close()
+
+
+def _preflight_reconstruction_root(
+    root: Path,
+    specs: Sequence[tuple[InventoryEntry, str]],
+) -> None:
+    """Prove an existing target contains only exact or owned resume state.
+
+    This scan completes before the first reconstructed file is published.  It
+    accepts an empty target, byte-exact already-published outputs, and only the
+    deterministic temporary leaf reserved by the corresponding durable
+    operation.  Any unrelated directory/file therefore fails without leaving
+    a partial reconstruction beside operator-owned content.
+    """
+
+    expected_files: dict[str, InventoryEntry] = {}
+    expected_temps: dict[str, InventoryEntry] = {}
+    expected_directories: set[str] = set()
+    for entry, ownership_id in specs:
+        if entry.relative_path in expected_files:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+        expected_files[entry.relative_path] = entry
+        components = entry.relative_path.split("/")
+        for index in range(1, len(components)):
+            expected_directories.add("/".join(components[:index]))
+        temp_name = _owned_temp_name(
+            components[-1],
+            "par-reconstruct",
+            ownership_id,
+        )
+        temp_relative = "/".join((*components[:-1], temp_name))
+        if temp_relative in expected_temps or temp_relative in expected_files:
+            raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+        expected_temps[temp_relative] = entry
+
+    seen_casefolded: set[str] = set()
+    seen_files: set[str] = set()
+    seen_temps: set[str] = set()
+    directory_count = 0
+    with _RootPin(root) as root_pin:
+        def walk(
+            directory: Path,
+            components: tuple[str, ...],
+            *,
+            inherited_descriptor: int | None = None,
+        ) -> None:
+            nonlocal directory_count
+            directory_count += 1
+            if (
+                directory_count > _MAX_DIRECTORIES
+                or len(components) > _MAX_DIRECTORY_DEPTH
+            ):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED")
+            if _is_redirected(directory):
+                raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+            _windows_reject_named_streams(directory, directory=True)
+            with _RootPin(
+                directory,
+                descriptor=inherited_descriptor,
+            ) as directory_pin:
+                if (
+                    directory_pin.resolved_path is None
+                    or not _same_path(directory_pin.resolved_path, directory)
+                ):
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+                try:
+                    before = (
+                        directory.lstat()
+                        if os.name == "nt"
+                        else os.fstat(directory_pin.descriptor)
+                    )
+                    children = list(
+                        os.scandir(
+                            directory
+                            if os.name == "nt"
+                            else directory_pin.descriptor
+                        )
+                    )
+                except OSError:
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE") from None
+                for child in children:
+                    _validate_component(child.name)
+                children.sort(key=lambda item: item.name.encode("utf-8"))
+                for child in children:
+                    relative_components = components + (child.name,)
+                    relative = "/".join(relative_components)
+                    _claim_casefolded_path(seen_casefolded, relative)
+                    child_path = directory / child.name
+                    try:
+                        metadata = (
+                            child_path.lstat()
+                            if os.name == "nt"
+                            else os.stat(
+                                child.name,
+                                dir_fd=directory_pin.descriptor,
+                                follow_symlinks=False,
+                            )
+                        )
+                    except OSError:
+                        raise _error(
+                            "PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED"
+                        ) from None
+                    if (
+                        stat.S_ISLNK(metadata.st_mode)
+                        or bool(
+                            _REPARSE_POINT
+                            and getattr(metadata, "st_file_attributes", 0)
+                            & _REPARSE_POINT
+                        )
+                        or (os.name == "nt" and _is_redirected(child_path))
+                    ):
+                        raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        if relative not in expected_directories:
+                            raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+                        child_descriptor: int | None = None
+                        if os.name != "nt":
+                            try:
+                                child_descriptor = os.open(
+                                    child.name,
+                                    os.O_RDONLY
+                                    | getattr(os, "O_DIRECTORY", 0)
+                                    | getattr(os, "O_NOFOLLOW", 0),
+                                    dir_fd=directory_pin.descriptor,
+                                )
+                            except OSError:
+                                raise _error(
+                                    "PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED"
+                                ) from None
+                        walk(
+                            child_path,
+                            relative_components,
+                            inherited_descriptor=child_descriptor,
+                        )
+                        continue
+                    entry = expected_files.get(relative)
+                    temporary = False
+                    if entry is None:
+                        entry = expected_temps.get(relative)
+                        temporary = entry is not None
+                    if entry is None:
+                        raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+                    _raw, size, digest, _observed = _inspect_regular_file(
+                        child_path,
+                        maximum=entry.byte_size,
+                        collect=False,
+                        parent_descriptor=(
+                            None if os.name == "nt" else directory_pin.descriptor
+                        ),
+                        relative_name=None if os.name == "nt" else child.name,
+                    )
+                    if temporary:
+                        seen_temps.add(entry.relative_path)
+                    else:
+                        if size != entry.byte_size or digest != entry.sha256:
+                            raise _error(
+                                "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT"
+                            )
+                        seen_files.add(entry.relative_path)
+                try:
+                    after = (
+                        directory.lstat()
+                        if os.name == "nt"
+                        else os.fstat(directory_pin.descriptor)
+                    )
+                except OSError:
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED") from None
+                if (after.st_dev, after.st_ino, after.st_mtime_ns) != (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_mtime_ns,
+                ):
+                    raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
+                _windows_reject_named_streams(directory, directory=True)
+                directory_pin.assert_stable()
+
+        walk(root, ())
+        root_pin.assert_stable()
+    if seen_files & seen_temps:
+        raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
 
 
 def _publish_reconstructed_file(
