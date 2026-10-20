@@ -4766,6 +4766,10 @@ class PromptArchiveIncremental:
             occurrence,
             source_kind="offline_migration",
         )
+        # Offline migration preserves opaque legacy bytes only.  A native
+        # source-metadata projection is a separate runtime authority and must
+        # never be inferred, attached, or silently ignored on this path.
+        self._validate_occurrence_source_metadata(occurrence)
         if self.sprint_id is not None or occurrence.occurrence_kind != "migration":
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         # Freeze the caller's exact original before any CAS write.  The raw

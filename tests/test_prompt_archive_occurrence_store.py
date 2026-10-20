@@ -21,6 +21,10 @@ from nginx_qa.prompt_archive_storage import (
     PromptArchiveStorageError,
     canonical_json_bytes_v1,
 )
+from nginx_qa.prompt_archive_source_metadata import (
+    SourceMetadataScreenSnapshot,
+    project_source_metadata,
+)
 
 
 PROJECT_ID = "9000"
@@ -345,6 +349,51 @@ class PromptArchiveOccurrenceReceiptStoreTests(unittest.TestCase):
             "PROMPT_ARCHIVE_REFERENCE_INVALID",
         )
         self.assertFalse(self._receipt_path().exists())
+
+    def test_migration_occurrence_rejects_native_source_metadata_authority(self):
+        occurrence_id = "migration-occurrence-store-1"
+        projected = project_source_metadata(
+            {
+                "source_type": "manual",
+                "source_id": "must-not-bind-to-offline-migration",
+                "observed_at": "2026-10-11T20:00:00+02:00",
+            },
+            screen=SourceMetadataScreenSnapshot((), (), ()),
+        )
+        selected = dataclasses.replace(
+            occurrence(),
+            sprint_id=None,
+            response_id=response_id_v1(
+                PROJECT_ID,
+                None,
+                "migration-snapshot",
+                "migration",
+                occurrence_id,
+            ),
+            response_kind="migration-snapshot",
+            occurrence_kind="migration",
+            occurrence_id=occurrence_id,
+            transition_id=None,
+            source_metadata_projection=projected.document,
+            source_metadata_receipt=projected.receipt,
+        )
+        selected_locator = {
+            **locator(occurrence_id=occurrence_id),
+            "state_revision": selected.state_revision,
+        }
+
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            self.store.register_occurrence(
+                project_id=PROJECT_ID,
+                locator=selected_locator,
+                occurrence=selected,
+                source=source(self.payload),
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        )
 
     def test_native_tampering_is_rejected_and_winner_remains_immutable(self):
         self.register_native()

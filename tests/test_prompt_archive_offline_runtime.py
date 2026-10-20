@@ -9,6 +9,7 @@ from pathlib import Path
 
 from nginx_qa.prompt_archive_incremental import (
     ArchiveOccurrence,
+    PromptArchiveIncremental,
     pas1_id_v1,
     response_id_v1,
     sprint_storage_key_v1,
@@ -22,6 +23,10 @@ from nginx_qa.prompt_archive_storage import (
     PromptArchiveStorage,
     PromptArchiveStorageError,
     canonical_json_bytes_v1,
+)
+from nginx_qa.prompt_archive_source_metadata import (
+    SourceMetadataScreenSnapshot,
+    project_source_metadata,
 )
 
 
@@ -162,6 +167,17 @@ class PromptArchiveOfflineRuntimeTests(unittest.TestCase):
             },
             created_at=INVENTORY_CREATED_AT,
             verified_at=INVENTORY_CREATED_AT,
+        )
+
+    @staticmethod
+    def source_metadata_projection():
+        return project_source_metadata(
+            {
+                "source_type": "manual",
+                "source_id": "offline-source-must-not-be-persisted",
+                "observed_at": INVENTORY_CREATED_AT,
+            },
+            screen=SourceMetadataScreenSnapshot((), (), ()),
         )
 
     @staticmethod
@@ -368,6 +384,193 @@ class PromptArchiveOfflineRuntimeTests(unittest.TestCase):
                 )
             ),
         )
+
+    def test_first_offline_write_rejects_every_source_metadata_shape_before_verifier_or_publication(
+        self,
+    ) -> None:
+        projection = self.source_metadata_projection()
+        variants = (
+            ("projection-only", projection.document, None),
+            ("receipt-only", None, projection.receipt),
+            ("projection-and-receipt", projection.document, projection.receipt),
+        )
+
+        for ordinal, (name, document, receipt) in enumerate(variants, start=60):
+            with self.subTest(name=name):
+                runtime = self.runtime(self.base / f"first-write-{name}")
+                descriptor, locator = self.register_inventory(
+                    runtime,
+                    ordinal=ordinal,
+                )
+                occurrence = dataclasses.replace(
+                    self.occurrence(ordinal),
+                    source_metadata_projection=document,
+                    source_metadata_receipt=receipt,
+                )
+                operation_id = self.operation_id(ordinal)
+                verifier_calls: list[dict] = []
+
+                def verifier(observed: dict) -> str:
+                    verifier_calls.append(copy.deepcopy(observed))
+                    return "verified"
+
+                with runtime.storage.account_cas_writes() as observed_writes:
+                    self.assert_code(
+                        "PROMPT_ARCHIVE_REFERENCE_INVALID",
+                        lambda: runtime.publish_offline_migration(
+                            RAW_LEGACY_RESPONSE,
+                            occurrence,
+                            operation_id=operation_id,
+                            inventory_descriptor=descriptor,
+                            inventory_ref=locator["inventory_ref"],
+                            inventory_verifier=verifier,
+                        ),
+                    )
+
+                self.assertEqual(verifier_calls, [])
+                outcomes = observed_writes.snapshot()
+                self.assertEqual(outcomes.new_object_count, 0)
+                self.assertEqual(outcomes.new_stored_bytes, 0)
+                self.assertEqual(outcomes.dedup_hits, 0)
+                self.assert_code(
+                    "PROMPT_ARCHIVE_NOT_FOUND",
+                    lambda: runtime.storage.read_immutable_json(
+                        (
+                            "operations",
+                            "v1",
+                            occurrence.response_id,
+                            operation_id,
+                            "plan.json",
+                        )
+                    ),
+                )
+
+    def test_retained_offline_plan_rejects_source_metadata_retry_without_poisoning_replay(
+        self,
+    ) -> None:
+        root = self.base / "retained-plan-source-metadata-retry"
+
+        def crash_after_plan(stage: str) -> None:
+            if stage == "after_publication_plan":
+                raise InjectedCrash()
+
+        failing = self.runtime(root, fault_hook=crash_after_plan)
+        descriptor, locator = self.register_inventory(failing, ordinal=70)
+        occurrence = self.occurrence(70)
+        operation_id = self.operation_id(70)
+        with self.assertRaises(InjectedCrash):
+            failing.publish_offline_migration(
+                RAW_LEGACY_RESPONSE,
+                occurrence,
+                operation_id=operation_id,
+                inventory_descriptor=descriptor,
+                inventory_ref=locator["inventory_ref"],
+                inventory_verifier=lambda _observed: "verified",
+            )
+
+        restarted = self.runtime(root)
+        plan_path = (
+            "operations",
+            "v1",
+            occurrence.response_id,
+            operation_id,
+            "plan.json",
+        )
+        retained_plan = restarted.storage.read_immutable_json(plan_path)
+        projection = self.source_metadata_projection()
+        poisoned = dataclasses.replace(
+            occurrence,
+            source_metadata_projection=projection.document,
+            source_metadata_receipt=projection.receipt,
+        )
+        poisoned_verifier_calls: list[dict] = []
+
+        def poisoned_verifier(observed: dict) -> str:
+            poisoned_verifier_calls.append(copy.deepcopy(observed))
+            return "verified"
+
+        self.assert_code(
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            lambda: restarted.publish_offline_migration(
+                RAW_LEGACY_RESPONSE,
+                poisoned,
+                operation_id=operation_id,
+                inventory_descriptor=descriptor,
+                inventory_ref=locator["inventory_ref"],
+                inventory_verifier=poisoned_verifier,
+            ),
+        )
+        self.assertEqual(poisoned_verifier_calls, [])
+        self.assertEqual(restarted.storage.read_immutable_json(plan_path), retained_plan)
+
+        def replay_unpoisoned():
+            return restarted.publish_offline_migration(
+                RAW_LEGACY_RESPONSE,
+                occurrence,
+                operation_id=operation_id,
+                inventory_descriptor=descriptor,
+                inventory_ref=locator["inventory_ref"],
+                inventory_verifier=lambda observed: (
+                    "verified" if observed == locator else "source_changed"
+                ),
+            )
+
+        first = replay_unpoisoned()
+        second = replay_unpoisoned()
+        self.assertEqual(first, second)
+        self.assertEqual(restarted.storage.read_immutable_json(plan_path), retained_plan)
+        selected = restarted.lookup_offline_archive_metadata(
+            archive_id=first.archive_id
+        )
+        self.assertEqual(restarted.hydrate_content(selected), RAW_LEGACY_RESPONSE)
+
+    def test_legacy_manifest_rejects_source_metadata_root_and_receipt_tampering(
+        self,
+    ) -> None:
+        runtime = self.runtime(self.base / "legacy-source-metadata-tampering")
+        publication, _, _, _, _ = self.publish(runtime, ordinal=80)
+        selected = runtime.lookup_offline_archive_metadata(
+            archive_id=publication.archive_id
+        )
+        incremental = PromptArchiveIncremental(runtime.storage, PROJECT_ID, None)
+        projection = self.source_metadata_projection()
+        source_metadata_root = copy.deepcopy(selected.manifest["roots"]["raw_bytes"])
+
+        def add_root(manifest: dict) -> None:
+            manifest["roots"]["source_metadata"] = copy.deepcopy(
+                source_metadata_root
+            )
+
+        def add_receipt(manifest: dict) -> None:
+            manifest["source_metadata_receipt"] = projection.receipt
+
+        def add_root_and_receipt(manifest: dict) -> None:
+            add_root(manifest)
+            add_receipt(manifest)
+
+        for name, mutate in (
+            ("source-metadata-root", add_root),
+            ("source-metadata-receipt", add_receipt),
+            ("source-metadata-root-and-receipt", add_root_and_receipt),
+        ):
+            with self.subTest(name=name):
+                tampered = copy.deepcopy(selected.manifest)
+                mutate(tampered)
+                tampered_raw = canonical_json_bytes_v1(
+                    tampered,
+                    maximum=8 * 1024 * 1024,
+                )
+                tampered_ref = runtime.storage.put_blob(
+                    tampered_raw,
+                    logical_kind="manifest",
+                    media_type=(
+                        "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+                    ),
+                )
+                self.assert_code(
+                    "PROMPT_ARCHIVE_REFERENCE_INVALID",
+                    lambda ref=tampered_ref: incremental.read_manifest_metadata(ref),
+                )
 
     def test_bound_locator_rejects_batch_plan_sha_and_reservation_tamper(self) -> None:
         runtime = self.runtime()

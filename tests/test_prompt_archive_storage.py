@@ -6,6 +6,7 @@ import hashlib
 import json
 import multiprocessing
 import os
+import stat
 import subprocess
 import tempfile
 import threading
@@ -2244,6 +2245,76 @@ class PromptArchiveStorageTests(unittest.TestCase):
                 self.store.read_current_json(journal),
                 {"revision": 2},
             )
+
+    def test_existing_control_lock_is_read_only_and_never_repairs(self) -> None:
+        response_id = "parresp1-" + "7" * 64
+        operation_id = "parop1-" + "8" * 32
+        lock = ("operations", "v1", response_id, operation_id, "operation.lock")
+
+        with self.store.control_lock(lock):
+            pass
+        target = self.store._mutable_path_from_validated(lock)
+        expected = target.read_bytes()
+        self.assertEqual(expected, b"\0")
+        with self.store.existing_control_lock(lock):
+            pass
+        self.assertEqual(target.read_bytes(), expected)
+
+        original_mode = stat.S_IMODE(target.stat().st_mode)
+        try:
+            os.chmod(target, stat.S_IREAD)
+            with self.store.existing_control_lock(lock):
+                pass
+            self.assertEqual(target.read_bytes(), expected)
+        finally:
+            os.chmod(target, original_mode)
+
+        target.unlink()
+        before_missing = sorted(
+            path.relative_to(self.root).as_posix()
+            for path in self.root.rglob("*")
+        )
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_BLOB_MISSING",
+            lambda: self.store.existing_control_lock(lock).__enter__(),
+        )
+        self.assertFalse(target.exists())
+        self.assertEqual(
+            sorted(
+                path.relative_to(self.root).as_posix()
+                for path in self.root.rglob("*")
+            ),
+            before_missing,
+        )
+
+        target.write_bytes(b"")
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            lambda: self.store.existing_control_lock(lock).__enter__(),
+        )
+        self.assertEqual(target.read_bytes(), b"")
+
+    def test_require_existing_root_never_bootstraps_missing_authority(self) -> None:
+        missing = self.root.parent / "must-remain-absent"
+
+        self.assert_error_code(
+            "PROMPT_ARCHIVE_UNAVAILABLE",
+            lambda: PromptArchiveStorage(
+                missing,
+                PROJECT_ID,
+                protected_roots=(),
+                require_existing_root=True,
+            ),
+        )
+
+        self.assertFalse(missing.exists())
+        reopened = PromptArchiveStorage(
+            self.root,
+            PROJECT_ID,
+            protected_roots=(),
+            require_existing_root=True,
+        )
+        self.assertEqual(reopened.root, self.store.root)
 
     def test_mutable_lock_and_journal_hardlink_aliases_are_rejected(self) -> None:
         response_id = "parresp1-" + "7" * 64

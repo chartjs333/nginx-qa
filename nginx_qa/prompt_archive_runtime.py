@@ -2527,6 +2527,55 @@ class PromptArchiveRuntime:
             logical_kind="publication_plan",
             media_type=_PLAN_MEDIA,
         )
+        return self._validate_offline_plan_identity(
+            plan,
+            plan_ref,
+            response_id=response_id,
+            operation_id=operation_id,
+        )
+
+    def _read_offline_plan_identity(
+        self,
+        *,
+        response_id: str,
+        operation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Read one retained offline plan without healing its CAS identity."""
+
+        if (
+            type(response_id) is not str
+            or _RESPONSE_ID_RE.fullmatch(response_id) is None
+            or type(operation_id) is not str
+            or _OPERATION_ID_RE.fullmatch(operation_id) is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        storage = self._require_storage()
+        plan = storage.read_immutable_json(
+            ("operations", "v1", response_id, operation_id, "plan.json")
+        )
+        raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.describe_blob(
+            raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        if storage.read_blob(plan_ref, max_output_bytes=_PLAN_MAX_BYTES) != raw:
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return self._validate_offline_plan_identity(
+            plan,
+            plan_ref,
+            response_id=response_id,
+            operation_id=operation_id,
+        )
+
+    def _validate_offline_plan_identity(
+        self,
+        plan: Mapping[str, Any],
+        plan_ref: Mapping[str, Any],
+        *,
+        response_id: str,
+        operation_id: str,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
         validated = self._validate_plan(plan, plan_ref)
         if (
             validated.get("operation_kind") != "offline_migration"
@@ -2548,6 +2597,7 @@ class PromptArchiveRuntime:
             return False
         integrity = manifest.get("integrity")
         publication = manifest.get("publication")
+        roots = manifest.get("roots")
         expected_occurrence = {
             "response_id": occurrence.response_id,
             "response_kind": occurrence.response_kind,
@@ -2557,6 +2607,8 @@ class PromptArchiveRuntime:
         }
         return bool(
             plan.get("operation_kind") == "offline_migration"
+            and occurrence.source_metadata_projection is None
+            and occurrence.source_metadata_receipt is None
             and plan.get("scope")
             == {"project_id": occurrence.project_id, "sprint_id": None}
             and plan.get("occurrence") == expected_occurrence
@@ -2564,6 +2616,9 @@ class PromptArchiveRuntime:
             and manifest.get("source") == occurrence.source
             and manifest.get("authorization") == occurrence.authorization
             and manifest.get("created_at") == occurrence.created_at
+            and type(roots) is dict
+            and set(roots) == {"raw_bytes"}
+            and "source_metadata_receipt" not in manifest
             and type(publication) is dict
             and publication.get("verified_at") == occurrence.verified_at
             and type(integrity) is dict
@@ -2580,7 +2635,12 @@ class PromptArchiveRuntime:
         inventory_verifier: PromptArchiveOfflineInventoryVerifier | None,
     ) -> PromptArchivePublication:
         storage = self._require_storage()
-        with storage.control_lock(self._operation_lock_path(plan)):
+        lock = (
+            storage.existing_control_lock
+            if inventory_verifier is None
+            else storage.control_lock
+        )
+        with lock(self._operation_lock_path(plan)):
             existing_journal = self._load_journal_chain_locked(plan, plan_ref)
         if existing_journal is not None and existing_journal[0]["state"] in {
             "complete",
@@ -2646,6 +2706,15 @@ class PromptArchiveRuntime:
             or not callable(inventory_verifier)
         ):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        if (
+            occurrence.source_metadata_projection is not None
+            or occurrence.source_metadata_receipt is not None
+        ):
+            # Offline migration is an opaque legacy-byte path.  Treat native
+            # source-metadata authorities as an invalid reference, including
+            # retained-plan retries, rather than silently accepting or
+            # ignoring them as generic request decoration.
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         storage = self._require_storage()
         frozen = _freeze_bytes(raw_bytes, maximum=self.max_hydrated_bytes)
         descriptor = self._validate_inventory_descriptor(inventory_descriptor)
@@ -2796,7 +2865,12 @@ class PromptArchiveRuntime:
         storage = self._require_storage()
         with self._stream_lock:
             with storage.account_cas_writes() as cas_writes:
-                plan, plan_ref = self._load_offline_plan_identity(
+                plan_reader = (
+                    self._read_offline_plan_identity
+                    if inventory_verifier is None
+                    else self._load_offline_plan_identity
+                )
+                plan, plan_ref = plan_reader(
                     response_id=response_id,
                     operation_id=operation_id,
                 )

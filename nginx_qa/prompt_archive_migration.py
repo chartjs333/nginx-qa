@@ -1580,6 +1580,13 @@ class PromptArchiveMigration:
 
     @property
     def storage(self) -> PromptArchiveStorage:
+        return self._storage_instance(require_existing_root=False)
+
+    def _storage_instance(
+        self,
+        *,
+        require_existing_root: bool,
+    ) -> PromptArchiveStorage:
         if self._storage is None:
             try:
                 self._storage = PromptArchiveStorage(
@@ -1590,6 +1597,7 @@ class PromptArchiveMigration:
                     # unavailable source merely to resume retained PAS1 state.
                     protected_roots=(),
                     fault_hook=self._fault,
+                    require_existing_root=require_existing_root,
                 )
             except PromptArchiveStorageError as exc:
                 raise _error_from_storage(exc) from None
@@ -1616,9 +1624,18 @@ class PromptArchiveMigration:
             self._fault_hook(stage)
 
     @contextmanager
-    def _batch_control_lock(self) -> Iterable[None]:
+    def _batch_control_lock(
+        self,
+        *,
+        existing_only: bool = False,
+    ) -> Iterable[None]:
         try:
-            with self.storage.control_lock(self._lock_path()):
+            lock = (
+                self.storage.existing_control_lock
+                if existing_only
+                else self.storage.control_lock
+            )
+            with lock(self._lock_path()):
                 yield
         except PromptArchiveStorageError as exc:
             raise _error_from_storage(exc) from None
@@ -2633,8 +2650,128 @@ class PromptArchiveMigration:
                 raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
             _assert_legacy_input_bytes(raw, maximum=maximum)
 
+    def _verified_entry_plan_binding(
+        self,
+        plan: Mapping[str, Any],
+        reservation: Mapping[str, Any],
+        runtime: PromptArchiveRuntime,
+        *,
+        require_completed: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Cross-bind one retained entry plan to its outer batch authority.
+
+        Exact hydrated bytes are necessary but not sufficient recovery proof.
+        The per-entry plan and journal must still belong to this batch,
+        inventory, reservation, and offline operator.  Native source-metadata
+        sidecars are deliberately excluded from the opaque legacy path.
+        """
+
+        response_id = reservation.get("response_id")
+        operation_id = reservation.get("operation_id")
+        try:
+            # Verification and source-free resume both require the retained
+            # plan CAS and operation-lock receipt to exist.  Only journal
+            # successor adoption is an authorized recovery mutation.
+            entry_plan, entry_plan_ref = runtime._read_offline_plan_identity(
+                response_id=response_id,
+                operation_id=operation_id,
+            )
+            with self.storage.existing_control_lock(
+                runtime._operation_lock_path(entry_plan)
+            ):
+                entry_journal_pair = runtime._load_journal_chain_locked(
+                    entry_plan,
+                    entry_plan_ref,
+                    adopt_retained_successor=not require_completed,
+                )
+        except PromptArchiveStorageError as exc:
+            raise _error_from_storage(exc) from None
+
+        manifest = entry_plan.get("intended_manifest", {}).get("document")
+        integrity = manifest.get("integrity") if type(manifest) is dict else None
+        roots = manifest.get("roots") if type(manifest) is dict else None
+        authorization = (
+            manifest.get("authorization") if type(manifest) is dict else None
+        )
+        source = manifest.get("source") if type(manifest) is dict else None
+        occurrence = entry_plan.get("occurrence")
+        source_locator = entry_plan.get("source_locator")
+        migration_binding = (
+            source_locator.get("migration_binding")
+            if type(source_locator) is dict
+            else None
+        )
+        base_source_locator = (
+            {
+                name: copy.deepcopy(value)
+                for name, value in source_locator.items()
+                if name != "migration_binding"
+            }
+            if type(source_locator) is dict
+            else None
+        )
+        journal_state = (
+            entry_journal_pair[0].get("state")
+            if entry_journal_pair is not None
+            else None
+        )
+        expected_authorization = {
+            "auth_model_version": "prompt-archive-authorization-v1",
+            "principal_kind": "offline_operator",
+            "principal_id": self.operator_principal_id,
+            "binding_id": None,
+            "scope_source": "offline_operator_gate",
+            "effective_scope_revision": None,
+            "effective_scope_sha256": None,
+            "decision_occurrence_id": reservation.get("decision_occurrence_id"),
+        }
+        if (
+            base_source_locator != plan.get("source_inventory")
+            or type(migration_binding) is not dict
+            or set(migration_binding)
+            != {"batch_id", "batch_plan_sha256", "reservation"}
+            or migration_binding.get("batch_id") != self.batch_id
+            or migration_binding.get("batch_plan_sha256")
+            != _document_sha256(plan)
+            or migration_binding.get("reservation") != reservation
+            or entry_plan.get("operation_id") != operation_id
+            or type(occurrence) is not dict
+            or occurrence
+            != {
+                "response_id": response_id,
+                "response_kind": "migration-snapshot",
+                "occurrence_kind": "migration",
+                "occurrence_id": reservation.get("occurrence_id"),
+                "transition_id": None,
+            }
+            or type(manifest) is not dict
+            or manifest.get("archive_format") != "legacy_raw_chunks_v1"
+            or source != {"source_kind": "offline_migration"}
+            or authorization != expected_authorization
+            or type(roots) is not dict
+            or set(roots) != {"raw_bytes"}
+            or "source_metadata_receipt" in manifest
+            or type(integrity) is not dict
+            or integrity.get("hydrated_size")
+            != reservation.get("source_byte_size")
+            or integrity.get("hydrated_sha256")
+            != reservation.get("source_sha256")
+            or entry_journal_pair is None
+            or (
+                require_completed
+                and journal_state != "complete"
+            )
+            or (
+                not require_completed
+                and journal_state in {None, "intent", "aborted"}
+            )
+        ):
+            raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+        return entry_plan, manifest
+
     def _verify_completed_entry(
         self,
+        plan: Mapping[str, Any],
         result: Mapping[str, Any],
         reservation: Mapping[str, Any],
         expected: InventoryEntry,
@@ -2650,6 +2787,20 @@ class PromptArchiveMigration:
             or result.get("matched") is not True
         ):
             raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
+        entry_plan, manifest = self._verified_entry_plan_binding(
+            plan,
+            reservation,
+            runtime,
+            require_completed=True,
+        )
+        intended_manifest = entry_plan["intended_manifest"]
+        intended_pointer = entry_plan["intended_pointer"]
+        if (
+            result.get("archive_id") != intended_manifest.get("archive_id")
+            or result.get("pointer_id") != intended_pointer.get("pointer_id")
+            or manifest.get("archive_id") != result.get("archive_id")
+        ):
+            raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
         try:
             selected = runtime.lookup_offline_archive_metadata(
                 archive_id=result["archive_id"]
@@ -2660,9 +2811,12 @@ class PromptArchiveMigration:
                 raise _error_from_storage(exc) from None
             raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT") from None
         if (
-            selected.pointer.get("pointer_id") != result.get("pointer_id")
+            selected.archive_id != result.get("archive_id")
+            or selected.pointer.get("pointer_id") != result.get("pointer_id")
             or selected.manifest.get("scope", {}).get("response_id")
             != reservation["response_id"]
+            or selected.manifest.get("roots", {}).keys() != {"raw_bytes"}
+            or "source_metadata_receipt" in selected.manifest
             or len(hydrated) != expected.byte_size
             or hashlib.sha256(hydrated).hexdigest() != expected.sha256
         ):
@@ -2942,7 +3096,13 @@ class PromptArchiveMigration:
             for index, result in enumerate(completed):
                 reservation = plan["reservations"][index]
                 entry = self._entry_for_reservation(pre, reservation)
-                self._verify_completed_entry(result, reservation, entry, runtime)
+                self._verify_completed_entry(
+                    plan,
+                    result,
+                    reservation,
+                    entry,
+                    runtime,
+                )
 
             if journal["state"] != "complete":
                 for reservation in plan["reservations"][len(completed) :]:
@@ -2980,7 +3140,11 @@ class PromptArchiveMigration:
                         "matched": True,
                     }
                     hydrated = self._verify_completed_entry(
-                        result, reservation, entry, runtime
+                        plan,
+                        result,
+                        reservation,
+                        entry,
+                        runtime,
                     )
                     if hydrated != raw or self._source_bytes(entry) != raw:
                         raise _error("PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED")
@@ -3110,6 +3274,7 @@ class PromptArchiveMigration:
         ):
             raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
         self._assert_resume_access_ready()
+        self._storage_instance(require_existing_root=True)
         try:
             plan = self.storage.read_immutable_json(self._plan_path())
         except PromptArchiveStorageError as exc:
@@ -3137,71 +3302,12 @@ class PromptArchiveMigration:
             # journal chain before the source-free continuation.  This binds
             # the outer reservation to the inventory locator, immutable
             # manifest graph, operation/occurrence IDs, and content digest.
-            entry_plan, entry_plan_ref = runtime._load_offline_plan_identity(
-                response_id=response_id,
-                operation_id=operation_id,
+            self._verified_entry_plan_binding(
+                plan,
+                reservation,
+                runtime,
+                require_completed=False,
             )
-            with self.storage.control_lock(
-                runtime._operation_lock_path(entry_plan)
-            ):
-                entry_journal_pair = runtime._load_journal_chain_locked(
-                    entry_plan,
-                    entry_plan_ref,
-                )
-            manifest = entry_plan.get("intended_manifest", {}).get("document")
-            integrity = (
-                manifest.get("integrity") if type(manifest) is dict else None
-            )
-            occurrence = entry_plan.get("occurrence")
-            authorization = (
-                manifest.get("authorization")
-                if type(manifest) is dict
-                else None
-            )
-            source_locator = entry_plan.get("source_locator")
-            migration_binding = (
-                source_locator.get("migration_binding")
-                if type(source_locator) is dict
-                else None
-            )
-            base_source_locator = (
-                {
-                    name: copy.deepcopy(value)
-                    for name, value in source_locator.items()
-                    if name != "migration_binding"
-                }
-                if type(source_locator) is dict
-                else None
-            )
-            if (
-                base_source_locator != plan.get("source_inventory")
-                or type(migration_binding) is not dict
-                or set(migration_binding)
-                != {"batch_id", "batch_plan_sha256", "reservation"}
-                or migration_binding.get("batch_id") != self.batch_id
-                or migration_binding.get("batch_plan_sha256")
-                != _document_sha256(plan)
-                or migration_binding.get("reservation") != reservation
-                or type(occurrence) is not dict
-                or occurrence.get("response_id") != response_id
-                or occurrence.get("occurrence_id")
-                != reservation.get("occurrence_id")
-                or occurrence.get("transition_id") is not None
-                or type(integrity) is not dict
-                or integrity.get("hydrated_size")
-                != reservation.get("source_byte_size")
-                or integrity.get("hydrated_sha256")
-                != reservation.get("source_sha256")
-                or type(authorization) is not dict
-                or authorization.get("principal_id")
-                != self.operator_principal_id
-                or authorization.get("decision_occurrence_id")
-                != reservation.get("decision_occurrence_id")
-                or entry_journal_pair is None
-                or entry_journal_pair[0].get("state")
-                in {"intent", "aborted"}
-            ):
-                raise _error("PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT")
             publication = runtime.resume_offline_migration(
                 response_id=response_id,
                 operation_id=operation_id,
@@ -3244,8 +3350,9 @@ class PromptArchiveMigration:
         if self.private_evidence_file is None:
             raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID")
         self._assert_migration_access_ready()
+        self._storage_instance(require_existing_root=True)
         inventory = inventory_isolated_root(self.input_root)
-        with self._batch_control_lock():
+        with self._batch_control_lock(existing_only=True):
             plan = self._require_existing_plan(inventory)
             journal = self._read_journal(plan)
             if journal is None or journal["state"] != "complete":
@@ -3256,7 +3363,11 @@ class PromptArchiveMigration:
             ):
                 expected = self._entry_for_reservation(inventory, reservation)
                 self._verify_completed_entry(
-                    result, reservation, expected, runtime
+                    plan,
+                    result,
+                    reservation,
+                    expected,
+                    runtime,
                 )
             private_raw = self._private_evidence_bytes(plan, inventory, inventory)
             observed_private = _read_private_evidence_file(
@@ -3484,8 +3595,9 @@ class PromptArchiveMigration:
             target, self.private_evidence_file
         ):
             raise _error("PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP")
+        self._storage_instance(require_existing_root=True)
         inventory, private_raw = self._inventory_from_private_evidence()
-        with self._batch_control_lock():
+        with self._batch_control_lock(existing_only=True):
             plan = self._require_existing_plan(inventory)
             journal = self._read_journal(plan)
             if journal is None or journal["state"] != "complete":
@@ -3533,7 +3645,11 @@ class PromptArchiveMigration:
             ):
                 entry = self._entry_for_reservation(inventory, reservation)
                 raw = self._verify_completed_entry(
-                    result, reservation, entry, runtime
+                    plan,
+                    result,
+                    reservation,
+                    entry,
+                    runtime,
                 )
                 _publish_reconstructed_file(
                     target,

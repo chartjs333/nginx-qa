@@ -1284,7 +1284,10 @@ class PromptArchiveStorage:
         protected_roots: Sequence[str | os.PathLike[str]],
         limits: PromptArchiveLimits | Mapping[str, int] | None = None,
         fault_hook: Callable[[str], None] | None = None,
+        require_existing_root: bool = False,
     ) -> None:
+        if type(require_existing_root) is not bool:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
         self.limits = self._coerce_limits(limits)
         self.project_id = project_id
         self.project_storage_key = _project_storage_key(project_id)
@@ -1302,7 +1305,8 @@ class PromptArchiveStorage:
         # every ancestor remains pinned until final revalidation, and the
         # kernel-resolved handle path must equal the configured lexical path.
         self._root_identity, root_directories_durable = self._bootstrap_root(
-            raw_root
+            raw_root,
+            create=not require_existing_root,
         )
         self.root = raw_root
         with self._open_pinned_directory(self.root):
@@ -1413,8 +1417,13 @@ class PromptArchiveStorage:
         return identity
 
     @classmethod
-    def _bootstrap_root(cls, root: Path) -> tuple[tuple[int, int], bool]:
-        """Create a root by relative no-follow traversal from a pinned anchor."""
+    def _bootstrap_root(
+        cls,
+        root: Path,
+        *,
+        create: bool = True,
+    ) -> tuple[tuple[int, int], bool]:
+        """Open, and when allowed create, a no-follow root from its anchor."""
 
         anchor = Path(root.anchor)
         try:
@@ -1465,6 +1474,8 @@ class PromptArchiveStorage:
                                 )
                             )
                         except FileNotFoundError:
+                            if not create:
+                                raise
                             child_descriptor, created = (
                                 _windows_open_or_create_relative_directory(
                                     current.descriptor,
@@ -1477,11 +1488,16 @@ class PromptArchiveStorage:
                         nofollow = getattr(os, "O_NOFOLLOW", 0)
                         if not nofollow:
                             raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
-                        try:
-                            os.mkdir(component, mode=0o700, dir_fd=current.descriptor)
-                            created = True
-                        except FileExistsError:
-                            pass
+                        if create:
+                            try:
+                                os.mkdir(
+                                    component,
+                                    mode=0o700,
+                                    dir_fd=current.descriptor,
+                                )
+                                created = True
+                            except FileExistsError:
+                                pass
                         child_descriptor = os.open(
                             component,
                             os.O_RDONLY
@@ -2852,6 +2868,77 @@ class PromptArchiveStorage:
                         os.close(descriptor)
                     except OSError:
                         pass
+
+    @contextmanager
+    def existing_control_lock(self, relative_components: Sequence[str]):
+        """Lock an already-published one-byte control without repairing it.
+
+        Recovery verification must be observational: a missing directory,
+        lock receipt, or zero-byte interrupted lock is evidence failure rather
+        than permission to create or finish it.  This companion to
+        :meth:`control_lock` therefore opens the exact existing leaf read-only
+        and never calls the directory/bootstrap or write paths.
+        """
+
+        validated = self._validate_mutable_components(relative_components, lock=True)
+        target = self._mutable_path_from_validated(validated)
+        descriptor = -1
+        try:
+            with self._open_pinned_directory(target.parent) as parent:
+                descriptor = self._open_relative_control_file(
+                    parent,
+                    target,
+                    create=False,
+                    writable=False,
+                    compare_size=False,
+                )
+                if descriptor is None:
+                    descriptor = -1
+                    raise _error("PROMPT_ARCHIVE_BLOB_MISSING")
+                metadata = os.fstat(descriptor)
+                if metadata.st_size != 1:
+                    raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                if os.name == "nt":
+                    _windows_lock_descriptor(descriptor, unlock=False)
+                else:
+                    import fcntl
+
+                    fcntl.flock(descriptor, fcntl.LOCK_EX)
+                try:
+                    observed = self._assert_relative_control_handle(
+                        descriptor,
+                        parent=parent,
+                        target=target,
+                    )
+                    if observed.st_size != 1:
+                        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+                    yield
+                    observed = self._assert_relative_control_handle(
+                        descriptor,
+                        parent=parent,
+                        target=target,
+                    )
+                    if observed.st_size != 1:
+                        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+                finally:
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    if os.name == "nt":
+                        _windows_lock_descriptor(descriptor, unlock=True)
+                    else:
+                        import fcntl
+
+                        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        except PromptArchiveStorageError:
+            raise
+        except OSError:
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        finally:
+            if descriptor != -1:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
 
     def read_current_json(
         self,

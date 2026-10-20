@@ -850,7 +850,11 @@ def _validate_occurrence(value: Any, *, project_id: str) -> ArchiveOccurrence:
     elif transition_id is not None:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     if occurrence_kind == "migration":
-        if response_kind != "migration-snapshot" or sprint_id is not None:
+        if (
+            response_kind != "migration-snapshot"
+            or sprint_id is not None
+            or occurrence_keys == _OCCURRENCE_KEYS_WITH_SOURCE_METADATA
+        ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     elif response_kind == "migration-snapshot" or sprint_id is None:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")

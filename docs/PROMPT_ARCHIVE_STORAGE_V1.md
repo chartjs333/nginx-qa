@@ -1632,6 +1632,15 @@ caused merely by a mode toggle and never deletes CAS data or rewrites an
 immutable authoritative occurrence. Offline migration requires explicit
 isolated input/output roots, a durable journal, full-file pre/post inventory,
 idempotent resume, and the same raw digest proof. Live roots are rejected in V1.
+It accepts only opaque legacy response bytes: a PAS1 descriptor or any other
+top-level `kind` is rejected before durable migration output. Native
+`source_metadata` sidecars, projection receipts, and occurrence projection
+proofs are not migration inputs and are never inferred from a property named
+`source_metadata` inside legacy JSON. Such a property remains opaque source
+bytes and is reproduced only as part of the exact raw legacy file. Preservation
+of native source metadata instead belongs to the cold recovery unit, which
+copies the complete archive graph and the occurrence authority's immutable
+`source-metadata-projections/v1` proof tree and validates their cross-binding.
 The batch plan's `tool_source_sha256` is writer provenance; compatible resume,
 reconstruction, and rollback are gated by the exact contract/tool versions so
 that a code-only safety fix cannot strand a durable v1 operation. Reconstruction

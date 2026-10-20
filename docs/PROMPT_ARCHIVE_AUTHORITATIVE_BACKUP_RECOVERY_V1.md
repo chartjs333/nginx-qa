@@ -15,8 +15,9 @@ A PAS1 authoritative backup is one cold, coherent recovery unit containing all
 of the following authorities from the same quiescent instant:
 
 1. the complete isolated `NGINX_QA_PROMPT_ARCHIVE_ROOT` tree;
-2. the complete durable occurrence-receipt root, normally the isolated
-   `NGINX_QA_RUNTIME_ROOT/prompt-archive-occurrences/v1` tree; and
+2. the complete durable occurrence authority, normally the isolated
+   `NGINX_QA_RUNTIME_ROOT/prompt-archive-occurrences/v1` tree, including both
+   occurrence receipts and immutable source-metadata projection proofs; and
 3. for every enrolled project, the resolved project-specific external
    `latest-response.json`, every immutable transition-specific descriptor stub
    referenced by its archive plans, and the complete sibling
@@ -72,12 +73,20 @@ substitute for that check.
 Copy the complete configured occurrence-receipt root, including:
 
 - every immutable legacy or native receipt below `receipts/v1`;
-- every corresponding lock receipt below `locks/v1`; and
+- every immutable pre-plan source-metadata projection proof below
+  `source-metadata-projections/v1`;
+- every corresponding occurrence/projection lock receipt below `locks/v1`;
+  and
 - all directories and reserved temporary entries below that authority.
 
-Receipt bytes bind the durable runtime occurrence and its frozen source proof.
-They must stay byte-identical and at the same authority path. Reconstructing a
-receipt from runtime state, a manifest, or a response is forbidden.
+Occurrence-receipt bytes bind the durable runtime occurrence. Projection-proof
+bytes separately bind the runtime-occurrence locator, canonical screened
+projection, and closed projection receipt before an archive plan exists. Both
+artifact kinds must stay byte-identical and at the same authority paths. A
+backup that keeps `receipts/v1` but omits
+`source-metadata-projections/v1` is incomplete even when the same projected
+values are visible in a later manifest. Reconstructing an occurrence receipt
+from runtime state, a manifest, a projection proof, or a response is forbidden.
 
 ### 2.3 External latest authority
 
@@ -231,9 +240,17 @@ paths. Before installation, require all of the following:
    CAS ref, predecessor chain, frozen timestamps, scope, occurrence locator,
    planned reachable set, pointer precondition, locator, compatibility output,
    and pending-entry lower-bound fence.
-4. Every occurrence locator resolves to the exact immutable receipt and frozen
-   source proof selected by the plan. No occurrence is synthesized from another
-   artifact.
+4. Every occurrence locator resolves to the exact immutable occurrence receipt
+   and, when source metadata is present, the exact immutable proof below
+   `source-metadata-projections/v1`. The proof's locator and locator digest must
+   equal the plan's runtime-occurrence locator; its canonical projection and
+   projection receipt must equal the corresponding fields in the occurrence
+   receipt. Those same canonical projection bytes and receipt must equal the
+   one-record manifest `roots.source_metadata` sidecar and
+   `source_metadata_receipt`. Presence is biconditional across the occurrence,
+   proof, root, and manifest receipt; mixed presence or any digest, size,
+   projected-field, source-type, or counter mismatch is corruption. No
+   occurrence is synthesized from another artifact.
 5. Every pointer, locator, and manifest agrees in project, sprint, response,
    archive, manifest ref, and complete reachable graph. Every reachable object
    passes stored and uncompressed size/digest checks and bounded hydration.

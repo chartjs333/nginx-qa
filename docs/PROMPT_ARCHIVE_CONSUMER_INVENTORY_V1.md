@@ -138,13 +138,17 @@ qualification before any operational enablement:
 5. **B-05 — backup/recovery (documentation closed):**
    [`PROMPT_ARCHIVE_AUTHORITATIVE_BACKUP_RECOVERY_V1.md`](PROMPT_ARCHIVE_AUTHORITATIVE_BACKUP_RECOVERY_V1.md)
    defines one cold recovery unit covering CAS, immutable manifests,
-   pointers/locators, occurrence receipts, plans/journals, both fixed-shard
-   pending registries, transition stubs, and the external-target-colocated
-   latest content/control authority. It requires full-inventory SHA-256 proof,
-   exact path/volume/ownership validation, and fail-closed restore. The old
-   legacy pointer-copy example is explicitly not a PAS1 backup. No backup or
-   restore execution is claimed; an isolated drill and exact-candidate
-   qualification remain required before operational enablement.
+   pointers/locators, occurrence receipts, the immutable
+   `source-metadata-projections/v1` proof tree and its locks, plans/journals,
+   both fixed-shard pending registries, transition stubs, and the
+   external-target-colocated latest content/control authority. It requires
+   full-inventory SHA-256 proof, exact path/volume/ownership validation, and
+   fail-closed cross-binding of each projection proof to its occurrence
+   receipt and the manifest `roots.source_metadata` /
+   `source_metadata_receipt` pair. The old legacy pointer-copy example is
+   explicitly not a PAS1 backup. No backup or restore execution is claimed;
+   an isolated drill and exact-candidate qualification remain required before
+   operational enablement.
 6. **B-06 — closed:** legacy-only readers explicitly pin legacy mode, and an
    authoritative actor-to-reviewer test hydrates through the authorized shared
    reader with exact project/sprint/archive authorization.

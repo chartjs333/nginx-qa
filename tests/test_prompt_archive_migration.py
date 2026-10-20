@@ -200,6 +200,218 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             "prompt-archive-migration-private-evidence-v1.schema.json", private
         )
 
+    def test_legacy_source_metadata_member_is_opaque_and_byte_exact(self) -> None:
+        raw = (
+            b' \r\n{"source_metadata":{"source_type":"must-remain-opaque",'
+            b'"nested":{"preserve":"literal-payload"}},'
+            b'"duplicate":"first","duplicate":"second",'
+            b'"unicode":"\\u0061"}\r\n'
+        )
+        (self.source / "latest-response.json").write_bytes(raw)
+        migration = self.migration()
+
+        evidence = migration.migrate()
+        reconstructed = self.base / "opaque-source-metadata-reconstructed"
+        reconstruction = migration.reconstruct(reconstructed)
+        selected = migration._runtime_instance().lookup_offline_archive_metadata(
+            archive_id=evidence["archives"][0]["archive_id"]
+        )
+
+        self.assertTrue(reconstruction["raw_files_equal"])
+        self.assertEqual(
+            reconstructed.joinpath("latest-response.json").read_bytes(),
+            raw,
+        )
+        self.assertEqual(
+            migration._runtime_instance().hydrate_content(selected),
+            raw,
+        )
+        self.assertEqual(set(selected.manifest["roots"]), {"raw_bytes"})
+        self.assertNotIn("source_metadata", selected.manifest["roots"])
+        self.assertNotIn("source_metadata_receipt", selected.manifest)
+
+    def test_completed_entry_rejects_wrong_outer_binding(self) -> None:
+        (self.source / "latest-response.json").write_bytes(
+            b'{"completed":"entry"}\r\n'
+        )
+        migration = self.migration()
+        migration.migrate()
+        plan = migration.storage.read_immutable_json(migration._plan_path())
+        journal = migration.storage.read_current_json(migration._journal_path())
+        inventory = inventory_isolated_root(self.source)
+        reservation = plan["reservations"][0]
+        result = journal["completed_entries"][0]
+        expected = migration._entry_for_reservation(inventory, reservation)
+        runtime = migration._runtime_instance()
+
+        def wrong_batch(value: dict[str, object]) -> None:
+            value["batch_id"] = "parmb1-" + "0" * 64
+
+        def wrong_provenance(value: dict[str, object]) -> None:
+            source_inventory = value["source_inventory"]
+            assert isinstance(source_inventory, dict)
+            source_inventory["inventory_sha256"] = "0" * 64
+
+        def wrong_plan_binding(value: dict[str, object]) -> None:
+            value["tool_source_sha256"] = "0" * 64
+
+        mutations = {
+            "outer_batch": wrong_batch,
+            "source_provenance": wrong_provenance,
+            "plan_digest": wrong_plan_binding,
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(binding=name):
+                mismatched_plan = json.loads(json.dumps(plan))
+                mutate(mismatched_plan)
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+                    lambda: migration._verify_completed_entry(
+                        mismatched_plan,
+                        result,
+                        reservation,
+                        expected,
+                        runtime,
+                    ),
+                )
+
+    def test_completed_verification_never_repairs_retained_entry_authority(
+        self,
+    ) -> None:
+        (self.source / "latest-response.json").write_bytes(
+            b'{"completed":"read-only-verification"}\r\n'
+        )
+        migration = self.migration()
+        migration.migrate()
+        outer_plan = migration.storage.read_immutable_json(migration._plan_path())
+        reservation = outer_plan["reservations"][0]
+        runtime = migration._runtime_instance()
+        entry_plan, entry_plan_ref = runtime._load_offline_plan_identity(
+            response_id=reservation["response_id"],
+            operation_id=reservation["operation_id"],
+        )
+        entry_plan_raw = canonical_json_bytes_v1(
+            entry_plan,
+            maximum=8 * 1024 * 1024,
+        )
+
+        def archive_snapshot() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.archive).as_posix(): path.read_bytes()
+                for path in self.archive.rglob("*")
+                if path.is_file()
+            }
+
+        batch_lock_components = migration._lock_path()
+        batch_lock_path = migration.storage._mutable_path_from_validated(
+            batch_lock_components
+        )
+        batch_lock_path.unlink()
+        before_missing_batch_lock = archive_snapshot()
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_INTEGRITY_MISMATCH",
+            migration.verify_rollback,
+        )
+        self.assertEqual(archive_snapshot(), before_missing_batch_lock)
+        self.assertFalse(batch_lock_path.exists())
+        with migration.storage.control_lock(batch_lock_components):
+            pass
+
+        plan_blob = migration.storage.blob_path(entry_plan_ref)
+        plan_blob.unlink()
+        before_missing_plan = archive_snapshot()
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_INTEGRITY_MISMATCH",
+            migration.verify_rollback,
+        )
+        self.assertEqual(archive_snapshot(), before_missing_plan)
+        self.assertFalse(plan_blob.exists())
+        self.assertEqual(
+            migration.storage.put_blob(
+                entry_plan_raw,
+                logical_kind="publication_plan",
+                media_type=(
+                    "application/vnd.nginx-qa.prompt-archive-"
+                    "publication-plan-v1+json"
+                ),
+            ),
+            entry_plan_ref,
+        )
+
+        lock_components = runtime._operation_lock_path(entry_plan)
+        lock_path = migration.storage._mutable_path_from_validated(lock_components)
+        lock_path.unlink()
+        before_missing_lock = archive_snapshot()
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_INTEGRITY_MISMATCH",
+            migration.verify_rollback,
+        )
+        self.assertEqual(archive_snapshot(), before_missing_lock)
+        self.assertFalse(lock_path.exists())
+        with migration.storage.control_lock(lock_components):
+            pass
+
+        current_path = runtime._journal_current_path(entry_plan)
+        current = migration.storage.read_current_json(current_path)
+        self.assertIsNotNone(current)
+        predecessor = migration.storage.read_immutable_json(
+            runtime._journal_generation_path(
+                entry_plan,
+                current["previous_journal_generation"],
+                current["previous_journal_sha256"],
+            )
+        )
+        migration.storage.replace_current_json(current_path, predecessor)
+        before_retained_successor = archive_snapshot()
+        self.assert_code(
+            "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT",
+            migration.verify_rollback,
+        )
+        self.assertEqual(archive_snapshot(), before_retained_successor)
+        self.assertEqual(
+            migration.storage.read_current_json(current_path),
+            predecessor,
+        )
+
+    def test_recovery_commands_never_bootstrap_missing_archive_root(self) -> None:
+        (self.source / "latest-response.json").write_bytes(
+            b'{"completed":"missing-archive-authority"}\r\n'
+        )
+        completed = self.migration()
+        completed.migrate()
+        outer_plan = completed.storage.read_immutable_json(completed._plan_path())
+        reservation = outer_plan["reservations"][0]
+        saved_archive = self.base / "archive-saved"
+        self.archive.rename(saved_archive)
+        reconstruction = self.base / "must-remain-uncreated"
+
+        def base_snapshot() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.base).as_posix(): path.read_bytes()
+                for path in self.base.rglob("*")
+                if path.is_file()
+            }
+
+        before = base_snapshot()
+        operations = {
+            "verify-rollback": lambda migration: migration.verify_rollback(),
+            "source-free-resume": lambda migration: migration.resume_operation(
+                response_id=reservation["response_id"],
+                operation_id=reservation["operation_id"],
+            ),
+            "reconstruct": lambda migration: migration.reconstruct(reconstruction),
+        }
+        for name, operation in operations.items():
+            with self.subTest(command=name):
+                fresh = self.migration()
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE",
+                    lambda: operation(fresh),
+                )
+                self.assertFalse(self.archive.exists())
+                self.assertFalse(reconstruction.exists())
+                self.assertEqual(base_snapshot(), before)
+
     def test_compatible_code_update_resumes_retained_v1_plan(self) -> None:
         payloads = self.write_fixture()
         original = self.migration().migrate()
@@ -1456,6 +1668,97 @@ class PromptArchiveMigrationTests(unittest.TestCase):
             "prompt-archive-migration-resume-evidence-v1.schema.json",
             evidence,
         )
+
+    def test_source_free_resume_never_repairs_missing_plan_or_lock(self) -> None:
+        def prepare(label: str):
+            source = self.base / f"{label}-source"
+            archive = self.base / f"{label}-archive"
+            private_evidence = self.base / f"{label}-private.json"
+            source.mkdir()
+            (source / "latest-response.json").write_bytes(
+                b'{"resume":"strict-existing-authority"}\r\n'
+            )
+            runtime_currents = 0
+
+            def crash(stage: str) -> None:
+                nonlocal runtime_currents
+                if stage == "after_journal_current":
+                    runtime_currents += 1
+                    if runtime_currents == 2:
+                        raise InjectedCrash()
+
+            interrupted = PromptArchiveMigration(
+                input_root=source,
+                archive_root=archive,
+                project_id=PROJECT_ID,
+                source_root_handle_id=HANDLE_ID,
+                operator_gate=OFFLINE_OPERATOR_GATE,
+                operator_principal_id="operator-psc-005",
+                private_evidence_file=private_evidence,
+                protected_roots=(),
+                clock=lambda: STAMP,
+                fault_hook=crash,
+            )
+            with self.assertRaises(InjectedCrash):
+                interrupted.migrate()
+            outer_plan = interrupted.storage.read_immutable_json(
+                interrupted._plan_path()
+            )
+            reservation = outer_plan["reservations"][0]
+            runtime = interrupted._runtime_instance()
+            entry_plan, entry_plan_ref = runtime._load_offline_plan_identity(
+                response_id=reservation["response_id"],
+                operation_id=reservation["operation_id"],
+            )
+            source.rename(self.base / f"{label}-source-unavailable")
+            resumed = PromptArchiveMigration(
+                input_root=source,
+                archive_root=archive,
+                project_id=PROJECT_ID,
+                source_root_handle_id=HANDLE_ID,
+                operator_gate=OFFLINE_OPERATOR_GATE,
+                operator_principal_id="operator-psc-005",
+                private_evidence_file=private_evidence,
+                protected_roots=(),
+                clock=lambda: STAMP,
+            )
+            return resumed, reservation, entry_plan, entry_plan_ref
+
+        for artifact in ("plan-cas", "operation-lock"):
+            with self.subTest(artifact=artifact):
+                migration, reservation, entry_plan, entry_plan_ref = prepare(
+                    artifact
+                )
+                if artifact == "plan-cas":
+                    target = migration.storage.blob_path(entry_plan_ref)
+                else:
+                    target = migration.storage._mutable_path_from_validated(
+                        migration._runtime_instance()._operation_lock_path(
+                            entry_plan
+                        )
+                    )
+                target.unlink()
+                before = {
+                    path.relative_to(migration.archive_root).as_posix(): path.read_bytes()
+                    for path in migration.archive_root.rglob("*")
+                    if path.is_file()
+                }
+
+                self.assert_code(
+                    "PROMPT_ARCHIVE_MIGRATION_INTEGRITY_MISMATCH",
+                    lambda: migration.resume_operation(
+                        response_id=reservation["response_id"],
+                        operation_id=reservation["operation_id"],
+                    ),
+                )
+
+                after = {
+                    path.relative_to(migration.archive_root).as_posix(): path.read_bytes()
+                    for path in migration.archive_root.rglob("*")
+                    if path.is_file()
+                }
+                self.assertEqual(after, before)
+                self.assertFalse(target.exists())
 
     def test_source_free_resume_rejects_tampered_outer_plan(self) -> None:
         (self.source / "latest-response.json").write_bytes(b'{"resume":true}\r\n')
