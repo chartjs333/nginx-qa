@@ -480,6 +480,106 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
         self.assertEqual(runtime.metrics.snapshot().new_physical_bytes, 0)
         self.assertEqual(runtime.metrics.snapshot().dedup_hits, 0)
 
+    def test_completed_legacy_plan_preserves_metadata_absence_on_upgrade_retry(
+        self,
+    ) -> None:
+        config = PromptArchiveRuntimeConfig(
+            mode="authoritative",
+            root=self.root,
+            max_hydrated_bytes=8 * 1024 * 1024,
+            operator_gate="prompt-archive-authoritative-v1",
+        )
+        raw = b'{"upgrade":"completed-legacy-plan"}'
+        occurrence = dataclasses.replace(
+            self.occurrence(11),
+            source={"source_kind": "native_runtime", "assignment_id": "a11"},
+        )
+        first_runtime = PromptArchiveRuntimeRegistry(config).for_project(PROJECT_ID)
+        prompt_root = self.base / "prompt-upgrade-completed"
+        first = first_runtime.publish_authoritative(
+            raw,
+            occurrence,
+            compatibility_publisher=ClosedCompatibilityPublisher(
+                prompt_root,
+                first_runtime,
+            ),
+        )
+
+        restarted = PromptArchiveRuntimeRegistry(config).for_project(PROJECT_ID)
+        retried = restarted.publish_authoritative(
+            raw,
+            occurrence,
+            compatibility_publisher=ClosedCompatibilityPublisher(
+                prompt_root,
+                restarted,
+            ),
+            raw_source_metadata={"source_type": "api", "title": "new-owner-data"},
+            source_metadata_screen_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("legacy retry re-screened source metadata")
+            ),
+        )
+
+        self.assertEqual(retried.archive_id, first.archive_id)
+        selected = restarted.lookup_archive(
+            sprint_id=SPRINT_ID,
+            archive_id=retried.archive_id,
+        )
+        self.assertNotIn("source_metadata", selected.manifest["roots"])
+        self.assertNotIn("source_metadata_receipt", selected.manifest)
+
+    def test_plan_only_legacy_shadow_retry_preserves_metadata_absence(self) -> None:
+        root = self.base / "plan-only-upgrade"
+        config = PromptArchiveRuntimeConfig(
+            mode="shadow",
+            root=root,
+            max_hydrated_bytes=8 * 1024 * 1024,
+        )
+
+        def fail_after_plan(stage: str) -> None:
+            if stage == "after_publication_plan":
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+
+        storage = PromptArchiveStorage(
+            root,
+            PROJECT_ID,
+            protected_roots=(),
+            limits=PromptArchiveLimits(max_hydrated_bytes=config.max_hydrated_bytes),
+            fault_hook=fail_after_plan,
+        )
+        prover = ClosedOccurrenceProver()
+        failing = PromptArchiveRuntime(
+            config,
+            PROJECT_ID,
+            storage,
+            occurrence_prover=prover,
+        )
+        raw = b'{"upgrade":"plan-only-legacy-shadow"}'
+        occurrence = self.occurrence(12, committed_bytes=raw)
+        self.assert_code(
+            "PROMPT_ARCHIVE_UNAVAILABLE",
+            lambda: failing.publish_shadow(raw, occurrence),
+        )
+
+        restarted = PromptArchiveRuntimeRegistry(
+            config,
+            occurrence_prover=prover,
+        ).for_project(PROJECT_ID)
+        retried = restarted.publish_shadow(
+            raw,
+            occurrence,
+            raw_source_metadata={"source_type": "api", "title": "new-owner-data"},
+            source_metadata_screen_factory=lambda: (_ for _ in ()).throw(
+                AssertionError("legacy plan retry re-screened source metadata")
+            ),
+        )
+
+        selected = restarted.lookup_archive(
+            sprint_id=SPRINT_ID,
+            archive_id=retried.archive_id,
+        )
+        self.assertNotIn("source_metadata", selected.manifest["roots"])
+        self.assertNotIn("source_metadata_receipt", selected.manifest)
+
     def test_reachable_set_rejects_one_digest_in_multiple_roles(self) -> None:
         storage = PromptArchiveStorage(self.root, PROJECT_ID, protected_roots=())
         manifest_ref = storage.put_blob(

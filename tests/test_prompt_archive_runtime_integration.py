@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import copy
 import hashlib
 import io
@@ -21,6 +22,10 @@ from nginx_qa.prompt_archive_runtime import (
     PromptArchivePublication,
     PromptArchiveRuntimeConfig,
     PromptArchiveRuntimeRegistry,
+)
+from nginx_qa.prompt_archive_source_metadata import (
+    freeze_source_metadata_screen,
+    project_source_metadata,
 )
 from nginx_qa.prompt_archive_storage import PromptArchiveStorageError
 from tests.test_managed_continuity import (
@@ -206,6 +211,7 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         *,
         archive_occurrence: ArchiveOccurrence | None = None,
         request_agent_phone: str = "4102",
+        archive_source_metadata: dict | None = None,
     ) -> dict:
         selected = response or self.response()
         return main.materialize_sequential_graph_response(
@@ -221,6 +227,7 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
                 if archive_occurrence is None
                 else archive_occurrence
             ),
+            archive_source_metadata=archive_source_metadata,
         )
 
     def test_shadow_uses_exact_committed_bytes_and_publishes_after_legacy(self) -> None:
@@ -448,6 +455,493 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
         self.assertTrue(heartbeat["response_archive_available"])
         self.assertNotIn("response_file_path", heartbeat)
         self.assertNotIn("latest_response_file_path", heartbeat)
+
+    def test_authoritative_source_metadata_is_frozen_before_plan_and_reused(self) -> None:
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={
+                "source_kind": "native_runtime",
+                "assignment_id": "assignment-one",
+                "source_commit": "1" * 40,
+            },
+        )
+        raw_identifier = "conversation-source-canary"
+        configured_secret = "§Ω"
+        raw_metadata = {
+            "source_type": "email",
+            "conversation_id": raw_identifier,
+            "sender_label": "Alice",
+            "title": configured_secret,
+            "observed_at": "2026-10-11T18:00:00+02:00",
+            "adapter_command": "must-be-discarded",
+        }
+        screen = freeze_source_metadata_screen(
+            configured_values=(configured_secret,),
+        )
+
+        self.configure("authoritative")
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            return_value=screen,
+        ) as snapshot:
+            compact = self.materialize(
+                response,
+                archive_occurrence=occurrence,
+                archive_source_metadata=raw_metadata,
+            )
+        snapshot.assert_called_once_with(project_id="9000")
+
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        selected = runtime.lookup_archive(
+            sprint_id="sprint-runtime-one",
+            archive_id=compact["prompt_archive"]["archive_id"],
+        )
+        self.assertIn("source_metadata", selected.manifest["roots"])
+        receipt = selected.manifest["source_metadata_receipt"]
+        self.assertEqual(receipt["source_type"], "email")
+        self.assertEqual(receipt["discarded_field_count"], 1)
+        self.assertEqual(
+            receipt["projected_fields"],
+            ["conversation_id", "observed_at", "sender_label", "title"],
+        )
+
+        hydrated = json.loads(runtime.hydrate_content(selected))
+        self.assertNotIn("source_metadata", hydrated)
+        self.assertEqual(hydrated["kind"], "prompt_archive_occurrence_document")
+
+        persisted = b"\n".join(
+            path.read_bytes()
+            for root in (self.archive_root, self.root / "occurrence-receipts")
+            if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(configured_secret.encode("utf-8"), persisted)
+        self.assertNotIn(raw_identifier.encode("utf-8"), persisted)
+        self.assertNotIn(b"must-be-discarded", persisted)
+        self.assertIn(b"[REDACTED]", persisted)
+
+        # A retry after credential rotation and with different raw input must
+        # recover the immutable projection without invoking the new snapshot.
+        self.configure("authoritative")
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            side_effect=AssertionError("credential snapshot re-read on retry"),
+        ) as rotated_snapshot:
+            replayed = self.materialize(
+                response,
+                archive_occurrence=occurrence,
+                archive_source_metadata={
+                    "source_type": "folder",
+                    "title": "different-raw-value",
+                },
+            )
+        rotated_snapshot.assert_not_called()
+        self.assertEqual(replayed, compact)
+
+    def test_existing_plan_recovers_missing_projection_proof_without_rescreen(
+        self,
+    ) -> None:
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={"source_kind": "native_runtime"},
+        )
+        assert occurrence is not None
+        metadata = {"source_type": "api", "title": "frozen-owner-title"}
+        self.configure("authoritative")
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            return_value=freeze_source_metadata_screen(),
+        ):
+            first = self.materialize(
+                response,
+                archive_occurrence=occurrence,
+                archive_source_metadata=metadata,
+            )
+        proof_paths = []
+        receipt_root = self.root / "occurrence-receipts"
+        for path in receipt_root.rglob("*.json"):
+            try:
+                document = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                continue
+            if document.get("kind") == "prompt_archive_source_metadata_projection_proof":
+                proof_paths.append(path)
+        self.assertEqual(len(proof_paths), 1)
+        proof_paths[0].unlink()
+
+        self.configure("authoritative")
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            side_effect=AssertionError("immutable plan projection was re-screened"),
+        ) as snapshot:
+            replayed = self.materialize(
+                response,
+                archive_occurrence=occurrence,
+                archive_source_metadata={
+                    "source_type": "folder",
+                    "title": "rotated-owner-title",
+                },
+            )
+
+        snapshot.assert_not_called()
+        self.assertEqual(replayed, first)
+        self.assertTrue(proof_paths[0].is_file())
+
+    def test_shadow_source_metadata_is_bound_without_changing_legacy_bytes(self) -> None:
+        self.configure("shadow")
+        raw_metadata = {
+            "source_type": "api",
+            "conversation_id": "shadow-conversation-canary",
+            "title": "shadow-safe-title",
+            "observed_at": "2026-10-11T18:00:00+02:00",
+        }
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            return_value=freeze_source_metadata_screen(),
+        ) as snapshot:
+            compact = self.materialize(archive_source_metadata=raw_metadata)
+
+        snapshot.assert_called_once_with(project_id="9000")
+        committed = Path(compact["response_file_path"]).read_bytes()
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        selected = runtime.lookup_archive(
+            sprint_id="sprint-runtime-one",
+            archive_id=compact["prompt_archive"]["archive_id"],
+        )
+        self.assertIn("source_metadata", selected.manifest["roots"])
+        self.assertEqual(
+            selected.manifest["source_metadata_receipt"]["source_type"],
+            "api",
+        )
+        self.assertEqual(runtime.hydrate_content(selected), committed)
+        self.assertNotIn("source_metadata", json.loads(committed))
+
+    def test_production_attach_derives_non_rendered_source_metadata(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={"source_kind": "native_runtime"},
+        )
+        assert occurrence is not None
+        with (
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value={
+                    "directory_template": str(self.prompt_root / "{repository}"),
+                    "agent_latest_file_template": str(
+                        self.prompt_root
+                        / "agents"
+                        / "{repository}_{agent_phone}-latest.prompt"
+                    ),
+                },
+            ),
+            patch.object(
+                main,
+                "prompt_archive_source_metadata_screen_snapshot",
+                return_value=freeze_source_metadata_screen(),
+            ) as snapshot,
+        ):
+            compact = asyncio.run(
+                main.attach_sequential_graph_response_storage(
+                    response,
+                    response_kind="transition-response",
+                    request_agent_phone="4102",
+                    archive_occurrence=occurrence,
+                )
+            )
+
+        snapshot.assert_called_once_with(project_id="9000")
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        selected = runtime.lookup_archive(
+            sprint_id="sprint-runtime-one",
+            archive_id=compact["prompt_archive"]["archive_id"],
+        )
+        receipt = selected.manifest["source_metadata_receipt"]
+        self.assertIn("source_metadata", selected.manifest["roots"])
+        self.assertEqual(receipt["source_type"], "api")
+        self.assertEqual(
+            receipt["projected_fields"],
+            ["conversation_id", "message_id", "observed_at", "title"],
+        )
+        hydrated = json.loads(runtime.hydrate_content(selected))
+        self.assertNotIn("source_metadata", hydrated)
+
+    def test_shadow_source_screen_failure_preserves_legacy_response(self) -> None:
+        self.configure("shadow")
+        with patch.object(
+            main,
+            "prompt_archive_source_metadata_screen_snapshot",
+            side_effect=PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE"),
+        ) as snapshot:
+            compact = self.materialize(
+                archive_source_metadata={
+                    "source_type": "api",
+                    "title": "safe-title",
+                }
+            )
+
+        snapshot.assert_called_once_with(project_id="9000")
+        self.assertNotIn("prompt_archive", compact)
+        self.assertFalse(compact.get("response_archive_available", False))
+        self.assertTrue(Path(compact["response_file_path"]).is_file())
+        self.assertEqual(
+            json.loads(Path(compact["response_file_path"]).read_bytes())["answer"],
+            "Transition accepted",
+        )
+
+    def test_oversized_metadata_never_blocks_legacy_or_shadow_commit(self) -> None:
+        for mode in ("legacy", "shadow"):
+            with self.subTest(mode=mode):
+                self.configure(mode)
+                response = self.response()
+                response["transition_applied"] = {
+                    **response["transition_applied"],
+                    "transition_id": f"transition-oversized-{mode}",
+                }
+                occurrence = self.occurrence(response)
+                assert occurrence is not None
+                with patch.object(
+                    main,
+                    "read_sequential_prompt_settings_file",
+                    return_value={
+                        "directory_template": str(
+                            self.prompt_root / "{repository}"
+                        ),
+                        "agent_latest_file_template": str(
+                            self.prompt_root
+                            / "agents"
+                            / "{repository}_{agent_phone}-latest.prompt"
+                        ),
+                    },
+                ):
+                    compact = asyncio.run(
+                        main.attach_sequential_graph_response_storage(
+                            response,
+                            response_kind="transition-response",
+                            request_agent_phone="4102",
+                            archive_occurrence=occurrence,
+                            archive_source_metadata={"title": "x" * (20 * 1024)},
+                        )
+                    )
+
+                self.assertNotIn("response_storage_error", compact)
+                self.assertTrue(Path(compact["response_file_path"]).is_file())
+                self.assertEqual(
+                    json.loads(Path(compact["response_file_path"]).read_bytes())[
+                        "answer"
+                    ],
+                    "Transition accepted",
+                )
+                self.assertNotIn("prompt_archive", compact)
+
+    def _assert_exact_retry_adopts_plan_before_oversized_raw_metadata(
+        self,
+        mode: str,
+    ) -> None:
+        settings = {
+            "directory_template": str(self.prompt_root / "{repository}"),
+            "agent_latest_file_template": str(
+                self.prompt_root
+                / "agents"
+                / "{repository}_{agent_phone}-latest.prompt"
+            ),
+        }
+        self.configure(mode)
+        response = self.response()
+        response["transition_applied"] = {
+            **response["transition_applied"],
+            "transition_id": f"transition-retry-{mode}",
+        }
+        occurrence = self.occurrence(response)
+        assert occurrence is not None
+        if mode == "authoritative":
+            occurrence = replace(
+                occurrence,
+                source={"source_kind": "native_runtime"},
+            )
+        with (
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value=settings,
+            ),
+            patch.object(
+                main,
+                "prompt_archive_source_metadata_screen_snapshot",
+                return_value=freeze_source_metadata_screen(),
+            ),
+        ):
+            first = asyncio.run(
+                main.attach_sequential_graph_response_storage(
+                    response,
+                    response_kind="transition-response",
+                    request_agent_phone="4102",
+                    archive_occurrence=occurrence,
+                    archive_source_metadata={
+                        "source_type": "api",
+                        "title": "first-owner-title",
+                    },
+                )
+            )
+
+        with (
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value=settings,
+            ),
+            patch.object(
+                main,
+                "prompt_archive_source_metadata_screen_snapshot",
+                side_effect=AssertionError(
+                    "exact retry re-screened oversized raw metadata"
+                ),
+            ) as snapshot,
+        ):
+            replayed = asyncio.run(
+                main.attach_sequential_graph_response_storage(
+                    response,
+                    response_kind="transition-response",
+                    request_agent_phone="4102",
+                    archive_occurrence=occurrence,
+                    archive_source_metadata={
+                        "title": "x" * (20 * 1024),
+                    },
+                )
+            )
+
+        snapshot.assert_not_called()
+        self.assertEqual(
+            replayed["prompt_archive"]["archive_id"],
+            first["prompt_archive"]["archive_id"],
+        )
+        self.assertTrue(replayed["response_archive_available"])
+
+    def test_authoritative_exact_retry_adopts_plan_before_oversized_raw_metadata(
+        self,
+    ) -> None:
+        self._assert_exact_retry_adopts_plan_before_oversized_raw_metadata(
+            "authoritative"
+        )
+
+    def test_shadow_exact_retry_adopts_plan_before_oversized_raw_metadata(
+        self,
+    ) -> None:
+        self._assert_exact_retry_adopts_plan_before_oversized_raw_metadata("shadow")
+
+    def test_invalid_occurrence_is_rejected_before_projection_proof_write(self) -> None:
+        self.configure("authoritative")
+        occurrence = replace(
+            self.occurrence(self.response()),
+            source={"source_kind": "native_runtime"},
+        )
+        assert occurrence is not None
+        runtime = main.prompt_archive_runtime.for_project("9000")
+        invalid_occurrences = (
+            replace(occurrence, created_at="not-a-timestamp"),
+            replace(occurrence, response_kind="unbounded-response-kind"),
+        )
+
+        for invalid in invalid_occurrences:
+            with self.subTest(invalid=invalid.response_kind), patch.object(
+                main,
+                "prompt_archive_source_metadata_screen_snapshot",
+            ) as snapshot, self.assertRaises(PromptArchiveStorageError) as raised:
+                runtime.bind_source_metadata_projection(
+                    invalid,
+                    {"source_type": "api", "title": "safe-title"},
+                    screen_factory=main.prompt_archive_source_metadata_screen_snapshot,
+                )
+            self.assertEqual(
+                raised.exception.code,
+                "PROMPT_ARCHIVE_REFERENCE_INVALID",
+            )
+            snapshot.assert_not_called()
+
+        persisted_files = [
+            path
+            for root in (self.archive_root, self.root / "occurrence-receipts")
+            if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+        ]
+        self.assertEqual(persisted_files, [])
+
+    def test_supplied_source_projection_cannot_bypass_first_write_screen(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={"source_kind": "native_runtime"},
+        )
+        assert occurrence is not None
+        secret = "opaque-configured-value"
+        unsafe = project_source_metadata(
+            {"source_type": "api", "title": secret},
+            screen=freeze_source_metadata_screen(),
+        )
+        supplied = replace(
+            occurrence,
+            source_metadata_projection=unsafe.document,
+            source_metadata_receipt=unsafe.receipt,
+        )
+        runtime = main.prompt_archive_runtime.for_project("9000")
+
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            runtime.bind_source_metadata_projection(supplied)
+
+        self.assertEqual(raised.exception.code, "PROMPT_ARCHIVE_REQUEST_INVALID")
+        self.assertFalse(any(self.archive_root.rglob("plan.json")))
+        persisted = b"\n".join(
+            path.read_bytes()
+            for root in (self.archive_root, self.root / "occurrence-receipts")
+            if root.exists()
+            for path in root.rglob("*")
+            if path.is_file()
+        )
+        self.assertNotIn(secret.encode("utf-8"), persisted)
+
+    def test_supplied_source_projection_must_match_fresh_owner_projection(self) -> None:
+        self.configure("authoritative")
+        response = self.response()
+        occurrence = replace(
+            self.occurrence(response),
+            source={"source_kind": "native_runtime"},
+        )
+        assert occurrence is not None
+        supplied_projection = project_source_metadata(
+            {"source_type": "api", "title": "stale-safe-title"},
+            screen=freeze_source_metadata_screen(),
+        )
+        supplied = replace(
+            occurrence,
+            source_metadata_projection=supplied_projection.document,
+            source_metadata_receipt=supplied_projection.receipt,
+        )
+        runtime = main.prompt_archive_runtime.for_project("9000")
+
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            runtime.bind_source_metadata_projection(
+                supplied,
+                {"source_type": "api", "title": "current-safe-title"},
+                screen_factory=freeze_source_metadata_screen,
+            )
+
+        self.assertEqual(
+            raised.exception.code,
+            "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+        )
+        self.assertFalse(any(self.archive_root.rglob("plan.json")))
 
     def test_authoritative_read_only_identity_writes_only_compact_prompt(self) -> None:
         self.configure("authoritative")
@@ -1660,6 +2154,382 @@ class PromptArchiveRuntimeIntegrationTests(unittest.TestCase):
 
 
 class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
+    async def test_storage_owner_derives_source_metadata_from_durable_occurrence(
+        self,
+    ) -> None:
+        occurrence = ArchiveOccurrence(
+            project_id="9000",
+            sprint_id="sprint-production-seam",
+            response_id=response_id_v1(
+                "9000",
+                "sprint-production-seam",
+                "transition-response",
+                "transition",
+                "transition-production-seam",
+            ),
+            response_kind="transition-response",
+            occurrence_kind="transition",
+            occurrence_id="transition-production-seam",
+            transition_id="transition-production-seam",
+            source={"source_kind": "native_runtime"},
+            authorization={
+                "auth_model_version": "prompt-archive-authorization-v1",
+                "principal_kind": "legacy_local_principal",
+                "principal_id": "9000",
+                "binding_id": None,
+                "scope_source": "legacy_project_context",
+                "effective_scope_revision": None,
+                "effective_scope_sha256": None,
+                "decision_occurrence_id": "transition-production-seam",
+            },
+            created_at="2026-10-20T16:00:00+02:00",
+            verified_at="2026-10-20T16:00:00+02:00",
+        )
+        registry = Mock()
+        registry.config.mode = "authoritative"
+        with (
+            patch.object(main, "prompt_archive_runtime", registry),
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value={
+                    "directory_template": r"C:\prompt\{repository}",
+                    "agent_latest_file_template": (
+                        r"C:\prompt\agents\{repository}_{agent_phone}-latest.prompt"
+                    ),
+                },
+            ),
+            patch.object(
+                main,
+                "materialize_sequential_graph_response",
+                return_value={"answer": "stored"},
+            ) as materialize,
+        ):
+            stored = await main.attach_sequential_graph_response_storage(
+                {"answer": "committed"},
+                response_kind="transition-response",
+                archive_occurrence=occurrence,
+            )
+
+        self.assertEqual(stored, {"answer": "stored"})
+        supplied = materialize.call_args.kwargs["archive_source_metadata"]
+        self.assertEqual(
+            supplied,
+            {
+                "source_type": "api",
+                "conversation_id": "sprint-production-seam",
+                "message_id": "transition-production-seam",
+                "title": "transition-response:transition",
+                "observed_at": "2026-10-20T16:00:00+02:00",
+            },
+        )
+
+    async def test_source_metadata_override_is_frozen_before_first_await(self) -> None:
+        occurrence = ArchiveOccurrence(
+            project_id="9000",
+            sprint_id="sprint-freeze-seam",
+            response_id=response_id_v1(
+                "9000",
+                "sprint-freeze-seam",
+                "identity-response",
+                "identity-state",
+                "task-freeze-seam",
+            ),
+            response_kind="identity-response",
+            occurrence_kind="identity-state",
+            occurrence_id="task-freeze-seam",
+            transition_id=None,
+            source={"source_kind": "native_runtime"},
+            authorization={
+                "auth_model_version": "prompt-archive-authorization-v1",
+                "principal_kind": "legacy_local_principal",
+                "principal_id": "9000",
+                "binding_id": None,
+                "scope_source": "legacy_project_context",
+                "effective_scope_revision": None,
+                "effective_scope_sha256": None,
+                "decision_occurrence_id": "task-freeze-seam",
+            },
+            created_at="2026-10-20T16:00:00+02:00",
+            verified_at="2026-10-20T16:00:00+02:00",
+        )
+        raw_metadata = {"source_type": "api", "title": "before-await"}
+        registry = Mock()
+        registry.config.mode = "authoritative"
+        await main.sequential_prompt_storage_lock.acquire()
+        try:
+            with (
+                patch.object(main, "prompt_archive_runtime", registry),
+                patch.object(
+                    main,
+                    "read_sequential_prompt_settings_file",
+                    return_value={
+                        "directory_template": r"C:\prompt\{repository}",
+                        "agent_latest_file_template": (
+                            r"C:\prompt\agents\{repository}_{agent_phone}-latest.prompt"
+                        ),
+                    },
+                ),
+                patch.object(
+                    main,
+                    "materialize_sequential_graph_response",
+                    return_value={"answer": "stored"},
+                ) as materialize,
+            ):
+                pending = asyncio.create_task(
+                    main.attach_sequential_graph_response_storage(
+                        {"answer": "committed"},
+                        response_kind="identity-response",
+                        archive_occurrence=occurrence,
+                        archive_source_metadata=raw_metadata,
+                    )
+                )
+                await asyncio.sleep(0)
+                raw_metadata["title"] = "mutated-after-await"
+                main.sequential_prompt_storage_lock.release()
+                stored = await pending
+        finally:
+            if main.sequential_prompt_storage_lock.locked():
+                main.sequential_prompt_storage_lock.release()
+
+        self.assertEqual(stored, {"answer": "stored"})
+        self.assertEqual(
+            materialize.call_args.kwargs["archive_source_metadata"]["title"],
+            "before-await",
+        )
+
+    def test_source_screen_uses_only_supported_and_referenced_credentials(
+        self,
+    ) -> None:
+        fixed_secret = "fixed-gemini-secret"
+        referenced_secret = "opaque-reference-secret"
+        unrelated_secret = "opaquePgValue"
+        pending_token = "pending-capability-secret"
+        registered_token = "A" * 48
+        environment = {
+            "GEMINI_API_KEY": fixed_secret,
+            "PGPASSWORD": unrelated_secret,
+            "GIT_CREDENTIAL_BUNDLE": json.dumps(
+                {"GIT_PASSWORD": referenced_secret}
+            ),
+        }
+        screen = main.prompt_archive_source_metadata_screen_snapshot(
+            environment,
+            credential_references=("GIT_CREDENTIAL_BUNDLE",),
+            pending_access_tokens=(pending_token,),
+            producer_token_sha256=(
+                hashlib.sha256(registered_token.encode("ascii")).hexdigest(),
+            ),
+        )
+
+        projected = project_source_metadata(
+            {
+                "source_type": "api",
+                "sender_label": fixed_secret,
+                "title": referenced_secret,
+                "conversation_id": pending_token,
+                "thread_id": registered_token,
+                "message_id": unrelated_secret,
+            },
+            screen=screen,
+        ).document
+
+        self.assertEqual(projected["sender_label"], "[REDACTED]")
+        self.assertEqual(projected["title"], "[REDACTED]")
+        self.assertEqual(projected["conversation_id"], "[REDACTED]")
+        self.assertEqual(projected["thread_id"], "[REDACTED]")
+        self.assertRegex(projected["message_id"], r"^sha256:[0-9a-f]{64}$")
+
+        normalized = main.prompt_archive_source_metadata_screen_snapshot(
+            {"GEMINI_API_KEY": "  CanaRy42  "},
+            credential_references=(),
+            pending_access_tokens=(),
+            producer_token_sha256=(),
+        )
+        normalized_projection = project_source_metadata(
+            {"source_type": "api", "title": "CanaRy42"},
+            screen=normalized,
+        ).document
+        self.assertEqual(normalized_projection["title"], "[REDACTED]")
+
+    def test_credential_reference_discovery_is_structural_and_fail_closed(
+        self,
+    ) -> None:
+        project_references = main._prompt_archive_project_credential_references(
+            {
+                main.PROJECTS_KEY: {
+                    "context-one": {
+                        "credential_reference": "env:PROJECT_CREDENTIAL",
+                        "task_payload": {"secret_ref": "env:UNTRUSTED_TASK_VALUE"},
+                        "repositories": {
+                            "origin": {
+                                "credential_reference": "env:REPOSITORY_CREDENTIAL",
+                                "nested": {"secret_ref": "env:UNTRUSTED_NESTED"},
+                            }
+                        },
+                    }
+                }
+            }
+        )
+        managed_references = main._prompt_archive_managed_credential_references(
+            {
+                "repository": {"credential_reference": "env:MANAGED_REPOSITORY"},
+                "task": {"secret_ref": "env:UNTRUSTED_MANAGED_TASK"},
+                "processes": [
+                    {
+                        "environment_redacted": {
+                            "TOKEN": {"secret_ref": "env:MANAGED_PROCESS_TOKEN"},
+                            "NOT_EXACT": {
+                                "secret_ref": "env:UNTRUSTED_PROCESS_VALUE",
+                                "extra": True,
+                            },
+                        }
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual(
+            project_references,
+            ("PROJECT_CREDENTIAL", "REPOSITORY_CREDENTIAL"),
+        )
+        self.assertEqual(
+            managed_references,
+            ("MANAGED_PROCESS_TOKEN", "MANAGED_REPOSITORY"),
+        )
+        with self.assertRaises(PromptArchiveStorageError) as raised:
+            main.prompt_archive_source_metadata_screen_snapshot(
+                {},
+                credential_references=project_references + managed_references,
+                pending_access_tokens=(),
+                producer_token_sha256=(),
+            )
+        self.assertEqual(raised.exception.code, "PROMPT_ARCHIVE_UNAVAILABLE")
+
+    def test_configured_credential_inventory_is_current_project_scoped(self) -> None:
+        config = {
+            main.PROJECTS_KEY: {
+                "context-current": {
+                    "project_phone": "9000",
+                    "credential_reference": "env:CURRENT_PROJECT_CREDENTIAL",
+                },
+                "context-other": {
+                    "project_phone": "9001",
+                    "credential_reference": "env:OTHER_PROJECT_CREDENTIAL",
+                },
+            }
+        }
+        runtime = SimpleNamespace(store=Mock())
+        runtime.store.active_runtime_state.return_value = {
+            "status": "active",
+            "repository": {
+                "credential_reference": "env:ACTIVE_MANAGED_CREDENTIAL"
+            },
+        }
+        with (
+            patch.object(
+                main,
+                "git_config_file_lock",
+                return_value=contextlib.nullcontext(),
+            ),
+            patch.object(main, "read_git_config_file", return_value=config),
+            patch.object(main, "managed_continuity_runtime", runtime),
+        ):
+            references = main._prompt_archive_configured_credential_references(
+                "9000"
+            )
+
+        self.assertEqual(
+            references,
+            ("ACTIVE_MANAGED_CREDENTIAL", "CURRENT_PROJECT_CREDENTIAL"),
+        )
+        runtime.store.active_runtime_state.assert_called_once_with("9000")
+
+    def test_managed_credential_inventory_does_not_depend_on_registry_entry(
+        self,
+    ) -> None:
+        runtime = SimpleNamespace(store=Mock())
+        runtime.store.active_runtime_state.return_value = {
+            "status": "active",
+            "repository": {
+                "credential_reference": "env:ACTIVE_MANAGED_CREDENTIAL"
+            },
+        }
+        with (
+            patch.object(
+                main,
+                "git_config_file_lock",
+                return_value=contextlib.nullcontext(),
+            ),
+            patch.object(
+                main,
+                "read_git_config_file",
+                return_value={main.PROJECTS_KEY: {}},
+            ),
+            patch.object(main, "managed_continuity_runtime", runtime),
+        ):
+            references = main._prompt_archive_configured_credential_references(
+                "9000"
+            )
+
+        self.assertEqual(references, ("ACTIVE_MANAGED_CREDENTIAL",))
+        runtime.store.active_runtime_state.assert_called_once_with("9000")
+
+    def test_default_screen_traverses_supported_secret_authorities(self) -> None:
+        fixed = "fixed-secret-value"
+        role = "role-secret-value"
+        referenced = "referenced-secret-value"
+        pending = "pending-secret-value"
+        producer = "P" * 43
+        environment = {
+            "GEMINI_API_KEY": fixed,
+            "NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_2974": role,
+            "CURRENT_PROJECT_CREDENTIAL": referenced,
+            main.INBOUND_PRODUCER_REGISTRY_ENV: r"C:\protected\producers.json",
+        }
+        with (
+            patch.object(
+                main,
+                "_prompt_archive_configured_credential_references",
+                return_value=("CURRENT_PROJECT_CREDENTIAL",),
+            ) as references,
+            patch.object(
+                main,
+                "_prompt_archive_pending_access_tokens",
+                return_value=(pending,),
+            ) as pending_tokens,
+            patch.object(
+                main,
+                "load_producer_registry",
+                return_value=(
+                    SimpleNamespace(
+                        token_sha256=hashlib.sha256(
+                            producer.encode("ascii")
+                        ).hexdigest()
+                    ),
+                ),
+            ) as producer_registry,
+        ):
+            screen = main.prompt_archive_source_metadata_screen_snapshot(
+                environment,
+                project_id="9000",
+            )
+
+        references.assert_called_once_with("9000")
+        pending_tokens.assert_called_once_with()
+        producer_registry.assert_called_once_with(
+            environment[main.INBOUND_PRODUCER_REGISTRY_ENV],
+            require_protected_acl=True,
+        )
+        values = (fixed, role, referenced, pending, producer)
+        for index, secret in enumerate(values):
+            with self.subTest(authority=index):
+                projected = project_source_metadata(
+                    {"source_type": "api", "title": secret},
+                    screen=screen,
+                ).document
+                self.assertEqual(projected["title"], "[REDACTED]")
+
     async def test_storage_error_fallback_never_exposes_oserror_path_or_canary(
         self,
     ) -> None:
@@ -1704,6 +2574,108 @@ class PromptArchiveManagedHotPathTests(unittest.IsolatedAsyncioTestCase):
         serialized = json.dumps(compact, ensure_ascii=False)
         self.assertNotIn(raw_canary, serialized)
         self.assertNotIn(raw_path, serialized)
+
+    async def test_authoritative_publication_error_uses_stable_http_envelope(
+        self,
+    ) -> None:
+        occurrence = ArchiveOccurrence(
+            project_id="9000",
+            sprint_id="sprint-http-error",
+            response_id=response_id_v1(
+                "9000",
+                "sprint-http-error",
+                "identity-response",
+                "identity-state",
+                "task-http-error",
+            ),
+            response_kind="identity-response",
+            occurrence_kind="identity-state",
+            occurrence_id="task-http-error",
+            transition_id=None,
+            source={"source_kind": "native_runtime"},
+            authorization={},
+            created_at="2026-10-20T16:00:00+02:00",
+            verified_at="2026-10-20T16:00:00+02:00",
+        )
+        registry = Mock()
+        registry.config.mode = "authoritative"
+        with (
+            patch.object(main, "prompt_archive_runtime", registry),
+            patch.object(
+                main,
+                "read_sequential_prompt_settings_file",
+                return_value={
+                    "directory_template": r"C:\prompt\{repository}",
+                    "agent_latest_file_template": (
+                        r"C:\prompt\agents\{repository}_{agent_phone}-latest.prompt"
+                    ),
+                },
+            ),
+            patch.object(
+                main,
+                "materialize_sequential_graph_response",
+                side_effect=PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_UNAVAILABLE"
+                ),
+            ),
+            self.assertRaises(main.HTTPException) as raised,
+        ):
+            await main.attach_sequential_graph_response_storage(
+                {"answer": "committed"},
+                response_kind="identity-response",
+                archive_occurrence=occurrence,
+            )
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            {
+                "schema_version": 1,
+                "error": "PROMPT_ARCHIVE_UNAVAILABLE",
+                "message": "Prompt archive is unavailable for this request.",
+                "correlation_id": occurrence.response_id,
+                "retryable": True,
+            },
+        )
+        self.assertEqual(
+            raised.exception.headers["X-Correlation-ID"],
+            occurrence.response_id,
+        )
+
+    def test_publication_http_error_never_echoes_invalid_response_id(self) -> None:
+        canary = "CANARY\r\nX-Injected: yes"
+        occurrence = ArchiveOccurrence(
+            project_id="9000",
+            sprint_id="sprint-invalid-correlation",
+            response_id=canary,
+            response_kind="identity-response",
+            occurrence_kind="identity-state",
+            occurrence_id="task-invalid-correlation",
+            transition_id=None,
+            source={"source_kind": "native_runtime"},
+            authorization={},
+            created_at="2026-10-20T16:00:00+02:00",
+            verified_at="2026-10-20T16:00:00+02:00",
+        )
+
+        mapped = main._prompt_archive_publication_http_exception(
+            PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID"),
+            occurrence,
+        )
+
+        correlation_id = mapped.detail["correlation_id"]
+        self.assertEqual(mapped.status_code, 400)
+        self.assertRegex(
+            correlation_id,
+            r"^prompt-archive-request-[0-9a-f]{32}$",
+        )
+        self.assertEqual(mapped.headers["X-Correlation-ID"], correlation_id)
+        serialized = json.dumps(
+            {"detail": mapped.detail, "headers": mapped.headers},
+            ensure_ascii=False,
+        )
+        self.assertNotIn(canary, serialized)
+        self.assertNotIn("X-Injected", serialized)
 
     def test_history_tail_reader_bounds_bytes_records_and_identity_call_sites(
         self,

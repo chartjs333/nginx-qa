@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import base64
 import dataclasses
+import hmac
 import hashlib
 import os
 import re
@@ -38,6 +39,10 @@ from .prompt_archive_json_spans import (
     JsonNode,
     JsonSpanParseError,
     parse_json_bytes,
+)
+from .prompt_archive_source_metadata import (
+    PromptArchiveSourceMetadataError,
+    validate_source_metadata_projection,
 )
 
 
@@ -202,18 +207,28 @@ _RFC3339_RE: Final = re.compile(
     r"(?:\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$",
     re.ASCII,
 )
-_SOURCE_SECRET_PATTERNS: Final = tuple(
-    re.compile(pattern, re.IGNORECASE | re.ASCII)
-    for pattern in (
-        r"[\x00-\x1f\x7f]",
-        r"[A-Za-z][A-Za-z0-9+.-]*://[^\s<>\"']+",
-        r"-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----",
-        r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}(?![A-Za-z0-9_-])",
-        r"\b(?:Bearer|Basic)[ \t]+\S+",
-        r"\b(?:sk-(?:proj-)?|ghp_|github_pat_|glpat-|xox[A-Za-z0-9]{1,8}-)[A-Za-z0-9_-]{8,}",
-        r"(?:^|[-_.\s])(?:authorization|cookie|access[-_]?token|api[-_]?key|apikey|bearer[-_]?token|credentials?|password|passwd|private[-_]?key|secrets?|token|pending[-_]?token|producer[-_]?token|dpapi|webhook)(?:$|[-_.\s:=])",
-        r"(?:^|[\s'\"(])(?:[A-Za-z]:[\\/]|\\\\[^\\/\s]+[\\/]|//[^/\s]+/|/(?:[^/\s]+(?:/[^/\s]*)*))",
-    )
+_SOURCE_METADATA_OPTIONAL_FIELDS: Final = frozenset(
+    {
+        "conversation_id",
+        "thread_id",
+        "message_id",
+        "sender_label",
+        "title",
+        "observed_at",
+    }
+)
+_SOURCE_METADATA_RECEIPT_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "projection_version",
+        "redaction_version",
+        "projection_sha256",
+        "projection_byte_size",
+        "source_type",
+        "discarded_field_count",
+        "projected_fields",
+    }
 )
 
 
@@ -285,6 +300,12 @@ class ArchiveOccurrence:
     source_response_key: str | None = None
     source_byte_size: int | None = None
     source_sha256: str | None = None
+    # A runtime occurrence may carry one already-screened, canonical source
+    # projection and its closed receipt.  Both are immutable pre-plan input;
+    # raw source metadata and the ephemeral secret-screen snapshot never enter
+    # this type or the CAS graph.
+    source_metadata_projection: Mapping[str, Any] | None = None
+    source_metadata_receipt: Mapping[str, Any] | None = None
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -2288,88 +2309,146 @@ class PromptArchiveIncremental:
         return output
 
     @staticmethod
-    def _validate_source_metadata_projection(raw: bytes) -> None:
+    def _validate_source_metadata_projection(
+        raw: bytes,
+    ) -> tuple[dict[str, Any], bytes, str]:
         document = _load_canonical_control(raw)
-        required = {
-            "schema_version",
-            "kind",
-            "projection_version",
-            "redaction_version",
-            "source_type",
-            "redaction_count",
-            "redacted_fields",
-            "discarded_field_count",
-        }
-        optional = {
-            "conversation_id",
-            "thread_id",
-            "message_id",
-            "sender_label",
-            "title",
-            "observed_at",
-        }
+        try:
+            projection = validate_source_metadata_projection(document)
+        except PromptArchiveSourceMetadataError as exc:
+            raise _error(exc.code) from None
+        canonical = projection.canonical_bytes
+        if canonical != raw:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return projection.document, canonical, projection.sha256
+
+    @staticmethod
+    def _validate_source_metadata_receipt(value: Any) -> dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            raw = canonical_json_bytes_v1(dict(value), maximum=16 * 1024)
+        except PromptArchiveStorageError:
+            raise
+        except (TypeError, ValueError, MemoryError):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        receipt = _load_canonical_control(raw)
+        fields = receipt.get("projected_fields")
         if (
-            not required.issubset(document)
-            or not set(document).issubset(required | optional)
-            or document.get("schema_version") != 1
-            or document.get("kind") != "prompt_archive_source_metadata"
-            or document.get("projection_version")
+            set(receipt) != _SOURCE_METADATA_RECEIPT_KEYS
+            or receipt.get("schema_version") != 1
+            or receipt.get("kind")
+            != "prompt_archive_source_metadata_projection_receipt"
+            or receipt.get("projection_version")
             != "prompt-archive-source-projection-v1"
-            or document.get("redaction_version")
+            or receipt.get("redaction_version")
             != "prompt-archive-source-redaction-v1"
-            or document.get("source_type")
+            or type(receipt.get("projection_sha256")) is not str
+            or _SHA256_RE.fullmatch(receipt["projection_sha256"]) is None
+            or type(receipt.get("projection_byte_size")) is not int
+            or not 1 <= receipt["projection_byte_size"] <= 16 * 1024
+            or receipt.get("source_type")
             not in {"api", "email", "folder", "manual", "telegram", "unknown"}
+            or type(receipt.get("discarded_field_count")) is not int
+            or not 0 <= receipt["discarded_field_count"] <= 1024
+            or type(fields) is not list
+            or any(type(field) is not str for field in fields)
+            or fields != sorted(set(fields))
+            or not set(fields).issubset(_SOURCE_METADATA_OPTIONAL_FIELDS)
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        redacted = document.get("redacted_fields")
-        allowed_redacted = {
-            "conversation_id",
-            "thread_id",
-            "message_id",
-            "sender_label",
-            "title",
-        }
-        if (
-            type(redacted) is not list
-            or len(redacted) > 5
-            or any(type(field) is not str or field not in allowed_redacted for field in redacted)
-            or redacted != sorted(set(redacted))
-            or document.get("redaction_count") != len(redacted)
-            or type(document.get("discarded_field_count")) is not int
-            or not 0 <= document["discarded_field_count"] <= 1024
+        return receipt
+
+    def _validate_occurrence_source_metadata(
+        self,
+        occurrence: ArchiveOccurrence,
+    ) -> tuple[dict[str, Any] | None, bytes | None, dict[str, Any] | None]:
+        projection_value = occurrence.source_metadata_projection
+        receipt_value = occurrence.source_metadata_receipt
+        if (projection_value is None) != (receipt_value is None):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if projection_value is None:
+            return None, None, None
+        if occurrence.occurrence_kind == "migration" or not isinstance(
+            projection_value,
+            Mapping,
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        observed_redacted = sorted(
-            field
-            for field in allowed_redacted
-            if document.get(field) == "[REDACTED]"
+        try:
+            projection_raw = canonical_json_bytes_v1(
+                dict(projection_value),
+                maximum=16 * 1024,
+            )
+        except PromptArchiveStorageError:
+            raise
+        except (TypeError, ValueError, MemoryError):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        projection, projection_raw, projection_sha256 = (
+            self._validate_source_metadata_projection(projection_raw)
         )
-        if observed_redacted != redacted:
+        receipt = self._validate_source_metadata_receipt(receipt_value)
+        self._validate_source_metadata_receipt_binding(
+            projection,
+            projection_raw,
+            projection_sha256,
+            receipt,
+        )
+        return projection, projection_raw, receipt
+
+    @staticmethod
+    def _validate_source_metadata_receipt_binding(
+        projection: Mapping[str, Any],
+        projection_raw: bytes,
+        projection_sha256: str,
+        receipt: Mapping[str, Any],
+    ) -> None:
+        projected_fields = sorted(
+            field for field in _SOURCE_METADATA_OPTIONAL_FIELDS if field in projection
+        )
+        if (
+            not hmac.compare_digest(
+                receipt["projection_sha256"],
+                projection_sha256,
+            )
+            or receipt["projection_byte_size"] != len(projection_raw)
+            or receipt["source_type"] != projection["source_type"]
+            or receipt["discarded_field_count"]
+            != projection["discarded_field_count"]
+            or receipt["projected_fields"] != projected_fields
+        ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        for field in ("conversation_id", "thread_id", "message_id"):
-            if field in document and (
-                type(document[field]) is not str
-                or re.fullmatch(r"(?:sha256:[0-9a-f]{64}|\[REDACTED\])", document[field])
-                is None
-            ):
-                raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        for field in ("sender_label", "title"):
-            if field in document:
-                value = document[field]
-                if (
-                    type(value) is not str
-                    or not 1 <= len(value) <= 256
-                    or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
-                    or (
-                        value != "[REDACTED]"
-                        and any(
-                            pattern.search(value) for pattern in _SOURCE_SECRET_PATTERNS
-                        )
-                    )
-                ):
-                    raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
-        if "observed_at" in document:
-            _require_rfc3339(document["observed_at"])
+
+    def _source_metadata_from_root(
+        self,
+        root_ref: Mapping[str, Any],
+    ) -> tuple[dict[str, Any], bytes, str]:
+        sequence = self._receipt_from_root(root_ref, "source_metadata")
+        leaves = self.sequence_leaves(sequence)
+        if sequence.item_count != 1 or len(leaves) != 1:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        projection_raw = self._hydrate_record(
+            leaves[0].ref,
+            expected_record_type="source_metadata",
+        )
+        if sequence.logical_bytes != len(projection_raw):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return self._validate_source_metadata_projection(projection_raw)
+
+    def _validate_source_metadata_root_binding(
+        self,
+        root_ref: Mapping[str, Any],
+        receipt_value: Mapping[str, Any],
+    ) -> None:
+        receipt = self._validate_source_metadata_receipt(receipt_value)
+        projection, projection_raw, projection_sha256 = (
+            self._source_metadata_from_root(root_ref)
+        )
+        self._validate_source_metadata_receipt_binding(
+            projection,
+            projection_raw,
+            projection_sha256,
+            receipt,
+        )
 
     def _validate_record_document(
         self,
@@ -2884,6 +2963,31 @@ class PromptArchiveIncremental:
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return dict(value)
 
+    def validate_runtime_occurrence(
+        self,
+        occurrence: ArchiveOccurrence,
+        *,
+        publication_mode: str,
+    ) -> None:
+        """Validate a runtime occurrence before any durable sidecar write.
+
+        Source-metadata projection proofs are persisted before publication
+        plans.  This preflight therefore applies the same closed occurrence,
+        source, authorization, timestamp, and optional projection contract as
+        the archive builder before a proof store can observe the occurrence.
+        """
+
+        source_kind = {
+            "shadow": "runtime_shadow",
+            "authoritative": "native_runtime",
+        }.get(publication_mode)
+        if source_kind is None:
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        self._validate_occurrence(occurrence, source_kind=source_kind)
+        self._validate_occurrence_source_metadata(occurrence)
+        if self.sprint_id is None or occurrence.occurrence_kind == "migration":
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
     def _validate_occurrence(
         self,
         occurrence: ArchiveOccurrence,
@@ -3046,6 +3150,11 @@ class PromptArchiveIncremental:
             "occurrence_id": occurrence.occurrence_id,
             "transition_id": occurrence.transition_id,
         }
+        # Freeze and cross-bind the optional sidecar before any caller can
+        # proceed to render-plan or CAS construction.  The values are returned
+        # separately by the build path; validation here makes the occurrence
+        # contract itself fail closed as well.
+        self._validate_occurrence_source_metadata(occurrence)
         return scope, source, authorization
 
     @staticmethod
@@ -3654,6 +3763,14 @@ class PromptArchiveIncremental:
             name: self._receipt_from_root(ref, _ROOT_SEQUENCE_KINDS[name])
             for name, ref in roots.items()
         }
+        # source_metadata is an occurrence-scoped, non-rendered sidecar.  It is
+        # still part of the manifest reachability graph and archive identity,
+        # but must never change executable response bytes or become an adapter
+        # instruction.  Validate the closed one-record root before rendering.
+        rendered_root_names = set(roots)
+        if "source_metadata" in roots:
+            self._source_metadata_from_root(roots["source_metadata"])
+            rendered_root_names.remove("source_metadata")
         current_leaves = (
             self.sequence_leaves(receipts["current_fields"])
             if "current_fields" in receipts
@@ -3779,7 +3896,7 @@ class PromptArchiveIncremental:
         if (
             cursor != source_size
             or current_ordinal != len(current_leaves)
-            or used_roots != set(roots)
+            or used_roots != rendered_root_names
         ):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         output = b"".join(output_parts)
@@ -4073,7 +4190,7 @@ class PromptArchiveIncremental:
             "publication",
             "created_at",
         }
-        allowed = required | {"legacy_comparison"}
+        allowed = required | {"legacy_comparison", "source_metadata_receipt"}
         if not required.issubset(value) or not set(value).issubset(allowed):
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         if (
@@ -4183,6 +4300,11 @@ class PromptArchiveIncremental:
                 or name not in _ROOT_SEQUENCE_KINDS
             ):
                 raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        source_metadata_receipt = value.get("source_metadata_receipt")
+        if ("source_metadata" in roots) != (source_metadata_receipt is not None):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if source_metadata_receipt is not None:
+            self._validate_source_metadata_receipt(source_metadata_receipt)
 
         envelope = value.get("envelope")
         if type(envelope) is not dict or set(envelope) != {
@@ -4352,6 +4474,11 @@ class PromptArchiveIncremental:
             occurrence,
             source_kind=source_kind,
         )
+        (
+            source_metadata_projection,
+            source_metadata_projection_raw,
+            source_metadata_receipt,
+        ) = self._validate_occurrence_source_metadata(occurrence)
         if self.sprint_id is None or occurrence.occurrence_kind == "migration":
             raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         source_bytes = self._native_source_bytes(
@@ -4369,6 +4496,8 @@ class PromptArchiveIncremental:
             occurrence,
             source=source,
             authorization=authorization,
+            source_metadata_projection=source_metadata_projection,
+            source_metadata_receipt=source_metadata_receipt,
         )
         verified_previous_roots = self._verified_previous_roots(
             frozen_occurrence,
@@ -4380,6 +4509,28 @@ class PromptArchiveIncremental:
             frozen_occurrence,
             verified_previous_roots,
         )
+        if source_metadata_projection_raw is not None:
+            source_metadata_record = self._build_record(
+                "source_metadata",
+                source_metadata_projection_raw,
+                ordinal=0,
+                provenance=self._record_provenance(frozen_occurrence),
+                occurred_at=frozen_occurrence.created_at,
+            )
+            source_metadata_sequence = self.build_record_sequence(
+                "source_metadata",
+                [source_metadata_record],
+            )
+            assert source_metadata_sequence is not None
+            roots = dict(roots)
+            roots["source_metadata"] = _copy_ref(
+                source_metadata_sequence.root_ref
+            )
+            assert source_metadata_receipt is not None
+            self._validate_source_metadata_root_binding(
+                roots["source_metadata"],
+                source_metadata_receipt,
+            )
         envelope_bytes = canonical_json_bytes_v1(
             envelope,
             maximum=self.storage.limits.max_hydrated_bytes,
@@ -4441,6 +4592,8 @@ class PromptArchiveIncremental:
             "publication": publication,
             "created_at": occurrence.created_at,
         }
+        if source_metadata_receipt is not None:
+            manifest["source_metadata_receipt"] = dict(source_metadata_receipt)
         if publication_mode == "shadow":
             manifest["legacy_comparison"] = {
                 "byte_size": len(source_bytes),
@@ -4929,6 +5082,12 @@ class PromptArchiveIncremental:
             or scope.get("sprint_id") != self.sprint_id
         ):
             raise _error("PROMPT_ARCHIVE_NOT_FOUND")
+        source_metadata_receipt = value.get("source_metadata_receipt")
+        if source_metadata_receipt is not None:
+            self._validate_source_metadata_root_binding(
+                value["roots"]["source_metadata"],
+                source_metadata_receipt,
+            )
         integrity = value["integrity"]
         byte_size = _require_exact_int(integrity.get("hydrated_size"))
         if max_output_bytes is not None:

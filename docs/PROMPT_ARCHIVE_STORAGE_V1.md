@@ -230,11 +230,11 @@ becoming `unknown`. Conversation/thread/message identifiers are never stored
 raw: non-empty exact UTF-8 input becomes `sha256:<lowercase digest>`; invalid or
 suspected-secret input becomes `[REDACTED]`.
 
-The frozen `prompt-archive-source-redaction-v1` screen examines each identifier
-and display value before hashing, truncation, or storage. Matching is over the
-exact Unicode input and an ASCII-case-folded view. It rejects controls, values
-above 256 Unicode scalars, any URL, URL user-info, a PEM private-key marker,
-JWT-shaped text, `Bearer` or `Basic` credentials, token shapes beginning
+The frozen `prompt-archive-source-redaction-v1` screen examines every raw value
+that may be persisted before hashing, truncation, or storage. Matching is over
+the exact Unicode input and an ASCII-case-folded view. It rejects controls,
+values above 256 Unicode scalars, any URL, URL user-info, a PEM private-key
+marker, JWT-shaped text, `Bearer` or `Basic` credentials, token shapes beginning
 `sk-`, `sk-proj-`, `ghp_`, `github_pat_`, `glpat-`, or an `xox*` prefix, and a
 credential word at a `^`, `-`, `_`, `.`, or whitespace boundary. The closed
 credential words are `authorization`, `cookie`, `access-token`, `api-key`,
@@ -266,27 +266,49 @@ this contract. Configured-secret comparison is case-sensitive and has one
 explicit short-value rule: a non-empty configured value of one through three
 Unicode scalars rejects only an exactly equal whole candidate value; a
 configured value of four or more scalars rejects any candidate containing it as
-a substring. Empty configured values are ignored. Registered-token candidates use
-`(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43,}(?![A-Za-z0-9_-])`, ASCII encoding, and
-SHA-256 constant-time comparison against the frozen digest set.
+a substring. Empty configured values are ignored. Registered-token candidates
+use maximal ASCII token-character runs matched by
+`(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{43,}(?![A-Za-z0-9_-])`. An exactly
+43-character run is SHA-256 compared in constant time against every digest in
+the frozen set. When that set is non-empty, a longer maximal run is rejected
+fail-closed: the digest-only registry cannot prove that a registered token was
+not embedded with adjacent token characters.
 
 Before projection, the owner also takes one ephemeral immutable snapshot of
 all non-empty configured credential values, partitioned into the exact-whole
 one-to-three-scalar set and the substring four-or-more-scalar set, plus the
 registered token SHA-256 digests. The frozen rule above is applied without
-normalization. A 43-or-more-character ASCII bearer candidate whose digest
-matches the snapshot is rejected with constant-time digest comparison. Neither
-snapshot nor a raw secret is persisted. Instead the fully screened, closed source-metadata
+Unicode normalization or locale/case folding beyond the stated patterns. For
+configured credentials, both the exact configured representation and the
+operational `strip()` form are protected, because credential consumers remove
+surrounding whitespace before use. Neither snapshot nor a raw secret is
+persisted. Instead the fully screened, closed source-metadata
 projection is frozen in the durable occurrence before archive planning; its
 canonical bytes/digest are reused on every retry and recovery and raw metadata
 is never re-screened against a later environment. This prevents credential
 rotation from changing a durable occurrence.
 
+The V1 credential authority inventory is closed: the six fixed environment
+names `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`,
+`NGINX_QA_SCOPE_CONTROL_ADMIN_TOKEN`, `NGINX_QA_SMTP_USERNAME`, and
+`NGINX_QA_SMTP_PASSWORD`; numeric
+`NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_<phone>` names; `env:` references from the
+current project's configured project/repository credential fields; `env:`
+references from that project's one indexed active managed runtime repository
+and redacted process environments; durable pending-sprint access tokens; and
+the producer registry's token digests. Historical terminal runtimes and other
+projects are not credential authorities for the current occurrence, and the
+hot path reads the indexed active runtime rather than traversing history.
+Arbitrary payload keys that merely look like secret references are not scanned
+or treated as credential configuration.
+
 A rejected optional identifier or display value is replaced wholly by
 `[REDACTED]`; partial masking is forbidden. `source_type` is mapped to its
-closed enum (otherwise `unknown`) and `observed_at` is copied only when it is a
-valid durable RFC 3339 occurrence timestamp; neither can appear in
-`redacted_fields`. `redacted_fields` is the lexicographically sorted unique
+closed enum, but becomes `unknown` when invalid or when it collides with the
+credential screen. `observed_at` is copied only when it is a valid durable RFC
+3339 occurrence timestamp and passes the same credential screen; otherwise it
+is omitted. Neither field can appear in `redacted_fields`. `redacted_fields` is
+the lexicographically sorted unique
 list drawn only from `conversation_id`, `thread_id`, `message_id`,
 `sender_label`, and `title`; `redaction_count` equals its length.
 `discarded_field_count` records rejected non-allowlisted input fields (bounded

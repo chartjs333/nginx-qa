@@ -51,6 +51,7 @@ from nginx_qa.inbound_proposals import (
     correlation_id_from_values,
     create_request_fingerprint,
     is_canonical_bearer_token,
+    load_producer_registry,
     schema_issues as inbound_proposal_schema_issues,
 )
 from nginx_qa.managed_import import (
@@ -130,6 +131,10 @@ from nginx_qa.prompt_archive_runtime import (
     PromptArchivePublication,
     PromptArchiveRuntimeConfig,
     PromptArchiveRuntimeRegistry,
+)
+from nginx_qa.prompt_archive_source_metadata import (
+    SourceMetadataScreenSnapshot,
+    freeze_source_metadata_screen,
 )
 from nginx_qa.prompt_archive_storage import (
     PromptArchiveStorageError,
@@ -897,6 +902,299 @@ def configure_prompt_archive_runtime(
     prompt_archive_runtime = configured
     prompt_archive_occurrence_receipt_path = selected_receipt_root
     return configured
+
+
+_PROMPT_ARCHIVE_FIXED_CREDENTIAL_ENV_NAMES = frozenset(
+    {
+        "GEMINI_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "NGINX_QA_SCOPE_CONTROL_ADMIN_TOKEN",
+        "NGINX_QA_SMTP_USERNAME",
+        "NGINX_QA_SMTP_PASSWORD",
+    }
+)
+_PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME = re.compile(
+    r"^NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_[0-9]+$",
+    re.ASCII,
+)
+
+
+def _prompt_archive_env_credential_locator(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    provider, separator, locator = value.partition(":")
+    if separator != ":" or provider != "env" or not locator:
+        return None
+    return locator
+
+
+def _prompt_archive_project_credential_references(
+    config: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Enumerate only credential fields supported by project Git wiring."""
+
+    raw_projects = config.get(PROJECTS_KEY)
+    projects = raw_projects if isinstance(raw_projects, Mapping) else {}
+    references: set[str] = set()
+    for project in projects.values():
+        if not isinstance(project, Mapping):
+            continue
+        locator = _prompt_archive_env_credential_locator(
+            project.get("credential_reference")
+        )
+        if locator is not None:
+            references.add(locator)
+        raw_repositories = project.get("repositories")
+        repositories = (
+            raw_repositories
+            if isinstance(raw_repositories, Mapping)
+            else {}
+        )
+        for repository in repositories.values():
+            if not isinstance(repository, Mapping):
+                continue
+            locator = _prompt_archive_env_credential_locator(
+                repository.get("credential_reference")
+            )
+            if locator is not None:
+                references.add(locator)
+    return tuple(sorted(references))
+
+
+def _prompt_archive_managed_credential_references(
+    state: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Enumerate the two credential locations admitted by managed runtime."""
+
+    references: set[str] = set()
+    repository = state.get("repository")
+    if isinstance(repository, Mapping):
+        locator = _prompt_archive_env_credential_locator(
+            repository.get("credential_reference")
+        )
+        if locator is not None:
+            references.add(locator)
+    processes = state.get("processes")
+    for process in processes if isinstance(processes, list) else ():
+        if not isinstance(process, Mapping):
+            continue
+        environment = process.get("environment_redacted")
+        if not isinstance(environment, Mapping):
+            continue
+        for value in environment.values():
+            if not isinstance(value, Mapping) or set(value) != {"secret_ref"}:
+                continue
+            locator = _prompt_archive_env_credential_locator(
+                value.get("secret_ref")
+            )
+            if locator is not None:
+                references.add(locator)
+    return tuple(sorted(references))
+
+
+def _prompt_archive_configured_credential_references(
+    project_id: str | None = None,
+) -> tuple[str, ...]:
+    """Read current project credential wiring, never payload-shaped guesses.
+
+    A source projection is occurrence/project scoped.  Historical terminal
+    managed sprints and other projects are not credential authorities for that
+    occurrence; including them would turn a removed stale reference into a
+    permanent hot-path outage.
+    """
+
+    with git_config_file_lock():
+        config = read_git_config_file()
+    raw_projects = config.get(PROJECTS_KEY)
+    projects = raw_projects if isinstance(raw_projects, Mapping) else {}
+    selected_projects = {
+        key: value
+        for key, value in projects.items()
+        if isinstance(value, Mapping)
+        and (
+            project_id is None
+            or str(value.get("project_phone") or "").strip() == project_id
+        )
+    }
+    references = set(
+        _prompt_archive_project_credential_references(
+            {PROJECTS_KEY: selected_projects}
+        )
+    )
+
+    # Managed repository/process references live in validated durable runtime
+    # rows rather than the public project registry.  Reuse the already-open
+    # singleton when present; taking a credential snapshot must never create a
+    # managed runtime or reconcile/mutate its state.
+    runtime = managed_continuity_runtime
+    if runtime is not None:
+        project_ids = (
+            {project_id}
+            if project_id is not None
+            else {
+                str(project.get("project_phone") or "").strip()
+                for project in selected_projects.values()
+                if isinstance(project, Mapping)
+                and str(project.get("project_phone") or "").strip()
+            }
+        )
+        for selected_project_id in sorted(project_ids):
+            state = runtime.store.active_runtime_state(selected_project_id)
+            if isinstance(state, Mapping):
+                references.update(
+                    _prompt_archive_managed_credential_references(state)
+                )
+    return tuple(sorted(references))
+
+
+def _prompt_archive_pending_access_tokens() -> tuple[str, ...]:
+    """Snapshot durable Pending-Sprints capabilities for redaction only."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+    projects = storage.get("projects") if isinstance(storage, Mapping) else None
+    if not isinstance(projects, Mapping):
+        return ()
+    return tuple(
+        sorted(
+            {
+                token
+                for project in projects.values()
+                if isinstance(project, Mapping)
+                and (token := str(project.get("access_token") or "").strip())
+            }
+        )
+    )
+
+
+def prompt_archive_source_metadata_screen_snapshot(
+    environ: Mapping[str, str] | None = None,
+    *,
+    project_id: str | None = None,
+    credential_references: Sequence[str] | None = None,
+    pending_access_tokens: Sequence[str] | None = None,
+    producer_token_sha256: Sequence[str] | None = None,
+) -> SourceMetadataScreenSnapshot:
+    """Take one ephemeral, value-free-to-persist source redaction screen.
+
+    Unlike the inbound request validator, Prompt Archive must retain configured
+    values of one through three Unicode scalars for exact-whole matching.  The
+    snapshot is created lazily only after the durable projection store reports
+    a miss; retries therefore do not consult a rotated environment.
+    """
+
+    source = os.environ if environ is None else environ
+    configured: list[str] = []
+    observed: set[str] = set()
+
+    def remember(value: Any) -> None:
+        if type(value) is not str:
+            return
+        # Credential consumers normalize configured env/reference values with
+        # ``strip()`` before use.  Protect both the stored representation and
+        # the operational value so surrounding whitespace cannot bypass the
+        # native projection screen.
+        for candidate in (value, value.strip()):
+            if not candidate or candidate in observed:
+                continue
+            if len(observed) >= 4096:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            observed.add(candidate)
+            configured.append(candidate)
+
+    reference_names = (
+        _prompt_archive_configured_credential_references(project_id)
+        if credential_references is None
+        else tuple(credential_references)
+    )
+    selected_names = set(_PROMPT_ARCHIVE_FIXED_CREDENTIAL_ENV_NAMES)
+    selected_names.update(
+        name
+        for name in source
+        if type(name) is str
+        and _PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+    )
+    for reference_name in reference_names:
+        if type(reference_name) is not str or not reference_name:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        selected_names.add(reference_name)
+
+    required_reference_names = set(reference_names)
+    for name in sorted(selected_names):
+        raw_value = source.get(name)
+        if type(raw_value) is not str or not raw_value:
+            if name in required_reference_names:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            continue
+        remember(raw_value)
+        try:
+            decoded = json.loads(raw_value)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        stack = [decoded]
+        visited = 0
+        while stack:
+            visited += 1
+            if visited > 4096:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            candidate = stack.pop()
+            if type(candidate) is str:
+                remember(candidate)
+            elif isinstance(candidate, Mapping):
+                stack.extend(candidate.values())
+            elif isinstance(candidate, list):
+                stack.extend(candidate)
+
+    durable_access_tokens = (
+        _prompt_archive_pending_access_tokens()
+        if pending_access_tokens is None
+        else tuple(pending_access_tokens)
+    )
+    for value in durable_access_tokens:
+        remember(value)
+
+    registry_configured = bool(
+        str(source.get(INBOUND_PRODUCER_REGISTRY_ENV) or "").strip()
+    )
+    registered_token_sha256 = (
+        tuple(producer_token_sha256)
+        if producer_token_sha256 is not None
+        else (
+            tuple(
+                principal.token_sha256
+                for principal in load_producer_registry(
+                    str(source[INBOUND_PRODUCER_REGISTRY_ENV]).strip(),
+                    require_protected_acl=True,
+                )
+            )
+            if registry_configured
+            else ()
+        )
+    )
+    return freeze_source_metadata_screen(
+        configured_values=configured,
+        registered_token_sha256=registered_token_sha256,
+    )
+
+
+def prompt_archive_source_metadata_from_occurrence(
+    occurrence: ArchiveOccurrence,
+) -> dict[str, Any]:
+    """Project only immutable occurrence facts into the production source seam.
+
+    This is deliberately independent of pending proposals, adapters, mutable
+    latest aliases, and executor payloads.  Identifiers are still raw here so
+    the projector hashes/screens them exactly once before durable planning.
+    """
+
+    return {
+        "source_type": "api",
+        "conversation_id": occurrence.sprint_id,
+        "message_id": occurrence.occurrence_id,
+        "title": f"{occurrence.response_kind}:{occurrence.occurrence_kind}",
+        "observed_at": occurrence.created_at,
+    }
 
 
 def validate_prompt_archive_template_roots(
@@ -10851,6 +11149,44 @@ def _safe_sequential_storage_error_code(exc: BaseException) -> str:
     return "SEQUENTIAL_RESPONSE_STORAGE_UNAVAILABLE"
 
 
+def _prompt_archive_publication_http_exception(
+    exc: PromptArchiveStorageError,
+    occurrence: ArchiveOccurrence | None,
+) -> HTTPException:
+    """Map authoritative publication failure to the stable PAS1 envelope."""
+
+    supplied_correlation_id = (
+        occurrence.response_id
+        if isinstance(occurrence, ArchiveOccurrence)
+        else None
+    )
+    correlation_id = (
+        supplied_correlation_id
+        if isinstance(supplied_correlation_id, str)
+        and re.fullmatch(r"parresp1-[0-9a-f]{64}", supplied_correlation_id)
+        is not None
+        else f"prompt-archive-request-{uuid4().hex}"
+    )
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
+    }
+    if exc.code == "PROMPT_ARCHIVE_BUSY":
+        headers["Retry-After"] = "1"
+    return HTTPException(
+        status_code=exc.http_status,
+        detail={
+            "schema_version": 1,
+            "error": exc.code,
+            "message": exc.message,
+            "correlation_id": correlation_id,
+            "retryable": exc.retryable,
+        },
+        headers=headers,
+    )
+
+
 def materialize_sequential_graph_response(
     *,
     response: dict[str, Any],
@@ -10860,6 +11196,8 @@ def materialize_sequential_graph_response(
     request_agent_phone: str = "",
     archive_occurrence: ArchiveOccurrence | None = None,
     archive_occurrence_failed: bool = False,
+    archive_source_metadata: Mapping[str, Any] | None = None,
+    archive_source_metadata_error: str | None = None,
 ) -> dict[str, Any]:
     project = response.get("project")
     project_data = project if isinstance(project, dict) else {}
@@ -11139,6 +11477,16 @@ def materialize_sequential_graph_response(
                 write_prompt_text_if_changed(path, agent_prompt_json)
             return agent_prompt_response
         runtime = prompt_archive_runtime.for_project(archive_occurrence.project_id)
+        if archive_source_metadata_error is not None:
+            planned_occurrence = (
+                runtime.source_metadata_occurrence_from_existing_plan(
+                    archive_occurrence
+                )
+            )
+            if planned_occurrence is None:
+                raise PromptArchiveStorageError(archive_source_metadata_error)
+            archive_occurrence = planned_occurrence
+            archive_source_metadata = None
         archive_response = deepcopy(agent_prompt_response)
         # The executable prompt stays compact, while the archive receives the
         # exact evidence for *this* committed occurrence.  Never copy cumulative
@@ -11198,6 +11546,14 @@ def materialize_sequential_graph_response(
             native_bytes,
             archive_occurrence,
             compatibility_publisher=compatibility_publisher,
+            raw_source_metadata=archive_source_metadata,
+            source_metadata_screen_factory=(
+                lambda: prompt_archive_source_metadata_screen_snapshot(
+                    project_id=archive_occurrence.project_id
+                )
+                if archive_source_metadata is not None
+                else None
+            ),
         )
 
         published_prompt_response = dict(agent_prompt_response)
@@ -11467,7 +11823,11 @@ def materialize_sequential_graph_response(
     # by the raw-byte equality proof.  No guessed sprint or occurrence is ever
     # published.
     if prompt_archive_runtime.config.mode == "shadow":
-        if archive_occurrence is None or "response_archive" in storage_errors:
+        if (
+            archive_occurrence is None
+            or archive_occurrence_failed
+            or "response_archive" in storage_errors
+        ):
             record_prompt_archive_metric(
                 "shadow_failed"
                 if archive_occurrence_failed
@@ -11511,9 +11871,33 @@ def materialize_sequential_graph_response(
                             ),
                         },
                     )
-                publication = prompt_archive_runtime.for_project(
+                runtime = prompt_archive_runtime.for_project(
                     publication_occurrence.project_id
-                ).publish_shadow(committed_bytes, publication_occurrence)
+                )
+                if archive_source_metadata_error is not None:
+                    planned_occurrence = (
+                        runtime.source_metadata_occurrence_from_existing_plan(
+                            publication_occurrence
+                        )
+                    )
+                    if planned_occurrence is None:
+                        raise PromptArchiveStorageError(
+                            archive_source_metadata_error
+                        )
+                    publication_occurrence = planned_occurrence
+                    archive_source_metadata = None
+                publication = runtime.publish_shadow(
+                    committed_bytes,
+                    publication_occurrence,
+                    raw_source_metadata=archive_source_metadata,
+                    source_metadata_screen_factory=(
+                        lambda: prompt_archive_source_metadata_screen_snapshot(
+                            project_id=publication_occurrence.project_id
+                        )
+                        if archive_source_metadata is not None
+                        else None
+                    ),
+                )
                 if publication is not None:
                     published_prompt_response = dict(agent_prompt_response)
                     published_prompt_response[
@@ -11605,8 +11989,44 @@ async def attach_sequential_graph_response_storage(
     request_agent_phone: str = "",
     archive_occurrence: ArchiveOccurrence | None = None,
     archive_occurrence_failed: bool = False,
+    archive_source_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
+        archive_mode = prompt_archive_runtime.config.mode
+        resolved_source_metadata = None
+        source_metadata_error = None
+        if archive_mode != "legacy":
+            try:
+                resolved_source_metadata = (
+                    None
+                    if archive_source_metadata is None
+                    else json.loads(
+                        prompt_archive_canonical_json_bytes_v1(
+                            archive_source_metadata,
+                            maximum=16 * 1024,
+                        ).decode("utf-8")
+                    )
+                )
+                if (
+                    resolved_source_metadata is None
+                    and isinstance(archive_occurrence, ArchiveOccurrence)
+                ):
+                    # The production owner uses only immutable facts returned
+                    # by the just-committed transition/runtime transaction.  It
+                    # never reads a pending proposal, latest alias, queue
+                    # payload, or adapter state.
+                    resolved_source_metadata = (
+                        prompt_archive_source_metadata_from_occurrence(
+                            archive_occurrence
+                        )
+                    )
+            except PromptArchiveStorageError as exc:
+                # Preserve only the safe stable code.  Materialization can now
+                # consult an immutable existing plan before deciding whether
+                # this is an idempotent retry (ignore raw) or a first write
+                # (authoritative fail / shadow isolation).
+                source_metadata_error = exc.code
+                resolved_source_metadata = None
         async with sequential_prompt_storage_lock:
             settings = await asyncio.to_thread(read_sequential_prompt_settings_file)
             return await asyncio.to_thread(
@@ -11620,13 +12040,18 @@ async def attach_sequential_graph_response_storage(
                 request_agent_phone=request_agent_phone,
                 archive_occurrence=archive_occurrence,
                 archive_occurrence_failed=archive_occurrence_failed,
+                archive_source_metadata=resolved_source_metadata,
+                archive_source_metadata_error=source_metadata_error,
             )
     except (HTTPException, PromptArchiveStorageError, OSError, UnicodeError) as exc:
         if (
             isinstance(exc, PromptArchiveStorageError)
             and prompt_archive_runtime.config.mode == "authoritative"
         ):
-            raise
+            raise _prompt_archive_publication_http_exception(
+                exc,
+                archive_occurrence,
+            ) from None
         return compact_sequential_agent_prompt_response(
             {
                 "response_storage_error": _safe_sequential_storage_error_code(exc),

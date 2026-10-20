@@ -45,6 +45,14 @@ from .prompt_archive_occurrence_store import (
     PromptArchiveNativeOccurrenceSource,
     PromptArchiveOccurrenceProof,
     PromptArchiveOccurrenceSource,
+    PromptArchiveSourceMetadataProjectionProof,
+)
+from .prompt_archive_source_metadata import (
+    PromptArchiveSourceMetadataError,
+    SourceMetadataProjection,
+    SourceMetadataScreenSnapshot,
+    project_source_metadata,
+    validate_source_metadata_projection,
 )
 from .prompt_archive_response import dispatch_prompt_archive_response
 from .prompt_archive_metrics import PromptArchiveMetrics
@@ -451,6 +459,21 @@ class PromptArchiveOccurrenceProver(Protocol):
         locator: Mapping[str, Any],
     ) -> PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof | None: ...
 
+    def load_source_metadata_projection(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+    ) -> PromptArchiveSourceMetadataProjectionProof | None: ...
+
+    def load_or_register_source_metadata_projection(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+        projector: Callable[[], Any],
+    ) -> PromptArchiveSourceMetadataProjectionProof: ...
+
 
 class PromptArchiveOfflineInventoryVerifier(Protocol):
     """Re-prove one explicitly supplied isolated source at journal intent.
@@ -538,7 +561,16 @@ class PromptArchiveRuntime:
             bytes,
             PromptArchiveOccurrenceProof | PromptArchiveNativeOccurrenceProof,
         ] = {}
-        self._stream_lock = threading.Lock()
+        self._live_source_metadata_proofs: dict[
+            bytes,
+            PromptArchiveSourceMetadataProjectionProof,
+        ] = {}
+        self._source_metadata_lock = threading.Lock()
+        # Projection selection and publication share one re-entrant stream
+        # serialization boundary.  This prevents concurrent absent/present
+        # metadata callers from freezing different identities for the same
+        # occurrence while still allowing publish_* to call the public binder.
+        self._stream_lock = threading.RLock()
         self._predecessor_archives: OrderedDict[str, str] = OrderedDict()
 
     @property
@@ -614,6 +646,10 @@ class PromptArchiveRuntime:
     def _freeze_occurrence(occurrence: ArchiveOccurrence) -> ArchiveOccurrence:
         if not isinstance(occurrence, ArchiveOccurrence):
             raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        projection = occurrence.source_metadata_projection
+        receipt = occurrence.source_metadata_receipt
+        if (projection is None) != (receipt is None):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
         return dataclasses.replace(
             occurrence,
             source=_copy_document(occurrence.source, maximum=16 * 1024),
@@ -621,7 +657,397 @@ class PromptArchiveRuntime:
                 occurrence.authorization,
                 maximum=16 * 1024,
             ),
+            source_metadata_projection=(
+                None
+                if projection is None
+                else _copy_document(projection, maximum=16 * 1024)
+            ),
+            source_metadata_receipt=(
+                None
+                if receipt is None
+                else _copy_document(receipt, maximum=16 * 1024)
+            ),
         )
+
+    def _runtime_occurrence_locator(
+        self,
+        occurrence: ArchiveOccurrence,
+    ) -> dict[str, Any]:
+        if (
+            not isinstance(occurrence, ArchiveOccurrence)
+            or occurrence.project_id != self.project_id
+            or occurrence.sprint_id is None
+            or type(occurrence.state_revision) is not int
+            or not 0 <= occurrence.state_revision <= 9_223_372_036_854_775_807
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        _require_safe_id(occurrence.occurrence_id)
+        return {
+            "locator_kind": "runtime_occurrence",
+            "locator_version": "prompt-archive-runtime-occurrence-locator-v1",
+            "runtime_instance_id": self.config.runtime_instance_id,
+            "runtime_occurrence_id": occurrence.occurrence_id,
+            "state_revision": occurrence.state_revision,
+        }
+
+    @staticmethod
+    def _validated_source_metadata_proof(
+        proof: Any,
+    ) -> SourceMetadataProjection:
+        if not isinstance(proof, PromptArchiveSourceMetadataProjectionProof):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            validated = validate_source_metadata_projection(
+                proof.document,
+                proof.receipt,
+            )
+        except PromptArchiveSourceMetadataError as exc:
+            raise _error(exc.code) from None
+        if (
+            validated.canonical_bytes != proof.canonical_bytes
+            or validated.sha256 != proof.sha256
+        ):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+        return validated
+
+    @staticmethod
+    def _source_metadata_proof_from_projection(
+        projection: SourceMetadataProjection,
+    ) -> PromptArchiveSourceMetadataProjectionProof:
+        return PromptArchiveSourceMetadataProjectionProof(
+            document=projection.document,
+            canonical_bytes=projection.canonical_bytes,
+            sha256=projection.sha256,
+            receipt=projection.receipt,
+        )
+
+    def _load_existing_occurrence_plan(
+        self,
+        occurrence: ArchiveOccurrence,
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Load and fully validate the immutable plan for one retry, if any."""
+
+        storage = self._require_storage()
+        operation_id = self._operation_id(occurrence)
+        path = (
+            "operations",
+            "v1",
+            occurrence.response_id,
+            operation_id,
+            "plan.json",
+        )
+        try:
+            plan = storage.read_immutable_json(path)
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_NOT_FOUND":
+                return None
+            raise
+        raw = canonical_json_bytes_v1(plan, maximum=_PLAN_MAX_BYTES)
+        plan_ref = storage.put_blob(
+            raw,
+            logical_kind="publication_plan",
+            media_type=_PLAN_MEDIA,
+        )
+        return self._validate_plan(plan, plan_ref), plan_ref
+
+    def _restore_plan_source_metadata_proof(
+        self,
+        occurrence: ArchiveOccurrence,
+        projection: SourceMetadataProjection,
+    ) -> None:
+        """Recover a missing proof only from a verified immutable plan graph."""
+
+        locator = self._runtime_occurrence_locator(occurrence)
+        locator_key = self._occurrence_locator_key(locator)
+        expected = self._source_metadata_proof_from_projection(projection)
+
+        def require_match(proof: Any) -> None:
+            validated = self._validated_source_metadata_proof(proof)
+            if (
+                validated.canonical_bytes != projection.canonical_bytes
+                or validated.receipt != projection.receipt
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+
+        prover = self._occurrence_prover
+        if prover is None:
+            with self._source_metadata_lock:
+                existing = self._live_source_metadata_proofs.get(locator_key)
+                if existing is None:
+                    self._live_source_metadata_proofs[locator_key] = expected
+                else:
+                    require_match(existing)
+            return
+
+        load_projection = getattr(
+            prover,
+            "load_source_metadata_projection",
+            None,
+        )
+        load_or_register = getattr(
+            prover,
+            "load_or_register_source_metadata_projection",
+            None,
+        )
+        if not callable(load_projection) or not callable(load_or_register):
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        existing = load_projection(
+            project_id=self.project_id,
+            locator=copy.deepcopy(locator),
+        )
+        if existing is None:
+            existing = load_or_register(
+                project_id=self.project_id,
+                locator=copy.deepcopy(locator),
+                projector=lambda: projection,
+            )
+        require_match(existing)
+
+    def _occurrence_from_existing_plan(
+        self,
+        occurrence: ArchiveOccurrence,
+        plan: Mapping[str, Any],
+        supplied_projection: SourceMetadataProjection | None,
+    ) -> ArchiveOccurrence:
+        """Freeze source-metadata identity from a pre-existing plan graph."""
+
+        manifest = plan["intended_manifest"]["document"]
+        roots = manifest.get("roots")
+        receipt = manifest.get("source_metadata_receipt")
+        if type(roots) is not dict:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        root_ref = roots.get("source_metadata")
+        plan_projection: SourceMetadataProjection | None = None
+        if receipt is None and root_ref is None:
+            if supplied_projection is not None:
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            planned = dataclasses.replace(
+                occurrence,
+                source_metadata_projection=None,
+                source_metadata_receipt=None,
+            )
+        elif receipt is not None and isinstance(root_ref, Mapping):
+            incremental = PromptArchiveIncremental(
+                self._require_storage(),
+                self.project_id,
+                occurrence.sprint_id,
+            )
+            document, _raw, _sha256 = incremental._source_metadata_from_root(
+                root_ref
+            )
+            try:
+                projection = validate_source_metadata_projection(
+                    document,
+                    receipt,
+                )
+            except PromptArchiveSourceMetadataError as exc:
+                raise _error(exc.code) from None
+            if supplied_projection is not None and (
+                supplied_projection.canonical_bytes != projection.canonical_bytes
+                or supplied_projection.receipt != projection.receipt
+            ):
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            planned = dataclasses.replace(
+                occurrence,
+                source_metadata_projection=projection.document,
+                source_metadata_receipt=projection.receipt,
+            )
+            plan_projection = projection
+        else:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if not self._occurrence_matches_plan(plan, planned):
+            raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+        if plan_projection is not None:
+            self._restore_plan_source_metadata_proof(planned, plan_projection)
+        return planned
+
+    def source_metadata_occurrence_from_existing_plan(
+        self,
+        occurrence: ArchiveOccurrence,
+    ) -> ArchiveOccurrence | None:
+        """Return an immutable plan's source-metadata identity, if it exists.
+
+        This read-before-raw seam lets the HTTP owner preserve exact retries
+        when a caller supplies changed, oversized, or otherwise unusable raw
+        metadata.  A miss authorizes no metadata and performs no projection
+        write; first publication must still pass through the normal owner
+        screen in :meth:`bind_source_metadata_projection`.
+        """
+
+        with self._stream_lock:
+            frozen = self._freeze_occurrence(occurrence)
+            storage = self._require_storage()
+            PromptArchiveIncremental(
+                storage,
+                self.project_id,
+                frozen.sprint_id,
+            ).validate_runtime_occurrence(
+                frozen,
+                publication_mode=self.config.mode,
+            )
+            supplied_projection: SourceMetadataProjection | None = None
+            if frozen.source_metadata_projection is not None:
+                try:
+                    supplied_projection = validate_source_metadata_projection(
+                        frozen.source_metadata_projection,
+                        frozen.source_metadata_receipt,
+                    )
+                except PromptArchiveSourceMetadataError as exc:
+                    raise _error(exc.code) from None
+            existing_plan = self._load_existing_occurrence_plan(frozen)
+            if existing_plan is None:
+                return None
+            return self._occurrence_from_existing_plan(
+                frozen,
+                existing_plan[0],
+                supplied_projection,
+            )
+
+    def bind_source_metadata_projection(
+        self,
+        occurrence: ArchiveOccurrence,
+        raw_metadata: Mapping[str, Any] | None = None,
+        *,
+        screen_factory: Callable[[], SourceMetadataScreenSnapshot] | None = None,
+    ) -> ArchiveOccurrence:
+        """Freeze or recover one occurrence-scoped source projection.
+
+        The durable prover is consulted before ``screen_factory`` or raw input.
+        A retry therefore reuses the first canonical projection even after
+        credential rotation.  Only the screened document and its closed receipt
+        are attached to the returned occurrence; raw metadata and the ephemeral
+        screen never enter a plan, journal, descriptor, or CAS object.
+        """
+
+        with self._stream_lock:
+            return self._bind_source_metadata_projection_serialized(
+                occurrence,
+                raw_metadata,
+                screen_factory=screen_factory,
+            )
+
+    def _bind_source_metadata_projection_serialized(
+        self,
+        occurrence: ArchiveOccurrence,
+        raw_metadata: Mapping[str, Any] | None = None,
+        *,
+        screen_factory: Callable[[], SourceMetadataScreenSnapshot] | None = None,
+    ) -> ArchiveOccurrence:
+        frozen = self._freeze_occurrence(occurrence)
+        storage = self._require_storage()
+        PromptArchiveIncremental(
+            storage,
+            self.project_id,
+            frozen.sprint_id,
+        ).validate_runtime_occurrence(
+            frozen,
+            publication_mode=self.config.mode,
+        )
+        locator = self._runtime_occurrence_locator(frozen)
+        locator_key = self._occurrence_locator_key(locator)
+        supplied_projection: SourceMetadataProjection | None = None
+        if frozen.source_metadata_projection is not None:
+            try:
+                supplied_projection = validate_source_metadata_projection(
+                    frozen.source_metadata_projection,
+                    frozen.source_metadata_receipt,
+                )
+            except PromptArchiveSourceMetadataError as exc:
+                raise _error(exc.code) from None
+
+        # A verified immutable plan is the source of truth across rolling
+        # upgrades.  Legacy plans intentionally preserve metadata absence;
+        # new-format plans recover their exact projection from CAS without
+        # re-reading rotated credentials.  This check must precede proof
+        # creation or an exact retry could fork the occurrence identity.
+        existing_plan = self._load_existing_occurrence_plan(frozen)
+        if existing_plan is not None:
+            return self._occurrence_from_existing_plan(
+                frozen,
+                existing_plan[0],
+                supplied_projection,
+            )
+
+        def attach(proof: Any) -> ArchiveOccurrence:
+            validated = self._validated_source_metadata_proof(proof)
+            if supplied_projection is not None and (
+                supplied_projection.canonical_bytes != validated.canonical_bytes
+                or supplied_projection.receipt != validated.receipt
+            ):
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            return dataclasses.replace(
+                frozen,
+                source_metadata_projection=validated.document,
+                source_metadata_receipt=validated.receipt,
+            )
+
+        def create_projection() -> SourceMetadataProjection:
+            if raw_metadata is None or not callable(screen_factory):
+                raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+            try:
+                screen = screen_factory()
+                projected = project_source_metadata(raw_metadata, screen=screen)
+            except PromptArchiveSourceMetadataError as exc:
+                raise _error(exc.code) from None
+            except PromptArchiveStorageError:
+                raise
+            except Exception:
+                raise _error("PROMPT_ARCHIVE_UNAVAILABLE") from None
+            # An occurrence-carried projection is only an equality witness on
+            # the first write, never authority to bypass the owner's current
+            # credential/token screen.  Only a proof already recovered from
+            # the durable occurrence store may skip raw re-screening.
+            if supplied_projection is not None and (
+                supplied_projection.canonical_bytes != projected.canonical_bytes
+                or supplied_projection.receipt != projected.receipt
+            ):
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            return projected
+
+        prover = self._occurrence_prover
+        if prover is None:
+            with self._source_metadata_lock:
+                existing = self._live_source_metadata_proofs.get(locator_key)
+                if existing is not None:
+                    return attach(existing)
+                if supplied_projection is None and raw_metadata is None:
+                    return frozen
+                created = create_projection()
+                proof = self._source_metadata_proof_from_projection(created)
+                self._live_source_metadata_proofs[locator_key] = proof
+                return attach(proof)
+
+        load_projection = getattr(
+            prover,
+            "load_source_metadata_projection",
+            None,
+        )
+        load_or_register = getattr(
+            prover,
+            "load_or_register_source_metadata_projection",
+            None,
+        )
+        if not callable(load_projection) or not callable(load_or_register):
+            if supplied_projection is None and raw_metadata is None:
+                return frozen
+            raise _error("PROMPT_ARCHIVE_UNAVAILABLE")
+        try:
+            existing = load_projection(
+                project_id=self.project_id,
+                locator=copy.deepcopy(locator),
+            )
+            if existing is not None:
+                return attach(existing)
+            if supplied_projection is None and raw_metadata is None:
+                return frozen
+            registered = load_or_register(
+                project_id=self.project_id,
+                locator=copy.deepcopy(locator),
+                projector=create_projection,
+            )
+        except PromptArchiveSourceMetadataError as exc:
+            raise _error(exc.code) from None
+        return attach(registered)
 
     def _occurrence_source(
         self,
@@ -826,6 +1252,24 @@ class PromptArchiveRuntime:
             source_matches = frozen.source == source_without_runtime_predecessor
         if not source_matches:
             return False
+
+        projection = frozen.source_metadata_projection
+        receipt = frozen.source_metadata_receipt
+        manifest_receipt = manifest.get("source_metadata_receipt")
+        if (projection is None) != (receipt is None) or (
+            projection is None
+        ) != (manifest_receipt is None):
+            return False
+        if projection is not None:
+            try:
+                validated_projection = validate_source_metadata_projection(
+                    projection,
+                    receipt,
+                )
+            except PromptArchiveSourceMetadataError:
+                return False
+            if validated_projection.receipt != manifest_receipt:
+                return False
 
         if plan.get("operation_kind") == "native_publish":
             return bool(
@@ -1457,6 +1901,11 @@ class PromptArchiveRuntime:
         self,
         committed_bytes: bytes | bytearray | memoryview,
         occurrence: ArchiveOccurrence,
+        *,
+        raw_source_metadata: Mapping[str, Any] | None = None,
+        source_metadata_screen_factory: (
+            Callable[[], SourceMetadataScreenSnapshot] | None
+        ) = None,
     ) -> PromptArchivePublication | None:
         """Publish one shadow occurrence while serializing its sprint stream."""
 
@@ -1471,6 +1920,11 @@ class PromptArchiveRuntime:
         storage = self._require_storage()
         with self._stream_lock:
             with storage.account_cas_writes() as cas_writes:
+                occurrence = self.bind_source_metadata_projection(
+                    occurrence,
+                    raw_source_metadata,
+                    screen_factory=source_metadata_screen_factory,
+                )
                 publication = self._publish_runtime_serialized(
                     committed_bytes,
                     occurrence,
@@ -1490,6 +1944,11 @@ class PromptArchiveRuntime:
         native_bytes: bytes | bytearray | memoryview,
         occurrence: ArchiveOccurrence,
         compatibility_publisher: PromptArchiveCompatibilityPublisher | None = None,
+        *,
+        raw_source_metadata: Mapping[str, Any] | None = None,
+        source_metadata_screen_factory: (
+            Callable[[], SourceMetadataScreenSnapshot] | None
+        ) = None,
     ) -> PromptArchivePublication:
         """Publish one operator-gated native PAS1 occurrence.
 
@@ -1510,6 +1969,15 @@ class PromptArchiveRuntime:
         storage = self._require_storage()
         with self._stream_lock:
             with storage.account_cas_writes() as cas_writes:
+                # Projection selection and plan publication are one serialized
+                # and accounted decision.  A retry first adopts an immutable
+                # plan's metadata identity; a first publication freezes
+                # owner-screened raw input.
+                occurrence = self.bind_source_metadata_projection(
+                    occurrence,
+                    raw_source_metadata,
+                    screen_factory=source_metadata_screen_factory,
+                )
                 publication = self._publish_runtime_serialized(
                     native_bytes,
                     occurrence,
@@ -2555,12 +3023,7 @@ class PromptArchiveRuntime:
             "occurrence_id": occurrence.occurrence_id,
             "operation_id": operation_id,
         }
-        revision = occurrence.state_revision
-        if (
-            type(revision) is not int
-            or not 0 <= revision <= 9_223_372_036_854_775_807
-        ):
-            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        source_locator = self._runtime_occurrence_locator(occurrence)
         compatibility_publication: dict[str, Any] = {"mode": "none"}
         if publication_mode == "authoritative":
             publisher = self._require_compatibility_publisher(
@@ -2682,13 +3145,7 @@ class PromptArchiveRuntime:
                     "published_at": planned_at,
                 },
             },
-            "source_locator": {
-                "locator_kind": "runtime_occurrence",
-                "locator_version": "prompt-archive-runtime-occurrence-locator-v1",
-                "runtime_instance_id": self.config.runtime_instance_id,
-                "runtime_occurrence_id": occurrence.occurrence_id,
-                "state_revision": revision,
-            },
+            "source_locator": source_locator,
             "intended_manifest": {
                 "identity_version": "prompt-archive-intended-manifest-identity-v1",
                 "archive_id": built.archive_id,

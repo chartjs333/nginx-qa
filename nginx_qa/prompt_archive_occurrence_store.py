@@ -23,7 +23,7 @@ import hmac
 import os
 import re
 import stat
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +31,10 @@ from typing import Any, Final, Literal, Protocol
 from uuid import uuid4
 
 from nginx_qa.prompt_archive_incremental import ArchiveOccurrence, response_id_v1
+from nginx_qa.prompt_archive_source_metadata import (
+    PromptArchiveSourceMetadataError,
+    validate_source_metadata_projection,
+)
 from nginx_qa.prompt_archive_storage import (
     PromptArchiveStorageError,
     canonical_json_bytes_v1,
@@ -60,6 +64,22 @@ _NATIVE_RECEIPT_KIND: Final = "prompt_archive_native_runtime_occurrence_receipt"
 _NATIVE_RECEIPT_MEDIA_TYPE: Final = (
     "application/vnd.nginx-qa.prompt-archive-native-runtime-"
     "occurrence-receipt-v1+json"
+)
+_SOURCE_METADATA_PROJECTION_PROOF_KIND: Final = (
+    "prompt_archive_source_metadata_projection_proof"
+)
+_SOURCE_METADATA_PROJECTION_PROOF_MEDIA_TYPE: Final = (
+    "application/vnd.nginx-qa.prompt-archive-source-metadata-"
+    "projection-proof-v1+json"
+)
+_SOURCE_METADATA_PROJECTION_RECEIPT_KIND: Final = (
+    "prompt_archive_source_metadata_projection_receipt"
+)
+_SOURCE_METADATA_PROJECTION_VERSION: Final = (
+    "prompt-archive-source-projection-v1"
+)
+_SOURCE_METADATA_REDACTION_VERSION: Final = (
+    "prompt-archive-source-redaction-v1"
 )
 _REPARSE_POINT: Final = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
 
@@ -138,6 +158,46 @@ _RECEIPT_KEYS: Final = frozenset(
         "receipt_sha256",
     }
 )
+_SOURCE_METADATA_PROJECTION_PROOF_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "media_type",
+        "hash_algorithm",
+        "project_id",
+        "locator_sha256",
+        "locator",
+        "projection",
+        "projection_receipt",
+        "proof_sha256",
+    }
+)
+_SOURCE_METADATA_PROJECTION_RECEIPT_KEYS: Final = frozenset(
+    {
+        "schema_version",
+        "kind",
+        "projection_version",
+        "redaction_version",
+        "projection_sha256",
+        "projection_byte_size",
+        "source_type",
+        "discarded_field_count",
+        "projected_fields",
+    }
+)
+_SOURCE_METADATA_OPTIONAL_KEYS: Final = frozenset(
+    {
+        "conversation_id",
+        "thread_id",
+        "message_id",
+        "sender_label",
+        "title",
+        "observed_at",
+    }
+)
+_SOURCE_METADATA_SOURCE_TYPES: Final = frozenset(
+    {"api", "email", "folder", "manual", "telegram", "unknown"}
+)
 _NATIVE_SOURCE_KEYS: Final = frozenset(
     {"byte_size", "sha256", "archive_id", "manifest_ref"}
 )
@@ -173,6 +233,10 @@ _OCCURRENCE_KEYS: Final = frozenset(
         "state_revision",
     }
 )
+_OCCURRENCE_KEYS_WITH_SOURCE_METADATA: Final = _OCCURRENCE_KEYS | {
+    "source_metadata_projection",
+    "source_metadata_receipt",
+}
 
 
 def _error(code: str) -> PromptArchiveStorageError:
@@ -214,6 +278,22 @@ class PromptArchiveNativeOccurrenceProof:
     status: Literal["verified"]
     occurrence: ArchiveOccurrence
     source: PromptArchiveNativeOccurrenceSource
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class PromptArchiveSourceMetadataProjectionProof:
+    """Immutable pre-plan source projection recovered by occurrence locator.
+
+    The proof deliberately exposes only the canonical, screened projection and
+    its closed cross-binding receipt.  Raw source metadata and the ephemeral
+    configured-secret screen are neither accepted by this type nor persisted
+    by the receipt store.
+    """
+
+    document: Mapping[str, Any]
+    canonical_bytes: bytes
+    sha256: str
+    receipt: Mapping[str, Any]
 
 
 class PromptArchiveOccurrenceSourceReader(Protocol):
@@ -703,10 +783,40 @@ def _validate_occurrence(value: Any, *, project_id: str) -> ArchiveOccurrence:
             "verified_at": value.verified_at,
             "state_revision": value.state_revision,
         }
+        source_metadata_projection = getattr(
+            value,
+            "source_metadata_projection",
+            None,
+        )
+        source_metadata_receipt = getattr(
+            value,
+            "source_metadata_receipt",
+            None,
+        )
+        if (source_metadata_projection is None) is not (
+            source_metadata_receipt is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if source_metadata_projection is not None:
+            document["source_metadata_projection"] = dict(
+                source_metadata_projection
+            )
+            document["source_metadata_receipt"] = dict(
+                source_metadata_receipt
+            )
     else:
         document = value
     occurrence = _canonical_mapping(document, maximum=_RECEIPT_MAX_BYTES)
-    if set(occurrence) != _OCCURRENCE_KEYS:
+    occurrence_keys = set(occurrence)
+    if occurrence_keys not in {
+        _OCCURRENCE_KEYS,
+        _OCCURRENCE_KEYS_WITH_SOURCE_METADATA,
+    }:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if occurrence_keys == _OCCURRENCE_KEYS_WITH_SOURCE_METADATA and (
+        occurrence.get("source_metadata_projection") is None
+        or occurrence.get("source_metadata_receipt") is None
+    ):
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     if occurrence.get("project_id") != project_id:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
@@ -751,19 +861,48 @@ def _validate_occurrence(value: Any, *, project_id: str) -> ArchiveOccurrence:
     state_revision = occurrence.get("state_revision")
     if type(state_revision) is not int or not 0 <= state_revision <= _MAX_INT64:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    source_metadata_projection = occurrence.get("source_metadata_projection")
+    source_metadata_receipt = occurrence.get("source_metadata_receipt")
+    if source_metadata_projection is not None:
+        (
+            source_metadata_projection,
+            source_metadata_projection_raw,
+            source_metadata_projection_sha256,
+        ) = _validate_source_metadata_projection_document(
+            source_metadata_projection
+        )
+        source_metadata_receipt = _validate_source_metadata_projection_receipt(
+            source_metadata_receipt,
+            projection=source_metadata_projection,
+            projection_raw=source_metadata_projection_raw,
+            projection_sha256=source_metadata_projection_sha256,
+        )
+    occurrence_arguments: dict[str, Any] = {
+        "project_id": project_id,
+        "sprint_id": sprint_id,
+        "response_id": response_id,
+        "response_kind": response_kind,
+        "occurrence_kind": occurrence_kind,
+        "occurrence_id": occurrence_id,
+        "transition_id": transition_id,
+        "source": source,
+        "authorization": authorization,
+        "created_at": occurrence["created_at"],
+        "verified_at": occurrence["verified_at"],
+        "state_revision": state_revision,
+    }
+    if "source_metadata_projection" in ArchiveOccurrence.__dataclass_fields__:
+        occurrence_arguments["source_metadata_projection"] = (
+            source_metadata_projection
+        )
+    elif source_metadata_projection is not None:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if "source_metadata_receipt" in ArchiveOccurrence.__dataclass_fields__:
+        occurrence_arguments["source_metadata_receipt"] = source_metadata_receipt
+    elif source_metadata_receipt is not None:
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     return ArchiveOccurrence(
-        project_id=project_id,
-        sprint_id=sprint_id,
-        response_id=response_id,
-        response_kind=response_kind,
-        occurrence_kind=occurrence_kind,
-        occurrence_id=occurrence_id,
-        transition_id=transition_id,
-        source=source,
-        authorization=authorization,
-        created_at=occurrence["created_at"],
-        verified_at=occurrence["verified_at"],
-        state_revision=state_revision,
+        **occurrence_arguments,
     )
 
 
@@ -783,6 +922,125 @@ def _validate_locator(value: Any) -> tuple[dict[str, Any], bytes, str]:
         raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
     raw = canonical_json_bytes_v1(locator, maximum=_LOCATOR_MAX_BYTES)
     return locator, raw, hashlib.sha256(raw).hexdigest()
+
+
+def _validate_source_metadata_projection_document(
+    value: Any,
+) -> tuple[dict[str, Any], bytes, str]:
+    try:
+        validated = validate_source_metadata_projection(value)
+    except PromptArchiveSourceMetadataError as exc:
+        if exc.code == "PROMPT_ARCHIVE_LIMIT_EXCEEDED":
+            raise _error(exc.code) from None
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    return (
+        validated.document,
+        validated.canonical_bytes,
+        validated.sha256,
+    )
+
+
+def _validate_source_metadata_projection_receipt(
+    value: Any,
+    *,
+    projection: Mapping[str, Any] | None = None,
+    projection_raw: bytes | None = None,
+    projection_sha256: str | None = None,
+) -> dict[str, Any]:
+    if isinstance(value, Mapping) and type(value) is not dict:
+        value = dict(value)
+    receipt = _canonical_mapping(value, maximum=_SOURCE_DOCUMENT_MAX_BYTES)
+    projected_fields = receipt.get("projected_fields")
+    if (
+        set(receipt) != _SOURCE_METADATA_PROJECTION_RECEIPT_KEYS
+        or receipt.get("schema_version") != 1
+        or receipt.get("kind")
+        != _SOURCE_METADATA_PROJECTION_RECEIPT_KIND
+        or receipt.get("projection_version")
+        != _SOURCE_METADATA_PROJECTION_VERSION
+        or receipt.get("redaction_version")
+        != _SOURCE_METADATA_REDACTION_VERSION
+        or type(receipt.get("projection_sha256")) is not str
+        or _SHA256_RE.fullmatch(receipt["projection_sha256"]) is None
+        or type(receipt.get("projection_byte_size")) is not int
+        or not 1 <= receipt["projection_byte_size"] <= _SOURCE_DOCUMENT_MAX_BYTES
+        or receipt.get("source_type") not in _SOURCE_METADATA_SOURCE_TYPES
+        or type(receipt.get("discarded_field_count")) is not int
+        or not 0 <= receipt["discarded_field_count"] <= 1024
+        or type(projected_fields) is not list
+        or any(type(name) is not str for name in projected_fields)
+        or projected_fields != sorted(set(projected_fields))
+        or not set(projected_fields).issubset(_SOURCE_METADATA_OPTIONAL_KEYS)
+    ):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if projection is not None:
+        if projection_raw is None or projection_sha256 is None:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        try:
+            validated = validate_source_metadata_projection(
+                projection,
+                receipt,
+            )
+        except PromptArchiveSourceMetadataError:
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+        expected_fields = sorted(
+            name for name in _SOURCE_METADATA_OPTIONAL_KEYS if name in projection
+        )
+        if (
+            validated.canonical_bytes != projection_raw
+            or not hmac.compare_digest(validated.sha256, projection_sha256)
+            or validated.receipt != receipt
+            or not hmac.compare_digest(
+                receipt["projection_sha256"],
+                projection_sha256,
+            )
+            or receipt["projection_byte_size"] != len(projection_raw)
+            or receipt["source_type"] != projection["source_type"]
+            or receipt["discarded_field_count"]
+            != projection["discarded_field_count"]
+            or projected_fields != expected_fields
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return receipt
+
+
+def _validate_source_metadata_projection_bundle(
+    value: Any,
+) -> PromptArchiveSourceMetadataProjectionProof:
+    try:
+        document = value.document
+        canonical_bytes = value.canonical_bytes
+        claimed_sha256 = value.sha256
+        receipt = value.receipt
+    except AttributeError:
+        raise _error("PROMPT_ARCHIVE_REQUEST_INVALID") from None
+    projection, expected_raw, expected_sha256 = (
+        _validate_source_metadata_projection_document(document)
+    )
+    if not isinstance(canonical_bytes, (bytes, bytearray, memoryview)):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    try:
+        observed_raw = bytes(canonical_bytes)
+    except (BufferError, TypeError, ValueError):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    if (
+        observed_raw != expected_raw
+        or type(claimed_sha256) is not str
+        or not hmac.compare_digest(claimed_sha256, expected_sha256)
+    ):
+        raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    frozen_receipt = _validate_source_metadata_projection_receipt(
+        receipt,
+        projection=projection,
+        projection_raw=expected_raw,
+        projection_sha256=expected_sha256,
+    )
+    return PromptArchiveSourceMetadataProjectionProof(
+        document=projection,
+        canonical_bytes=expected_raw,
+        sha256=expected_sha256,
+        receipt=frozen_receipt,
+    )
 
 
 def _validate_occurrence_source(
@@ -1369,6 +1627,42 @@ class PromptArchiveOccurrenceReceiptStore:
             lock_parent / f"{locator_sha256}.lock",
         )
 
+    def _source_metadata_projection_paths(
+        self,
+        project_id: str,
+        locator_sha256: str,
+    ) -> tuple[Path, Path]:
+        """Derive one direct proof path and the occurrence-scoped lock path."""
+
+        project_digest = hashlib.sha256(project_id.encode("utf-8")).hexdigest()
+        projection_parent = self._root.joinpath(
+            "source-metadata-projections",
+            "v1",
+            project_digest[:2],
+            project_digest,
+            locator_sha256[:2],
+        )
+        lock_parent = self._root.joinpath(
+            "locks",
+            "v1",
+            project_digest[:2],
+            project_digest,
+            locator_sha256[:2],
+        )
+        projection_components = self._relative_components_for_parent(
+            projection_parent
+        )
+        lock_components = self._relative_components_for_parent(lock_parent)
+        with self._ensure_relative_directory(projection_components):
+            pass
+        with self._ensure_relative_directory(lock_components):
+            pass
+        self._assert_root()
+        return (
+            projection_parent / f"{locator_sha256}.json",
+            lock_parent / f"{locator_sha256}.lock",
+        )
+
     @contextmanager
     def _locked(self, lock_path: Path):
         self._validate_relative_component(lock_path.name)
@@ -1739,7 +2033,7 @@ class PromptArchiveOccurrenceReceiptStore:
 
     @staticmethod
     def _occurrence_document(occurrence: ArchiveOccurrence) -> dict[str, Any]:
-        return {
+        document = {
             "project_id": occurrence.project_id,
             "sprint_id": occurrence.sprint_id,
             "response_id": occurrence.response_id,
@@ -1753,6 +2047,31 @@ class PromptArchiveOccurrenceReceiptStore:
             "verified_at": occurrence.verified_at,
             "state_revision": occurrence.state_revision,
         }
+        source_metadata_projection = getattr(
+            occurrence,
+            "source_metadata_projection",
+            None,
+        )
+        source_metadata_receipt = getattr(
+            occurrence,
+            "source_metadata_receipt",
+            None,
+        )
+        if (source_metadata_projection is None) is not (
+            source_metadata_receipt is None
+        ):
+            raise _error("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        # Preserve the byte shape of V1 receipts when the optional pre-plan
+        # proof is absent.  Existing stores therefore remain readable and an
+        # idempotent re-registration does not manufacture a new member.
+        if source_metadata_projection is not None:
+            document["source_metadata_projection"] = dict(
+                source_metadata_projection
+            )
+            document["source_metadata_receipt"] = dict(
+                source_metadata_receipt
+            )
+        return document
 
     @staticmethod
     def _source_document(
@@ -1774,6 +2093,92 @@ class PromptArchiveOccurrenceReceiptStore:
             "archive_id": source.archive_id,
             "manifest_ref": dict(source.manifest_ref),
         }
+
+    def _source_metadata_projection_proof_document(
+        self,
+        *,
+        project_id: str,
+        locator: dict[str, Any],
+        locator_sha256: str,
+        proof: PromptArchiveSourceMetadataProjectionProof,
+    ) -> dict[str, Any]:
+        core = {
+            "schema_version": 1,
+            "kind": _SOURCE_METADATA_PROJECTION_PROOF_KIND,
+            "media_type": _SOURCE_METADATA_PROJECTION_PROOF_MEDIA_TYPE,
+            "hash_algorithm": "sha256-canonical-json-v1",
+            "project_id": project_id,
+            "locator_sha256": locator_sha256,
+            "locator": locator,
+            "projection": dict(proof.document),
+            "projection_receipt": dict(proof.receipt),
+        }
+        core_raw = canonical_json_bytes_v1(core, maximum=_RECEIPT_MAX_BYTES)
+        return {
+            **core,
+            "proof_sha256": hashlib.sha256(core_raw).hexdigest(),
+        }
+
+    def _decode_source_metadata_projection_proof(
+        self,
+        raw: bytes,
+        *,
+        project_id: str,
+        locator: dict[str, Any],
+        locator_sha256: str,
+    ) -> PromptArchiveSourceMetadataProjectionProof:
+        try:
+            document = parse_canonical_json_v1(raw, maximum=_RECEIPT_MAX_BYTES)
+            if (
+                set(document) != _SOURCE_METADATA_PROJECTION_PROOF_KEYS
+                or document.get("schema_version") != 1
+                or document.get("kind")
+                != _SOURCE_METADATA_PROJECTION_PROOF_KIND
+                or document.get("media_type")
+                != _SOURCE_METADATA_PROJECTION_PROOF_MEDIA_TYPE
+                or document.get("hash_algorithm")
+                != "sha256-canonical-json-v1"
+                or document.get("project_id") != project_id
+                or document.get("locator_sha256") != locator_sha256
+                or document.get("locator") != locator
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            core = dict(document)
+            observed_proof_sha256 = core.pop("proof_sha256", None)
+            expected_proof_sha256 = hashlib.sha256(
+                canonical_json_bytes_v1(core, maximum=_RECEIPT_MAX_BYTES)
+            ).hexdigest()
+            if (
+                type(observed_proof_sha256) is not str
+                or not hmac.compare_digest(
+                    observed_proof_sha256,
+                    expected_proof_sha256,
+                )
+            ):
+                raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
+            projection, projection_raw, projection_sha256 = (
+                _validate_source_metadata_projection_document(
+                    document.get("projection")
+                )
+            )
+            receipt = _validate_source_metadata_projection_receipt(
+                document.get("projection_receipt"),
+                projection=projection,
+                projection_raw=projection_raw,
+                projection_sha256=projection_sha256,
+            )
+            return PromptArchiveSourceMetadataProjectionProof(
+                document=projection,
+                canonical_bytes=projection_raw,
+                sha256=projection_sha256,
+                receipt=receipt,
+            )
+        except PromptArchiveStorageError as exc:
+            if exc.code == "PROMPT_ARCHIVE_UNAVAILABLE":
+                raise
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
+        except (AttributeError, KeyError, TypeError, ValueError, OverflowError):
+            raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH") from None
 
     def _receipt_document(
         self,
@@ -1998,6 +2403,118 @@ class PromptArchiveOccurrenceReceiptStore:
             )
         return kind, occurrence, source
 
+    def load_source_metadata_projection(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+    ) -> PromptArchiveSourceMetadataProjectionProof | None:
+        """Load the exact immutable pre-plan projection for one occurrence."""
+
+        selected_project = _validate_safe_id(project_id)
+        frozen_locator, _locator_raw, locator_digest = _validate_locator(locator)
+        target, _lock_path = self._source_metadata_projection_paths(
+            selected_project,
+            locator_digest,
+        )
+        observed = self._read_file(target)
+        if observed is None:
+            return None
+        return self._decode_source_metadata_projection_proof(
+            observed,
+            project_id=selected_project,
+            locator=frozen_locator,
+            locator_sha256=locator_digest,
+        )
+
+    def register_source_metadata_projection(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+        projection: Any,
+    ) -> PromptArchiveSourceMetadataProjectionProof:
+        """Create once or byte-verify one screened pre-plan projection."""
+
+        selected_project = _validate_safe_id(project_id)
+        frozen_locator, _locator_raw, locator_digest = _validate_locator(locator)
+        frozen_proof = _validate_source_metadata_projection_bundle(projection)
+        proof_document = self._source_metadata_projection_proof_document(
+            project_id=selected_project,
+            locator=frozen_locator,
+            locator_sha256=locator_digest,
+            proof=frozen_proof,
+        )
+        expected = canonical_json_bytes_v1(
+            proof_document,
+            maximum=_RECEIPT_MAX_BYTES,
+        )
+        target, lock_path = self._source_metadata_projection_paths(
+            selected_project,
+            locator_digest,
+        )
+        with self._locked(lock_path):
+            self._assert_root()
+            observed = self._read_file(target)
+            if observed is None:
+                self._publish(target, expected)
+                return frozen_proof
+            existing = self._decode_source_metadata_projection_proof(
+                observed,
+                project_id=selected_project,
+                locator=frozen_locator,
+                locator_sha256=locator_digest,
+            )
+            if observed != expected:
+                raise _error("PROMPT_ARCHIVE_GENERATION_CONFLICT")
+            return existing
+
+    def load_or_register_source_metadata_projection(
+        self,
+        *,
+        project_id: str,
+        locator: Mapping[str, Any],
+        projector: Callable[[], Any],
+    ) -> PromptArchiveSourceMetadataProjectionProof:
+        """Load before projecting, or atomically freeze the first projection.
+
+        The callback executes under the occurrence-scoped lock and only when
+        no durable proof exists.  Retries and recovery therefore never consult
+        a later credential snapshot or re-screen raw metadata.
+        """
+
+        selected_project = _validate_safe_id(project_id)
+        frozen_locator, _locator_raw, locator_digest = _validate_locator(locator)
+        if not callable(projector):
+            raise _error("PROMPT_ARCHIVE_REQUEST_INVALID")
+        target, lock_path = self._source_metadata_projection_paths(
+            selected_project,
+            locator_digest,
+        )
+        with self._locked(lock_path):
+            self._assert_root()
+            observed = self._read_file(target)
+            if observed is not None:
+                return self._decode_source_metadata_projection_proof(
+                    observed,
+                    project_id=selected_project,
+                    locator=frozen_locator,
+                    locator_sha256=locator_digest,
+                )
+            frozen_proof = _validate_source_metadata_projection_bundle(projector())
+            proof_document = self._source_metadata_projection_proof_document(
+                project_id=selected_project,
+                locator=frozen_locator,
+                locator_sha256=locator_digest,
+                proof=frozen_proof,
+            )
+            expected = canonical_json_bytes_v1(
+                proof_document,
+                maximum=_RECEIPT_MAX_BYTES,
+            )
+            self._publish(target, expected)
+            return frozen_proof
+
     def register_occurrence(
         self,
         *,
@@ -2210,4 +2727,5 @@ __all__ = [
     "PromptArchiveOccurrenceReceiptStore",
     "PromptArchiveOccurrenceSource",
     "PromptArchiveOccurrenceSourceReader",
+    "PromptArchiveSourceMetadataProjectionProof",
 ]

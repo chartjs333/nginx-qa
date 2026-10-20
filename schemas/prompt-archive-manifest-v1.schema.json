@@ -37,6 +37,9 @@
     "scope": {"$ref": "#/$defs/scope"},
     "source": {"$ref": "#/$defs/source"},
     "authorization": {"$ref": "#/$defs/authorization"},
+    "source_metadata_receipt": {
+      "$ref": "#/$defs/sourceMetadataReceipt"
+    },
     "renderer_version": {
       "description": "The frozen renderer that combines the exact response envelope with the named persistent sequences. Required only for incremental_transition_v1.",
       "const": "pas1-concat-renderer-v1"
@@ -85,6 +88,17 @@
           {"not": {"required": ["envelope"]}},
           {"not": {"required": ["legacy_comparison"]}}
         ]
+      }
+    },
+    {
+      "if": {"required": ["source_metadata_receipt"]},
+      "then": {
+        "properties": {"roots": {"required": ["source_metadata"]}}
+      },
+      "else": {
+        "properties": {
+          "roots": {"not": {"required": ["source_metadata"]}}
+        }
       }
     },
     {
@@ -314,6 +328,63 @@
             {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
             {"type": "null"}
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceMetadataReceipt": {
+      "description": "Closed cross-binding for the canonical screened source-metadata projection stored as exactly one non-rendered source_metadata record. Runtime validation also compares every bound value to the hydrated sidecar root.",
+      "type": "object",
+      "required": [
+        "schema_version",
+        "kind",
+        "projection_version",
+        "redaction_version",
+        "projection_sha256",
+        "projection_byte_size",
+        "source_type",
+        "discarded_field_count",
+        "projected_fields"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {
+          "const": "prompt_archive_source_metadata_projection_receipt"
+        },
+        "projection_version": {
+          "const": "prompt-archive-source-projection-v1"
+        },
+        "redaction_version": {
+          "const": "prompt-archive-source-redaction-v1"
+        },
+        "projection_sha256": {"$ref": "#/$defs/sha256"},
+        "projection_byte_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16384
+        },
+        "source_type": {
+          "enum": ["api", "email", "folder", "manual", "telegram", "unknown"]
+        },
+        "discarded_field_count": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1024
+        },
+        "projected_fields": {
+          "type": "array",
+          "maxItems": 6,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "conversation_id",
+              "thread_id",
+              "message_id",
+              "observed_at",
+              "sender_label",
+              "title"
+            ]
+          }
         }
       },
       "additionalProperties": false
