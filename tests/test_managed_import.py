@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from copy import deepcopy
 from contextlib import closing
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -1053,6 +1054,107 @@ class TransactionalSprintImporterTests(ManagedImportFixture):
                 repository, "agent/managed-build"
             )["refs/heads/agent/managed-build"],
             record["workspace_source_commit"],
+        )
+
+    def test_startup_recovery_leaves_dynamic_publication_to_continuity(self) -> None:
+        importer = self.importer()
+        result = importer.start(self.project_id, self.request)
+        sprint_id = str(result.response["sprint_id"])
+        state = importer.store.runtime_state(self.project_id, sprint_id)
+        assert state is not None
+
+        activation_assignment = state["assignments"][0]
+        activation_workspace = state["workspaces"][0]
+        activation_lease = state["branch_leases"][0]
+        dynamic_assignment = deepcopy(activation_assignment)
+        dynamic_assignment.update(
+            {
+                "assignment_id": "assignment-dynamic-continuation",
+                "workspace_id": "workspace-dynamic-continuation",
+                "branch_lease_id": "branch-lease-dynamic-continuation",
+            }
+        )
+        dynamic_workspace = deepcopy(activation_workspace)
+        dynamic_workspace.update(
+            {
+                "assignment_id": dynamic_assignment["assignment_id"],
+                "workspace_id": dynamic_assignment["workspace_id"],
+            }
+        )
+        dynamic_lease = deepcopy(activation_lease)
+        dynamic_lease.update(
+            {
+                "assignment_id": dynamic_assignment["assignment_id"],
+                "lease_id": dynamic_assignment["branch_lease_id"],
+            }
+        )
+        state["assignments"].append(dynamic_assignment)
+        state["workspaces"].append(dynamic_workspace)
+        state["branch_leases"].append(dynamic_lease)
+        state["outbox"].append(
+            {
+                "event_id": "event-dynamic-continuation",
+                "dedupe_key": "enqueue:assignment:dynamic-continuation",
+                "event_type": "ASSIGNMENT_ENQUEUE",
+                "payload": {
+                    "assignment_id": dynamic_assignment["assignment_id"],
+                },
+                "status": "pending",
+                "created_at": "2026-10-21T00:00:00+00:00",
+                "delivered_at": None,
+                "queue_receipt_id": None,
+            }
+        )
+
+        with (
+            patch.object(importer.store, "runtime_state", return_value=state),
+            patch.object(
+                importer.git_provider,
+                "ensure_local_branch_publication",
+            ) as publish,
+        ):
+            importer._ensure_succeeded_publication(
+                {
+                    "status": "SUCCEEDED",
+                    "sprint_id": sprint_id,
+                    "pinned_identity": deepcopy(state["identity"]),
+                    "attempt_id": "managed-startup-recovery",
+                },
+                git_provider=importer.git_provider,
+                restore_ports=False,
+            )
+
+        self.assertEqual(publish.call_count, 1)
+        self.assertEqual(
+            publish.call_args.kwargs["assignment_id"],
+            activation_assignment["assignment_id"],
+        )
+
+        state["outbox"][-1]["status"] = "delivered"
+        with (
+            patch.object(importer.store, "runtime_state", return_value=state),
+            patch.object(
+                importer.git_provider,
+                "ensure_local_branch_publication",
+            ) as publish,
+        ):
+            importer._ensure_succeeded_publication(
+                {
+                    "status": "SUCCEEDED",
+                    "sprint_id": sprint_id,
+                    "pinned_identity": deepcopy(state["identity"]),
+                    "attempt_id": "managed-startup-recovery",
+                },
+                git_provider=importer.git_provider,
+                restore_ports=False,
+            )
+
+        self.assertEqual(
+            [call.kwargs["assignment_id"] for call in publish.call_args_list],
+            [
+                activation_assignment["assignment_id"],
+                dynamic_assignment["assignment_id"],
+            ],
         )
 
     def test_startup_recovery_keeps_repository_aliases_project_scoped(self) -> None:

@@ -6923,6 +6923,52 @@ class TransactionalSprintImporter:
             for item in state.get("assignments", [])
             if isinstance(item, Mapping)
         }
+        succeeded_attempts = [
+            item
+            for item in state.get("import_attempts", [])
+            if isinstance(item, Mapping)
+            and item.get("status") == "succeeded"
+            and item.get("phase") == "ACTIVATE"
+        ]
+        if len(succeeded_attempts) != 1:
+            raise RuntimeError("managed success activation attempt is ambiguous")
+        activation_response = succeeded_attempts[0].get("activation_response")
+        initial_assignment_ids = (
+            activation_response.get("initial_assignment_ids")
+            if isinstance(activation_response, Mapping)
+            else None
+        )
+        prepared_artifact_ids = succeeded_attempts[0].get(
+            "prepared_artifact_ids"
+        )
+        if (
+            not isinstance(initial_assignment_ids, list)
+            or any(not isinstance(item, str) for item in initial_assignment_ids)
+            or len(set(initial_assignment_ids)) != len(initial_assignment_ids)
+            or not isinstance(prepared_artifact_ids, list)
+            or any(not isinstance(item, str) for item in prepared_artifact_ids)
+            or len(set(prepared_artifact_ids)) != len(prepared_artifact_ids)
+        ):
+            raise RuntimeError("managed success activation artifacts are corrupt")
+        activation_assignment_ids = set(initial_assignment_ids)
+        activation_workspace_ids = set(prepared_artifact_ids)
+        durable_workspace_ids = {
+            str(item.get("workspace_id"))
+            for item in state.get("workspaces", [])
+            if isinstance(item, Mapping)
+            and isinstance(item.get("workspace_id"), str)
+        }
+        if not activation_workspace_ids.issubset(durable_workspace_ids):
+            raise RuntimeError("managed success activation workspace is missing")
+        pending_assignment_ids = {
+            str(event["payload"]["assignment_id"])
+            for event in state.get("outbox", [])
+            if isinstance(event, Mapping)
+            and event.get("status") == "pending"
+            and event.get("event_type") == "ASSIGNMENT_ENQUEUE"
+            and isinstance(event.get("payload"), Mapping)
+            and isinstance(event["payload"].get("assignment_id"), str)
+        }
         try:
             for raw_lease in state.get("branch_leases", []):
                 if (
@@ -6933,6 +6979,27 @@ class TransactionalSprintImporter:
                 assignment = assignments.get(str(raw_lease["assignment_id"]))
                 if not isinstance(assignment, Mapping):
                     raise RuntimeError("branch lease assignment is missing")
+                assignment_id = str(raw_lease["assignment_id"])
+                # A not-yet-enqueued dynamic assignment belongs to continuity's
+                # crash-gap recovery.  It may deliberately reuse a branch under
+                # an authenticated predecessor proof, which the activation
+                # importer neither owns nor reconstructs.  Already-delivered
+                # dynamic assignments are still revalidated here; their intent
+                # or receipt must exist, so startup remains fail-closed if that
+                # durable Git evidence is missing or inconsistent.
+                if (
+                    assignment_id not in activation_assignment_ids
+                    and assignment_id in pending_assignment_ids
+                ):
+                    continue
+                if (
+                    assignment_id in activation_assignment_ids
+                    and assignment.get("workspace_id")
+                    not in activation_workspace_ids
+                ):
+                    raise RuntimeError(
+                        "managed success activation assignment workspace is corrupt"
+                    )
                 node = nodes.get(str(assignment.get("node_id")))
                 workspace_definition = (
                     node.get("workspace") if isinstance(node, Mapping) else None
