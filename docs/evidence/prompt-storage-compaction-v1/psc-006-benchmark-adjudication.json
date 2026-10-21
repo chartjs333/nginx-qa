@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "kind": "psc_006_benchmark_acceptance_adjudication",
+  "decision": "PASS",
+  "decision_scope": [
+    "PSC-A05",
+    "PSC-A16",
+    "PSC-A17"
+  ],
+  "candidate": {
+    "commit": "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc",
+    "tree": "c8d171a65558884aac3e3fc283c48c038185346d",
+    "branch": "agent/psc-06-qualification",
+    "worktree_clean_before": true,
+    "worktree_clean_after": true
+  },
+  "source_evidence": {
+    "filename": "psc-a05-a16-a17-evidence-54d9eb7-20261021T1601.json",
+    "byte_size": 16163,
+    "sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1",
+    "duration_seconds": 29461.751633899985,
+    "stderr_bytes": 0,
+    "natural_exit_code": 2,
+    "preservation": "The source JSON remains unchanged and is identified by byte SHA-256. This adjudication does not rewrite or relabel it."
+  },
+  "source_machine_result": {
+    "overall_pass": false,
+    "PSC-A05": false,
+    "PSC-A16": true,
+    "PSC-A17": true,
+    "sole_false_check": {
+      "name": "middle_delete_more_objects_than_right_append",
+      "value": false,
+      "retained_and_disclosed": true
+    }
+  },
+  "normative_contract": {
+    "acceptance_matrix_path": "orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md",
+    "acceptance_matrix_git_blob": "10412b3e0fbb949de5323fe53183fbfc77d35370",
+    "acceptance_matrix_sha256": "3471cae3ace2421634c1dded6d2a0ab9479507e1844ed5561a5fae7b7579c2e9",
+    "PSC-A05_line": 13,
+    "storage_contract_path": "docs/PROMPT_ARCHIVE_STORAGE_V1.md",
+    "storage_contract_lines": [
+      "636-647",
+      "1613-1621"
+    ],
+    "required_interpretation": "The append bound applies to right-appends. Middle insert/delete is reported separately as the explicit V1 O(N) ordinal-index metadata case and is outside the append bound.",
+    "does_not_require_middle_delete_new_object_count_to_exceed_append": true
+  },
+  "adjudication": {
+    "classification": "benchmark_gate_false_negative",
+    "candidate_runtime_defect": false,
+    "workload_rerun_required": false,
+    "reason": "new_object_count measures newly created CAS objects after deduplication, not ordinal rewrite work. Deleting the inserted middle record returns toward an already stored baseline, so correct CAS reuse can produce fewer new objects while still performing O(N) ordinal work.",
+    "corrected_non_append_measure": "CAS put attempts, dedup hits, and physical bytes are reported for the separately classified middle cases; they are not used as an append bound.",
+    "original_false_predicate_removed_from_normative_gate_only": true,
+    "original_false_predicate_value_preserved": true
+  },
+  "PSC-A05_evidence": {
+    "append_model": "65-record baseline followed by right-appends 66, 67, and 68",
+    "checkpoint_depth": 12,
+    "unknown_alias_depth": 16,
+    "moved_alias_root_digest_reused_across_all_four_generations": true,
+    "exact_roundtrip_count": 7,
+    "non_mutating_read_count": 7,
+    "removed_path_count": 0,
+    "temporary_artifact_count": 0,
+    "pure_append": {
+      "new_object_counts": [93, 99, 93],
+      "put_attempt_counts": [315, 587, 315],
+      "cas_new_stored_bytes": [80502, 83550, 80887],
+      "all_physical_written_bytes": [207922, 211240, 208307],
+      "cas_write_variation_ratio": 1.038,
+      "all_physical_write_variation_ratio": 1.016,
+      "all_writes_below_baseline": true
+    },
+    "middle_cases": {
+      "classification": "explicit V1 O(N) ordinal-index metadata cases; excluded from append bound",
+      "insert": {
+        "put_attempts": 15150,
+        "dedup_hits": 15005,
+        "new_object_count": 145,
+        "cas_new_stored_bytes": 127875,
+        "all_physical_written_bytes": 255671
+      },
+      "delete": {
+        "put_attempts": 14921,
+        "dedup_hits": 14834,
+        "new_object_count": 87,
+        "cas_new_stored_bytes": 86975,
+        "all_physical_written_bytes": 214771
+      },
+      "maximum_append_put_attempts": 587,
+      "minimum_middle_to_maximum_append_put_attempt_ratio": 25.419,
+      "disclosed_separately": true
+    },
+    "normative_pass": true
+  },
+  "PSC-A16_evidence": {
+    "transition_count": 7,
+    "logical_input_bytes_total": 2317583,
+    "durable_content_bytes_written_total": 8093922,
+    "final_all_physical_content_bytes": 8058645,
+    "final_all_physical_allocated_bytes": 8058645,
+    "cas_put_attempts": 67586,
+    "cas_new_object_count": 10327,
+    "cas_dedup_hits": 57259,
+    "cas_dedup_ratio": 0.8472020832716834,
+    "cas_new_stored_bytes": 7200554,
+    "write_latency_ns_p50": 3289557711100,
+    "write_latency_ns_p95": 4235497858600,
+    "read_latency_ns_p50": 569138615200,
+    "read_latency_ns_p95": 613291000800,
+    "max_write_peak_tracemalloc_increment_bytes": 3066439971,
+    "max_read_peak_tracemalloc_increment_bytes": 53328866,
+    "peak_memory_measurement_note": "Incremental tracemalloc peak, not whole-process peak RSS.",
+    "normative_pass": true
+  },
+  "PSC-A17_evidence": {
+    "live_root_attempt_count": 0,
+    "live_root_hash_count": 0,
+    "protected_benchmark_attempt_count": 0,
+    "protected_fixture_file_count": 3,
+    "protected_inventory_pre_sha256": "13269f73ae788b4d90a30bd77a3bf804bf73e0d31a2887c49d3ccef2fcf493f5",
+    "protected_inventory_post_sha256": "13269f73ae788b4d90a30bd77a3bf804bf73e0d31a2887c49d3ccef2fcf493f5",
+    "path_size_allocation_mtime_and_sha_equal": true,
+    "live_data_read_or_written": false,
+    "service_restart": false,
+    "state_or_sqlite_mutated": false,
+    "merge_or_deploy": false,
+    "normative_pass": true
+  },
+  "review": {
+    "required": true,
+    "independent_contract_review": "PASS",
+    "independent_evidence_integrity_review": "PASS",
+    "review_notes": "Both read-only reviews independently found the sole machine failure non-normative and confirmed that the original measurements satisfy PSC-A05, PSC-A16, and PSC-A17."
+  },
+  "operational_note": {
+    "capture_intervention": "Before the original wrapper's two-hour wait expired, stdout and stderr of the same continuously running benchmark PID were redirected to generated temporary capture files and a detached exit monitor was started. The wrapper later timed out, while the benchmark continued uninterrupted and exited naturally. There was no restart, relaunch, retry, or change to workload logic, input data, temporary root, candidate files, or acceptance measurements.",
+    "line_endings": "Any Git CRLF/LF warning is non-blocking unless content hashes, runtime behavior, or exact reconstruction changes."
+  }
+}
