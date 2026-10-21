@@ -2443,6 +2443,147 @@ class ManagedGitProvider:
         )
         return result.returncode == 0
 
+    def bounded_ancestry_path(
+        self,
+        repository: ManagedRepository,
+        ancestor: str,
+        descendant: str,
+        *,
+        max_commits: int = 512,
+    ) -> tuple[str, ...]:
+        """Return every commit on a bounded ancestry path, including both ends."""
+
+        if (
+            not isinstance(max_commits, int)
+            or isinstance(max_commits, bool)
+            or max_commits < 2
+            or max_commits > 4096
+        ):
+            raise ValueError("ancestry path bound is invalid")
+        self.assert_commit(repository, ancestor)
+        self.assert_commit(repository, descendant)
+        if not self.is_ancestor(repository, ancestor, descendant):
+            raise ManagedGitError(
+                "BRANCH_DIVERGED", "commit is not a descendant of the selected head"
+            )
+        if ancestor == descendant:
+            return (ancestor,)
+        result = self.runner.run(
+            (
+                "--git-dir",
+                str(repository.mirror_path),
+                "rev-list",
+                "--ancestry-path",
+                "--reverse",
+                f"--max-count={max_commits}",
+                descendant,
+                f"^{ancestor}",
+            ),
+            error_code="REPOSITORY_MIRROR_INVALID",
+        )
+        descendants = tuple(
+            line.strip().lower() for line in result.stdout.splitlines() if line.strip()
+        )
+        if len(descendants) >= max_commits:
+            raise ManagedGitError(
+                "BRANCH_DIVERGED", "ancestry path exceeds the recovery safety bound"
+            )
+        commits = (ancestor, *descendants)
+        if (
+            commits[-1] != descendant
+            or len(commits) != len(set(commits))
+            or any(
+                not _commit_matches_object_format(commit, repository.object_format)
+                for commit in commits
+            )
+        ):
+            raise ManagedGitError(
+                "REPOSITORY_MIRROR_INVALID", "ancestry path output is invalid"
+            )
+        return commits
+
+    def bounded_linear_ancestry_path(
+        self,
+        repository: ManagedRepository,
+        ancestor: str,
+        descendant: str,
+        *,
+        max_commits: int = 512,
+    ) -> tuple[str, ...]:
+        """Return one bounded single-parent path, including both endpoints.
+
+        Dirty-result recovery is intentionally narrower than generic Git
+        ancestry: neither a merge nor a side-parent path may authorize a head
+        which appeared after the failure context.  The hard bound also makes an
+        unexpectedly large or adversarial history fail closed instead of
+        turning recovery into an unbounded graph walk.
+        """
+
+        if (
+            not isinstance(max_commits, int)
+            or isinstance(max_commits, bool)
+            or max_commits < 2
+            or max_commits > 4096
+        ):
+            raise ValueError("ancestry path bound is invalid")
+        self.assert_commit(repository, ancestor)
+        self.assert_commit(repository, descendant)
+        if not self.is_ancestor(repository, ancestor, descendant):
+            raise ManagedGitError(
+                "BRANCH_DIVERGED", "commit is not a descendant of the selected head"
+            )
+        if ancestor == descendant:
+            return (ancestor,)
+
+        # Ask for one more descendant-side commit than the total result can
+        # contain.  Reaching the limit therefore proves that the complete path
+        # would exceed the configured recovery bound.
+        result = self.runner.run(
+            (
+                "--git-dir",
+                str(repository.mirror_path),
+                "rev-list",
+                "--first-parent",
+                "--reverse",
+                "--parents",
+                f"--max-count={max_commits}",
+                descendant,
+                f"^{ancestor}",
+            ),
+            error_code="REPOSITORY_MIRROR_INVALID",
+        )
+        rows = tuple(
+            tuple(line.strip().lower().split())
+            for line in result.stdout.splitlines()
+            if line.strip()
+        )
+        if len(rows) >= max_commits:
+            raise ManagedGitError(
+                "BRANCH_DIVERGED", "ancestry path exceeds the recovery safety bound"
+            )
+        expected_parent = ancestor
+        descendants: list[str] = []
+        for row in rows:
+            if len(row) != 2 or row[1] != expected_parent:
+                raise ManagedGitError(
+                    "BRANCH_DIVERGED", "recovery history is not a linear branch advance"
+                )
+            descendants.append(row[0])
+            expected_parent = row[0]
+        commits = (ancestor, *descendants)
+        if (
+            commits[-1] != descendant
+            or len(commits) != len(set(commits))
+            or any(
+                not _commit_matches_object_format(commit, repository.object_format)
+                for commit in commits
+            )
+        ):
+            raise ManagedGitError(
+                "REPOSITORY_MIRROR_INVALID", "ancestry path output is invalid"
+            )
+        return commits
+
     def pin_commit(
         self,
         repository: ManagedRepository,

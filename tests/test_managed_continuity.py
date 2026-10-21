@@ -789,6 +789,99 @@ class ManagedContinuityTests(unittest.TestCase):
             processes=(),
         )
 
+    def stage_dirty_descendant_recovery(self):
+        predecessor_initial = "d" * 40
+        context_bound_head = "b" * 40
+        current_workspace_head = "e" * 40
+        resumed = self.store.runtime_state("project-id", SPRINT_ID)
+        resumed["assignments"][0]["initial_head_commit"] = predecessor_initial
+        resumed["workspaces"][0]["initial_head_commit"] = predecessor_initial
+        resumed["branch_leases"][0]["initial_head_commit"] = predecessor_initial
+        self.assertEqual(managed_activation_invariant_issues(resumed), ())
+        self.replace_state(resumed)
+
+        class DirtyVerification:
+            def __enter__(self):
+                raise ManagedContinuityError(
+                    "WORKSPACE_DIRTY", 409, "result-verification"
+                )
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+        self.runtime.result_verifier = lambda *_args: DirtyVerification()
+        with self.assertRaises(ManagedContinuityError) as caught:
+            self.submit_result(
+                from_commit=predecessor_initial,
+                git_commit=context_bound_head,
+            )
+        self.assertEqual(caught.exception.code, "WORKSPACE_DIRTY")
+        self.runtime.result_verifier = lambda *_args: nullcontext()
+
+        staged = self.store.runtime_state("project-id", SPRINT_ID)
+        context = staged["coordinator_contexts"][0]
+        prepared = self.prepared_continuation(
+            staged,
+            assignment_id="assignment-dirty-descendant-continue",
+            source_commit=COMMIT,
+        )
+        provider = Mock(unsafe=True)
+        provider.ensure_mirror.return_value = object()
+        provider.is_ancestor.return_value = True
+        provider.bounded_ancestry_path.return_value = (
+            predecessor_initial,
+            context_bound_head,
+            current_workspace_head,
+        )
+        provider.bounded_linear_ancestry_path.return_value = (
+            context_bound_head,
+            current_workspace_head,
+        )
+        workspace_manager = Mock(unsafe=True)
+        workspace_manager.publish_write_workspace.return_value = (
+            prepared.verified_workspace
+        )
+        source_assignment = staged["assignments"][0]
+        source_workspace = staged["workspaces"][0]
+        failed_workspace = replace(
+            prepared.verified_workspace,
+            workspace_id=str(source_workspace["workspace_id"]),
+            assignment_id=str(source_assignment["assignment_id"]),
+            expected_root=Path(str(source_workspace["expected_root"])),
+            actual_git_toplevel=Path(str(source_workspace["actual_git_toplevel"])),
+            actual_git_dir=Path(str(source_workspace["actual_git_dir"])),
+            initial_head_commit=predecessor_initial,
+            head_commit=current_workspace_head,
+            working_tree_state="clean",
+            branch_lease_id=str(source_assignment["branch_lease_id"]),
+        )
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            failed_workspace
+        )
+        branch = str(source_workspace["assigned_branch"])
+        provider.branch_heads.return_value = {
+            f"refs/heads/{branch}": predecessor_initial,
+            f"refs/remotes/origin/{branch}": current_workspace_head,
+        }
+        request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "continue-dirty-descendant-1",
+            "action": "CONTINUE_NODE",
+            "parameters": {"node_id": "build", "source_commit": COMMIT},
+        }
+        return {
+            "predecessor_initial": predecessor_initial,
+            "context_bound_head": context_bound_head,
+            "current_workspace_head": current_workspace_head,
+            "staged": staged,
+            "prepared": prepared,
+            "provider": provider,
+            "workspace_manager": workspace_manager,
+            "failed_workspace": failed_workspace,
+            "branch": branch,
+            "request": request,
+        }
+
     def configure_join_conflict_repair(
         self, *, repair_key: str
     ) -> tuple[str, str, dict, Mock]:
@@ -2526,10 +2619,9 @@ class ManagedContinuityTests(unittest.TestCase):
             actual_git_dir=Path(str(staged["workspaces"][0]["actual_git_dir"])),
             initial_head_commit=predecessor_initial,
             head_commit=failed_workspace_head,
-            # The durable context proves the historical WORKSPACE_DIRTY
-            # rejection.  A later ignore-only cleanup must not erase the
-            # authenticated failed HEAD needed for recovery.
-            working_tree_state="clean",
+            # Exact-head legacy recovery remains valid even before an
+            # ignore-only cleanup; only a post-context descendant must be clean.
+            working_tree_state="dirty",
             branch_lease_id=str(staged["assignments"][0]["branch_lease_id"]),
         )
         workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
@@ -2541,6 +2633,7 @@ class ManagedContinuityTests(unittest.TestCase):
             f"refs/remotes/origin/{branch}": failed_workspace_head,
         }
         provider.is_ancestor.return_value = True
+        provider.bounded_linear_ancestry_path.return_value = (failed_workspace_head,)
         request = {
             "assignment_id": context["context_id"],
             "idempotency_key": "continue-dirty-1",
@@ -2675,6 +2768,20 @@ class ManagedContinuityTests(unittest.TestCase):
         self.assertEqual(
             predecessor.failed_workspace_head, failed_workspace_head
         )
+        legacy_bound_evidence = deepcopy(recovered)
+        legacy_bound_evidence["recovery_records"][0]["evidence"].pop(
+            "result_verification_binding"
+        )
+        self.assertEqual(
+            self.runtime._continuation_publication_predecessor(
+                legacy_bound_evidence,
+                legacy_bound_evidence["assignments"][1],
+                legacy_bound_evidence["workspaces"][1],
+                provider=provider,
+                repository=provider.ensure_mirror.return_value,
+            ),
+            predecessor,
+        )
         provider.ensure_local_branch_publication.reset_mock()
         provider.ensure_local_branch_publication.side_effect = None
         provider.ensure_local_branch_publication.return_value = (
@@ -2734,6 +2841,298 @@ class ManagedContinuityTests(unittest.TestCase):
             )
         )
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_dirty_result_recovers_clean_context_bound_descendant(self) -> None:
+        fixture = self.stage_dirty_descendant_recovery()
+        provider = fixture["provider"]
+        workspace_manager = fixture["workspace_manager"]
+        prepared = fixture["prepared"]
+        request = fixture["request"]
+        with (
+            patch.object(self.runtime, "_prepare_assignment", return_value=prepared),
+            patch.object(self.runtime, "_publish_prepared_assignment"),
+            patch.object(
+                self.runtime, "_recover_assignment_publications", return_value=0
+            ),
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            patch.object(
+                self.importer,
+                "_workspace_manager",
+                workspace_manager,
+            ),
+        ):
+            completed = self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "continue-dirty-descendant",
+            )
+            replay = self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "continue-dirty-descendant-replay",
+            )
+
+        self.assertEqual(completed.response["status"], "RECOVERY_COMPLETED")
+        self.assertFalse(completed.response["deduplicated"])
+        self.assertTrue(replay.response["deduplicated"])
+        self.assertEqual(
+            replay.response["produced_record_ids"],
+            completed.response["produced_record_ids"],
+        )
+        recovered = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(len(recovered["recovery_records"]), 1)
+        self.assertEqual(len(recovered["assignments"]), 2)
+        recovery = recovered["recovery_records"][0]
+        self.assertEqual(recovery["status"], "completed")
+        self.assertEqual(
+            recovery["evidence"]["result_verification_binding"],
+            {
+                "context_bound_head": fixture["context_bound_head"],
+                "current_workspace_head": fixture["current_workspace_head"],
+                "result_outcome": "DONE",
+            },
+        )
+        self.assertEqual(
+            recovery["evidence"]["publication_predecessor"][
+                "failed_workspace_head"
+            ],
+            fixture["current_workspace_head"],
+        )
+        successor = recovered["assignments"][1]
+        successor_workspace = recovered["workspaces"][1]
+        workspace_manager.inspect_failed_write_workspace.side_effect = AssertionError(
+            "frozen descendant proof must not reopen the predecessor workspace"
+        )
+        predecessor = self.runtime._continuation_publication_predecessor(
+            recovered,
+            successor,
+            successor_workspace,
+            provider=provider,
+            repository=provider.ensure_mirror.return_value,
+        )
+        self.assertIsNotNone(predecessor)
+        self.assertEqual(
+            predecessor.failed_workspace_head, fixture["current_workspace_head"]
+        )
+        provider.ensure_local_branch_publication.reset_mock()
+        provider.ensure_local_branch_publication.return_value = (
+            "refs/nginx-qa/publications/descendant-successor"
+        )
+        self.runtime._ensure_assignment_branch_publication(
+            recovered,
+            successor,
+            successor_workspace,
+            provider=provider,
+            repository=provider.ensure_mirror.return_value,
+            branch=fixture["branch"],
+            selected_head=COMMIT,
+            publication_id=str(successor["branch_lease_id"]),
+            assignment_id=str(successor["assignment_id"]),
+            source_commit=COMMIT,
+        )
+        self.assertEqual(
+            provider.ensure_local_branch_publication.call_args.kwargs["predecessor"],
+            predecessor,
+        )
+        provider.ensure_mirror.assert_any_call(
+            fixture["staged"]["repository"]["repository_id"], fetch=True
+        )
+        for field, value in (
+            ("context_bound_head", "f" * 40),
+            ("current_workspace_head", "f" * 40),
+            ("result_outcome", "STOP"),
+        ):
+            with self.subTest(tampered_field=field):
+                tampered = deepcopy(recovered)
+                tampered["recovery_records"][0]["evidence"][
+                    "result_verification_binding"
+                ][field] = value
+                with self.assertRaises(RuntimeError):
+                    self.runtime._continuation_publication_predecessor(
+                        tampered,
+                        tampered["assignments"][1],
+                        tampered["workspaces"][1],
+                        provider=provider,
+                        repository=provider.ensure_mirror.return_value,
+                    )
+        self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_dirty_result_descendant_recovery_rejects_unproven_heads(self) -> None:
+        fixture = self.stage_dirty_descendant_recovery()
+        provider = fixture["provider"]
+        workspace_manager = fixture["workspace_manager"]
+        branch = fixture["branch"]
+        request = fixture["request"]
+
+        def rejected(
+            name: str,
+            *,
+            candidate_heads: tuple[str, ...] | None = None,
+            ancestry_error: ManagedGitError | None = None,
+            working_tree_state: str = "clean",
+            remote_head: str | None = None,
+            local_head: str | None = None,
+            ancestor_relationship: bool = True,
+        ) -> None:
+            current_request = deepcopy(request)
+            current_request["idempotency_key"] = f"continue-dirty-{name}"
+            workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+                replace(
+                    fixture["failed_workspace"],
+                    working_tree_state=working_tree_state,
+                )
+            )
+            provider.bounded_ancestry_path.side_effect = None
+            provider.bounded_ancestry_path.return_value = candidate_heads
+            provider.bounded_linear_ancestry_path.side_effect = ancestry_error
+            if ancestry_error is None:
+                provider.bounded_linear_ancestry_path.return_value = (
+                    fixture["context_bound_head"],
+                    fixture["current_workspace_head"],
+                )
+            provider.branch_heads.return_value = {
+                f"refs/heads/{branch}": (
+                    fixture["predecessor_initial"]
+                    if local_head is None
+                    else local_head
+                ),
+                f"refs/remotes/origin/{branch}": (
+                    fixture["current_workspace_head"]
+                    if remote_head is None
+                    else remote_head
+                ),
+            }
+            provider.is_ancestor.return_value = ancestor_relationship
+            before = canonical_json_bytes(
+                self.store.runtime_state("project-id", SPRINT_ID)
+            )
+            with (
+                patch.object(
+                    self.importer,
+                    "provider_for_durable_repository",
+                    return_value=provider,
+                ),
+                patch.object(
+                    self.importer,
+                    "_workspace_manager",
+                    workspace_manager,
+                ),
+                self.assertRaises(ManagedContinuityError) as caught,
+            ):
+                self.runtime.submit_if_managed(
+                    "project-id",
+                    "2860",
+                    canonical_json_bytes(current_request),
+                    f"continue-dirty-{name}",
+                )
+            self.assertEqual(caught.exception.code, RECOVERY_CONFLICT)
+            self.assertEqual(caught.exception.http_status, 409)
+            self.assertEqual(
+                self.store.runtime_state("project-id", SPRINT_ID)[
+                    "recovery_records"
+                ],
+                [],
+            )
+            self.assertEqual(
+                canonical_json_bytes(
+                    self.store.runtime_state("project-id", SPRINT_ID)
+                ),
+                before,
+            )
+
+        selected = fixture["predecessor_initial"]
+        bound = fixture["context_bound_head"]
+        current = fixture["current_workspace_head"]
+        rejected("no-context-bound-head", candidate_heads=(selected, current))
+        rejected(
+            "ambiguous-context-bound-head",
+            candidate_heads=(selected, bound, bound, current),
+        )
+        rejected(
+            "nonlinear-history",
+            ancestry_error=ManagedGitError(
+                "BRANCH_DIVERGED", "recovery history is not linear"
+            ),
+        )
+        rejected(
+            "dirty-descendant",
+            candidate_heads=(selected, bound, current),
+            working_tree_state="dirty",
+        )
+        rejected(
+            "remote-mismatch",
+            candidate_heads=(selected, bound, current),
+            remote_head="a" * 40,
+        )
+        rejected(
+            "unpushed-descendant",
+            candidate_heads=(selected, bound, current),
+            remote_head=bound,
+        )
+        rejected(
+            "local-mirror-moved",
+            candidate_heads=(selected, bound, current),
+            local_head="f" * 40,
+        )
+        rejected(
+            "not-descendant",
+            candidate_heads=(selected, bound, current),
+            ancestor_relationship=False,
+        )
+
+    def test_dirty_result_descendant_recovery_rejects_durable_owner_drift(
+        self,
+    ) -> None:
+        fixture = self.stage_dirty_descendant_recovery()
+        staged = fixture["staged"]
+        context_id = fixture["request"]["assignment_id"]
+
+        def assigned(state: dict) -> dict:
+            return state["assignments"][0]
+
+        mutations = {
+            "workspace-branch": lambda state: state["workspaces"][0].update(
+                {"assigned_branch": "agent/other"}
+            ),
+            "lease-branch": lambda state: state["branch_leases"][0].update(
+                {"branch": "agent/other"}
+            ),
+            "lease-assignment": lambda state: state["branch_leases"][0].update(
+                {"assignment_id": "assignment-other"}
+            ),
+            "lease-status": lambda state: state["branch_leases"][0].update(
+                {"status": "released", "released_at": TIMESTAMP}
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(owner_drift=name):
+                candidate = deepcopy(staged)
+                mutate(candidate)
+                context = next(
+                    item
+                    for item in candidate["coordinator_contexts"]
+                    if item["context_id"] == context_id
+                )
+                with self.assertRaises(RuntimeError):
+                    self.runtime._prevalidate_dirty_continuation_predecessor(
+                        "project-id",
+                        candidate,
+                        context,
+                        assigned(candidate),
+                        successor_selected_head=COMMIT,
+                    )
+                self.assertEqual(
+                    self.store.runtime_state("project-id", SPRINT_ID)[
+                        "recovery_records"
+                    ],
+                    [],
+                )
 
     def test_terminal_after_failed_continue_node_source_is_idempotent(
         self,

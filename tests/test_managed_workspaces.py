@@ -131,6 +131,95 @@ class ManagedRepositoryAndWorkspaceTests(ManagedWorkspaceFixture, unittest.TestC
         self.assertEqual(local_head, "")
         self.assertEqual(primary.fetch_result.returncode, 0)
 
+    def test_bounded_linear_ancestry_path_returns_exact_single_parent_chain(
+        self,
+    ) -> None:
+        stale_repository = self.provider.ensure_mirror("primary")
+        self.assertEqual(
+            self.provider.branch_heads(stale_repository, "main")[
+                "refs/remotes/origin/main"
+            ],
+            self.source_commit,
+        )
+        second = self.commit("two\n", "second")
+        third = self.commit("three\n", "third")
+        self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
+        repository = self.provider.ensure_mirror("primary")
+        self.assertEqual(repository.mirror_path, stale_repository.mirror_path)
+
+        self.assertEqual(
+            self.provider.bounded_ancestry_path(
+                repository, self.source_commit, third
+            ),
+            (self.source_commit, second, third),
+        )
+        self.assertEqual(
+            self.provider.bounded_linear_ancestry_path(
+                repository, self.source_commit, third
+            ),
+            (self.source_commit, second, third),
+        )
+        for path_method in (
+            self.provider.bounded_ancestry_path,
+            self.provider.bounded_linear_ancestry_path,
+        ):
+            with self.subTest(path_method=path_method.__name__):
+                self.assertEqual(
+                    path_method(repository, third, third),
+                    (third,),
+                )
+                with self.assertRaises(ManagedGitError) as bounded:
+                    path_method(
+                        repository,
+                        self.source_commit,
+                        third,
+                        max_commits=2,
+                    )
+                self.assertEqual(bounded.exception.code, "BRANCH_DIVERGED")
+
+    def test_bounded_linear_ancestry_path_rejects_merge_and_side_parent(
+        self,
+    ) -> None:
+        self.git("switch", "-c", "side", cwd=self.source)
+        side = self.commit("side\n", "side")
+        self.git("switch", "main", cwd=self.source)
+        mainline = self.commit("mainline\n", "mainline")
+        self.git(
+            "merge",
+            "--no-ff",
+            "side",
+            "-m",
+            "merge side",
+            "-X",
+            "ours",
+            cwd=self.source,
+        )
+        merge = self.git("rev-parse", "HEAD", cwd=self.source)
+        post_merge = self.commit("post merge\n", "post merge")
+        self.git("push", "upstream", "HEAD:refs/heads/main", cwd=self.source)
+        repository = self.provider.ensure_mirror("primary")
+
+        generic = self.provider.bounded_ancestry_path(
+            repository, self.source_commit, post_merge
+        )
+        self.assertEqual(generic[0], self.source_commit)
+        self.assertEqual(generic[-1], post_merge)
+        self.assertIn(merge, generic)
+        self.assertEqual(
+            self.provider.bounded_linear_ancestry_path(
+                repository, merge, post_merge
+            ),
+            (merge, post_merge),
+        )
+
+        for ancestor in (self.source_commit, side, mainline):
+            with self.subTest(ancestor=ancestor):
+                with self.assertRaises(ManagedGitError) as rejected:
+                    self.provider.bounded_linear_ancestry_path(
+                        repository, ancestor, merge
+                    )
+                self.assertEqual(rejected.exception.code, "BRANCH_DIVERGED")
+
     def test_sha256_remote_materializes_sha256_mirror_and_workspace(self) -> None:
         source = self.base / "sha256-source"
         source.mkdir()

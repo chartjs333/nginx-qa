@@ -162,6 +162,14 @@ class _PreparedAssignment:
 
 
 @dataclass(frozen=True, slots=True)
+class _DirtyContinuationProof:
+    predecessor: BranchPublicationPredecessor
+    context_bound_head: str
+    current_workspace_head: str
+    result_outcome: str
+
+
+@dataclass(frozen=True, slots=True)
 class _JoinPlan:
     kind: str
     target_node_id: str
@@ -3061,7 +3069,7 @@ class ManagedContinuityRuntime:
                 RECOVERY_CONFLICT, 409, correlation_id
             )
 
-        continuation_predecessor: BranchPublicationPredecessor | None = None
+        continuation_proof: _DirtyContinuationProof | None = None
         if existing is None and action == "CONTINUE_NODE":
             source_assignment = _records_by(
                 state, "assignments", "assignment_id"
@@ -3114,7 +3122,7 @@ class ManagedContinuityRuntime:
                 )
             assert isinstance(source_assignment, Mapping)
             try:
-                continuation_predecessor = (
+                continuation_proof = (
                     self._prevalidate_dirty_continuation_predecessor(
                         project_id,
                         state,
@@ -3317,15 +3325,24 @@ class ManagedContinuityRuntime:
                         "evidence": (
                             {
                                 "publication_predecessor": {
-                                    "assignment_id": continuation_predecessor.assignment_id,
-                                    "publication_id": continuation_predecessor.publication_id,
-                                    "selected_head": continuation_predecessor.selected_head,
+                                    "assignment_id": continuation_proof.predecessor.assignment_id,
+                                    "publication_id": continuation_proof.predecessor.publication_id,
+                                    "selected_head": continuation_proof.predecessor.selected_head,
                                     "failed_workspace_head": (
-                                        continuation_predecessor.failed_workspace_head
+                                        continuation_proof.predecessor.failed_workspace_head
                                     ),
-                                }
+                                },
+                                "result_verification_binding": {
+                                    "context_bound_head": (
+                                        continuation_proof.context_bound_head
+                                    ),
+                                    "current_workspace_head": (
+                                        continuation_proof.current_workspace_head
+                                    ),
+                                    "result_outcome": continuation_proof.result_outcome,
+                                },
                             }
-                            if continuation_predecessor is not None
+                            if continuation_proof is not None
                             else {}
                         ),
                         "status": "pending",
@@ -3882,14 +3899,45 @@ class ManagedContinuityRuntime:
                     if isinstance(pending_evidence, Mapping)
                     else None
                 )
+                verification_binding = (
+                    pending_evidence.get("result_verification_binding")
+                    if isinstance(pending_evidence, Mapping)
+                    else None
+                )
                 completed_evidence: dict[str, Any] = {
                     "context_id": context_id,
                     "source_assignment_id": str(assignment_id),
                 }
+                if verification_binding is not None and not isinstance(
+                    publication_predecessor, Mapping
+                ):
+                    raise ManagedContinuityError(
+                        RECOVERY_CONFLICT, 409, correlation_id
+                    )
                 if isinstance(publication_predecessor, Mapping):
                     completed_evidence["publication_predecessor"] = deepcopy(
                         dict(publication_predecessor)
                     )
+                    if verification_binding is not None:
+                        binding_keys = {
+                            "context_bound_head",
+                            "current_workspace_head",
+                            "result_outcome",
+                        }
+                        if (
+                            not isinstance(verification_binding, Mapping)
+                            or set(verification_binding) != binding_keys
+                            or not all(
+                                isinstance(verification_binding.get(key), str)
+                                for key in binding_keys
+                            )
+                        ):
+                            raise ManagedContinuityError(
+                                RECOVERY_CONFLICT, 409, correlation_id
+                            )
+                        completed_evidence["result_verification_binding"] = (
+                            deepcopy(dict(verification_binding))
+                        )
                 current_recovery.update(
                     {
                         "produced_record_ids": produced_ids,
@@ -5462,27 +5510,52 @@ class ManagedContinuityRuntime:
         source: Mapping[str, Any],
         failed_workspace_head: str,
     ) -> bool:
+        return (
+            ManagedContinuityRuntime._context_result_binding(
+                state,
+                context,
+                source,
+                (failed_workspace_head,),
+            )
+            is not None
+        )
+
+    @staticmethod
+    def _context_result_binding(
+        state: Mapping[str, Any],
+        context: Mapping[str, Any],
+        source: Mapping[str, Any],
+        candidate_heads: Sequence[str],
+    ) -> tuple[str, str] | None:
+        """Resolve exactly one result head/outcome frozen by a failure context."""
+
         source_assignment_id = source.get("assignment_id")
         if not isinstance(source_assignment_id, str):
-            return False
-        matching_outcomes = [
-            outcome
-            for outcome in source.get("allowed_outcomes", [])
+            return None
+        allowed_outcomes = source.get("allowed_outcomes")
+        if (
+            not isinstance(allowed_outcomes, list)
+            or not candidate_heads
+            or any(not isinstance(head, str) for head in candidate_heads)
+        ):
+            return None
+        matches = [
+            (head, outcome)
+            for head in candidate_heads
+            for outcome in allowed_outcomes
             if isinstance(outcome, str)
             and _stable_id(
                 "context-assignment",
                 state["sprint_id"],
                 context["graph_revision"],
                 source_assignment_id,
-                managed_result_key(
-                    source_assignment_id, outcome, failed_workspace_head
-                ),
+                managed_result_key(source_assignment_id, outcome, head),
                 "WORKSPACE_DIRTY",
                 compact=True,
             )
             == context["context_id"]
         ]
-        return len(matching_outcomes) == 1
+        return matches[0] if len(matches) == 1 else None
 
     def _authenticate_failed_workspace_predecessor(
         self,
@@ -5495,7 +5568,7 @@ class ManagedContinuityRuntime:
         successor_selected_head: str,
         provider: ManagedGitProvider,
         repository: ManagedRepository,
-    ) -> BranchPublicationPredecessor | None:
+    ) -> _DirtyContinuationProof | None:
         source_assignment_id = source.get("assignment_id")
         branch = source_workspace.get("assigned_branch")
         publication_id = source_lease.get("lease_id")
@@ -5528,32 +5601,76 @@ class ManagedContinuityRuntime:
             expected_root=Path(str(source_workspace["expected_root"])),
             branch_lease_id=str(publication_id),
         ) as failed_workspace:
-            failed_workspace_head = str(failed_workspace.head_commit)
+            current_workspace_head = str(failed_workspace.head_commit)
+            current_workspace_state = str(failed_workspace.working_tree_state)
         if (
             not provider.is_ancestor(
                 repository, successor_selected_head, selected_head
             )
             or not provider.is_ancestor(
-                repository, selected_head, failed_workspace_head
+                repository, selected_head, current_workspace_head
             )
         ):
             raise ManagedGitError(
                 "BRANCH_DIVERGED",
                 "failed managed workspace does not descend from the continuation",
             )
-        if not self._failed_head_matches_context(
-            state, context, source, failed_workspace_head
+        binding = self._context_result_binding(
+            state, context, source, (current_workspace_head,)
+        )
+        if binding is None:
+            candidate_heads = provider.bounded_ancestry_path(
+                repository, selected_head, current_workspace_head
+            )
+            if (
+                not isinstance(candidate_heads, tuple)
+                or not candidate_heads
+                or candidate_heads[0] != selected_head
+                or candidate_heads[-1] != current_workspace_head
+                or len(candidate_heads) != len(set(candidate_heads))
+            ):
+                raise RuntimeError("managed continuation ancestry proof is corrupt")
+            binding = self._context_result_binding(
+                state, context, source, candidate_heads
+            )
+        if binding is None:
+            raise ManagedGitError(
+                "BRANCH_DIVERGED",
+                "workspace history has no unique head bound to the rejected result",
+            )
+        context_bound_head, result_outcome = binding
+        linear_heads = (
+            (context_bound_head,)
+            if context_bound_head == current_workspace_head
+            else provider.bounded_linear_ancestry_path(
+                repository, context_bound_head, current_workspace_head
+            )
+        )
+        if (
+            not isinstance(linear_heads, tuple)
+            or not linear_heads
+            or linear_heads[0] != context_bound_head
+            or linear_heads[-1] != current_workspace_head
+            or len(linear_heads) != len(set(linear_heads))
+            or not provider.is_ancestor(repository, selected_head, context_bound_head)
+            or not provider.is_ancestor(
+                repository, context_bound_head, current_workspace_head
+            )
+            or (
+                current_workspace_head != context_bound_head
+                and current_workspace_state != "clean"
+            )
         ):
             raise ManagedGitError(
                 "BRANCH_DIVERGED",
-                "failed workspace head is not bound to the rejected result",
+                "current workspace is not a clean descendant of the rejected result",
             )
-        if failed_workspace_head == successor_selected_head:
+        if current_workspace_head == successor_selected_head:
             return None
         branch_heads = provider.branch_heads(repository, str(branch))
         if (
             branch_heads.get(f"refs/remotes/origin/{branch}")
-            != failed_workspace_head
+            != current_workspace_head
             or branch_heads.get(f"refs/heads/{branch}")
             not in {None, successor_selected_head, selected_head}
         ):
@@ -5561,11 +5678,16 @@ class ManagedContinuityRuntime:
                 "BRANCH_DIVERGED",
                 "continued branch does not match the failed managed workspace",
             )
-        return BranchPublicationPredecessor(
-            assignment_id=str(source_assignment_id),
-            publication_id=str(publication_id),
-            selected_head=str(selected_head),
-            failed_workspace_head=failed_workspace_head,
+        return _DirtyContinuationProof(
+            predecessor=BranchPublicationPredecessor(
+                assignment_id=str(source_assignment_id),
+                publication_id=str(publication_id),
+                selected_head=str(selected_head),
+                failed_workspace_head=current_workspace_head,
+            ),
+            context_bound_head=context_bound_head,
+            current_workspace_head=current_workspace_head,
+            result_outcome=result_outcome,
         )
 
     def _prevalidate_dirty_continuation_predecessor(
@@ -5576,7 +5698,7 @@ class ManagedContinuityRuntime:
         source: Mapping[str, Any],
         *,
         successor_selected_head: str,
-    ) -> BranchPublicationPredecessor | None:
+    ) -> _DirtyContinuationProof | None:
         if (
             context.get("failure_scope") != "assignment"
             or context.get("reason_code") != "WORKSPACE_DIRTY"
@@ -5627,8 +5749,11 @@ class ManagedContinuityRuntime:
         ):
             raise RuntimeError("managed continuation publication proof is corrupt")
         provider = self.importer.provider_for_durable_repository(repository_record)
+        # The result verifier fetched the context-bound commit, but a publisher
+        # may have completed and pushed a clean evidence descendant afterwards.
+        # Refresh the same durable mirror before proving that exact remote head.
         repository = provider.ensure_mirror(
-            str(repository_record["repository_id"]), fetch=False
+            str(repository_record["repository_id"]), fetch=True
         )
         return self._authenticate_failed_workspace_predecessor(
             state,
@@ -5788,17 +5913,74 @@ class ManagedContinuityRuntime:
                 selected_head=str(frozen["selected_head"]),
                 failed_workspace_head=str(frozen["failed_workspace_head"]),
             )
-            if (
-                predecessor.assignment_id != source_assignment_id
-                or predecessor.publication_id != publication_id
-                or predecessor.selected_head != selected_head
-                or predecessor.failed_workspace_head == successor_selected_head
-                or not self._failed_head_matches_context(
+            verification_binding = evidence.get("result_verification_binding")
+            if verification_binding is None:
+                context_binding_valid = self._failed_head_matches_context(
                     state,
                     context,
                     source,
                     predecessor.failed_workspace_head,
                 )
+            else:
+                binding_keys = {
+                    "context_bound_head",
+                    "current_workspace_head",
+                    "result_outcome",
+                }
+                if (
+                    not isinstance(verification_binding, Mapping)
+                    or set(verification_binding) != binding_keys
+                    or not all(
+                        isinstance(verification_binding.get(key), str)
+                        for key in binding_keys
+                    )
+                ):
+                    raise RuntimeError(
+                        "managed continuation publication proof is corrupt"
+                    )
+                context_bound_head = str(
+                    verification_binding["context_bound_head"]
+                )
+                current_workspace_head = str(
+                    verification_binding["current_workspace_head"]
+                )
+                result_outcome = str(verification_binding["result_outcome"])
+                linear_heads = (
+                    (context_bound_head,)
+                    if context_bound_head == current_workspace_head
+                    else provider.bounded_linear_ancestry_path(
+                        repository,
+                        context_bound_head,
+                        current_workspace_head,
+                    )
+                )
+                if (
+                    not isinstance(linear_heads, tuple)
+                    or not linear_heads
+                    or linear_heads[0] != context_bound_head
+                    or linear_heads[-1] != current_workspace_head
+                    or len(linear_heads) != len(set(linear_heads))
+                ):
+                    raise RuntimeError(
+                        "managed continuation publication proof is corrupt"
+                    )
+                context_binding_valid = bool(
+                    current_workspace_head == predecessor.failed_workspace_head
+                    and linear_heads.count(context_bound_head) == 1
+                    and provider.is_ancestor(
+                        repository, predecessor.selected_head, context_bound_head
+                    )
+                    and self._context_result_binding(
+                        state, context, source, (context_bound_head,)
+                    )
+                    == (context_bound_head, result_outcome)
+                )
+            if (
+                predecessor.assignment_id != source_assignment_id
+                or predecessor.publication_id != publication_id
+                or predecessor.selected_head != selected_head
+                or predecessor.failed_workspace_head == successor_selected_head
+                or not context_binding_valid
                 or not provider.is_ancestor(
                     repository,
                     successor_selected_head,
