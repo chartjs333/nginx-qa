@@ -14,6 +14,7 @@ import re
 import urllib.parse
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
@@ -4048,6 +4049,186 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         tuple[Any, Any, tuple[Any, ...], Any], list[str]
     ] = {}
     valid_join_context_ids: set[str] = set()
+
+    def settled_assignment_repair_result_binding_valid(
+        context_id: str,
+        context: Mapping[str, Any],
+        assignment: Mapping[str, Any],
+        workspace: Mapping[str, Any] | None,
+    ) -> bool:
+        """Validate the one allowed post-context assignment result transition.
+
+        A result-verification context freezes the assignment before a receipt
+        exists, so its immutable ``result_commit`` is ``None``.  A completed,
+        assignment-scoped APPLY_REPAIR settles that context and permits the
+        *same* active assignment to submit its result again.  The receipt then
+        advances the assignment while the historical context must stay frozen.
+
+        Keep this exception fail closed: it is valid only when one completed
+        repair, its durable effect, and one accepted result all bind exactly to
+        the same context and assignment.
+        """
+
+        normalized_error = context.get("normalized_error")
+        assignment_id = assignment.get("assignment_id")
+        result_commit = assignment.get("result_commit")
+        outcome = assignment.get("outcome")
+        if (
+            context.get("failure_scope") != "assignment"
+            or context.get("result_commit") is not None
+            or not isinstance(normalized_error, Mapping)
+            or normalized_error.get("phase") != "RESULT_VERIFICATION"
+            or normalized_error.get("code") != context.get("reason_code")
+            or not isinstance(assignment_id, str)
+            or not isinstance(result_commit, str)
+            or not isinstance(outcome, str)
+            or outcome not in assignment.get("allowed_outcomes", [])
+            or not isinstance(workspace, Mapping)
+        ):
+            return False
+
+        matching_receipts = [
+            (result_key, receipt)
+            for result_key, receipt in receipt_by_key.items()
+            if receipt.get("assignment_id") == assignment_id
+        ]
+        if len(matching_receipts) != 1:
+            return False
+        result_key, receipt = matching_receipts[0]
+
+        def parse_timestamp(value: Any) -> datetime | None:
+            if not isinstance(value, str):
+                return None
+            normalized = (
+                value[:-1] + "+00:00"
+                if value[-1:] in {"Z", "z"}
+                else value
+            )
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError:
+                return None
+            if parsed.tzinfo is None:
+                return None
+            return parsed.astimezone(timezone.utc)
+
+        try:
+            expected_result_key = managed_result_key(
+                assignment_id, outcome, result_commit
+            )
+        except (TypeError, ValueError):
+            return False
+        result_response = receipt.get("response")
+        journal = journal_by_result.get(result_key)
+        if (
+            result_key != expected_result_key
+            or receipt.get("result_commit") != result_commit
+            or receipt.get("outcome") != outcome
+            or receipt.get("from_commit") != assignment.get("initial_head_commit")
+            or receipt.get("git_branch") != workspace.get("assigned_branch")
+            or not isinstance(result_response, Mapping)
+            or result_response.get("assignment_id") != assignment_id
+            or result_response.get("outcome") != outcome
+            or result_response.get("result_commit") != result_commit
+            or result_response.get("result_key") != result_key
+            or not isinstance(journal, Mapping)
+            or journal.get("assignment_id") != assignment_id
+            or journal.get("outcome") != outcome
+            or journal.get("result_commit") != result_commit
+        ):
+            return False
+
+        context_recoveries = [
+            recovery
+            for recovery in recovery_by_id.values()
+            if recovery.get("context_id") == context_id
+        ]
+        settled_recoveries = [
+            recovery
+            for recovery in context_recoveries
+            if recovery.get("status") == "completed"
+        ]
+        if len(settled_recoveries) != 1:
+            return False
+        recovery = settled_recoveries[0]
+        parameters = recovery.get("parameters")
+        request = (
+            parameters.get("request") if isinstance(parameters, Mapping) else None
+        )
+        if not isinstance(request, Mapping):
+            return False
+        matching_repairs = [
+            (repair_id, repair)
+            for repair_id, repair in repair_by_id.items()
+            if repair.get("from_revision") == request.get("expected_revision")
+            and repair.get("repair_source_commit")
+            == request.get("repair_source_commit")
+            and repair.get("idempotency_key") == request.get("idempotency_key")
+            and repair.get("patch") == request.get("patch")
+        ]
+        if len(matching_repairs) != 1:
+            return False
+        repair_id, repair = matching_repairs[0]
+        produced_ids = recovery.get("produced_record_ids")
+        recovery_response = recovery.get("response")
+        evidence = recovery.get("evidence")
+        recovery_revision = recovery.get("graph_revision")
+        repair_from_revision = repair.get("from_revision")
+        repair_to_revision = repair.get("to_revision")
+        recovery_completed_at = parse_timestamp(recovery.get("completed_at"))
+        result_accepted_at = parse_timestamp(receipt.get("accepted_at"))
+        try:
+            expected_recovery_fingerprint = recovery_request_fingerprint(
+                context_id,
+                recovery_revision,
+                "APPLY_REPAIR",
+                None,
+                assignment_id,
+                parameters,
+                None,
+            )
+            expected_repair_fingerprint = repair_request_fingerprint(
+                sprint_id,
+                request.get("expected_revision"),
+                request.get("repair_source_commit"),
+                request.get("patch"),
+            )
+        except (TypeError, ValueError):
+            return False
+        return bool(
+            recovery.get("status") == "completed"
+            and recovery.get("action") == "APPLY_REPAIR"
+            and recovery.get("assignment_id") == assignment_id
+            and recovery_revision == context.get("graph_revision")
+            and recovery.get("import_attempt_id") is None
+            and recovery.get("join_target") is None
+            and recovery.get("request_fingerprint")
+            == expected_recovery_fingerprint
+            and recovery.get("normalized_error") is None
+            and recovery_completed_at is not None
+            and result_accepted_at is not None
+            and result_accepted_at >= recovery_completed_at
+            and produced_ids == [repair_id]
+            and isinstance(recovery_response, Mapping)
+            and recovery_response.get("recovery_id")
+            == recovery.get("recovery_id")
+            and recovery_response.get("action") == "APPLY_REPAIR"
+            and recovery_response.get("status") == "RECOVERY_COMPLETED"
+            and recovery_response.get("produced_record_ids") == [repair_id]
+            and recovery_response.get("deduplicated") is False
+            and evidence
+            == {
+                "repair_id": repair_id,
+                "from_revision": repair_from_revision,
+                "to_revision": repair_to_revision,
+            }
+            and repair.get("request_fingerprint")
+            == expected_repair_fingerprint
+            and isinstance(repair_from_revision, int)
+            and not isinstance(repair_from_revision, bool)
+            and repair_to_revision == repair_from_revision + 1
+        )
+
     for context_id, context in coordinator_context_by_id.items():
         context_revision = context.get("graph_revision")
         import_attempt_id = context.get("import_attempt_id")
@@ -4068,6 +4249,22 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             if isinstance(failed_assignment, Mapping)
             else None
         )
+        assignment_result_binding_valid = bool(
+            isinstance(failed_assignment, Mapping)
+            and context.get("result_commit") == failed_assignment.get("result_commit")
+        )
+        normalized_error = context.get("normalized_error")
+        if (
+            isinstance(failed_assignment, Mapping)
+            and isinstance(normalized_error, Mapping)
+            and normalized_error.get("phase") == "RESULT_VERIFICATION"
+            and failed_assignment.get("result_commit") is not None
+        ):
+            assignment_result_binding_valid = (
+                settled_assignment_repair_result_binding_valid(
+                    context_id, context, failed_assignment, workspace
+                )
+            )
         join_target_valid = join_target is None
         if isinstance(join_target, Mapping):
             target_revision = join_target.get("target_graph_revision")
@@ -4301,8 +4498,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                     != workspace.get("assigned_branch")
                     or context.get("source_commit")
                     != failed_assignment.get("source_commit")
-                    or context.get("result_commit")
-                    != failed_assignment.get("result_commit")
+                    or not assignment_result_binding_valid
                 )
             )
         )

@@ -4427,11 +4427,21 @@ class ManagedContinuityTests(unittest.TestCase):
 
     def test_assignment_apply_repair_produces_only_the_repair_id(self) -> None:
         state = self.store.runtime_state("project-id", SPRINT_ID)
+        definition = state["graph_revisions"][0]["definition"]
+        definition["execution"]["max_rework_cycles"] = 0
+        state["graph_revisions"][0]["definition_sha256"] = hashlib.sha256(
+            canonical_json_bytes(definition)
+        ).hexdigest()
         context = self.add_assignment_coordinator_context(
             state,
             context_id="context-assignment-repair",
-            reason_code="CONFIGURATION_INVALID",
+            reason_code="WORKSPACE_DIRTY",
         )
+        context["normalized_error"] = {
+            "code": "WORKSPACE_DIRTY",
+            "phase": "RESULT_VERIFICATION",
+        }
+        context["failure_scope"] = "assignment"
         self.assertEqual(managed_activation_invariant_issues(state), ())
         self.replace_state(state)
         content = b"repair artifact\n"
@@ -4457,6 +4467,35 @@ class ManagedContinuityTests(unittest.TestCase):
         provider = Mock(unsafe=True)
         provider.ensure_mirror.return_value = object()
         provider.assert_commit.return_value = repair_commit
+        provider.read_blob.return_value = b"failed repair artifact\n"
+
+        failed_repair_request = deepcopy(repair_request)
+        failed_repair_request["idempotency_key"] = "assignment-repair-failed"
+        failed_request = {
+            "assignment_id": context["context_id"],
+            "idempotency_key": "assignment-recovery-failed",
+            "action": "APPLY_REPAIR",
+            "parameters": {"request": failed_repair_request},
+        }
+        with (
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            self.assertRaises(ManagedContinuityError) as failed_repair,
+        ):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(failed_request),
+                "assignment-repair-failed",
+            )
+        self.assertEqual(failed_repair.exception.code, "REPAIR_PATCH_CONFLICT")
+        failed_state = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(failed_state["recovery_records"][0]["status"], "failed")
+        self.assertEqual(managed_activation_invariant_issues(failed_state), ())
+
         provider.read_blob.return_value = content
 
         with patch.object(
@@ -4473,10 +4512,13 @@ class ManagedContinuityTests(unittest.TestCase):
         repair_id = recovered["repairs"][0]["repair_id"]
         self.assertEqual(completed.response["produced_record_ids"], [repair_id])
         self.assertEqual(
-            recovered["recovery_records"][0]["produced_record_ids"],
+            recovered["recovery_records"][1]["produced_record_ids"],
             [repair_id],
         )
-        self.assertEqual(recovered["recovery_records"][0]["status"], "completed")
+        self.assertEqual(
+            [item["status"] for item in recovered["recovery_records"]],
+            ["failed", "completed"],
+        )
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
 
         replay = self.runtime.submit_if_managed(
@@ -4487,6 +4529,91 @@ class ManagedContinuityTests(unittest.TestCase):
         )
         self.assertEqual(replay.response["produced_record_ids"], [repair_id])
         self.assertTrue(replay.response["deduplicated"])
+
+        accepted = self.submit_result()
+        self.assertEqual(accepted.response["status"], "REVIEWS_PENDING")
+        settled = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(settled["assignments"][0]["result_commit"], COMMIT)
+        self.assertEqual(settled["coordinator_contexts"][0]["result_commit"], None)
+        self.assertEqual(len(settled["result_receipts"]), 1)
+        self.assertEqual(managed_activation_invariant_issues(settled), ())
+
+        invalid_variants = {}
+        pending_recovery = deepcopy(settled)
+        pending_recovery["recovery_records"][1].update(
+            {
+                "status": "pending",
+                "produced_record_ids": [],
+                "response": None,
+                "normalized_error": None,
+                "evidence": {},
+                "completed_at": None,
+            }
+        )
+        invalid_variants["pending recovery"] = pending_recovery
+
+        failed_recovery = deepcopy(pending_recovery)
+        failed_recovery["recovery_records"][1].update(
+            {
+                "status": "failed",
+                "normalized_error": {"code": "REPAIR_PATCH_CONFLICT"},
+                "completed_at": TIMESTAMP,
+            }
+        )
+        invalid_variants["failed recovery"] = failed_recovery
+
+        wrong_action = deepcopy(settled)
+        wrong_action["recovery_records"][1]["action"] = "BLOCK_EXTERNAL"
+        invalid_variants["wrong recovery action"] = wrong_action
+
+        no_receipt = deepcopy(settled)
+        no_receipt["result_receipts"] = []
+        invalid_variants["missing result receipt"] = no_receipt
+
+        mismatched_receipt = deepcopy(settled)
+        mismatched_receipt["result_receipts"][0]["result_commit"] = "b" * 40
+        invalid_variants["mismatched result receipt"] = mismatched_receipt
+
+        tampered_context = deepcopy(settled)
+        tampered_context["coordinator_contexts"][0]["result_commit"] = COMMIT
+        invalid_variants["tampered immutable context"] = tampered_context
+
+        reordered_result = deepcopy(settled)
+        reordered_result["result_receipts"][0]["accepted_at"] = (
+            "2000-01-01T00:00:00+00:00"
+        )
+        invalid_variants["result predates completed repair"] = reordered_result
+
+        tampered_recovery_evidence = deepcopy(settled)
+        tampered_recovery_evidence["recovery_records"][1]["evidence"][
+            "repair_id"
+        ] = "repair-tampered"
+        invalid_variants["tampered repair evidence"] = tampered_recovery_evidence
+
+        for label, candidate in invalid_variants.items():
+            with self.subTest(label=label):
+                self.assertIn(
+                    "COORDINATOR_CONTEXT_BINDING_INVALID",
+                    managed_activation_invariant_issues(candidate),
+                )
+
+        review = settled["review_assignments"][0]
+        rejected = self.runtime.submit_if_managed(
+            "project-id",
+            review["reviewer_phone"],
+            canonical_json_bytes(
+                {
+                    "assignment_id": review["assignment_id"],
+                    "status": "REJECT",
+                    "feedback": "The repaired result exhausted the cycle limit",
+                }
+            ),
+            "assignment-repair-result-review-cap",
+        )
+        self.assertEqual(rejected.response["status"], "REWORK_ENQUEUED")
+        blocked = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(blocked["assignments"][0]["status"], "blocked")
+        self.assertEqual(managed_activation_invariant_issues(blocked), ())
 
     def test_pending_assignment_repair_resumes_existing_durable_repair(self) -> None:
         state = self.store.runtime_state("project-id", SPRINT_ID)
