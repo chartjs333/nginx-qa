@@ -4960,6 +4960,10 @@ class PromptArchiveIncremental:
         }
         observed: dict[tuple[str, str, str], dict[str, Any]] = {}
         digest_roles: dict[str, tuple[str, str]] = {}
+        control_children: dict[
+            tuple[str, str, str], list[Mapping[str, Any]]
+        ] = {}
+        deepest_expansion: dict[tuple[str, str, str], int] = {}
         active: set[tuple[str, str, str]] = set()
 
         def nested_refs(value: Any) -> Iterable[Mapping[str, Any]]:
@@ -4987,19 +4991,32 @@ class PromptArchiveIncremental:
             if previous is not None:
                 if previous != copied:
                     raise _error("PROMPT_ARCHIVE_INTEGRITY_MISMATCH")
-                return
-            if len(observed) >= self.storage.limits.max_referenced_objects:
-                raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
-            raw = self.storage.read_blob(copied)
-            observed[typed_key] = copied
+            else:
+                if len(observed) >= self.storage.limits.max_referenced_objects:
+                    raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+                raw = self.storage.read_blob(copied)
+                observed[typed_key] = copied
             logical_kind = typed_key[1]
             if logical_kind not in control_kinds:
                 return
+            # A typed CAS object is unique in the closure, but reference depth
+            # belongs to each incoming path.  Re-expand a shared control node
+            # whenever it is reached more deeply so a shallow first visit
+            # cannot hide a descendant beyond the fixed depth limit.  Parsed
+            # children remain cached; descriptor equality and role checks above
+            # still run for every incoming edge.
+            if deepest_expansion.get(typed_key, -1) >= depth:
+                return
             active.add(typed_key)
             try:
-                document = _load_canonical_control(raw)
-                for child in nested_refs(document):
+                children = control_children.get(typed_key)
+                if children is None:
+                    document = _load_canonical_control(raw)
+                    children = list(nested_refs(document))
+                    control_children[typed_key] = children
+                for child in children:
                     visit(child, depth + 1)
+                deepest_expansion[typed_key] = depth
             finally:
                 active.remove(typed_key)
 

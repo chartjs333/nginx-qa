@@ -607,6 +607,82 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
             ),
         )
 
+    def test_recovery_graph_verification_rejects_deep_shared_subtree_before_mutation(
+        self,
+    ) -> None:
+        runtime = self.registry(mode="authoritative").for_project(PROJECT_ID)
+        incremental = PromptArchiveIncremental(
+            runtime.storage,
+            PROJECT_ID,
+            SPRINT_ID,
+        )
+        refs: list[dict] = []
+        terminal_ref = runtime.storage.put_blob(
+            b"runtime-recovery-depth-terminal",
+            logical_kind="literal_chunk",
+            media_type=(
+                "application/vnd.nginx-qa.prompt-archive-json-fragment-v1"
+            ),
+        )
+        refs.append(terminal_ref)
+
+        def wrap(ref: dict, edge_count: int) -> dict:
+            wrapped = dict(ref)
+            for _index in range(edge_count):
+                wrapped = incremental._put_control(
+                    {"child_ref": wrapped},
+                    "json_value",
+                )
+                refs.append(wrapped)
+            return wrapped
+
+        shared = wrap(terminal_ref, 1)
+        deep_root = wrap(shared, 510)
+        manifest = {
+            "a_shallow": shared,
+            "z_deep": deep_root,
+            "integrity": {
+                "semantics": "native-byte-equality",
+                "hydrated_size": 0,
+                "hydrated_sha256": "0" * 64,
+            },
+            "legacy_comparison": None,
+        }
+        manifest_ref = incremental._put_control(manifest, "manifest")
+        refs.append(manifest_ref)
+        plan = {
+            "operation_kind": "native_publish",
+            "scope": {"sprint_id": SPRINT_ID},
+            "intended_manifest": {
+                "document": manifest,
+                "manifest_ref": manifest_ref,
+            },
+            # This is the complete unique typed closure.  The old traversal
+            # incorrectly accepted it after memoizing ``shared`` shallowly.
+            "planned_reachable_set": _reachable_set_document(tuple(refs)),
+        }
+        journal = {"state": "intent"}
+
+        def filesystem_snapshot() -> dict[str, bytes]:
+            return {
+                path.relative_to(self.root).as_posix(): path.read_bytes()
+                for path in self.root.rglob("*")
+                if path.is_file()
+            }
+
+        before = filesystem_snapshot()
+        with mock.patch.object(
+            runtime,
+            "_intended_pointer_is_published",
+            return_value=True,
+        ):
+            self.assert_code(
+                "PROMPT_ARCHIVE_LIMIT_EXCEEDED",
+                lambda: runtime._perform_state_action(plan, journal),
+            )
+
+        self.assertEqual(filesystem_snapshot(), before)
+
     def test_metadata_lookup_never_reads_leaf_closure_but_content_does(self) -> None:
         runtime = self.registry().for_project(PROJECT_ID)
         raw = (

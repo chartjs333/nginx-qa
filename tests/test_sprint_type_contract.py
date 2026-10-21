@@ -55,6 +55,7 @@ from tests.test_prompt_archive_contract import (
     archive_locator_fixture as contract_archive_locator_fixture,
     blob_fixture as contract_blob_fixture,
     blob_ref as contract_ref_fixture,
+    compact_response_fixture as contract_compact_response_fixture,
     descriptor_fixture as contract_descriptor_fixture,
     descriptor_stub_fixture as contract_descriptor_stub_fixture,
     envelope_fixture as contract_envelope_fixture,
@@ -66,11 +67,13 @@ from tests.test_prompt_archive_contract import (
     legacy_latest_journal_fixture as contract_legacy_latest_journal_fixture,
     legacy_latest_plan_fixture as contract_legacy_latest_plan_fixture,
     manifest_fixture as contract_manifest_fixture,
+    occurrence_document_fixture as contract_occurrence_document_fixture,
     pending_registry_example_fixture as contract_pending_registry_fixture,
     pointer_fixture as contract_pointer_fixture,
     record_fixture as contract_record_fixture,
     source_inventory_fixture as contract_source_inventory_fixture,
     source_metadata_fixture as contract_source_metadata_fixture,
+    state_view_fixture as contract_state_view_fixture,
 )
 
 
@@ -111,6 +114,7 @@ EXPECTED_SCHEMA_FILES = {
     "managed-runtime-state-v2.schema.json",
     "managed-workspace-sprint-v1.schema.json",
     "prompt-archive-blob-v1.schema.json",
+    "prompt-archive-compact-response-v1.schema.json",
     "prompt-archive-descriptor-v1.schema.json",
     "prompt-archive-error-v1.schema.json",
     "prompt-archive-envelope-v1.schema.json",
@@ -121,6 +125,16 @@ EXPECTED_SCHEMA_FILES = {
     "prompt-archive-latest-slot-v1.schema.json",
     "prompt-archive-locator-v1.schema.json",
     "prompt-archive-manifest-v1.schema.json",
+    "prompt-archive-migration-analysis-v1.schema.json",
+    "prompt-archive-migration-batch-journal-v1.schema.json",
+    "prompt-archive-migration-batch-plan-v1.schema.json",
+    "prompt-archive-migration-error-v1.schema.json",
+    "prompt-archive-migration-evidence-v1.schema.json",
+    "prompt-archive-migration-private-evidence-v1.schema.json",
+    "prompt-archive-migration-reconstruction-evidence-v1.schema.json",
+    "prompt-archive-migration-resume-evidence-v1.schema.json",
+    "prompt-archive-migration-verification-v1.schema.json",
+    "prompt-archive-occurrence-document-v1.schema.json",
     "prompt-archive-pending-operation-registry-v1.schema.json",
     "prompt-archive-pointer-v1.schema.json",
     "prompt-archive-publication-plan-v1.schema.json",
@@ -128,6 +142,7 @@ EXPECTED_SCHEMA_FILES = {
     "prompt-archive-ref-v1.schema.json",
     "prompt-archive-source-inventory-v1.schema.json",
     "prompt-archive-source-metadata-v1.schema.json",
+    "prompt-archive-state-view-v1.schema.json",
     "prompt-archive-descriptor-stub-v1.schema.json",
     "repair-sprint-response-v1.schema.json",
     "repair-sprint-v1.schema.json",
@@ -424,6 +439,329 @@ def prompt_archive_journal_fixture() -> dict:
         "state": "intent",
         "events": [{"state": "intent", "ordinal": 0, "occurred_at": TIMESTAMP}],
         "updated_at": TIMESTAMP,
+    }
+
+
+def prompt_archive_migration_schema_fixtures() -> dict[str, dict]:
+    """Small path-free positive examples for every offline migration schema."""
+
+    sha_a = "a" * 64
+    sha_b = "b" * 64
+    sha_c = "c" * 64
+    batch_id = "parmb1-" + sha_a
+    inventory_id = "parinv1-" + sha_b
+    entry_id = "parme1-" + sha_c
+    operation_id = "parop1-" + "d" * 32
+    response_id = "parresp1-" + "e" * 64
+    archive_id = "par1-" + "f" * 64
+    pointer_id = "parptr1-" + "1" * 64
+
+    public_inventory = {
+        "inventory_sha256": sha_a,
+        "entry_count": 1,
+        "source_root_identity_sha256": sha_b,
+        "safety_snapshot_sha256": sha_c,
+        "total_bytes": 2,
+    }
+    result = {
+        "entry_id": entry_id,
+        "ordinal": 0,
+        "operation_id": operation_id,
+        "response_id": response_id,
+        "archive_id": archive_id,
+        "pointer_id": pointer_id,
+        "source_byte_size": 2,
+        "source_sha256": sha_a,
+        "matched": True,
+    }
+    private_inventory = {
+        "source_root_identity": {
+            "identity_version": "prompt-archive-root-identity-v1",
+            "platform": "posix-dev-inode-v1",
+            "st_dev": "1",
+            "st_ino": "2",
+        },
+        "source_root_identity_sha256": sha_b,
+        "inventory_sha256": sha_a,
+        "safety_snapshot_sha256": sha_c,
+        "total_bytes": 2,
+        "entries": [
+            {
+                "relative_path": "latest-response.json",
+                "path_sha256": sha_b,
+                "byte_size": 2,
+                "sha256": sha_a,
+                "mtime_ns": 1,
+                "file_identity": {
+                    "identity_version": "prompt-archive-file-identity-v1",
+                    "platform": "posix-dev-inode-v1",
+                    "st_dev": "1",
+                    "st_ino": "3",
+                },
+                "identity_sha256": sha_c,
+                "link_count": 1,
+            }
+        ],
+    }
+
+    return {
+        "prompt-archive-migration-analysis-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_analysis",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "analyze",
+            "status": "ready",
+            "batch_id": batch_id,
+            "project_id": "project-id",
+            "contract_version": "prompt-archive-offline-migration-contract-v1",
+            "tool_version": "prompt-archive-migration-v1",
+            "tool_source_sha256": sha_a,
+            "inventory": {
+                "inventory_sha256": sha_a,
+                "safety_snapshot_sha256": sha_c,
+                "entry_count": 1,
+                "total_bytes": 2,
+                "selected_archive_count": 1,
+            },
+            "selected_archives": [
+                {
+                    "ordinal": 0,
+                    "path_sha256": sha_b,
+                    "source_byte_size": 2,
+                    "source_sha256": sha_a,
+                }
+            ],
+            "safety": {
+                "read_only": True,
+                "archive_root_opened": False,
+                "public_paths_persisted": False,
+                "originals_modified": False,
+            },
+        },
+        "prompt-archive-migration-batch-plan-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_batch_plan",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-batch-plan-v1+json"
+            ),
+            "id_algorithm": "PAS1-ID-v1",
+            "batch_id": batch_id,
+            "operation_kind": "offline_migration_batch",
+            "contract_version": "prompt-archive-offline-migration-contract-v1",
+            "tool_version": "prompt-archive-migration-v1",
+            "tool_source_sha256": sha_a,
+            "project_id": "project-id",
+            "sprint_id": None,
+            "source_root_handle_id": "isolated-fixture",
+            "operator_authorization": {
+                "gate": "prompt-archive-offline-migration-v1",
+                "principal_kind": "offline_operator",
+                "principal_id": "operator-1",
+                "scope_source": "offline_operator_gate",
+            },
+            "source_inventory": {
+                "locator_kind": "isolated_inventory",
+                "locator_version": "prompt-archive-isolated-inventory-locator-v1",
+                "inventory_id": inventory_id,
+                "inventory_format": "prompt-archive-isolated-inventory-v1",
+                "inventory_sha256": sha_a,
+                "entry_count": 1,
+                "inventory_ref": {
+                    "schema_version": 1,
+                    "kind": "prompt_archive_blob_ref",
+                    "hash_algorithm": "sha256",
+                    "digest": sha_a,
+                    "logical_kind": "source_inventory",
+                    "media_type": (
+                        "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
+                    ),
+                    "content_encoding": "identity",
+                    "uncompressed_size": 2,
+                    "stored_size": 2,
+                    "stored_sha256": sha_a,
+                },
+            },
+            "source_safety": {
+                "source_root_identity_sha256": sha_b,
+                "safety_snapshot_sha256": sha_c,
+                "total_bytes": 2,
+            },
+            "reservations": [
+                {
+                    "ordinal": 0,
+                    "entry_id": entry_id,
+                    "path_sha256": sha_b,
+                    "source_byte_size": 2,
+                    "source_sha256": sha_a,
+                    "operation_id": operation_id,
+                    "occurrence_id": "migration-" + sha_a,
+                    "response_id": response_id,
+                    "decision_occurrence_id": "decision-" + sha_b,
+                }
+            ],
+            "created_at": TIMESTAMP,
+        },
+        "prompt-archive-migration-batch-journal-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_batch_journal",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-batch-journal-v1+json"
+            ),
+            "id_algorithm": "PAS1-ID-v1",
+            "batch_id": batch_id,
+            "plan_sha256": sha_a,
+            "journal_generation": 0,
+            "previous_journal_generation": None,
+            "previous_journal_sha256": None,
+            "state": "planned",
+            "completed_entries": [],
+            "pre_inventory": copy.deepcopy(public_inventory),
+            "post_inventory": None,
+            "originals_preserved": True,
+            "created_at": TIMESTAMP,
+            "updated_at": TIMESTAMP,
+        },
+        "prompt-archive-migration-error-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_error",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "analyze",
+            "status": "failed",
+            "error": "PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID",
+            "message": "Prompt archive migration failed safely.",
+            "fail_closed": True,
+        },
+        "prompt-archive-migration-evidence-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_evidence",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "migrate",
+            "status": "complete",
+            "batch_id": batch_id,
+            "project_id": "project-id",
+            "sprint_id": None,
+            "contract_version": "prompt-archive-offline-migration-contract-v1",
+            "tool_version": "prompt-archive-migration-v1",
+            "tool_source_sha256": sha_a,
+            "plan_sha256": sha_b,
+            "source_inventory": {
+                "inventory_id": inventory_id,
+                "source_root_identity_sha256": sha_b,
+                "inventory_sha256": sha_a,
+                "entry_count": 1,
+                "selected_archive_count": 1,
+            },
+            "journal": {
+                "generation": 2,
+                "sha256": sha_c,
+                "state": "complete",
+                "pre_inventory": copy.deepcopy(public_inventory),
+                "post_inventory": copy.deepcopy(public_inventory),
+            },
+            "archives": [copy.deepcopy(result)],
+            "private_evidence": {"sha256": sha_c, "byte_size": 2},
+            "safety": {
+                "explicit_isolated_roots": True,
+                "public_paths_persisted": False,
+                "operator_gate_verified": True,
+                "originals_modified": False,
+                "originals_deleted": False,
+                "archive_gc_performed": False,
+                "live_rewrite_performed": False,
+            },
+            "created_at": TIMESTAMP,
+            "completed_at": TIMESTAMP,
+        },
+        "prompt-archive-migration-private-evidence-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_private_evidence",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-private-evidence-v1+json"
+            ),
+            "batch_id": batch_id,
+            "project_id": "project-id",
+            "source_root_handle_id": "isolated-fixture",
+            "inventory_id": inventory_id,
+            "pre": copy.deepcopy(private_inventory),
+            "post": copy.deepcopy(private_inventory),
+            "comparison": {
+                "entry_count": 1,
+                "paths_sizes_mtimes_hashes_identities_equal": True,
+                "originals_modified": False,
+                "originals_deleted": False,
+            },
+            "observed_at": TIMESTAMP,
+        },
+        "prompt-archive-migration-reconstruction-evidence-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_reconstruction_evidence",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "reconstruct",
+            "status": "verified",
+            "batch_id": batch_id,
+            "source_inventory_id": inventory_id,
+            "entry_count": 1,
+            "entries": [
+                {
+                    "entry_id": entry_id,
+                    "ordinal": 0,
+                    "response_id": response_id,
+                    "archive_id": archive_id,
+                    "source_byte_size": 2,
+                    "source_sha256": sha_a,
+                    "reconstructed_byte_size": 2,
+                    "reconstructed_sha256": sha_a,
+                    "matched": True,
+                    "journal_state": "complete",
+                }
+            ],
+            "raw_files_equal": True,
+            "public_paths_persisted": False,
+            "source_tree_opened": False,
+        },
+        "prompt-archive-migration-resume-evidence-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_operation_resume_evidence",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "resume-operation",
+            "status": "completed",
+            "batch_id": batch_id,
+            "entry_id": entry_id,
+            "operation_id": operation_id,
+            "response_id": response_id,
+            "archive_id": archive_id,
+            "pointer_id": pointer_id,
+            "source_byte_size": 2,
+            "source_sha256": sha_a,
+            "batch_completion_deferred_until_post_inventory": True,
+            "outer_journal_generation": 1,
+            "source_tree_opened": False,
+        },
+        "prompt-archive-migration-verification-v1.schema.json": {
+            "schema_version": 1,
+            "kind": "prompt_archive_migration_verification",
+            "media_type": (
+                "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"
+            ),
+            "command": "rollback-verify",
+            "status": "verified",
+            "batch_id": batch_id,
+            "migration_evidence_sha256": sha_a,
+            "private_evidence_sha256": sha_b,
+            "entry_count": 1,
+            "originals_equal": True,
+            "archives_readable": True,
+        },
     }
 
 
@@ -2081,13 +2419,24 @@ class SprintSchemaContractTests(unittest.TestCase):
             for path in sorted(SCHEMA_ROOT.glob("*.schema.json"))
         }
         registry = Registry()
-        for schema in cls.schemas.values():
+        for name, schema in cls.schemas.items():
+            resource = Resource.from_contents(schema)
             registry = registry.with_resource(
                 schema["$id"],
-                Resource.from_contents(schema),
+                resource,
+            )
+            registry = registry.with_resource(
+                "https://github.com/chartjs333/nginx-qa/schemas/" + name,
+                resource,
             )
         cls.registry = registry
         cls.schema_by_id = {schema["$id"]: schema for schema in cls.schemas.values()}
+        cls.schema_by_id.update(
+            {
+                "https://github.com/chartjs333/nginx-qa/schemas/" + name: schema
+                for name, schema in cls.schemas.items()
+            }
+        )
 
     def validator(self, filename: str) -> Draft202012Validator:
         return Draft202012Validator(
@@ -2785,6 +3134,13 @@ class SprintSchemaContractTests(unittest.TestCase):
             ),
             "prompt-archive-descriptor-v1.schema.json": contract_descriptor_fixture(),
             "prompt-archive-error-v1.schema.json": contract_error_fixture(),
+            "prompt-archive-compact-response-v1.schema.json": (
+                contract_compact_response_fixture()
+            ),
+            "prompt-archive-occurrence-document-v1.schema.json": (
+                contract_occurrence_document_fixture()
+            ),
+            "prompt-archive-state-view-v1.schema.json": contract_state_view_fixture(),
             "legacy-scope-amendment-v1.schema.json": {
                 "schema_version": 1,
                 "amendment_id": "ISC-S16-D01",
@@ -2897,6 +3253,7 @@ class SprintSchemaContractTests(unittest.TestCase):
             },
             "start-sprint-from-git-response-v1.schema.json": start_response_fixture(),
         }
+        cases.update(prompt_archive_migration_schema_fixtures())
         cases["legacy-scope-amendment-v2.schema.json"] = {
             **copy.deepcopy(cases["legacy-scope-amendment-v1.schema.json"]),
             "schema_version": 2,

@@ -174,6 +174,11 @@ class PromptArchiveNativeManifestTests(unittest.TestCase):
             )
         return wrapped
 
+    def reachable_manifest_ref(self, document: dict) -> dict:
+        """Store a minimal control root for direct reachable-closure tests."""
+
+        return self.archive._put_control(document, "manifest")
+
     def whole_document_current_plan(
         self,
         source: bytes,
@@ -1086,6 +1091,49 @@ class PromptArchiveNativeManifestTests(unittest.TestCase):
         )
 
         self.assertEqual(error.code, "PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+
+    def test_reachable_refs_accepts_reference_at_exact_depth_512(self) -> None:
+        _envelope_stream, terminal_ref = self.native_graph_depth_fixture()
+        # The manifest is depth 1; 510 wrappers put the terminal at depth 512.
+        root = self.wrap_native_graph_ref(terminal_ref, 510)
+        manifest_ref = self.reachable_manifest_ref({"root": root})
+
+        refs = self.archive.reachable_refs(manifest_ref)
+
+        self.assertEqual(len(refs), 512)
+        self.assertIn(terminal_ref, refs)
+
+    def test_reachable_refs_rechecks_shallow_first_shared_node_at_depth_513(
+        self,
+    ) -> None:
+        _envelope_stream, terminal_ref = self.native_graph_depth_fixture()
+        shared = self.wrap_native_graph_ref(terminal_ref, 1)
+        # Canonical key order visits ``a_shallow`` first.  The deep path then
+        # reaches ``shared`` at depth 512 and its terminal at forbidden 513.
+        deep_root = self.wrap_native_graph_ref(shared, 510)
+        manifest_ref = self.reachable_manifest_ref(
+            {"a_shallow": shared, "z_deep": deep_root}
+        )
+
+        error = self.assert_archive_error(
+            lambda: self.archive.reachable_refs(manifest_ref)
+        )
+
+        self.assertEqual(error.code, "PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+
+    def test_reachable_refs_accepts_benign_shared_dag_once(self) -> None:
+        _envelope_stream, terminal_ref = self.native_graph_depth_fixture()
+        shared = self.wrap_native_graph_ref(terminal_ref, 1)
+        deep_root = self.wrap_native_graph_ref(shared, 5)
+        manifest_ref = self.reachable_manifest_ref(
+            {"a_shallow": shared, "z_deep": deep_root}
+        )
+
+        refs = self.archive.reachable_refs(manifest_ref)
+
+        # manifest + terminal + shared + five unique deep-path wrappers.
+        self.assertEqual(len(refs), 8)
+        self.assertEqual(refs.count(shared), 1)
 
     def test_render_rejects_byte_equal_alternate_array_record_partition(self) -> None:
         source = self.response([1, 2])
