@@ -11,16 +11,21 @@
     "commit": "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc",
     "tree": "c8d171a65558884aac3e3fc283c48c038185346d",
     "branch": "agent/psc-06-qualification",
-    "worktree_clean_before": true,
-    "worktree_clean_after": true
+    "benchmark_worktree_clean_before": true,
+    "benchmark_worktree_clean_after": true,
+    "evidence_carrier_note": "These flags describe the exact candidate during benchmark capture. This adjudication is an evidence-only child and does not claim that its pre-commit worktree or resulting branch head equals the tested runtime commit."
   },
   "source_evidence": {
-    "filename": "psc-a05-a16-a17-evidence-54d9eb7-20261021T1601.json",
+    "original_filename": "psc-a05-a16-a17-evidence-54d9eb7-20261021T1601.json",
+    "durable_artifact": {
+      "path": "docs/evidence/prompt-storage-compaction-v1/psc-006-a05-a16-a17-benchmark.raw.json.base64",
+      "encoding": "base64 of the original bytes; ASCII whitespace in the carrier is ignored during decode",
+      "decoded_byte_size": 16163,
+      "decoded_sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1"
+    },
     "byte_size": 16163,
     "sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1",
     "duration_seconds": 29461.751633899985,
-    "stderr_bytes": 0,
-    "natural_exit_code": 2,
     "preservation": "The source JSON remains unchanged and is identified by byte SHA-256. This adjudication does not rewrite or relabel it."
   },
   "source_machine_result": {
@@ -57,7 +62,7 @@
     "original_false_predicate_value_preserved": true
   },
   "PSC-A05_evidence": {
-    "append_model": "65-record baseline followed by right-appends 66, 67, and 68",
+    "append_model": "65-record baseline; generation 66 pure right-append; generation 67 right-append plus moved unknown alias; generation 68 pure right-append",
     "checkpoint_depth": 12,
     "unknown_alias_depth": 16,
     "moved_alias_root_digest_reused_across_all_four_generations": true,
@@ -65,13 +70,18 @@
     "non_mutating_read_count": 7,
     "removed_path_count": 0,
     "temporary_artifact_count": 0,
-    "pure_append": {
+    "append_bound_transitions": {
+      "change_kinds": [
+        "right_append",
+        "right_append_plus_unknown_alias_move",
+        "right_append"
+      ],
       "new_object_counts": [93, 99, 93],
       "put_attempt_counts": [315, 587, 315],
       "cas_new_stored_bytes": [80502, 83550, 80887],
       "all_physical_written_bytes": [207922, 211240, 208307],
-      "cas_write_variation_ratio": 1.038,
-      "all_physical_write_variation_ratio": 1.016,
+      "cas_write_variation_ratio_across_append_bound_transitions": 1.038,
+      "all_physical_write_variation_ratio_across_append_bound_transitions": 1.016,
       "all_writes_below_baseline": true
     },
     "middle_cases": {
