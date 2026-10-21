@@ -5749,12 +5749,35 @@ class ManagedContinuityRuntime:
         ):
             raise RuntimeError("managed continuation publication proof is corrupt")
         provider = self.importer.provider_for_durable_repository(repository_record)
-        # The result verifier fetched the context-bound commit, but a publisher
-        # may have completed and pushed a clean evidence descendant afterwards.
-        # Refresh the same durable mirror before proving that exact remote head.
-        repository = provider.ensure_mirror(
-            str(repository_record["repository_id"]), fetch=True
-        )
+        repository_id = str(repository_record["repository_id"])
+        # Preserve the legacy exact-head recovery path when the origin is
+        # unavailable.  Result verification already fetched and authenticated
+        # the context-bound commit, so the durable mirror is sufficient for
+        # that case.  A later clean evidence descendant may only become
+        # visible after a refresh; retry narrowly for Git ancestry/ref failures.
+        repository = provider.ensure_mirror(repository_id, fetch=False)
+        try:
+            cached_proof = self._authenticate_failed_workspace_predecessor(
+                state,
+                context,
+                source,
+                source_workspace,
+                source_lease,
+                successor_selected_head=successor_selected_head,
+                provider=provider,
+                repository=repository,
+            )
+        except ManagedGitError as exc:
+            if exc.code not in {"SOURCE_COMMIT_NOT_FOUND", "BRANCH_DIVERGED"}:
+                raise
+        else:
+            if (
+                cached_proof is None
+                or cached_proof.context_bound_head
+                == cached_proof.current_workspace_head
+            ):
+                return cached_proof
+        repository = provider.ensure_mirror(repository_id, fetch=True)
         return self._authenticate_failed_workspace_predecessor(
             state,
             context,
@@ -5994,7 +6017,7 @@ class ManagedContinuityRuntime:
             ):
                 raise RuntimeError("managed continuation publication proof is corrupt")
             return predecessor
-        return self._authenticate_failed_workspace_predecessor(
+        proof = self._authenticate_failed_workspace_predecessor(
             state,
             context,
             source,
@@ -6004,6 +6027,7 @@ class ManagedContinuityRuntime:
             provider=provider,
             repository=repository,
         )
+        return proof.predecessor if proof is not None else None
 
     @staticmethod
     def _inbound_parent_ids(

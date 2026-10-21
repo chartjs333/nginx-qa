@@ -2604,6 +2604,16 @@ class ManagedContinuityTests(unittest.TestCase):
         )
         provider = Mock(unsafe=True)
         provider.ensure_mirror.return_value = object()
+        exact_repository = provider.ensure_mirror.return_value
+
+        def exact_head_mirror(_repository_id, *, fetch):
+            if fetch:
+                raise AssertionError(
+                    "exact context-bound recovery must not require origin access"
+                )
+            return exact_repository
+
+        provider.ensure_mirror.side_effect = exact_head_mirror
         workspace_manager = Mock(unsafe=True)
         workspace_manager.publish_write_workspace.return_value = (
             prepared.verified_workspace
@@ -2735,6 +2745,13 @@ class ManagedContinuityTests(unittest.TestCase):
                 canonical_json_bytes(request),
                 "continue-dirty",
             )
+        self.assertTrue(provider.ensure_mirror.call_args_list)
+        self.assertTrue(
+            all(
+                call.kwargs == {"fetch": False}
+                for call in provider.ensure_mirror.call_args_list
+            )
+        )
         recovered = self.store.runtime_state("project-id", SPRINT_ID)
         self.assertEqual(completed.response["status"], "RECOVERY_COMPLETED")
         self.assertEqual(recovered["assignments"][0]["status"], "failed")
@@ -2808,6 +2825,20 @@ class ManagedContinuityTests(unittest.TestCase):
         legacy_replay = deepcopy(recovered)
         legacy_recovery = legacy_replay["recovery_records"][0]
         legacy_recovery["evidence"].pop("publication_predecessor")
+        legacy_recovery["evidence"].pop("result_verification_binding")
+        workspace_manager.inspect_failed_write_workspace.side_effect = None
+        workspace_manager.inspect_failed_write_workspace.return_value = nullcontext(
+            failed_workspace
+        )
+        with patch.object(self.importer, "_workspace_manager", workspace_manager):
+            legacy_predecessor = self.runtime._continuation_publication_predecessor(
+                legacy_replay,
+                legacy_replay["assignments"][1],
+                legacy_replay["workspaces"][1],
+                provider=provider,
+                repository=exact_repository,
+            )
+        self.assertEqual(legacy_predecessor, predecessor)
         workspace_manager.inspect_failed_write_workspace.side_effect = WorkspaceError(
             "WORKSPACE_ROOT_MISMATCH", "failed workspace is unavailable"
         )
@@ -2848,6 +2879,23 @@ class ManagedContinuityTests(unittest.TestCase):
         workspace_manager = fixture["workspace_manager"]
         prepared = fixture["prepared"]
         request = fixture["request"]
+        stale_repository = object()
+        refreshed_repository = object()
+        provider.ensure_mirror.side_effect = (
+            lambda _repository_id, *, fetch: (
+                refreshed_repository if fetch else stale_repository
+            )
+        )
+
+        def descendant_ancestry(repository, _ancestor, _descendant):
+            if repository is stale_repository:
+                raise ManagedGitError(
+                    "SOURCE_COMMIT_NOT_FOUND",
+                    "clean descendant is not present in the durable mirror yet",
+                )
+            return True
+
+        provider.is_ancestor.side_effect = descendant_ancestry
         with (
             patch.object(self.runtime, "_prepare_assignment", return_value=prepared),
             patch.object(self.runtime, "_publish_prepared_assignment"),
@@ -2941,6 +2989,9 @@ class ManagedContinuityTests(unittest.TestCase):
             predecessor,
         )
         provider.ensure_mirror.assert_any_call(
+            fixture["staged"]["repository"]["repository_id"], fetch=False
+        )
+        provider.ensure_mirror.assert_any_call(
             fixture["staged"]["repository"]["repository_id"], fetch=True
         )
         for field, value in (
@@ -2962,6 +3013,71 @@ class ManagedContinuityTests(unittest.TestCase):
                         repository=provider.ensure_mirror.return_value,
                     )
         self.assertEqual(managed_activation_invariant_issues(recovered), ())
+
+    def test_dirty_result_descendant_refresh_rejects_remote_advance(self) -> None:
+        fixture = self.stage_dirty_descendant_recovery()
+        provider = fixture["provider"]
+        workspace_manager = fixture["workspace_manager"]
+        cached_repository = object()
+        refreshed_repository = object()
+        provider.ensure_mirror.side_effect = (
+            lambda _repository_id, *, fetch: (
+                refreshed_repository if fetch else cached_repository
+            )
+        )
+        provider.is_ancestor.return_value = True
+        workspace_manager.inspect_failed_write_workspace.side_effect = (
+            lambda *_args, **_kwargs: nullcontext(fixture["failed_workspace"])
+        )
+        branch = fixture["branch"]
+
+        def branch_heads(repository, _branch):
+            return {
+                f"refs/heads/{branch}": fixture["predecessor_initial"],
+                f"refs/remotes/origin/{branch}": (
+                    fixture["current_workspace_head"]
+                    if repository is cached_repository
+                    else "f" * 40
+                ),
+            }
+
+        provider.branch_heads.side_effect = branch_heads
+        request = deepcopy(fixture["request"])
+        request["idempotency_key"] = "continue-dirty-refreshed-origin-advanced"
+        before = canonical_json_bytes(
+            self.store.runtime_state("project-id", SPRINT_ID)
+        )
+        with (
+            patch.object(
+                self.importer,
+                "provider_for_durable_repository",
+                return_value=provider,
+            ),
+            patch.object(
+                self.importer,
+                "_workspace_manager",
+                workspace_manager,
+            ),
+            self.assertRaises(ManagedContinuityError) as caught,
+        ):
+            self.runtime.submit_if_managed(
+                "project-id",
+                "2860",
+                canonical_json_bytes(request),
+                "continue-dirty-refreshed-origin-advanced",
+            )
+
+        self.assertEqual(caught.exception.code, RECOVERY_CONFLICT)
+        self.assertEqual(caught.exception.http_status, 409)
+        provider.ensure_mirror.assert_any_call(
+            fixture["staged"]["repository"]["repository_id"], fetch=False
+        )
+        provider.ensure_mirror.assert_any_call(
+            fixture["staged"]["repository"]["repository_id"], fetch=True
+        )
+        after = self.store.runtime_state("project-id", SPRINT_ID)
+        self.assertEqual(canonical_json_bytes(after), before)
+        self.assertEqual(after["recovery_records"], [])
 
     def test_dirty_result_descendant_recovery_rejects_unproven_heads(self) -> None:
         fixture = self.stage_dirty_descendant_recovery()
