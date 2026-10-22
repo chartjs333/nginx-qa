@@ -18,27 +18,35 @@ The public workflow is:
 * ``verify`` checks the canonical payload hash and detached exact-byte hash.
 
 No command deletes an existing artifact.  Run roots must be outside the Git
-workspace and outside every configured forbidden/live root.
+workspace and outside every required named protected/live root.
 """
 
 from __future__ import annotations
 
 import argparse
+import builtins
+import codecs
 import contextlib
 import copy
+import ctypes
+import functools
 import hashlib
 import importlib
 import importlib.metadata
 import inspect
+import io
 import json
 import ntpath
 import os
 import pathlib
 import platform
 import re
+import secrets
 import shutil
+import stat
 import subprocess
 import sys
+import threading
 import time
 import traceback
 import unittest
@@ -52,6 +60,7 @@ PLAN_KIND = "psc_qualification_plan"
 WORKER_KIND = "psc_qualification_worker_result"
 START_KIND = "psc_qualification_worker_start"
 CONTROLLER_KIND = "psc_qualification_controller_receipt"
+ABANDONMENT_KIND = "psc_qualification_attempt_abandonment"
 LEDGER_KIND = "psc_exact_head_qualification_ledger"
 CANONICALIZATION = "python-json-sort-keys-utf8-v1"
 RUNNER_RELATIVE_PATH = "tools/run_psc_qualification.py"
@@ -73,7 +82,71 @@ SECRET_PATTERN = re.compile(
     r"\s*[:=]\s*[^\s,;]{4,}"
 )
 HEX_40_OR_64 = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
-BUILTIN_FORBIDDEN_ROOTS = (r"D:\Prompt",)
+BUILTIN_PROTECTED_ROOTS = {"live_prompt": r"D:\Prompt"}
+REQUIRED_PROTECTED_ROOT_LABELS = frozenset(
+    {
+        "live_prompt",
+        "service_root",
+        "service_state",
+        "service_runtime",
+        "service_prompt",
+    }
+)
+ROOT_LABEL_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$", re.ASCII)
+LOCAL_DRIVE_PATH_RE = re.compile(r"^[A-Za-z]:[\\/]", re.ASCII)
+RESERVED_WINDOWS_COMPONENT_RE = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$",
+    re.ASCII | re.IGNORECASE,
+)
+PATH_AUDIT_EVENT_PATH_INDICES = {
+    "open": (0,),
+    "os.listdir": (0,),
+    "os.scandir": (0,),
+    "os.stat": (0,),
+    "os.remove": (0,),
+    "os.rename": (0, 1),
+    "os.replace": (0, 1),
+    "os.rmdir": (0,),
+    "os.mkdir": (0,),
+    "os.chdir": (0,),
+    "os.chmod": (0,),
+    "os.utime": (0,),
+    "os.link": (0, 1),
+    "os.symlink": (0, 1),
+    "os.truncate": (0,),
+}
+PATH_AUDIT_EVENT_DIR_FD_INDICES = {
+    "os.remove": (1,),
+    "os.rename": (2, 3),
+    "os.rmdir": (1,),
+    "os.mkdir": (2,),
+    "os.chmod": (2,),
+    "os.utime": (3,),
+    "os.link": (2, 3),
+    "os.symlink": (2,),
+}
+NATIVE_GUARD_ENTRYPOINTS = (
+    (
+        "nginx_qa.prompt_archive_storage",
+        "_windows_open_pinned_directory",
+        "prompt_archive_storage.CreateFileW",
+    ),
+    (
+        "nginx_qa.prompt_archive_occurrence_store",
+        "_windows_open_pinned_directory",
+        "prompt_archive_occurrence_store.CreateFileW",
+    ),
+    (
+        "nginx_qa.prompt_archive_migration",
+        "_windows_open_pinned_directory",
+        "prompt_archive_migration.CreateFileW",
+    ),
+    (
+        "nginx_qa.prompt_archive_incremental",
+        "_allocated_size",
+        "prompt_archive_incremental.GetCompressedFileSizeW",
+    ),
+)
 
 
 class QualificationError(RuntimeError):
@@ -114,6 +187,7 @@ def _canonical_json_bytes(value: Any) -> bytes:
 
 def _read_bytes(path: pathlib.Path) -> bytes:
     try:
+        _assert_existing_chain_not_redirected(path)
         return path.read_bytes()
     except (OSError, ValueError) as exc:
         raise QualificationError("PSC_QUALIFICATION_ARTIFACT_UNREADABLE") from exc
@@ -129,28 +203,110 @@ def _read_json(path: pathlib.Path) -> dict[str, Any]:
     return value
 
 
-def _write_immutable(path: pathlib.Path, data: bytes) -> None:
-    """Create one artifact without overwriting an existing byte sequence."""
+def _fsync_directory(path: pathlib.Path) -> None:
+    if os.name == "nt":
+        # Windows publication below uses MOVEFILE_WRITE_THROUGH, which flushes
+        # the same-directory move before returning.
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
+
+def _publish_temp_no_replace(temp_path: pathlib.Path, final_path: pathlib.Path) -> None:
+    """Atomically publish a complete same-directory temp without overwrite."""
+
+    if os.name == "nt":
+        from ctypes import wintypes
+
+        move = ctypes.WinDLL("kernel32", use_last_error=True).MoveFileExW
+        move.argtypes = (wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD)
+        move.restype = wintypes.BOOL
+        if not move(str(temp_path), str(final_path), 0x00000008):
+            error = ctypes.get_last_error()
+            if error in {80, 183}:
+                raise FileExistsError(error, "destination exists", str(final_path))
+            raise OSError(error, "MOVEFILE_WRITE_THROUGH failed", str(final_path))
+        return
+    os.link(temp_path, final_path, follow_symlinks=False)
+    _fsync_directory(final_path.parent)
+    os.unlink(temp_path)
+    _fsync_directory(final_path.parent)
+
+
+def _read_existing_immutable(path: pathlib.Path) -> bytes | None:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise QualificationError("PSC_QUALIFICATION_ARTIFACT_UNREADABLE") from exc
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or bool(getattr(metadata, "st_file_attributes", 0) & 0x400)
+    ):
+        raise QualificationError("PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT")
+    return _read_bytes(path)
+
+
+def _immutable_exists(path: pathlib.Path) -> bool:
+    return _read_existing_immutable(path) is not None
+
+
+def _write_immutable(path: pathlib.Path, data: bytes) -> None:
+    """Crash-safely publish one immutable artifact without partial finals."""
+
+    _assert_existing_chain_not_redirected(path.parent)
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        if _read_bytes(path) == data:
+    _assert_existing_chain_not_redirected(path.parent)
+    existing = _read_existing_immutable(path)
+    if existing is not None:
+        if existing == data:
             return
         raise QualificationError(
             "PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT", path.name
         )
+    temp_path = path.parent / (
+        f".{path.name}.psc-owned-{os.getpid()}-{secrets.token_hex(16)}.tmp"
+    )
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    descriptor: int | None = None
+    published = False
     try:
-        with path.open("xb") as handle:
+        descriptor = os.open(temp_path, flags, 0o600)
+        with os.fdopen(descriptor, "wb") as handle:
+            descriptor = None
             handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
-    except FileExistsError:
-        if _read_bytes(path) != data:
-            raise QualificationError(
-                "PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT", path.name
-            ) from None
+        try:
+            _publish_temp_no_replace(temp_path, path)
+            published = True
+        except FileExistsError:
+            if _read_existing_immutable(path) != data:
+                raise QualificationError(
+                    "PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT", path.name
+                ) from None
+        if _read_existing_immutable(path) != data:
+            raise QualificationError("PSC_QUALIFICATION_ARTIFACT_VERIFY_FAILED")
+    except QualificationError:
+        raise
     except OSError as exc:
         raise QualificationError("PSC_QUALIFICATION_ARTIFACT_WRITE_FAILED") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if not published:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 def _with_integrity(document: Mapping[str, Any]) -> dict[str, Any]:
@@ -187,6 +343,62 @@ def _write_json(path: pathlib.Path, document: Mapping[str, Any]) -> dict[str, An
     return bound
 
 
+@contextlib.contextmanager
+def _run_key_lease(run_root: pathlib.Path, run_key: str):
+    """Hold an OS-enforced exclusive controller lease for one run key."""
+
+    if re.fullmatch(r"[0-9a-f]{64}", run_key) is None:
+        raise QualificationError("PSC_QUALIFICATION_RUN_KEY_INVALID")
+    lease_root = run_root / ".leases"
+    lease_root.mkdir(parents=True, exist_ok=True)
+    _assert_existing_chain_not_redirected(lease_root)
+    lease_path = lease_root / f"{run_key}.lock"
+    try:
+        handle = lease_path.open("a+b")
+    except OSError as exc:
+        raise QualificationError("PSC_QUALIFICATION_RUN_KEY_LEASE_FAILED") from exc
+    owner_id = secrets.token_hex(16)
+    locked = False
+    try:
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+            os.fsync(handle.fileno())
+        handle.seek(0)
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:  # pragma: no cover - qualification currently runs on Windows
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            locked = True
+        except OSError as exc:
+            raise QualificationError("PSC_QUALIFICATION_RUN_KEY_BUSY") from exc
+        yield {
+            "mechanism": "msvcrt_byte_range" if os.name == "nt" else "flock",
+            "owner_id": owner_id,
+        }
+    finally:
+        if locked:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:  # pragma: no cover - qualification currently runs on Windows
+                    import fcntl
+
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
+
+
 def _require_exact_keys(
     value: Mapping[str, Any], required: set[str], *, code: str
 ) -> None:
@@ -218,7 +430,9 @@ def _load_selector(path: pathlib.Path) -> dict[str, Any]:
             "isolation_policy_version",
             "expected_unique_test_count",
             "expected_test_ids_sha256",
-            "default_forbidden_roots",
+            "required_protected_root_labels",
+            "builtin_protected_roots",
+            "coverage_partitions",
             "categories",
             "priority_test_ids",
             "singleton_modules",
@@ -243,16 +457,15 @@ def _load_selector(path: pathlib.Path) -> dict[str, Any]:
         r"[0-9a-f]{64}", str(selector["expected_test_ids_sha256"])
     ):
         raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
-    _string_list(
-        selector["default_forbidden_roots"],
+    protected_labels = _string_list(
+        selector["required_protected_root_labels"],
         code="PSC_QUALIFICATION_SELECTOR_INVALID",
     )
-    if any(
-        not any(
-            _path_key_lexical(configured) == _path_key_lexical(required)
-            for configured in selector["default_forbidden_roots"]
-        )
-        for required in BUILTIN_FORBIDDEN_ROOTS
+    builtin_roots = selector["builtin_protected_roots"]
+    if (
+        set(protected_labels) != REQUIRED_PROTECTED_ROOT_LABELS
+        or type(builtin_roots) is not dict
+        or builtin_roots != BUILTIN_PROTECTED_ROOTS
     ):
         raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
     priorities = _string_list(
@@ -302,6 +515,42 @@ def _load_selector(path: pathlib.Path) -> dict[str, Any]:
     ):
         raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
     if any(module not in modules for module in singletons):
+        raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
+
+    partitions = selector["coverage_partitions"]
+    if type(partitions) is not dict or set(partitions) != {
+        "psc_a15_regression",
+        "qualification_tooling_preflight",
+    }:
+        raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
+    partition_categories: list[str] = []
+    for partition in partitions.values():
+        if type(partition) is not dict:
+            raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
+        _require_exact_keys(
+            partition,
+            {
+                "category_ids",
+                "expected_unique_test_count",
+                "expected_test_ids_sha256",
+            },
+            code="PSC_QUALIFICATION_SELECTOR_INVALID",
+        )
+        mapped = _string_list(
+            partition["category_ids"], code="PSC_QUALIFICATION_SELECTOR_INVALID"
+        )
+        if (
+            any(item not in category_ids for item in mapped)
+            or type(partition["expected_unique_test_count"]) is not int
+            or partition["expected_unique_test_count"] <= 0
+            or re.fullmatch(
+                r"[0-9a-f]{64}", str(partition["expected_test_ids_sha256"])
+            )
+            is None
+        ):
+            raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
+        partition_categories.extend(mapped)
+    if sorted(partition_categories) != sorted(category_ids):
         raise QualificationError("PSC_QUALIFICATION_SELECTOR_INVALID")
 
     pass_policy = selector["pass_policy"]
@@ -606,7 +855,32 @@ def _collect_owned_tests(
     return tests, category_results, loader_errors
 
 
+def _coverage_partition_results(
+    selector: Mapping[str, Any], tests: Sequence[Mapping[str, str]]
+) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for partition_id, specification in selector["coverage_partitions"].items():
+        categories = set(specification["category_ids"])
+        ids = sorted(item["id"] for item in tests if item["category"] in categories)
+        digest = _sha256(
+            "".join(f"{test_id}\n" for test_id in ids).encode("utf-8")
+        )
+        if (
+            len(ids) != specification["expected_unique_test_count"]
+            or digest != specification["expected_test_ids_sha256"]
+        ):
+            raise QualificationError("PSC_QUALIFICATION_PARTITION_MISMATCH")
+        results[partition_id] = {
+            "category_ids": specification["category_ids"],
+            "unique_test_count": len(ids),
+            "test_ids_sha256": digest,
+        }
+    return results
+
+
 def _path_key_lexical(value: str) -> tuple[str, str]:
+    """Compatibility helper for component-boundary comparisons in tests."""
+
     if not value or "\x00" in value:
         raise QualificationError("PSC_QUALIFICATION_PATH_INVALID")
     if re.match(r"^(?:[A-Za-z]:[\\/]|\\\\)", value):
@@ -619,103 +893,592 @@ def _path_key_lexical(value: str) -> tuple[str, str]:
 def _lexically_within(path_value: str, root_value: str) -> bool:
     path, separator = _path_key_lexical(path_value)
     root, root_separator = _path_key_lexical(root_value)
-    if separator != root_separator:
-        return False
-    return path == root or path.startswith(root + separator)
+    return separator == root_separator and (
+        path == root or path.startswith(root + separator)
+    )
+
+
+def _strict_local_windows_path(value: str | os.PathLike[str]) -> str:
+    try:
+        raw = os.fsdecode(os.fspath(value))
+    except (TypeError, ValueError, UnicodeError):
+        raise QualificationError("PSC_QUALIFICATION_PATH_INVALID") from None
+    if (
+        not raw
+        or "\x00" in raw
+        or LOCAL_DRIVE_PATH_RE.match(raw) is None
+        or raw.startswith(("\\\\", "\\?\\", "\\.\\"))
+    ):
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    drive, tail = ntpath.splitdrive(raw)
+    if len(drive) != 2 or drive[1] != ":" or not tail.startswith(("\\", "/")):
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    for component in re.split(r"[\\/]+", tail):
+        if not component:
+            continue
+        if (
+            component.endswith((" ", "."))
+            or ":" in component
+            or "~" in component
+            or "*" in component
+            or "?" in component
+            or RESERVED_WINDOWS_COMPONENT_RE.fullmatch(component) is not None
+        ):
+            raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    normalized = ntpath.normcase(ntpath.normpath(raw))
+    return normalized if normalized.endswith(":\\") else normalized.rstrip("\\")
+
+
+def _query_dos_device(drive: str) -> str:
+    if os.name != "nt":
+        raise QualificationError("PSC_QUALIFICATION_WINDOWS_REQUIRED")
+    from ctypes import wintypes
+
+    query = ctypes.WinDLL("kernel32", use_last_error=True).QueryDosDeviceW
+    query.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    query.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(32_768)
+    if query(drive.upper(), buffer, len(buffer)) == 0:
+        raise QualificationError("PSC_QUALIFICATION_PATH_DEVICE_QUERY_FAILED")
+    return buffer.value
+
+
+def _device_lexical_windows_path(
+    value: str | os.PathLike[str],
+    *,
+    device_query=_query_dos_device,
+    _depth: int = 0,
+) -> str:
+    if _depth > 8:
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    local = _strict_local_windows_path(value)
+    drive, tail = ntpath.splitdrive(local)
+    mapping = device_query(drive)
+    folded = mapping.casefold()
+    if any(
+        marker in folded
+        for marker in ("\\device\\mup", "lanmanredirector", "webdavredirector")
+    ):
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    if mapping.startswith("\\??\\"):
+        target = mapping[4:]
+        if LOCAL_DRIVE_PATH_RE.match(target):
+            return _device_lexical_windows_path(
+                ntpath.join(target, tail.lstrip("\\/")),
+                device_query=device_query,
+                _depth=_depth + 1,
+            )
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    if not folded.startswith("\\device\\"):
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    return ntpath.normcase(mapping.rstrip("\\") + "\\" + tail.lstrip("\\/"))
+
+
+def _under(candidate: str, root: str) -> bool:
+    return candidate == root or candidate.startswith(root + "\\")
+
+
+def _path_forms(
+    value: str | os.PathLike[str], *, device_query=_query_dos_device
+) -> dict[str, str]:
+    lexical = _strict_local_windows_path(value)
+    return {
+        "lexical_path": lexical,
+        "device_path": _device_lexical_windows_path(
+            lexical, device_query=device_query
+        ),
+    }
+
+
+def _forms_overlap(first: Mapping[str, str], second: Mapping[str, str]) -> bool:
+    return any(
+        _under(first[key], second[key]) or _under(second[key], first[key])
+        for key in ("lexical_path", "device_path")
+    )
+
+
+def _parse_protected_roots(
+    values: Sequence[str], *, device_query=_query_dos_device
+) -> tuple[dict[str, str], ...]:
+    parsed = dict(BUILTIN_PROTECTED_ROOTS)
+    for value in values:
+        if type(value) is not str or "=" not in value:
+            raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_INVALID")
+        label, raw_path = value.split("=", 1)
+        if ROOT_LABEL_RE.fullmatch(label) is None or label in parsed:
+            raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_INVALID")
+        parsed[label] = _strict_local_windows_path(raw_path)
+    if set(parsed) != REQUIRED_PROTECTED_ROOT_LABELS:
+        raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_SET_INCOMPLETE")
+    roots = tuple(
+        {
+            "label": label,
+            **_path_forms(path, device_query=device_query),
+        }
+        for label, path in sorted(parsed.items())
+    )
+    identities = [
+        (item["lexical_path"], item["device_path"]) for item in roots
+    ]
+    if len(identities) != len(set(identities)):
+        raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_INVALID")
+    return roots
+
+
+def _coerce_root_forms(
+    roots: Sequence[Any], *, device_query=_query_dos_device
+) -> tuple[dict[str, str], ...]:
+    result: list[dict[str, str]] = []
+    for index, root in enumerate(roots):
+        if type(root) is dict and {
+            "label",
+            "lexical_path",
+            "device_path",
+        }.issubset(root):
+            result.append(
+                {
+                    "label": str(root["label"]),
+                    "lexical_path": str(root["lexical_path"]),
+                    "device_path": str(root["device_path"]),
+                }
+            )
+        else:
+            result.append(
+                {
+                    "label": f"legacy_{index}",
+                    **_path_forms(str(root), device_query=device_query),
+                }
+            )
+    return tuple(result)
+
+
+def _assert_existing_chain_not_redirected(
+    path: pathlib.Path, *, lstat_function=None
+) -> None:
+    if lstat_function is None:
+        lstat_function = os.lstat
+    local = _strict_local_windows_path(path)
+    drive, tail = ntpath.splitdrive(local)
+    current = pathlib.Path(drive + "\\")
+    chain = [current]
+    for component in (item for item in tail.split("\\") if item):
+        current = current / component
+        chain.append(current)
+    for index, item in enumerate(chain):
+        try:
+            metadata = lstat_function(item)
+        except FileNotFoundError:
+            if index == 0:
+                raise QualificationError("PSC_QUALIFICATION_PATH_PARENT_UNAVAILABLE")
+            return
+        except OSError:
+            raise QualificationError(
+                "PSC_QUALIFICATION_PATH_PARENT_UNAVAILABLE"
+            ) from None
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+            getattr(metadata, "st_file_attributes", 0) & 0x400
+        ):
+            raise QualificationError("PSC_QUALIFICATION_PATH_REDIRECTED")
+
+
+def _validate_path_isolation(
+    run_root: pathlib.Path,
+    workspace: pathlib.Path,
+    protected_roots: Sequence[Any],
+    *,
+    device_query=_query_dos_device,
+    inspect_existing: bool = True,
+) -> tuple[dict[str, str], tuple[dict[str, str], ...]]:
+    protected = _coerce_root_forms(protected_roots, device_query=device_query)
+    run = _path_forms(run_root, device_query=device_query)
+    work = _path_forms(workspace, device_query=device_query)
+    if _forms_overlap(run, work) or any(
+        _forms_overlap(run, root) for root in protected
+    ):
+        raise QualificationError("PSC_QUALIFICATION_RUN_ROOT_OVERLAP")
+    # The managed workspace is an explicit allowed subtree.  It may live
+    # below service_root, but never below live prompt/state/runtime/prompt.
+    for root in protected:
+        overlaps = _forms_overlap(work, root)
+        workspace_is_below = all(
+            _under(work[key], root[key]) for key in ("lexical_path", "device_path")
+        )
+        if overlaps and (
+            root["label"] != "service_root" or not workspace_is_below
+        ):
+            raise QualificationError("PSC_QUALIFICATION_WORKSPACE_OVERLAP")
+    if inspect_existing:
+        _assert_existing_chain_not_redirected(workspace)
+        _assert_existing_chain_not_redirected(run_root.parent)
+        try:
+            os.lstat(run_root)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise QualificationError(
+                "PSC_QUALIFICATION_PATH_PARENT_UNAVAILABLE"
+            ) from None
+        else:
+            _assert_existing_chain_not_redirected(run_root)
+    return work, protected
 
 
 def _validate_run_root(
     run_root: pathlib.Path,
     workspace: pathlib.Path,
-    forbidden_roots: Sequence[str],
+    protected_roots: Sequence[Any],
 ) -> None:
-    run_value = str(run_root.absolute())
-    workspace_value = str(workspace.absolute())
-    if _lexically_within(run_value, workspace_value) or _lexically_within(
-        workspace_value, run_value
-    ):
-        raise QualificationError("PSC_QUALIFICATION_RUN_ROOT_OVERLAP")
-    for forbidden in forbidden_roots:
-        if _lexically_within(run_value, forbidden) or _lexically_within(
-            forbidden, run_value
+    _validate_path_isolation(run_root, workspace, protected_roots)
+
+
+def _reject_protected_path(
+    path: pathlib.Path,
+    protected_roots: Sequence[Any],
+    *,
+    device_query=_query_dos_device,
+) -> None:
+    candidate = _path_forms(path, device_query=device_query)
+    for root in _coerce_root_forms(protected_roots, device_query=device_query):
+        if any(
+            _under(candidate[key], root[key])
+            for key in ("lexical_path", "device_path")
         ):
-            raise QualificationError("PSC_QUALIFICATION_RUN_ROOT_OVERLAP")
+            raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_ACCESS")
 
 
-def _reject_forbidden_path(path: pathlib.Path, forbidden_roots: Sequence[str]) -> None:
-    path_value = str(path.absolute())
-    if any(_lexically_within(path_value, root) for root in forbidden_roots):
-        raise QualificationError("PSC_QUALIFICATION_FORBIDDEN_ROOT_ACCESS")
+def _reject_forbidden_path(path: pathlib.Path, roots: Sequence[Any]) -> None:
+    """Backward-compatible alias with hardened lexical/device semantics."""
+
+    _reject_protected_path(path, roots)
 
 
 def _require_path_below(path: pathlib.Path, root: pathlib.Path) -> None:
-    if path.absolute() == root.absolute() or not _lexically_within(
-        str(path.absolute()), str(root.absolute())
-    ):
+    candidate = _strict_local_windows_path(path.absolute())
+    boundary = _strict_local_windows_path(root.absolute())
+    if candidate == boundary or not _under(candidate, boundary):
         raise QualificationError("PSC_QUALIFICATION_OUTPUT_OUTSIDE_RUN_ROOT")
+    _assert_existing_chain_not_redirected(root)
+    _assert_existing_chain_not_redirected(path.parent)
 
 
-class LexicalForbiddenRootGuard:
-    """Best-effort CPython audit guard without resolving/statting live roots."""
+class QualificationAccessGuard:
+    """Deny protected aliases and network access before a selected test runs."""
 
-    _PATH_EVENTS: dict[str, tuple[int, ...]] = {
-        "open": (0,),
-        "os.chdir": (0,),
-        "os.listdir": (0,),
-        "os.scandir": (0,),
-        "os.remove": (0,),
-        "os.rmdir": (0,),
-        "os.mkdir": (0,),
-        "os.rename": (0, 1),
-        "os.replace": (0, 1),
-        "os.truncate": (0,),
-        "os.chmod": (0,),
-        "os.link": (0, 1),
-        "os.symlink": (0, 1),
-        "os.utime": (0,),
-    }
-
-    def __init__(self, roots: Sequence[str]) -> None:
-        self.roots = tuple(roots)
-        self.attempts: list[dict[str, str]] = []
+    def __init__(
+        self,
+        *,
+        protected_roots: Sequence[Mapping[str, str]],
+        allowed_roots: Sequence[pathlib.Path],
+        device_query=_query_dos_device,
+    ) -> None:
+        self.protected_roots = tuple(dict(item) for item in protected_roots)
+        self.allowed_roots = tuple(
+            _path_forms(item, device_query=device_query) for item in allowed_roots
+        )
+        self.device_query = device_query
+        self.protected_attempts: list[dict[str, str]] = []
+        self.unsafe_alias_attempts: list[dict[str, str]] = []
+        self.network_attempts: list[dict[str, str]] = []
+        self.guard_checks_by_event: dict[str, int] = {}
+        self.descriptor_checks_by_event: dict[str, int] = {}
+        self.native_path_checks_by_entrypoint: dict[str, int] = {}
+        self.native_guard_entrypoints: list[str] = []
         self._installed = False
+        self._original_lstat = os.lstat
 
-    def _check(self, event: str, candidate: Any) -> None:
-        if isinstance(candidate, bytes):
-            candidate = os.fsdecode(candidate)
-        if not isinstance(candidate, str) or not candidate:
-            return
-        for index, root in enumerate(self.roots):
-            try:
-                matched = _lexically_within(candidate, root)
-            except QualificationError:
-                continue
-            if matched:
-                self.attempts.append(
-                    {
-                        "event": event,
-                        "root_index": str(index),
-                        "candidate_sha256": _sha256(candidate.encode("utf-8")),
-                    }
+    def _candidate_forms(self, value: Any) -> dict[str, str]:
+        try:
+            raw = os.fsdecode(os.fspath(value))
+        except (TypeError, ValueError, UnicodeError):
+            raise QualificationError(
+                "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
+            ) from None
+        if not raw or "\x00" in raw:
+            raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+        if LOCAL_DRIVE_PATH_RE.match(raw):
+            local = raw
+        elif ntpath.isabs(raw) or raw.startswith(("\\", "/")):
+            raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+        else:
+            local = ntpath.join(os.getcwd(), raw)
+        if "~" in local:
+            # Some third-party installations contain literal stale dist-info
+            # names beginning with ``~``.  Treat them as ordinary only when
+            # the fully non-aliased prefix is disjoint from every protected
+            # and allowed boundary and its existing chain has no reparse
+            # point.  A short-name form near either boundary remains denied
+            # before the aliased component is probed.
+            normalized = ntpath.normcase(ntpath.normpath(local))
+            drive, tail = ntpath.splitdrive(normalized)
+            components = [part for part in tail.split("\\") if part]
+            if any(
+                part.endswith((" ", "."))
+                or ":" in part
+                or "*" in part
+                or "?" in part
+                or RESERVED_WINDOWS_COMPONENT_RE.fullmatch(part) is not None
+                for part in components
+            ):
+                raise QualificationError(
+                    "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
                 )
-                raise PermissionError("PSC_FORBIDDEN_ROOT_ACCESS")
+            alias_index = next(
+                (index for index, part in enumerate(components) if "~" in part),
+                None,
+            )
+            if alias_index is None:
+                raise QualificationError(
+                    "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
+                )
+            prefix = drive + "\\" + "\\".join(components[:alias_index])
+            prefix_forms = _path_forms(prefix, device_query=self.device_query)
+            boundaries = (*self.protected_roots, *self.allowed_roots)
+            if any(_forms_overlap(prefix_forms, item) for item in boundaries):
+                raise QualificationError(
+                    "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
+                )
+            _assert_existing_chain_not_redirected(
+                pathlib.Path(prefix_forms["lexical_path"]),
+                lstat_function=self._original_lstat,
+            )
+            device_root = _device_lexical_windows_path(
+                drive + "\\", device_query=self.device_query
+            )
+            return {
+                "lexical_path": normalized.rstrip("\\"),
+                "device_path": ntpath.normcase(
+                    device_root.rstrip("\\") + "\\" + tail.lstrip("\\")
+                ).rstrip("\\"),
+            }
+        return _path_forms(local, device_query=self.device_query)
 
-    def _hook(self, event: str, arguments: tuple[Any, ...]) -> None:
-        for index in self._PATH_EVENTS.get(event, ()):
-            if index < len(arguments):
-                self._check(event, arguments[index])
-        if event == "subprocess.Popen":
-            for value in arguments[:3]:
-                if isinstance(value, (str, bytes)):
-                    self._check(event, value)
-                elif isinstance(value, (tuple, list)):
-                    for item in value:
-                        self._check(event, item)
+    def check(self, event: str, value: Any) -> None:
+        if value is None:
+            value = os.getcwd()
+        if isinstance(value, int):
+            self.descriptor_checks_by_event[event] = (
+                self.descriptor_checks_by_event.get(event, 0) + 1
+            )
+            return
+        try:
+            raw_value = os.fsdecode(os.fspath(value))
+        except (TypeError, ValueError, UnicodeError):
+            raw_value = ""
+        if raw_value.casefold() == os.devnull.casefold():
+            self.guard_checks_by_event[event] = (
+                self.guard_checks_by_event.get(event, 0) + 1
+            )
+            return
+        try:
+            candidate = self._candidate_forms(value)
+        except QualificationError:
+            self.unsafe_alias_attempts.append({"event": event})
+            raise PermissionError("PSC qualification denied unsafe path alias") from None
+        self.guard_checks_by_event[event] = self.guard_checks_by_event.get(event, 0) + 1
+        allowed = any(
+            all(_under(candidate[key], allowed[key]) for key in ("lexical_path", "device_path"))
+            for allowed in self.allowed_roots
+        )
+        matching_protected = None
+        for root in self.protected_roots:
+            if any(
+                _under(candidate[key], root[key])
+                for key in ("lexical_path", "device_path")
+            ):
+                matching_protected = root
+                break
+        if matching_protected is not None and not allowed:
+            self.protected_attempts.append(
+                {"event": event, "root_label": matching_protected["label"]}
+            )
+            raise PermissionError("PSC qualification denied protected-root access")
+        # Disjoint lexical/device paths can still be junctions into a protected
+        # root.  Inspect every permitted candidate chain with the original
+        # lstat so the guard itself is not recursively invoked.  The candidate
+        # was already syntax/device validated, including the narrowly allowed
+        # literal-tilde case.
+        drive, tail = ntpath.splitdrive(candidate["lexical_path"])
+        current = pathlib.Path(drive + "\\")
+        try:
+            chain = [current]
+            for component in (part for part in tail.split("\\") if part):
+                current = current / component
+                chain.append(current)
+            for index, item in enumerate(chain):
+                try:
+                    metadata = self._original_lstat(item)
+                except FileNotFoundError:
+                    if index == 0:
+                        raise QualificationError(
+                            "PSC_QUALIFICATION_PATH_PARENT_UNAVAILABLE"
+                        ) from None
+                    break
+                if stat.S_ISLNK(metadata.st_mode) or bool(
+                    getattr(metadata, "st_file_attributes", 0) & 0x400
+                ):
+                    raise QualificationError("PSC_QUALIFICATION_PATH_REDIRECTED")
+        except (QualificationError, OSError):
+            self.unsafe_alias_attempts.append({"event": event})
+            raise PermissionError(
+                "PSC qualification denied redirected path"
+            ) from None
+
+    def check_network(self, event: str) -> None:
+        self.network_attempts.append({"event": event})
+        raise PermissionError("PSC qualification denied network access")
+
+    def evidence(self) -> dict[str, Any]:
+        return {
+            "protected_root_attempts": list(self.protected_attempts),
+            "unsafe_alias_attempts": list(self.unsafe_alias_attempts),
+            "network_attempts": list(self.network_attempts),
+            "guard_checks_by_event": dict(sorted(self.guard_checks_by_event.items())),
+            "descriptor_checks_by_event": dict(
+                sorted(self.descriptor_checks_by_event.items())
+            ),
+            "native_path_checks_by_entrypoint": dict(
+                sorted(self.native_path_checks_by_entrypoint.items())
+            ),
+            "native_guard_entrypoints": sorted(self.native_guard_entrypoints),
+        }
 
     def install(self) -> None:
-        if not self._installed:
-            sys.addaudithook(self._hook)
-            self._installed = True
+        if self._installed:
+            return
+
+        def hook(event: str, arguments: tuple[Any, ...]) -> None:
+            if event in {"socket.connect", "socket.bind"}:
+                self.check_network(event)
+            for index in PATH_AUDIT_EVENT_PATH_INDICES.get(event, ()):
+                if index < len(arguments):
+                    self.check(event, arguments[index])
+            for index in PATH_AUDIT_EVENT_DIR_FD_INDICES.get(event, ()):
+                if index < len(arguments) and arguments[index] not in (None, -1):
+                    self.unsafe_alias_attempts.append({"event": event})
+                    raise PermissionError(
+                        "PSC qualification denied unbound directory descriptor"
+                    )
+
+        sys.addaudithook(hook)
+        original_stat = os.stat
+        original_lstat = os.lstat
+        original_listdir = os.listdir
+        original_scandir = os.scandir
+        original_open = os.open
+        original_readlink = os.readlink
+        original_access = os.access
+        original_builtin_open = builtins.open
+        original_io_open = io.open
+
+        def guarded_stat(path, *arguments, **keywords):
+            self.check("os.stat", path)
+            return original_stat(path, *arguments, **keywords)
+
+        def guarded_lstat(path, *arguments, **keywords):
+            self.check("os.lstat", path)
+            return original_lstat(path, *arguments, **keywords)
+
+        def guarded_listdir(path=None):
+            self.check("os.listdir", path)
+            return original_listdir(path) if path is not None else original_listdir()
+
+        def guarded_scandir(path=None):
+            self.check("os.scandir", path)
+            return original_scandir(path) if path is not None else original_scandir()
+
+        def guarded_open(path, flags, mode=0o777, *, dir_fd=None):
+            if dir_fd is not None:
+                self.unsafe_alias_attempts.append({"event": "os.open"})
+                raise PermissionError(
+                    "PSC qualification denied unbound directory descriptor"
+                )
+            self.check("os.open", path)
+            return original_open(path, flags, mode)
+
+        def guarded_readlink(path, *, dir_fd=None):
+            if dir_fd is not None:
+                self.unsafe_alias_attempts.append({"event": "os.readlink"})
+                raise PermissionError(
+                    "PSC qualification denied unbound directory descriptor"
+                )
+            self.check("os.readlink", path)
+            return original_readlink(path)
+
+        def guarded_access(
+            path, mode, *, dir_fd=None, effective_ids=False, follow_symlinks=True
+        ):
+            if dir_fd is not None:
+                self.unsafe_alias_attempts.append({"event": "os.access"})
+                raise PermissionError(
+                    "PSC qualification denied unbound directory descriptor"
+                )
+            self.check("os.access", path)
+            return original_access(
+                path,
+                mode,
+                effective_ids=effective_ids,
+                follow_symlinks=follow_symlinks,
+            )
+
+        def guarded_builtin_open(file, *arguments, **keywords):
+            self.check("open", file)
+            return original_builtin_open(file, *arguments, **keywords)
+
+        def guarded_io_open(file, *arguments, **keywords):
+            self.check("io.open", file)
+            return original_io_open(file, *arguments, **keywords)
+
+        os.stat = guarded_stat
+        os.lstat = guarded_lstat
+        os.listdir = guarded_listdir
+        os.scandir = guarded_scandir
+        os.open = guarded_open
+        os.readlink = guarded_readlink
+        os.access = guarded_access
+        builtins.open = guarded_builtin_open
+        io.open = guarded_io_open
+        self._installed = True
+
+
+def _install_candidate_native_guards(guard: QualificationAccessGuard) -> None:
+    for module_name, attribute, event in NATIVE_GUARD_ENTRYPOINTS:
+        module = sys.modules.get(module_name)
+        if module is None or not hasattr(module, attribute):
+            continue
+        original = getattr(module, attribute)
+        if getattr(original, "_psc_qualification_guard", False):
+            continue
+        if attribute == "_allocated_size":
+
+            @functools.wraps(original)
+            def guarded(path, metadata, _original=original, _event=event):
+                guard.check(_event, path)
+                guard.native_path_checks_by_entrypoint[_event] = (
+                    guard.native_path_checks_by_entrypoint.get(_event, 0) + 1
+                )
+                return _original(path, metadata)
+
+        else:
+
+            @functools.wraps(original)
+            def guarded(path, _original=original, _event=event):
+                guard.check(_event, path)
+                guard.native_path_checks_by_entrypoint[_event] = (
+                    guard.native_path_checks_by_entrypoint.get(_event, 0) + 1
+                )
+                return _original(path)
+
+        guarded._psc_qualification_guard = True
+        setattr(module, attribute, guarded)
+        guard.native_guard_entrypoints.append(event)
+
+
+def _assert_protected_root_binding(
+    configured: Sequence[Mapping[str, str]], collection: Mapping[str, Any]
+) -> None:
+    recorded = collection.get("environment", {}).get("protected_roots")
+    if _canonical_bytes(configured) != _canonical_bytes(recorded):
+        raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_BINDING_MISMATCH")
 
 
 def _module_path(module: str) -> str:
@@ -739,17 +1502,22 @@ def _collection_run_key(binding: Mapping[str, Any]) -> str:
 def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
     workspace_argument = pathlib.Path(args.workspace).absolute()
     selection_argument = pathlib.Path(args.selection).absolute()
-    _reject_forbidden_path(workspace_argument, BUILTIN_FORBIDDEN_ROOTS)
-    _reject_forbidden_path(selection_argument, BUILTIN_FORBIDDEN_ROOTS)
+    protected_roots = _parse_protected_roots(args.protected_root or [])
+    run_root = pathlib.Path(args.run_root).absolute()
+    _validate_path_isolation(run_root, workspace_argument, protected_roots)
     workspace = workspace_argument.resolve(strict=True)
     selection_path = selection_argument.resolve(strict=True)
-    run_root = pathlib.Path(args.run_root).absolute()
+    if not _lexically_within(str(selection_path), str(workspace)):
+        raise QualificationError("PSC_QUALIFICATION_PATH_OUTSIDE_WORKSPACE")
+    guard = QualificationAccessGuard(
+        protected_roots=protected_roots,
+        allowed_roots=(workspace, run_root),
+    )
     selector = _load_selector(selection_path)
-    forbidden_roots = list(selector["default_forbidden_roots"])
-    forbidden_roots.extend(args.forbid_root or [])
-    if len(forbidden_roots) != len(set(forbidden_roots)):
-        raise QualificationError("PSC_QUALIFICATION_FORBIDDEN_ROOT_INVALID")
-    _validate_run_root(run_root, workspace, forbidden_roots)
+    if set(selector["required_protected_root_labels"]) != {
+        item["label"] for item in protected_roots
+    }:
+        raise QualificationError("PSC_QUALIFICATION_PROTECTED_ROOT_SET_INCOMPLETE")
     git_before = _git_state(workspace)
     if args.expected_head and git_before["head"] != args.expected_head:
         raise QualificationError("PSC_QUALIFICATION_HEAD_CHANGED")
@@ -758,7 +1526,11 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
     if not args.allow_dirty and not git_before["clean"]:
         raise QualificationError("PSC_QUALIFICATION_WORKTREE_DIRTY")
 
-    guard = LexicalForbiddenRootGuard(forbidden_roots)
+    # Package metadata enumeration can encounter stale third-party dist-info
+    # names containing a literal ``~``.  Bind the toolchain before installing
+    # the irreversible path guard; the guard is active before any selected
+    # test module is imported and remains active for all candidate work.
+    toolchain = _toolchain()
     guard.install()
     _ensure_workspace_import_path(workspace)
     tests, categories, loader_errors = _collect_owned_tests(selector)
@@ -779,6 +1551,7 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
         raise QualificationError("PSC_QUALIFICATION_TEST_HASH_MISMATCH")
     if any(test_id not in set(test_ids) for test_id in selector["priority_test_ids"]):
         raise QualificationError("PSC_QUALIFICATION_PRIORITY_TEST_MISSING")
+    coverage_partitions = _coverage_partition_results(selector, tests)
 
     files = [
         _file_binding(workspace, workspace / RUNNER_RELATIVE_PATH),
@@ -788,7 +1561,6 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
         files.append(_file_binding(workspace, workspace / _module_path(module)))
     if not args.allow_dirty and any(item["git_blob"] is None for item in files):
         raise QualificationError("PSC_QUALIFICATION_SOURCE_NOT_COMMITTED")
-    toolchain = _toolchain()
     binding = {
         "suite_id": selector["suite_id"],
         "candidate_head": git_before["head"],
@@ -804,13 +1576,7 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
         "python_version": toolchain["python_version"],
         "packages": toolchain["packages"],
         "toolchain_sha256": _sha256(_canonical_bytes(toolchain)),
-        "forbidden_roots_sha256": _sha256(
-            _canonical_bytes(
-                sorted(
-                    _path_key_lexical(root)[0] for root in forbidden_roots
-                )
-            )
-        ),
+        "protected_roots_sha256": _sha256(_canonical_bytes(protected_roots)),
         "isolation_policy_version": selector["isolation_policy_version"],
     }
     run_key = _collection_run_key(binding)
@@ -821,8 +1587,13 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
         raise QualificationError("PSC_QUALIFICATION_HEAD_CHANGED")
     if not args.allow_dirty and not git_after["clean"]:
         raise QualificationError("PSC_QUALIFICATION_WORKTREE_DIRTY")
-    if guard.attempts:
-        raise QualificationError("PSC_QUALIFICATION_FORBIDDEN_ROOT_ACCESS")
+    guard_evidence = guard.evidence()
+    if (
+        guard_evidence["protected_root_attempts"]
+        or guard_evidence["unsafe_alias_attempts"]
+        or guard_evidence["network_attempts"]
+    ):
+        raise QualificationError("PSC_QUALIFICATION_ISOLATION_VIOLATION")
 
     collection = {
         "schema_version": SCHEMA_VERSION,
@@ -836,14 +1607,16 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
             "test_ids_sha256": ids_hash,
             "test_ids_file": "test-ids.txt",
             "categories": categories,
+            "coverage_partitions": coverage_partitions,
             "tests": tests,
             "loader_error_count": 0,
         },
         "source_files": files,
         "toolchain": toolchain,
         "environment": {
-            "forbidden_roots": forbidden_roots,
-            "forbidden_root_attempt_count": 0,
+            "protected_roots": protected_roots,
+            "workspace_allow_subtree": _path_forms(workspace),
+            "collection_guard_evidence": guard_evidence,
             "environment_values_captured": False,
         },
         "command": {
@@ -908,17 +1681,27 @@ def _load_collection(path: pathlib.Path) -> dict[str, Any]:
         != selection.get("unique_test_count")
         or selector.get("expected_test_ids_sha256")
         != selection.get("test_ids_sha256")
+        or selection.get("coverage_partitions")
+        != _coverage_partition_results(selector, selection["tests"])
         or binding.get("toolchain_sha256")
         != _sha256(_canonical_bytes(toolchain))
-        or binding.get("forbidden_roots_sha256")
-        != _sha256(
-            _canonical_bytes(
-                sorted(
-                    _path_key_lexical(root)[0]
-                    for root in environment.get("forbidden_roots", [])
-                )
-            )
+        or binding.get("protected_roots_sha256")
+        != _sha256(_canonical_bytes(environment.get("protected_roots", [])))
+        or {
+            item.get("label")
+            for item in environment.get("protected_roots", [])
+            if type(item) is dict
+        }
+        != REQUIRED_PROTECTED_ROOT_LABELS
+        or type(environment.get("workspace_allow_subtree")) is not dict
+        or type(environment.get("collection_guard_evidence")) is not dict
+        or environment["collection_guard_evidence"].get(
+            "protected_root_attempts"
         )
+        != []
+        or environment["collection_guard_evidence"].get("unsafe_alias_attempts")
+        != []
+        or environment["collection_guard_evidence"].get("network_attempts") != []
     ):
         raise QualificationError("PSC_QUALIFICATION_COLLECTION_INVALID")
     files_by_path = {
@@ -1014,13 +1797,11 @@ def _plan_document(collection: Mapping[str, Any]) -> dict[str, Any]:
 def _plan_command(args: argparse.Namespace) -> dict[str, Any]:
     run_root = pathlib.Path(args.run_root).absolute()
     workspace_argument = pathlib.Path(args.workspace).absolute()
-    _reject_forbidden_path(workspace_argument, BUILTIN_FORBIDDEN_ROOTS)
+    protected_roots = _parse_protected_roots(args.protected_root or [])
+    _validate_path_isolation(run_root, workspace_argument, protected_roots)
     workspace = workspace_argument.resolve(strict=True)
-    _validate_run_root(run_root, workspace, BUILTIN_FORBIDDEN_ROOTS)
     collection = _load_collection(run_root / "collection.json")
-    _validate_run_root(
-        run_root, workspace, collection["environment"]["forbidden_roots"]
-    )
+    _assert_protected_root_binding(protected_roots, collection)
     _assert_git_binding(workspace, collection["candidate"])
     plan = _plan_document(collection)
     _write_immutable(run_root / "plan.json", _canonical_bytes(plan))
@@ -1213,23 +1994,202 @@ class QualificationTestResult(unittest.TestResult):
         }
 
 
-def _output_digest(path: pathlib.Path, replacements: Mapping[str, str]) -> dict[str, Any]:
-    data = _read_bytes(path)
-    text = data.decode("utf-8", errors="replace")
-    for source, replacement in replacements.items():
-        text = text.replace(source, replacement)
-    if SECRET_PATTERN.search(text):
-        excerpt: str | None = None
-        excerpt_status = "omitted_secret_pattern"
-    else:
-        excerpt = text if len(text) <= 2048 else text[:1024] + "\n...\n" + text[-1024:]
-        excerpt_status = "complete" if len(text) <= 2048 else "bounded_head_tail"
-    return {
-        "byte_size": len(data),
-        "sha256": _sha256(data),
-        "excerpt_status": excerpt_status,
-        "excerpt": excerpt,
-    }
+class _StreamingSecretDetector:
+    """Incrementally recognize SECRET_PATTERN even across write boundaries."""
+
+    _keyword = re.compile(
+        r"(?i)(?:authorization|api[_-]?key|password|passwd|secret|token)$"
+    )
+
+    def __init__(self) -> None:
+        self.state = "search"
+        self.tail = ""
+        self.value_characters = 0
+        self.found = False
+
+    def feed(self, text: str) -> None:
+        for character in text:
+            self._feed_character(character)
+
+    def _search_character(self, character: str) -> None:
+        self.tail = (self.tail + character)[-16:]
+        match = self._keyword.search(self.tail)
+        if match is not None:
+            self.state = "after_keyword"
+            self.tail = ""
+
+    def _feed_character(self, character: str) -> None:
+        if self.found:
+            return
+        if self.state == "search":
+            self._search_character(character)
+            return
+        if self.state == "after_keyword":
+            if character.isspace():
+                return
+            if character in ":=":
+                self.state = "before_value"
+                return
+            self.state = "search"
+            self._search_character(character)
+            return
+        if self.state == "before_value":
+            if character.isspace():
+                return
+            if character in ",;":
+                self.state = "search"
+                self._search_character(character)
+                return
+            self.state = "value"
+            self.value_characters = 1
+            return
+        if character.isspace() or character in ",;":
+            self.state = "search"
+            self.value_characters = 0
+            self._search_character(character)
+            return
+        self.value_characters += 1
+        if self.value_characters >= 4:
+            self.found = True
+
+
+class _BoundedOutputCapture(io.TextIOBase):
+    """Hash a stream while retaining only bounded, secret-safe text."""
+
+    def __init__(self, *, excerpt_limit: int = 2048) -> None:
+        super().__init__()
+        self.excerpt_limit = excerpt_limit
+        self._head_limit = excerpt_limit // 2
+        self._tail_limit = excerpt_limit - self._head_limit
+        self._head = ""
+        self._tail = ""
+        self._character_count = 0
+        self._byte_size = 0
+        self._digest = hashlib.sha256()
+        self._detector = _StreamingSecretDetector()
+        self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self._decoder_finalized = False
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+    def writable(self) -> bool:
+        return True
+
+    def _retain_text(self, text: str) -> None:
+        if not text:
+            return
+        self._detector.feed(text)
+        self._character_count += len(text)
+        if len(self._head) < self._head_limit:
+            remaining = self._head_limit - len(self._head)
+            self._head += text[:remaining]
+        self._tail = (self._tail + text)[-self._tail_limit :]
+
+    def write(self, text: str) -> int:
+        if not isinstance(text, str):
+            raise TypeError("text output required")
+        data = text.encode("utf-8", errors="replace")
+        self._digest.update(data)
+        self._byte_size += len(data)
+        self._retain_text(text)
+        return len(text)
+
+    def write_bytes(self, data: bytes) -> None:
+        self._digest.update(data)
+        self._byte_size += len(data)
+        self._retain_text(self._decoder.decode(data, final=False))
+
+    def snapshot(self, replacements: Mapping[str, str]) -> dict[str, Any]:
+        if not self._decoder_finalized:
+            self._retain_text(self._decoder.decode(b"", final=True))
+            self._decoder_finalized = True
+        if self._character_count <= self.excerpt_limit:
+            missing = max(0, self._character_count - len(self._head))
+            candidate = self._head + (self._tail[-missing:] if missing else "")
+        else:
+            candidate = self._head + "\n...\n" + self._tail
+        for source, replacement in replacements.items():
+            candidate = candidate.replace(source, replacement)
+        # Excerpts are diagnostic convenience, not a security boundary.  Do
+        # not persist arbitrary test output even when the bounded sample does
+        # not match the conservative secret detector.
+        status = (
+            "omitted_secret_pattern"
+            if self._detector.found or SECRET_PATTERN.search(candidate)
+            else "omitted_by_policy"
+        )
+        return {
+            "byte_size": self._byte_size,
+            "sha256": self._digest.hexdigest(),
+            "excerpt_status": status,
+            "excerpt": None,
+        }
+
+
+def _run_process_captured(
+    command: Sequence[str],
+    *,
+    cwd: pathlib.Path,
+    environment: Mapping[str, str],
+    replacements: Mapping[str, str],
+) -> tuple[int, int, dict[str, Any], dict[str, Any]]:
+    stdout_capture = _BoundedOutputCapture()
+    stderr_capture = _BoundedOutputCapture()
+    started = time.perf_counter_ns()
+    process = subprocess.Popen(
+        list(command),
+        cwd=str(cwd),
+        env=dict(environment),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    errors: list[BaseException] = []
+
+    def drain(stream: Any, capture: _BoundedOutputCapture) -> None:
+        try:
+            while True:
+                chunk = stream.read(64 * 1024)
+                if not chunk:
+                    break
+                capture.write_bytes(chunk)
+        except BaseException as exc:  # pragma: no cover - defensive pipe failure
+            errors.append(exc)
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    threads = [
+        threading.Thread(target=drain, args=(process.stdout, stdout_capture), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, stderr_capture), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        return_code = process.wait()
+    except BaseException:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise
+    finally:
+        for thread in threads:
+            thread.join()
+    duration = time.perf_counter_ns() - started
+    if errors:
+        raise QualificationError("PSC_QUALIFICATION_PROCESS_CAPTURE_FAILED")
+    return (
+        return_code,
+        duration,
+        stdout_capture.snapshot(replacements),
+        stderr_capture.snapshot(replacements),
+    )
 
 
 def _safe_worker_environment(
@@ -1276,52 +2236,55 @@ def _safe_worker_environment(
 
 def _worker_command(args: argparse.Namespace) -> dict[str, Any]:
     workspace_argument = pathlib.Path(args.workspace).absolute()
-    _reject_forbidden_path(workspace_argument, BUILTIN_FORBIDDEN_ROOTS)
+    protected_roots = _parse_protected_roots(args.protected_root or [])
     workspace = workspace_argument.resolve(strict=True)
     collection_argument = pathlib.Path(args.collection).absolute()
     run_root = collection_argument.parent
-    _validate_run_root(run_root, workspace, BUILTIN_FORBIDDEN_ROOTS)
+    _validate_path_isolation(run_root, workspace, protected_roots)
     collection_path = collection_argument.resolve(strict=True)
     plan_argument = pathlib.Path(args.plan).absolute()
-    _reject_forbidden_path(plan_argument, BUILTIN_FORBIDDEN_ROOTS)
     plan_path = plan_argument.resolve(strict=True)
     output_path = pathlib.Path(args.output).absolute()
     if plan_path != (run_root / "plan.json").resolve(strict=True):
         raise QualificationError("PSC_QUALIFICATION_PLAN_PATH_INVALID")
     collection = _load_collection(collection_path)
-    _validate_run_root(
-        run_root,
-        workspace,
-        collection["environment"]["forbidden_roots"],
-    )
+    _assert_protected_root_binding(protected_roots, collection)
     _require_path_below(output_path, run_root)
     plan = _load_plan(plan_path, collection)
     shard = next((item for item in plan["shards"] if item["id"] == args.shard), None)
     if shard is None:
         raise QualificationError("PSC_QUALIFICATION_SHARD_UNKNOWN")
+    expected_parent = run_root / "attempts" / shard["id"]
+    if (
+        output_path.parent != expected_parent
+        or re.fullmatch(r"attempt-\d{4}\.result\.json", output_path.name) is None
+    ):
+        raise QualificationError("PSC_QUALIFICATION_WORKER_OUTPUT_INVALID")
     before = _assert_git_binding(workspace, collection["candidate"])
-    guard = LexicalForbiddenRootGuard(collection["environment"]["forbidden_roots"])
+    guard = QualificationAccessGuard(
+        protected_roots=protected_roots,
+        allowed_roots=(workspace, run_root),
+    )
     guard.install()
     _ensure_workspace_import_path(workspace)
     loader = unittest.TestLoader()
     suite = loader.loadTestsFromNames(shard["test_ids"])
     loaded_ids = [test.id() for test in _flatten_suite(suite)]
+    _install_candidate_native_guards(guard)
     loader_error_hashes = [_sha256(error.encode("utf-8")) for error in loader.errors]
     load_exact = loaded_ids == shard["test_ids"]
     result = QualificationTestResult(shard["test_ids"])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    stdout_path = output_path.with_suffix(".test.stdout")
-    stderr_path = output_path.with_suffix(".test.stderr")
+    stdout_capture = _BoundedOutputCapture()
+    stderr_capture = _BoundedOutputCapture()
     started = time.perf_counter_ns()
     execution_exception: dict[str, str] | None = None
     if not loader.errors and load_exact:
         try:
-            with stdout_path.open("w", encoding="utf-8", newline="\n") as stdout_handle:
-                with stderr_path.open("w", encoding="utf-8", newline="\n") as stderr_handle:
-                    with contextlib.redirect_stdout(stdout_handle), contextlib.redirect_stderr(
-                        stderr_handle
-                    ):
-                        suite.run(result)
+            with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(
+                stderr_capture
+            ):
+                suite.run(result)
         except BaseException as exc:  # fail closed even for non-TestCase failures
             rendered = "".join(
                 traceback.format_exception(type(exc), exc, exc.__traceback__)
@@ -1330,9 +2293,6 @@ def _worker_command(args: argparse.Namespace) -> dict[str, Any]:
                 "exception_type": type(exc).__name__,
                 "traceback_sha256": _sha256(rendered),
             }
-    else:
-        _write_immutable(stdout_path, b"")
-        _write_immutable(stderr_path, b"")
     duration = time.perf_counter_ns() - started
     after = _git_state(workspace)
     summary = result.summary()
@@ -1341,7 +2301,9 @@ def _worker_command(args: argparse.Namespace) -> dict[str, Any]:
         + (0 if load_exact else 1)
         + len(result.fixture_errors)
         + len(set(result.unexpected_parent_ids))
-        + len(guard.attempts)
+        + len(guard.protected_attempts)
+        + len(guard.unsafe_alias_attempts)
+        + len(guard.network_attempts)
         + (0 if execution_exception is None else 1)
         + (0 if after == before and after["clean"] else 1)
         + sum(
@@ -1382,13 +2344,13 @@ def _worker_command(args: argparse.Namespace) -> dict[str, Any]:
         "tests": [result.records[test_id] for test_id in shard["test_ids"]],
         "fixture_errors": result.fixture_errors,
         "unexpected_parent_id_count": len(set(result.unexpected_parent_ids)),
-        "forbidden_root_attempts": guard.attempts,
+        "guard_evidence": guard.evidence(),
         "execution_exception": execution_exception,
         "git_before": before,
         "git_after": after,
         "captured_output": {
-            "stdout": _output_digest(stdout_path, replacements),
-            "stderr": _output_digest(stderr_path, replacements),
+            "stdout": stdout_capture.snapshot(replacements),
+            "stderr": stderr_capture.snapshot(replacements),
         },
         "safe_environment": {
             name: os.environ.get(name)
@@ -1454,7 +2416,10 @@ def _validate_worker_pass(result: Mapping[str, Any]) -> None:
         )
         or result.get("fixture_errors") != []
         or result.get("unexpected_parent_id_count") != 0
-        or result.get("forbidden_root_attempts") != []
+        or type(result.get("guard_evidence")) is not dict
+        or result["guard_evidence"].get("protected_root_attempts") != []
+        or result["guard_evidence"].get("unsafe_alias_attempts") != []
+        or result["guard_evidence"].get("network_attempts") != []
         or result.get("execution_exception") is not None
         or result.get("git_before") != result.get("candidate")
         or result.get("git_after") != result.get("candidate")
@@ -1511,6 +2476,8 @@ def _validate_controller(
         != _sha256(_read_bytes(result_path))
         or controller.get("status") not in {"PASS", "FAIL"}
         or type(controller.get("return_code")) is not int
+        or not re.fullmatch(r"[0-9a-f]{32}", str(controller.get("lease_owner_id")))
+        or controller.get("lease_mechanism") not in {"msvcrt_byte_range", "flock"}
     ):
         raise QualificationError("PSC_QUALIFICATION_CONTROLLER_INVALID")
     if controller["status"] == "PASS":
@@ -1528,9 +2495,10 @@ def _validate_start_receipt(
     shard: Mapping[str, Any],
     attempt: int,
 ) -> None:
-    if not path.exists():
-        raise QualificationError("PSC_QUALIFICATION_START_RECEIPT_INVALID")
-    start = _read_json(path)
+    try:
+        start = _read_json(path)
+    except QualificationError as exc:
+        raise QualificationError("PSC_QUALIFICATION_START_RECEIPT_INVALID") from exc
     _verify_integrity(start)
     if (
         start.get("kind") != START_KIND
@@ -1540,167 +2508,379 @@ def _validate_start_receipt(
         or start.get("attempt") != attempt
         or type(start.get("command")) is not list
         or not start["command"]
+        or not re.fullmatch(r"[0-9a-f]{32}", str(start.get("lease_owner_id")))
+        or start.get("lease_mechanism") not in {"msvcrt_byte_range", "flock"}
     ):
         raise QualificationError("PSC_QUALIFICATION_START_RECEIPT_INVALID")
 
 
 def _existing_attempts(attempt_root: pathlib.Path) -> list[int]:
     result: set[int] = set()
-    if attempt_root.exists():
+    try:
+        metadata = os.lstat(attempt_root)
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise QualificationError("PSC_QUALIFICATION_ARTIFACT_UNREADABLE") from exc
+    if stat.S_ISDIR(metadata.st_mode):
+        _assert_existing_chain_not_redirected(attempt_root)
         for path in attempt_root.iterdir():
-            match = re.match(r"attempt-(\d{4})\.(?:start|result|controller)\.json$", path.name)
+            match = re.match(
+                r"attempt-(\d{4})\.(?:start|result|controller|abandonment)\.json$",
+                path.name,
+            )
             if match:
                 result.add(int(match.group(1)))
+    else:
+        raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
     return sorted(result)
+
+
+def _validate_abandonment(
+    path: pathlib.Path,
+    *,
+    start_path: pathlib.Path,
+    collection: Mapping[str, Any],
+    shard: Mapping[str, Any],
+    attempt: int,
+) -> dict[str, Any]:
+    abandonment = _read_json(path)
+    _verify_integrity(abandonment)
+    if (
+        abandonment.get("kind") != ABANDONMENT_KIND
+        or abandonment.get("run_key") != collection["run_key"]
+        or abandonment.get("candidate") != collection["candidate"]
+        or abandonment.get("shard_id") != shard["id"]
+        or abandonment.get("attempt") != attempt
+        or abandonment.get("start_receipt_sha256")
+        != _sha256(_read_bytes(start_path))
+        or abandonment.get("reason")
+        not in {
+            "controller_interrupted",
+            "worker_result_missing",
+            "worker_reported_failure",
+        }
+        or not re.fullmatch(
+            r"[0-9a-f]{32}", str(abandonment.get("lease_owner_id"))
+        )
+        or abandonment.get("lease_mechanism")
+        not in {"msvcrt_byte_range", "flock"}
+        or type(abandonment.get("observed_artifacts")) is not list
+    ):
+        raise QualificationError("PSC_QUALIFICATION_ABANDONMENT_INVALID")
+    expected_observed: list[dict[str, Any]] = []
+    for suffix in ("result", "controller"):
+        artifact = path.parent / f"attempt-{attempt:04d}.{suffix}.json"
+        raw = _read_existing_immutable(artifact)
+        if raw is not None:
+            expected_observed.append(
+                {
+                    "name": artifact.name,
+                    "byte_size": len(raw),
+                    "sha256": _sha256(raw),
+                }
+            )
+    if abandonment["observed_artifacts"] != expected_observed:
+        raise QualificationError("PSC_QUALIFICATION_ABANDONMENT_INVALID")
+    return abandonment
+
+
+def _write_abandonment(
+    attempt_root: pathlib.Path,
+    *,
+    collection: Mapping[str, Any],
+    shard: Mapping[str, Any],
+    attempt: int,
+    lease: Mapping[str, str],
+    reason: str,
+) -> dict[str, Any]:
+    start_path = attempt_root / f"attempt-{attempt:04d}.start.json"
+    _validate_start_receipt(
+        start_path, collection=collection, shard=shard, attempt=attempt
+    )
+    observed: list[dict[str, Any]] = []
+    for suffix in ("result", "controller"):
+        artifact = attempt_root / f"attempt-{attempt:04d}.{suffix}.json"
+        raw = _read_existing_immutable(artifact)
+        if raw is not None:
+            observed.append(
+                {
+                    "name": artifact.name,
+                    "byte_size": len(raw),
+                    "sha256": _sha256(raw),
+                }
+            )
+    document = _write_json(
+        attempt_root / f"attempt-{attempt:04d}.abandonment.json",
+        {
+            "schema_version": SCHEMA_VERSION,
+            "kind": ABANDONMENT_KIND,
+            "run_key": collection["run_key"],
+            "candidate": collection["candidate"],
+            "shard_id": shard["id"],
+            "attempt": attempt,
+            "start_receipt_sha256": _sha256(_read_bytes(start_path)),
+            "lease_owner_id": lease["owner_id"],
+            "lease_mechanism": lease["mechanism"],
+            "reason": reason,
+            "observed_artifacts": observed,
+        },
+    )
+    return document
+
+
+def _inspect_attempt_history(
+    attempt_root: pathlib.Path,
+    *,
+    collection: Mapping[str, Any],
+    shard: Mapping[str, Any],
+) -> dict[str, Any]:
+    attempts = _existing_attempts(attempt_root)
+    if attempts and attempts != list(range(1, max(attempts) + 1)):
+        raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
+    completed: list[tuple[int, pathlib.Path, dict[str, Any], dict[str, Any]]] = []
+    abandoned: list[dict[str, Any]] = []
+    unsettled: list[int] = []
+    terminal_failure = False
+    for attempt in attempts:
+        start_path = attempt_root / f"attempt-{attempt:04d}.start.json"
+        result_path = attempt_root / f"attempt-{attempt:04d}.result.json"
+        controller_path = attempt_root / f"attempt-{attempt:04d}.controller.json"
+        abandonment_path = attempt_root / f"attempt-{attempt:04d}.abandonment.json"
+        _validate_start_receipt(
+            start_path, collection=collection, shard=shard, attempt=attempt
+        )
+        abandonment_present = _immutable_exists(abandonment_path)
+        result_present = _immutable_exists(result_path)
+        controller_present = _immutable_exists(controller_path)
+        if abandonment_present:
+            if controller_present:
+                raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
+            abandonment = _validate_abandonment(
+                abandonment_path,
+                start_path=start_path,
+                collection=collection,
+                shard=shard,
+                attempt=attempt,
+            )
+            abandoned.append(
+                {
+                    "attempt": attempt,
+                    "receipt_sha256": _sha256(_read_bytes(abandonment_path)),
+                    "reason": abandonment["reason"],
+                }
+            )
+            continue
+        if result_present and controller_present:
+            result = _load_worker_result(result_path, collection, shard)
+            controller = _read_json(controller_path)
+            _validate_controller(
+                controller,
+                collection=collection,
+                shard=shard,
+                attempt=attempt,
+                result_path=result_path,
+                result=result,
+                require_pass=False,
+            )
+            completed.append((attempt, result_path, result, controller))
+            if result["status"] != "PASS" or controller["status"] != "PASS":
+                terminal_failure = True
+            continue
+        if controller_present and not result_present:
+            raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
+        unsettled.append(attempt)
+    if len(completed) > 1:
+        raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
+    return {
+        "attempts": attempts,
+        "completed": completed,
+        "abandoned": abandoned,
+        "unsettled": unsettled,
+        "terminal_failure": terminal_failure,
+    }
+
+
+def _protected_root_cli(protected_roots: Sequence[Mapping[str, str]]) -> list[str]:
+    arguments: list[str] = []
+    for item in protected_roots:
+        if item["label"] == "live_prompt":
+            continue
+        arguments.extend(
+            ["--protected-root", f"{item['label']}={item['lexical_path']}"]
+        )
+    return arguments
 
 
 def _run_command(args: argparse.Namespace) -> dict[str, Any]:
     run_root = pathlib.Path(args.run_root).absolute()
     workspace_argument = pathlib.Path(args.workspace).absolute()
-    _reject_forbidden_path(workspace_argument, BUILTIN_FORBIDDEN_ROOTS)
+    protected_roots = _parse_protected_roots(args.protected_root or [])
+    _validate_path_isolation(run_root, workspace_argument, protected_roots)
     workspace = workspace_argument.resolve(strict=True)
-    _validate_run_root(run_root, workspace, BUILTIN_FORBIDDEN_ROOTS)
     collection = _load_collection(run_root / "collection.json")
-    _validate_run_root(
-        run_root, workspace, collection["environment"]["forbidden_roots"]
-    )
+    _assert_protected_root_binding(protected_roots, collection)
     plan = _load_plan(run_root / "plan.json", collection)
     _assert_git_binding(workspace, collection["candidate"])
-    completed_count = 0
-    reused_count = 0
-    runner = pathlib.Path(__file__).resolve(strict=True)
-    for shard in plan["shards"]:
-        _assert_git_binding(workspace, collection["candidate"])
-        attempt_root = run_root / "attempts" / shard["id"]
-        attempts = _existing_attempts(attempt_root)
-        reusable: tuple[int, pathlib.Path, dict[str, Any]] | None = None
-        terminal_failure = False
-        completed_attempt_count = 0
-        for attempt in attempts:
+    with _run_key_lease(run_root, collection["run_key"]) as lease:
+        completed_count = 0
+        reused_count = 0
+        runner = pathlib.Path(__file__).resolve(strict=True)
+        for shard in plan["shards"]:
+            _assert_git_binding(workspace, collection["candidate"])
+            attempt_root = run_root / "attempts" / shard["id"]
+            history = _inspect_attempt_history(
+                attempt_root, collection=collection, shard=shard
+            )
+            if history["terminal_failure"]:
+                raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
+            for incomplete in history["unsettled"]:
+                partial_result = (
+                    attempt_root / f"attempt-{incomplete:04d}.result.json"
+                )
+                reason = "controller_interrupted"
+                if _immutable_exists(partial_result):
+                    partial = _load_worker_result(partial_result, collection, shard)
+                    if partial["status"] == "FAIL":
+                        reason = "worker_reported_failure"
+                _write_abandonment(
+                    attempt_root,
+                    collection=collection,
+                    shard=shard,
+                    attempt=incomplete,
+                    lease=lease,
+                    reason=reason,
+                )
+            if history["unsettled"]:
+                history = _inspect_attempt_history(
+                    attempt_root, collection=collection, shard=shard
+                )
+            if history["terminal_failure"] or any(
+                item["reason"] == "worker_reported_failure"
+                for item in history["abandoned"]
+            ):
+                raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
+            if history["completed"]:
+                reused_count += 1
+                completed_count += 1
+                continue
+            attempts = history["attempts"]
+            attempt = (max(attempts) + 1) if attempts else 1
             result_path = attempt_root / f"attempt-{attempt:04d}.result.json"
+            start_path = attempt_root / f"attempt-{attempt:04d}.start.json"
             controller_path = attempt_root / f"attempt-{attempt:04d}.controller.json"
-            if result_path.exists() and controller_path.exists():
-                _validate_start_receipt(
-                    attempt_root / f"attempt-{attempt:04d}.start.json",
+            command = [
+                sys.executable,
+                "-B",
+                str(runner),
+                "_worker",
+                "--workspace",
+                str(workspace),
+                "--collection",
+                str(run_root / "collection.json"),
+                "--plan",
+                str(run_root / "plan.json"),
+                "--shard",
+                shard["id"],
+                "--output",
+                str(result_path),
+                *_protected_root_cli(protected_roots),
+            ]
+            _write_json(
+                start_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "kind": START_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": collection["candidate"],
+                    "shard_id": shard["id"],
+                    "attempt": attempt,
+                    "command": command,
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            environment = _safe_worker_environment(run_root, shard["id"], attempt)
+            replacements = {
+                str(workspace): "<WORKSPACE>",
+                str(run_root): "<RUN_ROOT>",
+            }
+            try:
+                return_code, duration, process_stdout, process_stderr = (
+                    _run_process_captured(
+                        command,
+                        cwd=workspace,
+                        environment=environment,
+                        replacements=replacements,
+                    )
+                )
+            except BaseException as exc:
+                _write_abandonment(
+                    attempt_root,
                     collection=collection,
                     shard=shard,
                     attempt=attempt,
+                    lease=lease,
+                    reason="controller_interrupted",
                 )
-                completed_attempt_count += 1
-                result = _load_worker_result(result_path, collection, shard)
-                controller = _read_json(controller_path)
-                _validate_controller(
-                    controller,
+                if isinstance(exc, QualificationError):
+                    raise
+                raise QualificationError("PSC_QUALIFICATION_WORKER_PROCESS_FAILED") from exc
+            if not _immutable_exists(result_path):
+                _write_abandonment(
+                    attempt_root,
                     collection=collection,
                     shard=shard,
                     attempt=attempt,
-                    result_path=result_path,
-                    result=result,
-                    require_pass=False,
+                    lease=lease,
+                    reason="worker_result_missing",
                 )
-                if result["status"] == "PASS" and controller.get("status") == "PASS":
-                    reusable = (attempt, result_path, result)
-                else:
-                    terminal_failure = True
-        if completed_attempt_count > 1:
-            raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
-        if terminal_failure:
-            raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
-        if reusable is not None:
-            reused_count += 1
+                raise QualificationError("PSC_QUALIFICATION_WORKER_RESULT_MISSING")
+            result = _load_worker_result(result_path, collection, shard)
+            controller = _write_json(
+                controller_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "kind": CONTROLLER_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": collection["candidate"],
+                    "shard_id": shard["id"],
+                    "attempt": attempt,
+                    "status": (
+                        "PASS"
+                        if return_code == 0 and result["status"] == "PASS"
+                        else "FAIL"
+                    ),
+                    "return_code": return_code,
+                    "duration_ns": duration,
+                    "worker_result_sha256": _sha256(_read_bytes(result_path)),
+                    "process_stdout": process_stdout,
+                    "process_stderr": process_stderr,
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            _validate_controller(
+                controller,
+                collection=collection,
+                shard=shard,
+                attempt=attempt,
+                result_path=result_path,
+                result=result,
+                require_pass=False,
+            )
+            if controller["status"] != "PASS":
+                raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
             completed_count += 1
-            continue
-        attempt = (max(attempts) + 1) if attempts else 1
-        result_path = attempt_root / f"attempt-{attempt:04d}.result.json"
-        start_path = attempt_root / f"attempt-{attempt:04d}.start.json"
-        controller_path = attempt_root / f"attempt-{attempt:04d}.controller.json"
-        command = [
-            sys.executable,
-            "-B",
-            str(runner),
-            "_worker",
-            "--workspace",
-            str(workspace),
-            "--collection",
-            str(run_root / "collection.json"),
-            "--plan",
-            str(run_root / "plan.json"),
-            "--shard",
-            shard["id"],
-            "--output",
-            str(result_path),
-        ]
-        start = {
-            "schema_version": SCHEMA_VERSION,
-            "kind": START_KIND,
+        _assert_git_binding(workspace, collection["candidate"])
+        return {
             "run_key": collection["run_key"],
-            "candidate": collection["candidate"],
-            "shard_id": shard["id"],
-            "attempt": attempt,
-            "command": command,
+            "shard_count": plan["shard_count"],
+            "completed_shard_count": completed_count,
+            "reused_shard_count": reused_count,
+            "status": "PASS",
+            "lease_mechanism": lease["mechanism"],
         }
-        _write_json(start_path, start)
-        environment = _safe_worker_environment(run_root, shard["id"], attempt)
-        started = time.perf_counter_ns()
-        completed = subprocess.run(
-            command,
-            cwd=str(workspace),
-            env=environment,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-        duration = time.perf_counter_ns() - started
-        if not result_path.exists():
-            raise QualificationError("PSC_QUALIFICATION_WORKER_RESULT_MISSING")
-        result = _load_worker_result(result_path, collection, shard)
-        stdout_hash = _sha256(completed.stdout)
-        stderr_hash = _sha256(completed.stderr)
-        controller = {
-            "schema_version": SCHEMA_VERSION,
-            "kind": CONTROLLER_KIND,
-            "run_key": collection["run_key"],
-            "candidate": collection["candidate"],
-            "shard_id": shard["id"],
-            "attempt": attempt,
-            "status": (
-                "PASS"
-                if completed.returncode == 0 and result["status"] == "PASS"
-                else "FAIL"
-            ),
-            "return_code": completed.returncode,
-            "duration_ns": duration,
-            "worker_result_sha256": _sha256(_read_bytes(result_path)),
-            "process_stdout": {
-                "byte_size": len(completed.stdout),
-                "sha256": stdout_hash,
-            },
-            "process_stderr": {
-                "byte_size": len(completed.stderr),
-                "sha256": stderr_hash,
-            },
-        }
-        controller = _write_json(controller_path, controller)
-        _validate_controller(
-            controller,
-            collection=collection,
-            shard=shard,
-            attempt=attempt,
-            result_path=result_path,
-            result=result,
-            require_pass=False,
-        )
-        if controller["status"] != "PASS":
-            raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
-        completed_count += 1
-    _assert_git_binding(workspace, collection["candidate"])
-    return {
-        "run_key": collection["run_key"],
-        "shard_count": plan["shard_count"],
-        "completed_shard_count": completed_count,
-        "reused_shard_count": reused_count,
-        "status": "PASS",
-    }
 
 
 def _json_pointer(document: Any, pointer: str) -> Any:
@@ -1739,16 +2919,23 @@ def _verify_external_evidence(
 
 def _parse_external_evidence(
     values: Sequence[str],
-    forbidden_roots: Sequence[str] = BUILTIN_FORBIDDEN_ROOTS,
+    protected_roots: Sequence[Any] = (),
 ) -> dict[str, pathlib.Path]:
     result: dict[str, pathlib.Path] = {}
     for value in values:
         evidence_id, separator, path = value.partition("=")
         if not separator or not evidence_id or not path or evidence_id in result:
             raise QualificationError("PSC_QUALIFICATION_EVIDENCE_ARGUMENT_INVALID")
-        _reject_forbidden_path(pathlib.Path(path), forbidden_roots)
+        if protected_roots:
+            _reject_protected_path(pathlib.Path(path), protected_roots)
         try:
-            result[evidence_id] = pathlib.Path(path).resolve(strict=True)
+            supplied_path = pathlib.Path(path).absolute()
+            _assert_existing_chain_not_redirected(supplied_path)
+            resolved = supplied_path.resolve(strict=True)
+            _assert_existing_chain_not_redirected(resolved)
+            if protected_roots:
+                _reject_protected_path(resolved, protected_roots)
+            result[evidence_id] = resolved
         except (OSError, ValueError) as exc:
             raise QualificationError(
                 "PSC_QUALIFICATION_EVIDENCE_UNREADABLE"
@@ -1756,60 +2943,113 @@ def _parse_external_evidence(
     return result
 
 
+def _derive_restrictions(
+    collection: Mapping[str, Any],
+    worker_summaries: Sequence[Mapping[str, Any]],
+    plan: Mapping[str, Any],
+    lease: Mapping[str, str],
+) -> dict[str, Any]:
+    evidence = [collection["environment"]["collection_guard_evidence"]]
+    evidence.extend(item["guard_evidence"] for item in worker_summaries)
+    protected_count = sum(
+        len(item.get("protected_root_attempts", [])) for item in evidence
+    )
+    unsafe_alias_count = sum(
+        len(item.get("unsafe_alias_attempts", [])) for item in evidence
+    )
+    network_count = sum(len(item.get("network_attempts", [])) for item in evidence)
+    return {
+        "protected_root_access": {
+            "status": "enforced_and_observed_zero"
+            if protected_count == 0
+            else "violation_observed",
+            "attempt_count": protected_count,
+            "unsafe_alias_attempt_count": unsafe_alias_count,
+            "required_root_labels": sorted(REQUIRED_PROTECTED_ROOT_LABELS),
+            "scope": "qualification_python_processes_only",
+        },
+        "python_process_network_access": {
+            "status": "enforced_and_observed_zero"
+            if network_count == 0
+            else "violation_observed",
+            "attempt_count": network_count,
+            "scope": "qualification_python_processes_only",
+        },
+        "controller_concurrency": {
+            "status": "os_lease_enforced",
+            "mechanism": lease["mechanism"],
+            "run_key_bound": True,
+        },
+        "worker_schedule": {
+            "status": "sequential_plan_enforced"
+            if plan.get("sequential") is True
+            else "not_enforced",
+            "maximum_controller_started_workers": 1,
+        },
+        "claims_not_made": [
+            "child_process_protected_root_access",
+            "child_process_network_or_service_mutation",
+            "external_api_mutation",
+            "remote_repository_merge_or_deploy",
+            "system_wide_state_or_sqlite_mutation",
+        ],
+    }
+
+
 def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
     run_root = pathlib.Path(args.run_root).absolute()
     workspace_argument = pathlib.Path(args.workspace).absolute()
-    _reject_forbidden_path(workspace_argument, BUILTIN_FORBIDDEN_ROOTS)
+    protected_roots = _parse_protected_roots(args.protected_root or [])
+    _validate_path_isolation(run_root, workspace_argument, protected_roots)
     workspace = workspace_argument.resolve(strict=True)
-    _validate_run_root(run_root, workspace, BUILTIN_FORBIDDEN_ROOTS)
     collection = _load_collection(run_root / "collection.json")
-    _validate_run_root(
-        run_root, workspace, collection["environment"]["forbidden_roots"]
-    )
+    _assert_protected_root_binding(protected_roots, collection)
     plan = _load_plan(run_root / "plan.json", collection)
     _assert_git_binding(workspace, collection["candidate"])
+    with _run_key_lease(run_root, collection["run_key"]) as lease:
+        return _finalize_under_lease(
+            args,
+            run_root=run_root,
+            workspace=workspace,
+            protected_roots=protected_roots,
+            collection=collection,
+            plan=plan,
+            lease=lease,
+        )
+
+
+def _finalize_under_lease(
+    args: argparse.Namespace,
+    *,
+    run_root: pathlib.Path,
+    workspace: pathlib.Path,
+    protected_roots: Sequence[Mapping[str, str]],
+    collection: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    lease: Mapping[str, str],
+) -> dict[str, Any]:
     worker_summaries: list[dict[str, Any]] = []
+    abandonment_summaries: list[dict[str, Any]] = []
     aggregate_parent: dict[str, int] = {}
     aggregate_subtests: dict[str, int] = {}
     for shard in plan["shards"]:
         attempt_root = run_root / "attempts" / shard["id"]
-        accepted: tuple[pathlib.Path, dict[str, Any], dict[str, Any]] | None = None
-        terminal_failure = False
-        completed_attempt_count = 0
-        for attempt in _existing_attempts(attempt_root):
-            result_path = attempt_root / f"attempt-{attempt:04d}.result.json"
-            controller_path = attempt_root / f"attempt-{attempt:04d}.controller.json"
-            if not result_path.exists() or not controller_path.exists():
-                continue
-            _validate_start_receipt(
-                attempt_root / f"attempt-{attempt:04d}.start.json",
-                collection=collection,
-                shard=shard,
-                attempt=attempt,
-            )
-            completed_attempt_count += 1
-            result = _load_worker_result(result_path, collection, shard)
-            controller = _read_json(controller_path)
-            _validate_controller(
-                controller,
-                collection=collection,
-                shard=shard,
-                attempt=attempt,
-                result_path=result_path,
-                result=result,
-                require_pass=False,
-            )
-            if result["status"] == "PASS" and controller.get("status") == "PASS":
-                accepted = (result_path, result, controller)
-            else:
-                terminal_failure = True
-        if completed_attempt_count > 1:
-            raise QualificationError("PSC_QUALIFICATION_ATTEMPT_HISTORY_INVALID")
-        if terminal_failure:
+        history = _inspect_attempt_history(
+            attempt_root, collection=collection, shard=shard
+        )
+        if history["unsettled"]:
+            raise QualificationError("PSC_QUALIFICATION_ATTEMPT_UNSETTLED")
+        if history["terminal_failure"] or any(
+            item["reason"] == "worker_reported_failure"
+            for item in history["abandoned"]
+        ):
             raise QualificationError("PSC_QUALIFICATION_TERMINAL_SHARD_FAILURE")
-        if accepted is None:
+        if not history["completed"]:
             raise QualificationError("PSC_QUALIFICATION_SHARD_NOT_PASSED")
-        result_path, result, controller = accepted
+        _attempt, result_path, result, controller = history["completed"][0]
+        abandonment_summaries.extend(
+            {"shard_id": shard["id"], **item} for item in history["abandoned"]
+        )
         for name, value in result["outcomes"]["parent"].items():
             aggregate_parent[name] = aggregate_parent.get(name, 0) + value
         for name, value in result["outcomes"]["subtests"].items():
@@ -1823,11 +3063,12 @@ def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
                 "duration_ns": result["duration_ns"],
                 "outcomes": result["outcomes"],
                 "captured_output": result["captured_output"],
+                "guard_evidence": result["guard_evidence"],
             }
         )
 
     supplied = _parse_external_evidence(
-        args.external_evidence or [], collection["environment"]["forbidden_roots"]
+        args.external_evidence or [], protected_roots
     )
     expected_evidence_ids = {
         item["id"] for item in collection["selector"]["external_evidence"]
@@ -1841,10 +3082,13 @@ def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
             if specification["required"]:
                 raise QualificationError("PSC_QUALIFICATION_EVIDENCE_MISSING")
             continue
-        for forbidden in collection["environment"]["forbidden_roots"]:
-            if _lexically_within(str(path), forbidden):
-                raise QualificationError("PSC_QUALIFICATION_FORBIDDEN_ROOT_ACCESS")
-        evidence = _read_json(path)
+        raw_evidence = _read_bytes(path)
+        try:
+            evidence = json.loads(raw_evidence.decode("utf-8"))
+        except (UnicodeError, ValueError, json.JSONDecodeError) as exc:
+            raise QualificationError("PSC_QUALIFICATION_JSON_INVALID") from exc
+        if type(evidence) is not dict:
+            raise QualificationError("PSC_QUALIFICATION_JSON_INVALID")
         _verify_external_evidence(evidence, specification)
         if _json_pointer(evidence, specification["candidate_commit_pointer"]) != (
             collection["candidate"]["head"]
@@ -1856,8 +3100,8 @@ def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
             {
                 "id": specification["id"],
                 "path_name": path.name,
-                "byte_size": path.stat().st_size,
-                "sha256": _sha256(_read_bytes(path)),
+                "byte_size": len(raw_evidence),
+                "sha256": _sha256(raw_evidence),
                 "acceptance_ids": specification["acceptance_ids"],
             }
         )
@@ -1902,15 +3146,12 @@ def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
             "subtests": aggregate_subtests,
         },
         "workers": worker_summaries,
+        "abandoned_attempts": abandonment_summaries,
         "external_evidence": external_results,
         "acceptance_map": collection["selector"]["acceptance_map"],
-        "restrictions": {
-            "live_root_access_attempts": 0,
-            "api_or_service_mutation": False,
-            "state_or_sqlite_mutation": False,
-            "merge_or_deploy": False,
-            "parallel_test_execution": False,
-        },
+        "restrictions": _derive_restrictions(
+            collection, worker_summaries, plan, lease
+        ),
     }
     ledger_path = pathlib.Path(args.output).absolute()
     _require_path_below(ledger_path, run_root)
@@ -1931,7 +3172,9 @@ def _finalize_command(args: argparse.Namespace) -> dict[str, Any]:
 
 def _verify_command(args: argparse.Namespace) -> dict[str, Any]:
     ledger_argument = pathlib.Path(args.ledger).absolute()
-    _reject_forbidden_path(ledger_argument, BUILTIN_FORBIDDEN_ROOTS)
+    _reject_protected_path(
+        ledger_argument, tuple(BUILTIN_PROTECTED_ROOTS.values())
+    )
     ledger_path = ledger_argument.resolve(strict=True)
     ledger = _read_json(ledger_path)
     _verify_integrity(ledger)
@@ -1965,16 +3208,18 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--expected-tree")
     collect.add_argument("--expected-unique-count", type=int)
     collect.add_argument("--expected-id-sha256")
-    collect.add_argument("--forbid-root", action="append", default=[])
+    collect.add_argument("--protected-root", action="append", default=[])
     collect.add_argument("--allow-dirty", action="store_true")
 
     plan = commands.add_parser("plan")
     plan.add_argument("--workspace", required=True)
     plan.add_argument("--run-root", required=True)
+    plan.add_argument("--protected-root", action="append", default=[])
 
     run = commands.add_parser("run")
     run.add_argument("--workspace", required=True)
     run.add_argument("--run-root", required=True)
+    run.add_argument("--protected-root", action="append", default=[])
 
     worker = commands.add_parser("_worker")
     worker.add_argument("--workspace", required=True)
@@ -1982,12 +3227,14 @@ def _parser() -> argparse.ArgumentParser:
     worker.add_argument("--plan", required=True)
     worker.add_argument("--shard", required=True)
     worker.add_argument("--output", required=True)
+    worker.add_argument("--protected-root", action="append", default=[])
 
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--workspace", required=True)
     finalize.add_argument("--run-root", required=True)
     finalize.add_argument("--external-evidence", action="append", default=[])
     finalize.add_argument("--output", required=True)
+    finalize.add_argument("--protected-root", action="append", default=[])
 
     verify = commands.add_parser("verify")
     verify.add_argument("--ledger", required=True)

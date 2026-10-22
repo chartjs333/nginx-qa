@@ -3,11 +3,39 @@
   "kind": "psc_qualification_selectors",
   "suite_id": "PSC-006-exact-head-v1",
   "isolation_policy_version": "psc-qualification-isolation-v1",
-  "expected_unique_test_count": 943,
-  "expected_test_ids_sha256": "05ed5e81cb7e84793289f9c38945ff6e8c5db2307c266f49468fc6eaf0dc42e9",
-  "default_forbidden_roots": [
-    "D:\\Prompt"
+  "expected_unique_test_count": 951,
+  "expected_test_ids_sha256": "22e39cb72dd36c02287bdb4bcbb5ff3e7aa5bc5d0b578081310b4b45a102abf5",
+  "required_protected_root_labels": [
+    "live_prompt",
+    "service_prompt",
+    "service_root",
+    "service_runtime",
+    "service_state"
   ],
+  "builtin_protected_roots": {
+    "live_prompt": "D:\\Prompt"
+  },
+  "coverage_partitions": {
+    "psc_a15_regression": {
+      "category_ids": [
+        "focused_prompt_archive",
+        "sequential_prompt",
+        "actor_import_and_telegram",
+        "managed_identity_continuity",
+        "proposal",
+        "schema_contract"
+      ],
+      "expected_unique_test_count": 910,
+      "expected_test_ids_sha256": "5866a1c6ad5e4c7e0f24a0d631519416fef98af6421086f4dd25a8edd82d5e8f"
+    },
+    "qualification_tooling_preflight": {
+      "category_ids": [
+        "qualification_harness"
+      ],
+      "expected_unique_test_count": 41,
+      "expected_test_ids_sha256": "dd94a21be832d5955300f3a99bbbbbdc67eedef445f999d2be23fddd76ab7b26"
+    }
+  },
   "categories": [
     {
       "id": "focused_prompt_archive",
@@ -81,8 +109,8 @@
     },
     {
       "id": "qualification_harness",
-      "expected_owned_test_count": 33,
-      "expected_test_ids_sha256": "29ed607351858bc97a77684dd3ef930aecb49aa75a68793afa985edefc9eaedb",
+      "expected_owned_test_count": 41,
+      "expected_test_ids_sha256": "dd94a21be832d5955300f3a99bbbbbdc67eedef445f999d2be23fddd76ab7b26",
       "modules": [
         "tests.test_psc_exact_head_benchmark",
         "tests.test_psc_qualification_runner"
@@ -107,7 +135,7 @@
     "tests.test_prompt_archive_runtime_integration"
   ],
   "pass_policy": {
-    "required_unique_test_count": 943,
+    "required_unique_test_count": 951,
     "maximum_failures": 0,
     "maximum_errors": 0,
     "maximum_skips": 0,
@@ -140,7 +168,8 @@
         "/acceptance/PSC-A17/pass": true,
         "/execution_policy/generated_fixture_only": true,
         "/execution_policy/sequential": true,
-        "/execution_policy/filesystem_delete_or_storage_gc": false,
+        "/execution_policy/durable_archive_or_blob_delete": false,
+        "/execution_policy/storage_gc": false,
         "/execution_policy/services_called_or_restarted": false,
         "/execution_policy/production_authoritative_mode_enabled": false,
         "/execution_policy/isolated_authoritative_mode_only": true,
@@ -168,7 +197,7 @@
     "PSC-A12": {"categories": ["focused_prompt_archive", "managed_identity_continuity"], "modules": ["tests.test_prompt_archive_api", "tests.test_prompt_archive_auth", "tests.test_prompt_archive_runtime_integration", "tests.test_managed_scope_secret_boundary", "tests.test_managed_continuity"], "external_evidence": [], "documents": ["docs/PROMPT_ARCHIVE_STORAGE_V1.md"]},
     "PSC-A13": {"categories": ["focused_prompt_archive"], "modules": ["tests.test_prompt_archive_storage", "tests.test_prompt_archive_incremental_security", "tests.test_prompt_archive_migration", "tests.test_prompt_archive_occurrence_store", "tests.test_prompt_archive_latest", "tests.test_prompt_archive_runtime_integration"], "external_evidence": [], "documents": ["docs/PROMPT_ARCHIVE_STORAGE_V1.md"]},
     "PSC-A14": {"categories": ["focused_prompt_archive"], "modules": ["tests.test_prompt_archive_api", "tests.test_prompt_archive_auth", "tests.test_prompt_archive_source_metadata", "tests.test_prompt_archive_source_metadata_projection_store", "tests.test_prompt_archive_incremental_security", "tests.test_prompt_archive_contract", "tests.test_prompt_archive_metrics"], "external_evidence": [], "documents": ["docs/PROMPT_ARCHIVE_STORAGE_V1.md"]},
-    "PSC-A15": {"categories": ["focused_prompt_archive", "sequential_prompt", "actor_import_and_telegram", "managed_identity_continuity", "proposal", "qualification_harness", "schema_contract"], "modules": [], "external_evidence": [], "documents": ["orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md"]},
+    "PSC-A15": {"categories": ["focused_prompt_archive", "sequential_prompt", "actor_import_and_telegram", "managed_identity_continuity", "proposal", "schema_contract"], "modules": [], "external_evidence": [], "documents": ["orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md"]},
     "PSC-A16": {"categories": ["focused_prompt_archive", "qualification_harness"], "modules": ["tests.test_prompt_archive_metrics", "tests.test_psc_exact_head_benchmark", "tests.test_psc_qualification_runner"], "external_evidence": ["exact_head_benchmark"], "documents": ["orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md"]},
     "PSC-A17": {"categories": ["focused_prompt_archive", "qualification_harness"], "modules": ["tests.test_psc_exact_head_benchmark", "tests.test_psc_qualification_runner"], "external_evidence": ["exact_head_benchmark"], "documents": ["orchestration/sprints/prompt-storage-compaction-v1/acceptance-matrix.md"]},
     "PSC-A18": {"categories": ["focused_prompt_archive"], "modules": ["tests.test_prompt_archive_runtime", "tests.test_prompt_archive_native_manifest", "tests.test_prompt_archive_runtime_integration"], "external_evidence": [], "documents": ["docs/PROMPT_ARCHIVE_STORAGE_V1.md"]},

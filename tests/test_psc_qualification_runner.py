@@ -1,6 +1,10 @@
 import copy
+import json
 import pathlib
+import subprocess
+import sys
 import tempfile
+import threading
 import types
 import unittest
 from unittest import mock
@@ -26,7 +30,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
 
     def test_committed_selector_is_strict_and_maps_every_acceptance(self) -> None:
         selector = runner._load_selector(SELECTOR_PATH)
-        self.assertEqual(selector["expected_unique_test_count"], 943)
+        self.assertEqual(selector["expected_unique_test_count"], 951)
         self.assertEqual(
             set(selector["acceptance_map"]),
             {f"PSC-A{number:02d}" for number in range(1, 21)},
@@ -40,6 +44,30 @@ class PscQualificationRunnerTests(unittest.TestCase):
         self.assertEqual(
             selector["external_evidence"][0]["expected_kind"],
             "psc_a05_a16_a17_exact_head_benchmark_evidence",
+        )
+        required = selector["external_evidence"][0]["required_pointer_values"]
+        self.assertIs(required["/execution_policy/durable_archive_or_blob_delete"], False)
+        self.assertIs(required["/execution_policy/storage_gc"], False)
+        self.assertNotIn(
+            "/execution_policy/filesystem_delete_or_storage_gc", required
+        )
+        self.assertEqual(
+            set(selector["required_protected_root_labels"]),
+            runner.REQUIRED_PROTECTED_ROOT_LABELS,
+        )
+        partitions = selector["coverage_partitions"]
+        self.assertEqual(
+            partitions["psc_a15_regression"]["expected_unique_test_count"], 910
+        )
+        self.assertEqual(
+            partitions["qualification_tooling_preflight"][
+                "expected_unique_test_count"
+            ],
+            41,
+        )
+        self.assertNotIn(
+            "qualification_harness",
+            selector["acceptance_map"]["PSC-A15"]["categories"],
         )
 
     def test_integrity_seal_detects_payload_tamper(self) -> None:
@@ -65,6 +93,108 @@ class PscQualificationRunnerTests(unittest.TestCase):
                 b"two",
             )
 
+    def test_immutable_writer_is_race_safe_and_fault_leaves_no_final(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            path = root / "race.json"
+            barrier = threading.Barrier(2)
+            outcomes = []
+
+            def publish(payload):
+                barrier.wait()
+                try:
+                    runner._write_immutable(path, payload)
+                    outcomes.append("published")
+                except runner.QualificationError as exc:
+                    outcomes.append(exc.code)
+
+            threads = [
+                threading.Thread(target=publish, args=(b"one",)),
+                threading.Thread(target=publish, args=(b"two",)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            self.assertEqual(outcomes.count("published"), 1)
+            self.assertEqual(
+                outcomes.count("PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT"),
+                1,
+            )
+            self.assertIn(path.read_bytes(), {b"one", b"two"})
+
+            same_path = root / "same.json"
+            same_barrier = threading.Barrier(2)
+            same_errors = []
+
+            def publish_same():
+                try:
+                    same_barrier.wait()
+                    runner._write_immutable(same_path, b"identical")
+                except BaseException as exc:
+                    same_errors.append(exc)
+
+            same_threads = [threading.Thread(target=publish_same) for _ in range(2)]
+            for thread in same_threads:
+                thread.start()
+            for thread in same_threads:
+                thread.join()
+            self.assertEqual(same_errors, [])
+            self.assertEqual(same_path.read_bytes(), b"identical")
+
+            failed = root / "failed.json"
+            with mock.patch.object(
+                runner, "_publish_temp_no_replace", side_effect=OSError("synthetic")
+            ):
+                self.assertQualificationCode(
+                    "PSC_QUALIFICATION_ARTIFACT_WRITE_FAILED",
+                    runner._write_immutable,
+                    failed,
+                    b"complete",
+                )
+            self.assertFalse(failed.exists())
+            self.assertEqual(list(root.glob(".failed.json.psc-owned-*.tmp")), [])
+
+            truncated = root / "truncated.json"
+            truncated.write_bytes(b"partial")
+            self.assertQualificationCode(
+                "PSC_QUALIFICATION_IMMUTABLE_ARTIFACT_CONFLICT",
+                runner._write_immutable,
+                truncated,
+                b"complete",
+            )
+            self.assertEqual(truncated.read_bytes(), b"partial")
+
+    def test_run_key_lease_rejects_concurrent_controller_process(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            run_key = "a" * 64
+            script = (
+                "from pathlib import Path; "
+                "from tools.run_psc_qualification import _run_key_lease; "
+                f"root=Path({str(root)!r}); key={run_key!r}; "
+                "ctx=_run_key_lease(root,key); ctx.__enter__(); "
+                "print('ready',flush=True); input(); ctx.__exit__(None,None,None)"
+            )
+            process = subprocess.Popen(
+                [sys.executable, "-B", "-c", script],
+                cwd=str(REPOSITORY_ROOT),
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertEqual(process.stdout.readline().strip(), "ready")
+                self.assertQualificationCode(
+                    "PSC_QUALIFICATION_RUN_KEY_BUSY",
+                    lambda: runner._run_key_lease(root, run_key).__enter__(),
+                )
+            finally:
+                process.communicate("\n", timeout=10)
+            with runner._run_key_lease(root, run_key):
+                pass
+
     def test_windows_lexical_guard_has_component_boundary(self) -> None:
         self.assertTrue(runner._lexically_within(r"d:\prompt", r"D:\Prompt"))
         self.assertTrue(
@@ -74,10 +204,10 @@ class PscQualificationRunnerTests(unittest.TestCase):
             runner._lexically_within(r"D:\Prompt-copy\item", r"D:\Prompt")
         )
         self.assertQualificationCode(
-            "PSC_QUALIFICATION_FORBIDDEN_ROOT_ACCESS",
+            "PSC_QUALIFICATION_PROTECTED_ROOT_ACCESS",
             runner._reject_forbidden_path,
             pathlib.Path(r"D:\Prompt\live.json"),
-            runner.BUILTIN_FORBIDDEN_ROOTS,
+            tuple(runner.BUILTIN_PROTECTED_ROOTS.values()),
         )
 
     def test_run_root_overlap_fails_closed(self) -> None:
@@ -99,6 +229,104 @@ class PscQualificationRunnerTests(unittest.TestCase):
                 forbidden / "run",
                 workspace,
                 [str(forbidden)],
+            )
+
+    def test_named_protected_roots_cover_subst_alias_and_allow_workspace(self) -> None:
+        mappings = {
+            "C:": r"\Device\HarddiskVolumeC",
+            "D:": r"\Device\HarddiskVolumeD",
+            "E:": "\\??\\D:\\",
+        }
+
+        def query(drive):
+            return mappings[drive.upper()]
+
+        roots = runner._parse_protected_roots(
+            [
+                r"service_root=C:\service",
+                r"service_state=C:\state",
+                r"service_runtime=C:\state\runtime",
+                r"service_prompt=C:\state\prompt",
+            ],
+            device_query=query,
+        )
+        runner._validate_path_isolation(
+            pathlib.Path(r"C:\qualification"),
+            pathlib.Path(r"C:\service\managed-workspace"),
+            roots,
+            device_query=query,
+            inspect_existing=False,
+        )
+        guard = runner.QualificationAccessGuard(
+            protected_roots=roots,
+            allowed_roots=(pathlib.Path(r"C:\service\managed-workspace"),),
+            device_query=query,
+        )
+        ordinary = types.SimpleNamespace(
+            st_mode=runner.stat.S_IFDIR, st_file_attributes=0
+        )
+        guard._original_lstat = lambda _path: ordinary
+        guard.check("open", runner.os.devnull)
+        guard.check("open", r"C:\service\managed-workspace\test.py")
+        guard.check(
+            "io.open",
+            r"C:\Python312\Lib\site-packages\~-p.dist-info\entry_points.txt",
+        )
+        with self.assertRaises(PermissionError):
+            guard.check("open", r"C:\service\sibling\state.json")
+        with self.assertRaises(PermissionError):
+            guard.check("open", r"E:\Prompt\latest-response.json")
+        with self.assertRaises(PermissionError):
+            guard.check(
+                "open",
+                r"C:\service\managed-workspace\WORKSP~1\secret.json",
+            )
+        redirected = types.SimpleNamespace(
+            st_mode=runner.stat.S_IFDIR, st_file_attributes=0x400
+        )
+
+        def lstat_with_junction(path):
+            return (
+                redirected
+                if str(path).casefold().endswith(r"\redirect")
+                else ordinary
+            )
+
+        guard._original_lstat = lstat_with_junction
+        with self.assertRaises(PermissionError):
+            guard.check(
+                "open", r"C:\service\managed-workspace\redirect\secret.json"
+            )
+        with self.assertRaises(PermissionError):
+            guard.check("open", r"C:\external\redirect\secret.json")
+        self.assertEqual(
+            {item["root_label"] for item in guard.protected_attempts},
+            {"service_root", "live_prompt"},
+        )
+        self.assertEqual(
+            guard.unsafe_alias_attempts,
+            [{"event": "open"}, {"event": "open"}, {"event": "open"}],
+        )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED",
+            runner._strict_local_windows_path,
+            r"\\?\D:\Prompt",
+        )
+
+    def test_existing_reparse_chain_is_rejected(self) -> None:
+        ordinary = types.SimpleNamespace(
+            st_mode=runner.stat.S_IFDIR, st_file_attributes=0
+        )
+        redirected = types.SimpleNamespace(
+            st_mode=runner.stat.S_IFDIR, st_file_attributes=0x400
+        )
+        with mock.patch.object(
+            runner.os, "lstat", side_effect=[ordinary, redirected]
+        ):
+            self.assertQualificationCode(
+                "PSC_QUALIFICATION_PATH_REDIRECTED",
+                runner._assert_existing_chain_not_redirected,
+                pathlib.Path(r"C:\safe\path"),
             )
 
     def test_output_path_must_be_below_run_root(self) -> None:
@@ -306,7 +534,15 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "tests": [{"id": test_id, "outcome": "success", "subtests": []}],
             "fixture_errors": [],
             "unexpected_parent_id_count": 0,
-            "forbidden_root_attempts": [],
+            "guard_evidence": {
+                "protected_root_attempts": [],
+                "unsafe_alias_attempts": [],
+                "network_attempts": [],
+                "guard_checks_by_event": {},
+                "descriptor_checks_by_event": {},
+                "native_path_checks_by_entrypoint": {},
+                "native_guard_entrypoints": [],
+            },
             "execution_exception": None,
             "git_before": candidate,
             "git_after": candidate,
@@ -323,21 +559,179 @@ class PscQualificationRunnerTests(unittest.TestCase):
         )
 
     def test_external_evidence_requires_seal_contract_and_pass_values(self) -> None:
-        specification = {
-            "expected_schema_version": 2,
-            "expected_kind": "benchmark",
-            "seal_field": "payload_sha256",
-            "required_pointer_values": {"/acceptance/overall_pass": True},
-        }
+        specification = runner._load_selector(SELECTOR_PATH)["external_evidence"][0]
         evidence = {
             "schema_version": 2,
-            "kind": "benchmark",
-            "acceptance": {"overall_pass": True},
+            "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
+            "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+            "acceptance": {
+                "overall_pass": True,
+                "PSC-A05": {"pass": True},
+                "PSC-A16": {"pass": True},
+                "PSC-A17": {"pass": True},
+            },
+            "execution_policy": {
+                "generated_fixture_only": True,
+                "sequential": True,
+                "durable_archive_or_blob_delete": False,
+                "storage_gc": False,
+                "services_called_or_restarted": False,
+                "production_authoritative_mode_enabled": False,
+                "isolated_authoritative_mode_only": True,
+            },
+            "restrictions": {
+                "live_data_read_or_written": False,
+                "runtime_state_or_sqlite_mutated": False,
+                "service_restart": False,
+                "merge_or_deploy": False,
+                "start_from_git_or_sprint_import": False,
+                "generated_run_root_deleted": False,
+            },
         }
         evidence["payload_sha256"] = runner._sha256(
             runner._canonical_json_bytes(evidence)
         )
         runner._verify_external_evidence(evidence, specification)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            run_root = root / "run"
+            attempt_root = run_root / "attempts" / "shard-0001"
+            candidate = {
+                "head": "a" * 40,
+                "tree": "b" * 40,
+                "branch": "synthetic",
+                "clean": True,
+                "status_sha256": runner._sha256(b""),
+                "status_line_count": 0,
+            }
+            test_id = "tests.synthetic.Case.test_ok"
+            shard = {
+                "id": "shard-0001",
+                "test_count": 1,
+                "test_ids": [test_id],
+            }
+            empty_guard = {
+                "protected_root_attempts": [],
+                "unsafe_alias_attempts": [],
+                "network_attempts": [],
+            }
+            collection = {
+                "suite_id": "synthetic",
+                "run_key": "c" * 64,
+                "candidate": candidate,
+                "selection": {"unique_test_count": 1},
+                "toolchain": {},
+                "selector": {
+                    "external_evidence": [specification],
+                    "acceptance_map": {},
+                    "singleton_modules": [],
+                    "priority_test_ids": [],
+                },
+                "environment": {"collection_guard_evidence": empty_guard},
+            }
+            plan = {
+                "shards": [shard],
+                "shard_count": 1,
+                "unique_test_count": 1,
+                "sequential": True,
+            }
+            lease = {"owner_id": "d" * 32, "mechanism": "msvcrt_byte_range"}
+            runner._write_json(
+                attempt_root / "attempt-0001.start.json",
+                {
+                    "kind": runner.START_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard_id": shard["id"],
+                    "attempt": 1,
+                    "command": ["python", "_worker"],
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            outcomes = {
+                "tests_run": 1,
+                "parent": {
+                    name: 1 if name == "success" else 0
+                    for name in (
+                        "success", "failure", "error", "skip", "expected_failure",
+                        "unexpected_success", "subtest_failure", "subtest_error",
+                        "subtest_skip", "not_run",
+                    )
+                },
+                "subtests": {
+                    "success": 0, "failure": 0, "error": 0, "skip": 0, "total": 0
+                },
+                "fixture_error_count": 0,
+                "unexpected_parent_id_count": 0,
+            }
+            result_path = attempt_root / "attempt-0001.result.json"
+            runner._write_json(
+                result_path,
+                {
+                    "kind": runner.WORKER_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard": shard,
+                    "status": "PASS",
+                    "duration_ns": 1,
+                    "loader": {
+                        "requested_ids_equal_loaded_ids": True,
+                        "loaded_test_count": 1,
+                        "error_count": 0,
+                        "error_hashes": [],
+                    },
+                    "outcomes": outcomes,
+                    "tests": [{"id": test_id, "outcome": "success", "subtests": []}],
+                    "fixture_errors": [],
+                    "unexpected_parent_id_count": 0,
+                    "guard_evidence": empty_guard,
+                    "execution_exception": None,
+                    "git_before": candidate,
+                    "git_after": candidate,
+                    "captured_output": {},
+                },
+            )
+            runner._write_json(
+                attempt_root / "attempt-0001.controller.json",
+                {
+                    "kind": runner.CONTROLLER_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard_id": shard["id"],
+                    "attempt": 1,
+                    "status": "PASS",
+                    "return_code": 0,
+                    "worker_result_sha256": runner._sha256(result_path.read_bytes()),
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            evidence_path = root / "benchmark.json"
+            evidence_path.write_bytes(runner._canonical_json_bytes(evidence))
+            args = types.SimpleNamespace(
+                external_evidence=[f"exact_head_benchmark={evidence_path}"],
+                output=str(run_root / "ledger.json"),
+            )
+            with mock.patch.object(
+                runner, "_assert_git_binding", return_value=candidate
+            ):
+                finalized = runner._finalize_under_lease(
+                    args,
+                    run_root=run_root,
+                    workspace=workspace,
+                    protected_roots=(),
+                    collection=collection,
+                    plan=plan,
+                    lease=lease,
+                )
+            self.assertEqual(finalized["status"], "PASS")
+            ledger = runner._read_json(run_root / "ledger.json")
+            self.assertEqual(
+                ledger["external_evidence"][0]["id"], "exact_head_benchmark"
+            )
         tampered = copy.deepcopy(evidence)
         tampered["acceptance"]["overall_pass"] = False
         self.assertQualificationCode(
@@ -358,6 +752,186 @@ class PscQualificationRunnerTests(unittest.TestCase):
             specification,
         )
 
+    def test_committed_selector_accepts_sealed_benchmark_shaped_evidence(self) -> None:
+        specification = runner._load_selector(SELECTOR_PATH)["external_evidence"][0]
+        evidence = {
+            "schema_version": 2,
+            "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
+            "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+            "acceptance": {
+                "overall_pass": True,
+                "PSC-A05": {"pass": True},
+                "PSC-A16": {"pass": True},
+                "PSC-A17": {"pass": True},
+            },
+            "execution_policy": {
+                "generated_fixture_only": True,
+                "sequential": True,
+                "durable_archive_or_blob_delete": False,
+                "storage_gc": False,
+                "services_called_or_restarted": False,
+                "production_authoritative_mode_enabled": False,
+                "isolated_authoritative_mode_only": True,
+            },
+            "restrictions": {
+                "live_data_read_or_written": False,
+                "runtime_state_or_sqlite_mutated": False,
+                "service_restart": False,
+                "merge_or_deploy": False,
+                "start_from_git_or_sprint_import": False,
+                "generated_run_root_deleted": False,
+            },
+        }
+        evidence["payload_sha256"] = runner._sha256(
+            runner._canonical_json_bytes(evidence)
+        )
+        runner._verify_external_evidence(evidence, specification)
+
+    def test_start_only_attempt_requires_explicit_abandonment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            attempt_root = pathlib.Path(directory)
+            candidate = {"head": "a" * 40, "tree": "b" * 40}
+            collection = {"run_key": "c" * 64, "candidate": candidate}
+            shard = {"id": "shard-0001", "test_count": 1, "test_ids": ["x"]}
+            lease = {"owner_id": "d" * 32, "mechanism": "msvcrt_byte_range"}
+            runner._write_json(
+                attempt_root / "attempt-0001.start.json",
+                {
+                    "kind": runner.START_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard_id": shard["id"],
+                    "attempt": 1,
+                    "command": ["python", "_worker"],
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            history = runner._inspect_attempt_history(
+                attempt_root, collection=collection, shard=shard
+            )
+            self.assertEqual(history["unsettled"], [1])
+            runner._write_abandonment(
+                attempt_root,
+                collection=collection,
+                shard=shard,
+                attempt=1,
+                lease=lease,
+                reason="controller_interrupted",
+            )
+            history = runner._inspect_attempt_history(
+                attempt_root, collection=collection, shard=shard
+            )
+            self.assertEqual(history["unsettled"], [])
+            self.assertEqual(history["abandoned"][0]["attempt"], 1)
+
+    def test_higher_start_only_attempt_cannot_be_silently_finalized(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            attempt_root = pathlib.Path(directory)
+            candidate = {"head": "a" * 40, "tree": "b" * 40}
+            collection = {"run_key": "c" * 64, "candidate": candidate}
+            test_id = "tests.synthetic.Case.test_ok"
+            shard = {"id": "shard-0001", "test_count": 1, "test_ids": [test_id]}
+            lease = {"owner_id": "d" * 32, "mechanism": "msvcrt_byte_range"}
+            for attempt in (1, 2):
+                runner._write_json(
+                    attempt_root / f"attempt-{attempt:04d}.start.json",
+                    {
+                        "kind": runner.START_KIND,
+                        "run_key": collection["run_key"],
+                        "candidate": candidate,
+                        "shard_id": shard["id"],
+                        "attempt": attempt,
+                        "command": ["python", "_worker"],
+                        "lease_owner_id": lease["owner_id"],
+                        "lease_mechanism": lease["mechanism"],
+                    },
+                )
+            outcomes = {
+                "tests_run": 1,
+                "parent": {
+                    name: 1 if name == "success" else 0
+                    for name in (
+                        "success", "failure", "error", "skip", "expected_failure",
+                        "unexpected_success", "subtest_failure", "subtest_error",
+                        "subtest_skip", "not_run",
+                    )
+                },
+                "subtests": {
+                    "success": 0, "failure": 0, "error": 0, "skip": 0, "total": 0
+                },
+                "fixture_error_count": 0,
+                "unexpected_parent_id_count": 0,
+            }
+            result_path = attempt_root / "attempt-0001.result.json"
+            runner._write_json(
+                result_path,
+                {
+                    "kind": runner.WORKER_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard": shard,
+                    "status": "PASS",
+                    "loader": {
+                        "requested_ids_equal_loaded_ids": True,
+                        "loaded_test_count": 1,
+                        "error_count": 0,
+                        "error_hashes": [],
+                    },
+                    "outcomes": outcomes,
+                    "tests": [{"id": test_id, "outcome": "success", "subtests": []}],
+                    "fixture_errors": [],
+                    "unexpected_parent_id_count": 0,
+                    "guard_evidence": {
+                        "protected_root_attempts": [],
+                        "unsafe_alias_attempts": [],
+                        "network_attempts": [],
+                    },
+                    "execution_exception": None,
+                    "git_before": candidate,
+                    "git_after": candidate,
+                },
+            )
+            runner._write_json(
+                attempt_root / "attempt-0001.controller.json",
+                {
+                    "kind": runner.CONTROLLER_KIND,
+                    "run_key": collection["run_key"],
+                    "candidate": candidate,
+                    "shard_id": shard["id"],
+                    "attempt": 1,
+                    "status": "PASS",
+                    "return_code": 0,
+                    "worker_result_sha256": runner._sha256(result_path.read_bytes()),
+                    "lease_owner_id": lease["owner_id"],
+                    "lease_mechanism": lease["mechanism"],
+                },
+            )
+            history = runner._inspect_attempt_history(
+                attempt_root, collection=collection, shard=shard
+            )
+            self.assertEqual(len(history["completed"]), 1)
+            self.assertEqual(history["unsettled"], [2])
+
+    def test_restrictions_are_derived_and_disclose_unmeasured_claims(self) -> None:
+        empty_guard = {
+            "protected_root_attempts": [],
+            "unsafe_alias_attempts": [],
+            "network_attempts": [],
+        }
+        restrictions = runner._derive_restrictions(
+            {"environment": {"collection_guard_evidence": empty_guard}},
+            [{"guard_evidence": empty_guard}],
+            {"sequential": True},
+            {"mechanism": "msvcrt_byte_range"},
+        )
+        self.assertEqual(
+            restrictions["protected_root_access"]["status"],
+            "enforced_and_observed_zero",
+        )
+        self.assertIn("external_api_mutation", restrictions["claims_not_made"])
+        self.assertNotIn("api_or_service_mutation", restrictions)
+
     def test_controller_binding_rejects_wrong_worker_hash(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             result_path = pathlib.Path(directory) / "result.json"
@@ -375,6 +949,8 @@ class PscQualificationRunnerTests(unittest.TestCase):
                     "shard_id": shard["id"],
                     "attempt": 1,
                     "command": ["python", "_worker"],
+                    "lease_owner_id": "d" * 32,
+                    "lease_mechanism": "msvcrt_byte_range",
                 }
             )
             start_path.write_bytes(runner._canonical_bytes(start))
@@ -402,6 +978,8 @@ class PscQualificationRunnerTests(unittest.TestCase):
                     "status": "FAIL",
                     "return_code": 2,
                     "worker_result_sha256": "0" * 64,
+                    "lease_owner_id": "d" * 32,
+                    "lease_mechanism": "msvcrt_byte_range",
                 }
             )
             self.assertQualificationCode(
@@ -432,15 +1010,69 @@ class PscQualificationRunnerTests(unittest.TestCase):
                 runner._parse_external_evidence,
                 [f"benchmark={pathlib.Path(directory) / 'missing.json'}"],
             )
+            with mock.patch.object(
+                runner,
+                "_assert_existing_chain_not_redirected",
+                side_effect=runner.QualificationError(
+                    "PSC_QUALIFICATION_PATH_REDIRECTED"
+                ),
+            ):
+                self.assertQualificationCode(
+                    "PSC_QUALIFICATION_PATH_REDIRECTED",
+                    runner._parse_external_evidence,
+                    [f"benchmark={first}"],
+                )
 
-    def test_secret_shaped_output_is_hashed_but_not_excerpted(self) -> None:
+    def test_secret_shaped_output_is_streamed_and_never_persisted_raw(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            path = pathlib.Path(directory) / "stdout.txt"
-            path.write_text("api_key=do-not-publish-this", encoding="utf-8")
-            digest = runner._output_digest(path, {})
-        self.assertEqual(digest["excerpt_status"], "omitted_secret_pattern")
-        self.assertIsNone(digest["excerpt"])
-        self.assertRegex(digest["sha256"], r"^[0-9a-f]{64}$")
+            root = pathlib.Path(directory)
+            marker = "do-not-publish-this"
+            digests = []
+            for text in (
+                f"prefix api_key={marker} suffix",
+                f'{{"api_key":"{marker}"}}',
+                f"{{'Authorization': 'Bearer {marker}'}}",
+            ):
+                capture = runner._BoundedOutputCapture()
+                midpoint = len(text) // 2
+                capture.write(text[:midpoint])
+                capture.write(text[midpoint:])
+                digests.append(capture.snapshot({}))
+            bounded = runner._BoundedOutputCapture()
+            bounded.write("x" * (1024 * 1024))
+            bounded_digest = bounded.snapshot({})
+            return_code, _duration, child_stdout, child_stderr = (
+                runner._run_process_captured(
+                    [
+                        sys.executable,
+                        "-c",
+                        f"import sys; print('token={marker}'); "
+                        f"print('password={marker}', file=sys.stderr)",
+                    ],
+                    cwd=root,
+                    environment=dict(runner.os.environ),
+                    replacements={},
+                )
+            )
+            self.assertEqual(return_code, 0)
+            runner._write_json(
+                root / "artifact.json",
+                {
+                    "captured": digests,
+                    "child_stdout": child_stdout,
+                    "child_stderr": child_stderr,
+                },
+            )
+            persisted = b"".join(
+                path.read_bytes() for path in root.rglob("*") if path.is_file()
+            )
+        for digest in digests:
+            self.assertIsNone(digest["excerpt"])
+            self.assertRegex(digest["sha256"], r"^[0-9a-f]{64}$")
+        self.assertNotIn(marker.encode("utf-8"), persisted)
+        self.assertEqual(bounded_digest["byte_size"], 1024 * 1024)
+        self.assertEqual(bounded_digest["excerpt_status"], "omitted_by_policy")
+        self.assertIsNone(bounded_digest["excerpt"])
 
 
 if __name__ == "__main__":
