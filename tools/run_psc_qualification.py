@@ -54,6 +54,9 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 
+_ORIGINAL_LSTAT = os.lstat
+
+
 SCHEMA_VERSION = 1
 COLLECTION_KIND = "psc_qualification_collection"
 PLAN_KIND = "psc_qualification_plan"
@@ -1056,7 +1059,11 @@ def _assert_existing_chain_not_redirected(
     path: pathlib.Path, *, lstat_function=None
 ) -> None:
     if lstat_function is None:
-        lstat_function = os.lstat
+        # The qualification guard replaces os.lstat irreversibly.  Internal
+        # chain validation must still inspect the ancestors of an explicitly
+        # allowed managed workspace even when service_state is its protected
+        # parent; candidate calls continue through the guarded public API.
+        lstat_function = _ORIGINAL_LSTAT
     local = _strict_local_windows_path(path)
     drive, tail = ntpath.splitdrive(local)
     current = pathlib.Path(drive + "\\")
@@ -1096,15 +1103,18 @@ def _validate_path_isolation(
         _forms_overlap(run, root) for root in protected
     ):
         raise QualificationError("PSC_QUALIFICATION_RUN_ROOT_OVERLAP")
-    # The managed workspace is an explicit allowed subtree.  It may live
-    # below service_root, but never below live prompt/state/runtime/prompt.
+    # The exact managed workspace is an explicit allowed subtree.  It may
+    # live below the service checkout root or below the managed service-state
+    # root, but never below live prompt/runtime/prompt.  The access guard only
+    # exempts this exact workspace subtree, not siblings or either parent.
     for root in protected:
         overlaps = _forms_overlap(work, root)
         workspace_is_below = all(
             _under(work[key], root[key]) for key in ("lexical_path", "device_path")
         )
         if overlaps and (
-            root["label"] != "service_root" or not workspace_is_below
+            root["label"] not in {"service_root", "service_state"}
+            or not workspace_is_below
         ):
             raise QualificationError("PSC_QUALIFICATION_WORKSPACE_OVERLAP")
     if inspect_existing:
@@ -1184,7 +1194,7 @@ class QualificationAccessGuard:
         self.native_path_checks_by_entrypoint: dict[str, int] = {}
         self.native_guard_entrypoints: list[str] = []
         self._installed = False
-        self._original_lstat = os.lstat
+        self._original_lstat = _ORIGINAL_LSTAT
 
     def _candidate_forms(self, value: Any) -> dict[str, str]:
         try:

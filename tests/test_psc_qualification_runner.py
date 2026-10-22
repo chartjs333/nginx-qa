@@ -236,6 +236,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "C:": r"\Device\HarddiskVolumeC",
             "D:": r"\Device\HarddiskVolumeD",
             "E:": "\\??\\D:\\",
+            "F:": "\\??\\C:\\state",
         }
 
         def query(drive):
@@ -257,13 +258,47 @@ class PscQualificationRunnerTests(unittest.TestCase):
             device_query=query,
             inspect_existing=False,
         )
-        guard = runner.QualificationAccessGuard(
+        state_workspace = pathlib.Path(
+            r"C:\state\managed\projects\9000\sprints\sprint-1\nodes\qualification"
+        )
+        runner._validate_path_isolation(
+            pathlib.Path(r"C:\qualification"),
+            state_workspace,
+            roots,
+            device_query=query,
+            inspect_existing=False,
+        )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_RUN_ROOT_OVERLAP",
+            runner._validate_path_isolation,
+            pathlib.Path(r"C:\state\qualification-run"),
+            state_workspace,
+            roots,
+            device_query=query,
+            inspect_existing=False,
+        )
+        state_guard = runner.QualificationAccessGuard(
             protected_roots=roots,
-            allowed_roots=(pathlib.Path(r"C:\service\managed-workspace"),),
+            allowed_roots=(state_workspace,),
             device_query=query,
         )
         ordinary = types.SimpleNamespace(
             st_mode=runner.stat.S_IFDIR, st_file_attributes=0
+        )
+        state_guard._original_lstat = lambda _path: ordinary
+        state_guard.check("open", state_workspace / "test.py")
+        with self.assertRaises(PermissionError):
+            state_guard.check("open", r"C:\state\managed\sibling\state.json")
+        with self.assertRaises(PermissionError):
+            state_guard.check("open", r"F:\managed\sibling\state.json")
+        self.assertEqual(
+            [item["root_label"] for item in state_guard.protected_attempts],
+            ["service_state", "service_state"],
+        )
+        guard = runner.QualificationAccessGuard(
+            protected_roots=roots,
+            allowed_roots=(pathlib.Path(r"C:\service\managed-workspace"),),
+            device_query=query,
         )
         guard._original_lstat = lambda _path: ordinary
         guard.check("open", runner.os.devnull)
@@ -320,14 +355,12 @@ class PscQualificationRunnerTests(unittest.TestCase):
         redirected = types.SimpleNamespace(
             st_mode=runner.stat.S_IFDIR, st_file_attributes=0x400
         )
-        with mock.patch.object(
-            runner.os, "lstat", side_effect=[ordinary, redirected]
-        ):
-            self.assertQualificationCode(
-                "PSC_QUALIFICATION_PATH_REDIRECTED",
-                runner._assert_existing_chain_not_redirected,
-                pathlib.Path(r"C:\safe\path"),
-            )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_PATH_REDIRECTED",
+            runner._assert_existing_chain_not_redirected,
+            pathlib.Path(r"C:\safe\path"),
+            lstat_function=mock.Mock(side_effect=[ordinary, redirected]),
+        )
 
     def test_output_path_must_be_below_run_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
