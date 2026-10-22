@@ -31,7 +31,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
 
     def test_committed_selector_is_strict_and_maps_every_acceptance(self) -> None:
         selector = runner._load_selector(SELECTOR_PATH)
-        self.assertEqual(selector["expected_unique_test_count"], 955)
+        self.assertEqual(selector["expected_unique_test_count"], 956)
         self.assertEqual(
             set(selector["acceptance_map"]),
             {f"PSC-A{number:02d}" for number in range(1, 21)},
@@ -82,7 +82,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
             partitions["qualification_tooling_preflight"][
                 "expected_unique_test_count"
             ],
-            45,
+            46,
         )
         self.assertNotIn(
             "qualification_harness",

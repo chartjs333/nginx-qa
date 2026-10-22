@@ -6,6 +6,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import textwrap
 import unittest
 from pathlib import Path
@@ -86,6 +87,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             benchmark.READ_ONLY_GIT_COMMAND_DISCLOSURE,
             (
                 "branch --show-current",
+                "ls-files -z -v",
                 "ls-files --others --directory --no-empty-directory",
                 "merge-base --is-ancestor",
                 "rev-parse",
@@ -100,10 +102,13 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             benchmark.FORBIDDEN_GIT_METADATA_CONTROLS,
             (
                 ".gitmodules",
+                ".git/commondir",
                 ".git/config.worktree",
                 ".git/info/grafts",
+                ".git/nginx-qa-isolated-home",
                 ".git/objects/info/alternates",
                 ".git/objects/info/http-alternates",
+                ".git/refs/replace",
                 ".git/shallow",
             ),
         )
@@ -148,20 +153,261 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             self.assertIn("core.untrackedCache=false", command)
             self.assertIn("maintenance.auto=false", command)
             self.assertEqual(environment["GIT_OPTIONAL_LOCKS"], "0")
+            self.assertEqual(environment["GIT_ATTR_NOSYSTEM"], "1")
             self.assertEqual(environment["GIT_CONFIG_NOSYSTEM"], "1")
             self.assertEqual(environment["GIT_NO_LAZY_FETCH"], "1")
             self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
             self.assertEqual(environment["GIT_TERMINAL_PROMPT"], "0")
+            isolated_home = str(
+                benchmark.REPOSITORY_ROOT / ".git" / "nginx-qa-isolated-home"
+            )
+            self.assertEqual(environment["HOME"], isolated_home)
+            self.assertEqual(environment["XDG_CONFIG_HOME"], isolated_home)
         with self.assertRaisesRegex(
             BenchmarkFailure, "BENCHMARK_GIT_COMMAND_NOT_ALLOWED"
         ):
             benchmark._read_only_git_invocation("branch", "-D", "unsafe")
+        self.assertEqual(
+            benchmark._validate_tracked_index_snapshot(
+                b"H tracked.py\x00H path with spaces.py\x00"
+            )["entry_count"],
+            2,
+        )
+        for hidden in (b"S hidden.py\x00", b"h hidden.py\x00", b"s hidden.py\x00"):
+            with self.subTest(index_record=hidden), self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_GIT_INDEX_FLAGS_INVALID"
+            ):
+                benchmark._validate_tracked_index_snapshot(hidden)
         regular_file = mock.Mock(st_mode=benchmark.stat.S_IFREG, st_file_attributes=0)
         with mock.patch.object(benchmark, "_ORIGINAL_LSTAT", return_value=regular_file):
             with self.assertRaisesRegex(
                 BenchmarkFailure, "BENCHMARK_GIT_LAYOUT_INVALID"
             ):
                 benchmark._validate_repository_git_layout()
+
+    def test_git_integrity_fail_closed_reproductions(self) -> None:
+        benign_config = textwrap.dedent(
+            """\
+            [core]
+                repositoryformatversion = 0
+                filemode = false
+                bare = false
+                logallrefupdates = true
+                symlinks = false
+                ignorecase = true
+                longpaths = true
+            [remote "origin"]
+                url = https://github.com/chartjs333/nginx-qa.git
+                fetch = +refs/heads/*:refs/remotes/origin/*
+            """
+        ).encode("utf-8")
+
+        benchmark._close_git_config_lock()
+        with tempfile.TemporaryDirectory(prefix="psc-git-config-") as raw_root:
+            root = Path(raw_root)
+            metadata = root / ".git"
+            metadata.mkdir()
+            config_path = metadata / "config"
+            config_path.write_bytes(benign_config)
+            with mock.patch.object(benchmark, "REPOSITORY_ROOT", root):
+                raw, digest = benchmark._read_and_validate_local_git_config()
+                self.assertEqual(raw, benign_config)
+                self.assertEqual(digest, _sha256(benign_config))
+
+                invalid_configs = {
+                    "include": (
+                        benign_config + b"[include]\npath = C:/outside/config\n"
+                    ),
+                    "include_if": (
+                        benign_config
+                        + b"[includeIf \"gitdir:C:/outside/\"]\n"
+                        b"path = C:/outside/config\n"
+                    ),
+                    "filter": (
+                        benign_config
+                        + b"[filter \"external\"]\nclean = helper.exe\n"
+                    ),
+                    "diff": (
+                        benign_config
+                        + b"[diff \"external\"]\ncommand = helper.exe\n"
+                    ),
+                    "credential_helper": (
+                        benign_config + b"[credential]\nhelper = helper.exe\n"
+                    ),
+                    "fsmonitor": benign_config.replace(
+                        b"bare = false", b"bare = false\n    fsmonitor = helper.exe"
+                    ),
+                    "duplicate": benign_config + b"[core]\nbare = false\n",
+                    "continuation": benign_config.replace(
+                        b"bare = false", b"bare = false\\\n    true"
+                    ),
+                    "invalid_utf8": b"\xff\xfe",
+                    "oversize": b"x" * 65_537,
+                }
+                for label, payload in invalid_configs.items():
+                    with self.subTest(config_case=label):
+                        config_path.write_bytes(payload)
+                        with self.assertRaisesRegex(
+                            BenchmarkFailure, "BENCHMARK_GIT_CONFIG_INVALID"
+                        ):
+                            benchmark._read_and_validate_local_git_config()
+                config_path.write_bytes(benign_config)
+
+                locked_digest = benchmark._ensure_git_config_lock()
+                self.assertEqual(locked_digest, _sha256(benign_config))
+                from ctypes import wintypes
+
+                kernel32 = benchmark.ctypes.WinDLL("kernel32", use_last_error=True)
+                create_file = kernel32.CreateFileW
+                create_file.argtypes = (
+                    wintypes.LPCWSTR,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    benchmark.ctypes.c_void_p,
+                    wintypes.DWORD,
+                    wintypes.DWORD,
+                    wintypes.HANDLE,
+                )
+                create_file.restype = wintypes.HANDLE
+                close_handle = kernel32.CloseHandle
+                close_handle.argtypes = (wintypes.HANDLE,)
+                close_handle.restype = wintypes.BOOL
+                invalid_handle = benchmark.ctypes.c_void_p(-1).value
+                share_all = 0x00000001 | 0x00000002 | 0x00000004
+
+                for desired_access in (0x40000000, 0x00010000):
+                    with self.subTest(denied_access=desired_access):
+                        attempted = create_file(
+                            str(config_path),
+                            desired_access,
+                            share_all,
+                            None,
+                            3,
+                            0x00000080,
+                            None,
+                        )
+                        self.assertIn(attempted, (None, 0, invalid_handle))
+
+                with mock.patch.object(
+                    benchmark,
+                    "_read_and_validate_local_git_config",
+                    return_value=(benign_config, "0" * 64),
+                ), self.assertRaisesRegex(
+                    BenchmarkFailure, "BENCHMARK_GIT_CONFIG_CHANGED"
+                ):
+                    benchmark._verify_git_config_lock()
+
+                benchmark._close_git_config_lock()
+                writable = create_file(
+                    str(config_path),
+                    0x40000000,
+                    share_all,
+                    None,
+                    3,
+                    0x00000080,
+                    None,
+                )
+                self.assertNotIn(writable, (None, 0, invalid_handle))
+                self.assertTrue(close_handle(wintypes.HANDLE(writable)))
+
+        for relative_control, directory in (
+            (".git/commondir", False),
+            (".git/info/grafts", False),
+            (".git/refs/replace", True),
+        ):
+            with self.subTest(control=relative_control), tempfile.TemporaryDirectory(
+                prefix="psc-git-layout-"
+            ) as raw_root:
+                root = Path(raw_root)
+                metadata = root / ".git"
+                metadata.mkdir()
+                target = root / relative_control
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if directory:
+                    target.mkdir()
+                else:
+                    target.write_text("external", encoding="utf-8")
+                with mock.patch.object(
+                    benchmark, "REPOSITORY_ROOT", root
+                ), mock.patch.object(
+                    benchmark, "_git", side_effect=AssertionError("Git spawned")
+                ) as git_call, self.assertRaisesRegex(
+                    BenchmarkFailure, "BENCHMARK_GIT_LAYOUT_INVALID"
+                ):
+                    benchmark._validate_repository_git_layout()
+                git_call.assert_not_called()
+
+        with tempfile.TemporaryDirectory(prefix="psc-git-index-") as raw_root:
+            root = Path(raw_root)
+            isolated_home = root / "isolated-home"
+            no_hooks = root / ".git" / "no-hooks"
+            git_environment = {
+                key: value
+                for key, value in benchmark.os.environ.items()
+                if not key.upper().startswith("GIT_")
+            }
+            git_environment.update(
+                {
+                    "GIT_ATTR_NOSYSTEM": "1",
+                    "GIT_CONFIG_GLOBAL": benchmark.os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_NO_REPLACE_OBJECTS": "1",
+                    "GIT_TERMINAL_PROMPT": "0",
+                    "HOME": str(isolated_home),
+                    "XDG_CONFIG_HOME": str(isolated_home),
+                }
+            )
+
+            def git(*arguments: str) -> bytes:
+                return subprocess.run(
+                    [
+                        "git",
+                        "--no-replace-objects",
+                        "-c",
+                        "commit.gpgsign=false",
+                        "-c",
+                        f"core.hooksPath={no_hooks}",
+                        "-c",
+                        "core.fsmonitor=false",
+                        "-C",
+                        str(root),
+                        *arguments,
+                    ],
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=git_environment,
+                ).stdout
+
+            git("init")
+            git("config", "user.name", "PSC Test")
+            git("config", "user.email", "psc-test@example.invalid")
+            tracked = root / "tracked.txt"
+            tracked.write_text("baseline\n", encoding="utf-8")
+            git("add", "tracked.txt")
+            git("commit", "-m", "fixture")
+
+            git("update-index", "--assume-unchanged", "tracked.txt")
+            tracked.write_text("hidden assume-unchanged\n", encoding="utf-8")
+            self.assertEqual(git("status", "--porcelain=v1"), b"")
+            assume_inventory = git("ls-files", "-z", "-v")
+            self.assertTrue(assume_inventory.startswith(b"h "))
+            with self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_GIT_INDEX_FLAGS_INVALID"
+            ):
+                benchmark._validate_tracked_index_snapshot(assume_inventory)
+
+            git("update-index", "--no-assume-unchanged", "tracked.txt")
+            tracked.write_text("baseline\n", encoding="utf-8")
+            git("update-index", "--skip-worktree", "tracked.txt")
+            tracked.write_text("hidden skip-worktree\n", encoding="utf-8")
+            self.assertEqual(git("status", "--porcelain=v1"), b"")
+            skip_inventory = git("ls-files", "-z", "-v")
+            self.assertTrue(skip_inventory.startswith(b"S "))
+            with self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_GIT_INDEX_FLAGS_INVALID"
+            ):
+                benchmark._validate_tracked_index_snapshot(skip_inventory)
 
     def test_windows_lexical_deny_matching_has_component_boundary(self) -> None:
         root = _lexical_windows_path(r"D:\Prompt")

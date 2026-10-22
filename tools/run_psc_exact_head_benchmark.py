@@ -116,6 +116,7 @@ DELTA_GAP_OUTPUT_NAME = "psc-a05-a16-a17-delta-gap-v1.json"
 DELTA_GAP_OUTPUT_DIGEST_NAME = DELTA_GAP_OUTPUT_NAME + ".sha256"
 READ_ONLY_GIT_COMMAND_DISCLOSURE = (
     "branch --show-current",
+    "ls-files -z -v",
     "ls-files --others --directory --no-empty-directory",
     "merge-base --is-ancestor",
     "rev-parse",
@@ -124,10 +125,13 @@ READ_ONLY_GIT_COMMAND_DISCLOSURE = (
 )
 FORBIDDEN_GIT_METADATA_CONTROLS = (
     ".gitmodules",
+    ".git/commondir",
     ".git/config.worktree",
     ".git/info/grafts",
+    ".git/nginx-qa-isolated-home",
     ".git/objects/info/alternates",
     ".git/objects/info/http-alternates",
+    ".git/refs/replace",
     ".git/shallow",
 )
 RUNNER_PATH = "tools/run_psc_exact_head_benchmark.py"
@@ -465,6 +469,11 @@ def _read_only_git_arguments_allowed(arguments: tuple[str, ...]) -> bool:
     if arguments in {
         ("branch", "--show-current"),
         (
+            "ls-files",
+            "-z",
+            "-v",
+        ),
+        (
             "status",
             "--porcelain=v1",
             "--untracked-files=no",
@@ -509,14 +518,18 @@ def _read_only_git_invocation(*arguments: str) -> tuple[list[str], dict[str, str
         for key, value in os.environ.items()
         if not key.upper().startswith("GIT_")
     }
+    isolated_home = str(REPOSITORY_ROOT / ".git" / "nginx-qa-isolated-home")
     environment.update(
         {
+            "GIT_ATTR_NOSYSTEM": "1",
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "HOME": isolated_home,
+            "XDG_CONFIG_HOME": isolated_home,
         }
     )
     return (
@@ -579,6 +592,9 @@ def _git_bytes(*arguments: str) -> bytes:
 
 
 def _candidate_snapshot() -> dict[str, Any]:
+    index_snapshot = _validate_tracked_index_snapshot(
+        _git_bytes("ls-files", "-z", "-v")
+    )
     status = _git(
         "status",
         "--porcelain=v1",
@@ -595,12 +611,34 @@ def _candidate_snapshot() -> dict[str, Any]:
         "status_sha256": _sha256(status_binding),
         "tracked_status_sha256": _sha256(status.encode("utf-8")),
         "untracked_inventory_sha256": _sha256(untracked.encode("utf-8")),
+        "tracked_index": index_snapshot,
         "local_git_config_sha256": _verify_git_config_lock(),
         "runner_git_blob": _git("rev-parse", f"HEAD:{RUNNER_PATH}"),
         "predecessor_evidence_git_blob": _git(
             "rev-parse", f"HEAD:{PREDECESSOR_EVIDENCE_PATH}"
         ),
     }
+
+
+def _validate_tracked_index_snapshot(raw: bytes) -> dict[str, Any]:
+    """Reject hidden tracked-file mutations before any candidate import.
+
+    ``git status`` deliberately honors assume-unchanged and skip-worktree bits.
+    ``git ls-files -z -v`` emits ``H `` for an ordinary tracked stage-0 entry,
+    ``S `` for skip-worktree, and lower-case tags for assume-unchanged.  Exact
+    qualification accepts only the ordinary form and binds the raw inventory.
+    """
+
+    if type(raw) is not bytes:
+        raise BenchmarkFailure("BENCHMARK_GIT_INDEX_FLAGS_INVALID")
+    if not raw:
+        return {"entry_count": 0, "sha256": _sha256(raw)}
+    if not raw.endswith(b"\x00"):
+        raise BenchmarkFailure("BENCHMARK_GIT_INDEX_FLAGS_INVALID")
+    records = raw[:-1].split(b"\x00")
+    if any(len(record) < 3 or record[:2] != b"H " for record in records):
+        raise BenchmarkFailure("BENCHMARK_GIT_INDEX_FLAGS_INVALID")
+    return {"entry_count": len(records), "sha256": _sha256(raw)}
 
 
 def _validate_candidate(
@@ -688,6 +726,7 @@ def _validate_repository_git_layout() -> dict[str, Any]:
     return {
         "ordinary_in_worktree_git_directory": True,
         "git_dir_equals_common_dir": True,
+        "git_commondir_redirect_absent": True,
         "git_worktree_equals_candidate_root": True,
         "git_worktree_tree_contains_no_reparse_points": True,
         "git_metadata_tree_contains_no_reparse_points": True,
@@ -696,12 +735,16 @@ def _validate_repository_git_layout() -> dict[str, Any]:
         "git_shallow_boundary_absent": True,
         "git_replace_objects_disabled": True,
         "git_submodules_and_nested_git_directories_absent": True,
+        "git_replace_ref_directory_absent": True,
+        "git_index_assume_unchanged_and_skip_worktree_absent": True,
         "local_git_config_locked_against_write_and_delete": True,
         "local_git_config_sha256": _verify_git_config_lock(),
         "git_optional_locks_disabled": True,
         "git_fsmonitor_disabled": True,
         "git_untracked_cache_disabled": True,
         "git_global_and_system_config_disabled": True,
+        "git_system_attributes_disabled": True,
+        "git_user_home_and_xdg_pinned_inside_validated_metadata": True,
         "git_lazy_fetch_disabled": True,
     }
 
