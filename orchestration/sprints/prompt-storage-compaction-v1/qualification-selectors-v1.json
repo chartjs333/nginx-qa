@@ -3,8 +3,8 @@
   "kind": "psc_qualification_selectors",
   "suite_id": "PSC-006-exact-head-v1",
   "isolation_policy_version": "psc-qualification-isolation-v1",
-  "expected_unique_test_count": 951,
-  "expected_test_ids_sha256": "22e39cb72dd36c02287bdb4bcbb5ff3e7aa5bc5d0b578081310b4b45a102abf5",
+  "expected_unique_test_count": 955,
+  "expected_test_ids_sha256": "dd6374dda26ec1813847d07c1216a4adef3a23de57d830460d20b8c2d8242260",
   "required_protected_root_labels": [
     "live_prompt",
     "service_prompt",
@@ -32,8 +32,8 @@
       "category_ids": [
         "qualification_harness"
       ],
-      "expected_unique_test_count": 41,
-      "expected_test_ids_sha256": "dd94a21be832d5955300f3a99bbbbbdc67eedef445f999d2be23fddd76ab7b26"
+      "expected_unique_test_count": 45,
+      "expected_test_ids_sha256": "58c2a289ffcac7b51fad67436d90cae826739902d801d473680cf2138ee6125f"
     }
   },
   "categories": [
@@ -109,8 +109,8 @@
     },
     {
       "id": "qualification_harness",
-      "expected_owned_test_count": 41,
-      "expected_test_ids_sha256": "dd94a21be832d5955300f3a99bbbbbdc67eedef445f999d2be23fddd76ab7b26",
+      "expected_owned_test_count": 45,
+      "expected_test_ids_sha256": "58c2a289ffcac7b51fad67436d90cae826739902d801d473680cf2138ee6125f",
       "modules": [
         "tests.test_psc_exact_head_benchmark",
         "tests.test_psc_qualification_runner"
@@ -135,7 +135,7 @@
     "tests.test_prompt_archive_runtime_integration"
   ],
   "pass_policy": {
-    "required_unique_test_count": 951,
+    "required_unique_test_count": 955,
     "maximum_failures": 0,
     "maximum_errors": 0,
     "maximum_skips": 0,

@@ -136,6 +136,56 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             [{"event": "os.stat", "root_label": "live_prompt"}],
         )
 
+    def test_managed_repository_subtree_exemption_denies_sibling_and_subst(self) -> None:
+        mappings = {
+            "C:": r"\Device\HarddiskVolume1",
+            "D:": r"\Device\HarddiskVolume2",
+            "T:": r"\??\C:\service-state",
+        }
+
+        def query(drive: str) -> str:
+            return mappings[drive.upper()]
+
+        state_root = {
+            "label": "service_state",
+            "lexical_path": _strict_local_windows_path(r"C:\service-state"),
+            "device_path": _device_lexical_windows_path(
+                r"C:\service-state", device_query=query
+            ),
+        }
+        audit = {
+            "phase": "benchmark",
+            "forbidden_attempts": [],
+            "unsafe_alias_attempts": [],
+            "protected_fixture_benchmark_attempts": [],
+            "authorized_fixture_inventory_events": 0,
+            "guard_checks_by_event": {},
+            "descriptor_checks_by_event": {},
+            "native_path_checks_by_entrypoint": {},
+            "native_guard_entrypoints": [],
+            "write_telemetry": {"active_transition": None, "by_transition": {}},
+        }
+        guard = _AccessGuard(
+            forbidden=(state_root,),
+            protected=Path(r"D:\isolated\protected"),
+            allowed_roots=(Path(r"C:\service-state\managed\workspace"),),
+            audit=audit,
+            device_query=query,
+        )
+
+        guard.check("os.stat", r"C:\service-state\managed\workspace\file.py")
+        for denied in (
+            r"C:\service-state\managed\sibling\file.py",
+            r"T:\managed\workspace\file.py",
+            r"C:\service-state",
+        ):
+            with self.subTest(path=denied), self.assertRaises(PermissionError):
+                guard.check("os.stat", denied)
+        self.assertEqual(
+            audit["forbidden_attempts"],
+            [{"event": "os.stat", "root_label": "service_state"}] * 3,
+        )
+
     def test_preflight_rejects_repository_subst_equivalent_to_forbidden_root(self) -> None:
         mappings = {
             "C:": r"\Device\HarddiskVolume1",
@@ -162,6 +212,68 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
                     forbidden,
                     device_query=query,
                 )
+
+    def test_preflight_allows_only_strict_managed_repository_parent(self) -> None:
+        mappings = {
+            "C:": r"\Device\HarddiskVolume1",
+            "D:": r"\Device\HarddiskVolume2",
+            "T:": r"\??\C:\service-state",
+        }
+
+        def query(drive: str) -> str:
+            return mappings[drive.upper()]
+
+        state = ({
+            "label": "service_state",
+            "lexical_path": _strict_local_windows_path(r"C:\service-state"),
+            "device_path": _device_lexical_windows_path(
+                r"C:\service-state", device_query=query
+            ),
+        },)
+        with mock.patch.object(
+            benchmark,
+            "REPOSITORY_ROOT",
+            Path(r"C:\service-state\managed\workspace"),
+        ):
+            isolation = _preflight_path_isolation(
+                Path(r"D:\isolated-benchmark"), state, device_query=query
+            )
+        self.assertEqual(isolation["repository_parent_labels"], ("service_state",))
+
+        denied_cases = (
+            ("service_state", Path(r"C:\service-state")),
+            ("service_root", Path(r"C:\service-state\managed\workspace")),
+            ("service_runtime", Path(r"C:\service-state\managed\workspace")),
+            ("service_state", Path(r"T:\managed\workspace")),
+        )
+        for label, repository in denied_cases:
+            denied = ({**state[0], "label": label},)
+            with self.subTest(label=label, repository=repository), mock.patch.object(
+                benchmark, "REPOSITORY_ROOT", repository
+            ), self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_REPOSITORY_OVERLAPS_FORBIDDEN"
+            ):
+                _preflight_path_isolation(
+                    Path(r"D:\isolated-benchmark"), denied, device_query=query
+                )
+
+    def test_repository_parent_chain_reparse_still_fails_closed(self) -> None:
+        ordinary = mock.Mock(
+            st_mode=benchmark.stat.S_IFDIR,
+            st_file_attributes=0,
+        )
+        redirected = mock.Mock(
+            st_mode=benchmark.stat.S_IFDIR,
+            st_file_attributes=0x400,
+        )
+        metadata = iter((ordinary, redirected))
+        with self.assertRaisesRegex(
+            BenchmarkFailure, "BENCHMARK_RUN_ROOT_REDIRECTED"
+        ):
+            benchmark._assert_existing_chain_not_redirected(
+                Path(r"C:\service-state\managed\workspace"),
+                lstat_function=lambda _path: next(metadata),
+            )
 
     def test_audit_event_extraction_ignores_utime_metadata(self) -> None:
         metadata = (1_000, 2_000)

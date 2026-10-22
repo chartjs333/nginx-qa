@@ -31,7 +31,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
 
     def test_committed_selector_is_strict_and_maps_every_acceptance(self) -> None:
         selector = runner._load_selector(SELECTOR_PATH)
-        self.assertEqual(selector["expected_unique_test_count"], 951)
+        self.assertEqual(selector["expected_unique_test_count"], 955)
         self.assertEqual(
             set(selector["acceptance_map"]),
             {f"PSC-A{number:02d}" for number in range(1, 21)},
@@ -64,11 +64,41 @@ class PscQualificationRunnerTests(unittest.TestCase):
             partitions["qualification_tooling_preflight"][
                 "expected_unique_test_count"
             ],
-            41,
+            45,
         )
         self.assertNotIn(
             "qualification_harness",
             selector["acceptance_map"]["PSC-A15"]["categories"],
+        )
+
+    def test_non_full_delta_cannot_satisfy_exact_head_evidence(self) -> None:
+        specification = runner._load_selector(SELECTOR_PATH)["external_evidence"][0]
+        self.assertEqual(
+            specification["expected_kind"],
+            "psc_a05_a16_a17_exact_head_benchmark_evidence",
+        )
+        self.assertNotIn("variants", specification)
+        delta = {
+            "schema_version": 2,
+            "kind": "psc_a05_a16_a17_baseline_plus_delta_gap_v1_evidence",
+            "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+            "qualification": {
+                "qualification_mode": "baseline_plus_delta",
+                "full_exact_head_rerun": False,
+            },
+            "acceptance": {
+                "status": "BASELINE_PLUS_DELTA_PASS",
+                "not_a_full_benchmark_pass": True,
+            },
+        }
+        delta[specification["seal_field"]] = runner._sha256(
+            runner._canonical_json_bytes(delta)
+        )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_EVIDENCE_CONTRACT_INVALID",
+            runner._verify_external_evidence,
+            delta,
+            specification,
         )
 
     def test_integrity_seal_detects_payload_tamper(self) -> None:

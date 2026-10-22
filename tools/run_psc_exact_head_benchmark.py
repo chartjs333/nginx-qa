@@ -44,6 +44,7 @@ sys.path.insert(0, str(REPOSITORY_ROOT))
 _CANDIDATE_MODULES_LOADED = False
 _CANDIDATE_NATIVE_WRAPPERS_INSTALLED = False
 _ACTIVE_ACCESS_GUARD = None
+_ORIGINAL_LSTAT = os.lstat
 
 
 def _load_candidate_modules() -> None:
@@ -148,6 +149,25 @@ PATH_AUDIT_EVENT_DIR_FD_INDICES = {
     "os.link": (2, 3),
     "os.symlink": (2,),
 }
+MUTATING_PATH_EVENTS = frozenset(
+    {
+        "os.remove",
+        "os.rename",
+        "os.replace",
+        "os.rmdir",
+        "os.mkdir",
+        "os.chdir",
+        "os.chmod",
+        "os.utime",
+        "os.link",
+        "os.symlink",
+        "os.truncate",
+    }
+)
+OS_OPEN_WRITE_FLAGS = sum(
+    int(getattr(os, name, 0))
+    for name in ("O_WRONLY", "O_RDWR", "O_APPEND", "O_CREAT", "O_TRUNC", "O_EXCL")
+)
 FROZEN_INPUTS = {
     "append-0065-baseline": (
         333_496,
@@ -485,7 +505,11 @@ def parse_forbidden_roots(
     )
 
 
-def _assert_existing_chain_not_redirected(path: Path) -> None:
+def _assert_existing_chain_not_redirected(
+    path: Path, *, lstat_function=None
+) -> None:
+    if lstat_function is None:
+        lstat_function = os.lstat
     local = _strict_local_windows_path(path)
     drive, tail = ntpath.splitdrive(local)
     current = Path(drive + "\\")
@@ -495,7 +519,7 @@ def _assert_existing_chain_not_redirected(path: Path) -> None:
         chain.append(current)
     for index, item in enumerate(chain):
         try:
-            metadata = os.lstat(item)
+            metadata = lstat_function(item)
         except FileNotFoundError:
             if index == 0:
                 raise BenchmarkFailure(
@@ -534,17 +558,32 @@ def _preflight_path_isolation(
     forbidden: Sequence[Mapping[str, str]],
     *,
     device_query=_query_dos_device,
-) -> dict[str, dict[str, str]]:
+) -> dict[str, Any]:
     run = _path_forms(run_root, device_query=device_query)
     repository = _path_forms(REPOSITORY_ROOT, device_query=device_query)
+    repository_parent_labels: list[str] = []
     for item in forbidden:
-        if _forms_overlap(repository, item):
+        overlaps = _forms_overlap(repository, item)
+        repository_is_strictly_below = all(
+            _under(repository[key], item[key]) and repository[key] != item[key]
+            for key in ("lexical_path", "device_path")
+        )
+        if overlaps and (
+            item["label"] != "service_state"
+            or not repository_is_strictly_below
+        ):
             raise BenchmarkFailure("BENCHMARK_REPOSITORY_OVERLAPS_FORBIDDEN")
+        if overlaps:
+            repository_parent_labels.append(item["label"])
         if _forms_overlap(run, item):
             raise BenchmarkFailure("BENCHMARK_RUN_ROOT_OVERLAPS_FORBIDDEN")
     if _forms_overlap(run, repository):
         raise BenchmarkFailure("BENCHMARK_RUN_ROOT_OVERLAPS_REPOSITORY")
-    return {"run_root": run, "repository": repository}
+    return {
+        "run_root": run,
+        "repository": repository,
+        "repository_parent_labels": tuple(repository_parent_labels),
+    }
 
 
 def _prepare_run_root(
@@ -1447,6 +1486,8 @@ class _AccessGuard:
         forbidden: Sequence[Mapping[str, str]],
         protected: Path,
         audit: dict[str, Any],
+        allowed_roots: Sequence[Path] | None = None,
+        lstat_function=None,
         device_query=_query_dos_device,
     ) -> None:
         self.forbidden = tuple(
@@ -1454,6 +1495,13 @@ class _AccessGuard:
         )
         self.device_query = device_query
         self.protected = _path_forms(protected, device_query=device_query)
+        self.allowed_roots = tuple(
+            _path_forms(item, device_query=device_query)
+            for item in (
+                (REPOSITORY_ROOT,) if allowed_roots is None else allowed_roots
+            )
+        )
+        self.lstat_function = _ORIGINAL_LSTAT if lstat_function is None else lstat_function
         self.audit = audit
 
     def _candidate_forms(self, value: Any) -> dict[str, str]:
@@ -1471,7 +1519,22 @@ class _AccessGuard:
             local = ntpath.join(os.getcwd(), raw)
         return _path_forms(local, device_query=self.device_query)
 
-    def check(self, event: str, value: Any) -> None:
+    @staticmethod
+    def _is_git_metadata(candidate: Mapping[str, str], root: Mapping[str, str]) -> bool:
+        candidate_path = candidate["lexical_path"]
+        root_path = root["lexical_path"]
+        if candidate_path == root_path:
+            return False
+        relative = candidate_path[len(root_path) :].lstrip("\\")
+        return bool(relative) and relative.split("\\", 1)[0].casefold() == ".git"
+
+    def check(
+        self,
+        event: str,
+        value: Any,
+        *,
+        write_intent: bool | None = None,
+    ) -> None:
         if value is None:
             value = os.getcwd()
         if isinstance(value, int):
@@ -1485,11 +1548,49 @@ class _AccessGuard:
             raise PermissionError("PSC benchmark denied unsafe path alias") from None
         checks = self.audit["guard_checks_by_event"]
         checks[event] = checks.get(event, 0) + 1
+        allowed_root = next(
+            (
+                root
+                for root in self.allowed_roots
+                if all(
+                    _under(candidate[key], root[key])
+                    for key in ("lexical_path", "device_path")
+                )
+            ),
+            None,
+        )
+        allowed = allowed_root is not None
+        if allowed:
+            if write_intent is None:
+                write_intent = event in MUTATING_PATH_EVENTS
+            if write_intent or self._is_git_metadata(candidate, allowed_root):
+                for label, root in self.forbidden:
+                    if any(
+                        _under(candidate[key], root[key])
+                        for key in ("lexical_path", "device_path")
+                    ):
+                        self.audit["forbidden_attempts"].append(
+                            {"event": event, "root_label": label}
+                        )
+                        break
+                raise PermissionError(
+                    "PSC benchmark denied managed-repository mutation"
+                )
+            try:
+                _assert_existing_chain_not_redirected(
+                    Path(candidate["lexical_path"]),
+                    lstat_function=self.lstat_function,
+                )
+            except BenchmarkFailure:
+                self.audit["unsafe_alias_attempts"].append({"event": event})
+                raise PermissionError(
+                    "PSC benchmark denied repository reparse escape"
+                ) from None
         for label, root in self.forbidden:
             if any(
                 _under(candidate[key], root[key])
                 for key in ("lexical_path", "device_path")
-            ):
+            ) and not allowed:
                 self.audit["forbidden_attempts"].append(
                     {"event": event, "root_label": label}
                 )
@@ -1632,8 +1733,16 @@ def _install_access_guards(
     _ACTIVE_ACCESS_GUARD = guard
 
     def hook(event: str, arguments: tuple[Any, ...]) -> None:
+        write_intent = event in MUTATING_PATH_EVENTS
+        if event == "open":
+            mode = arguments[1] if len(arguments) > 1 else None
+            flags = arguments[2] if len(arguments) > 2 else 0
+            write_intent = (
+                isinstance(mode, str)
+                and any(marker in mode for marker in ("w", "a", "x", "+"))
+            ) or (isinstance(flags, int) and bool(flags & OS_OPEN_WRITE_FLAGS))
         for path_argument in audit_path_arguments(event, arguments):
-            guard.check(event, path_argument)
+            guard.check(event, path_argument, write_intent=write_intent)
         for index in PATH_AUDIT_EVENT_DIR_FD_INDICES.get(event, ()):
             if index < len(arguments) and arguments[index] not in (None, -1):
                 guard.deny_unsupported_descriptor(event)
@@ -1695,7 +1804,9 @@ def _install_access_guards(
     def guarded_open(path, flags, mode=0o777, *, dir_fd=None):
         if dir_fd is not None:
             guard.deny_unsupported_descriptor("os.open")
-        guard.check("os.open", path)
+        guard.check(
+            "os.open", path, write_intent=bool(flags & OS_OPEN_WRITE_FLAGS)
+        )
         return original_open(path, flags, mode, dir_fd=dir_fd)
 
     def guarded_write(descriptor, payload):
@@ -1722,7 +1833,13 @@ def _install_access_guards(
         )
 
     def guarded_builtin_open(file, *arguments, **keywords):
-        guard.check("open", file)
+        mode = arguments[0] if arguments else keywords.get("mode", "r")
+        guard.check(
+            "open",
+            file,
+            write_intent=isinstance(mode, str)
+            and any(marker in mode for marker in ("w", "a", "x", "+")),
+        )
         return wrap_writable(
             original_builtin_open(file, *arguments, **keywords),
             arguments,
@@ -1730,7 +1847,13 @@ def _install_access_guards(
         )
 
     def guarded_io_open(file, *arguments, **keywords):
-        guard.check("io.open", file)
+        mode = arguments[0] if arguments else keywords.get("mode", "r")
+        guard.check(
+            "io.open",
+            file,
+            write_intent=isinstance(mode, str)
+            and any(marker in mode for marker in ("w", "a", "x", "+")),
+        )
         return wrap_writable(
             original_io_open(file, *arguments, **keywords),
             arguments,
@@ -1798,8 +1921,16 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     }
     _install_access_guards(forbidden=forbidden, protected=protected, audit=audit)
     audit["phase"] = "candidate_precondition"
-    _assert_existing_chain_not_redirected(REPOSITORY_ROOT)
-    _assert_existing_chain_not_redirected(REPOSITORY_ROOT / "nginx_qa")
+    # The guard intentionally denies protected-parent metadata outside the
+    # exact managed repository subtree. These two internal precondition checks
+    # still have to validate the repository's ancestor chain for reparse
+    # redirection; candidate code continues through the guarded public API.
+    _assert_existing_chain_not_redirected(
+        REPOSITORY_ROOT, lstat_function=_ORIGINAL_LSTAT
+    )
+    _assert_existing_chain_not_redirected(
+        REPOSITORY_ROOT / "nginx_qa", lstat_function=_ORIGINAL_LSTAT
+    )
     before = _candidate_snapshot()
     _validate_candidate(before, expected_head, expected_tree)
     predecessor = _decode_predecessor_evidence()
@@ -2057,6 +2188,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "write_api_payload_bytes_measured_per_transition": True,
             "final_touched_footprint_distinct_from_write_api_bytes": True,
             "candidate_native_absolute_path_entrypoints_guarded": True,
+            "managed_repository_subtree_exemption_labels": list(
+                isolation["repository_parent_labels"]
+            ),
+            "repository_and_package_chain_lstat_precondition_only": True,
             "services_called_or_restarted": False,
             "production_authoritative_mode_enabled": False,
             "isolated_authoritative_mode_only": True,
@@ -2158,12 +2293,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "protected_pre": protected_pre,
             "protected_post": protected_post,
             "note": (
-                "Forbidden roots are lexical and drive-device deny values and "
-                "are never opened, listed, statted, or resolved; no filesystem "
-                "content or metadata beneath them is hashed. Their normalized "
-                "path strings have identifying hashes. Only the generated "
-                "three-file protected fixture is inventoried, including its "
-                "directory entries."
+                "The workload never opens, lists, resolves, or hashes forbidden "
+                "root content. If the managed repository is strictly below "
+                "service_state, internal preflight lstats only the ancestor "
+                "chains through the repository and nginx_qa package root; the "
+                "guard exempts exactly the repository subtree in both lexical "
+                "and device form, never siblings or SUBST aliases."
             ),
         },
         "acceptance": acceptance,
