@@ -1,0 +1,419 @@
+{
+  "schema_version": 1,
+  "kind": "psc_baseline_plus_diff_qualification",
+  "recorded_at": "2026-10-22T17:08:11.5818190Z",
+  "qualification": {
+    "mode": "baseline_plus_diff",
+    "status": "BASELINE_PLUS_DIFF_PASS",
+    "decision_basis": "Operator-approved use of the last saved successful aggregate run as the historical baseline plus targeted verification of every changed production/tooling path.",
+    "full_exact_head_rerun": false,
+    "satisfies_exact_head_selector": false,
+    "not_a_full_qualification": true,
+    "statement": "This is not a full rerun of all tests on the candidate HEAD. The exact-head selector remains a reproducible future plan, not a claimed execution result.",
+    "strict_exact_head_status": "NOT_CLAIMED",
+    "operator_acceptance_status": "PASS"
+  },
+  "candidate": {
+    "branch": "agent/psc-06-qualification",
+    "tested_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+    "tested_tree": "f2550c899256fbbc8b6836f4dd3903eba8701508",
+    "clean_before_and_after_delta_benchmark": true,
+    "tracked_status_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "benchmark_status_sha256": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+    "tracked_index_entry_count": 507,
+    "tracked_index_ids_sha256": "9ef8473afd6c290cfa48f3fb8bd0290182bd7a1dc8bba0f32a34ccebe149cb12",
+    "note": "The benchmark evidence contains the authoritative clean/status bindings. This report and its compressed carrier are evidence-only children of the tested commit."
+  },
+  "historical_baseline": {
+    "role": "operator_selected_historical_aggregate_baseline",
+    "runtime_commit": "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc",
+    "runtime_tree": "c8d171a65558884aac3e3fc283c48c038185346d",
+    "evidence_carrier_commit": "725c9f3ed2699cda3c8c2e65fee8431fa70d19b5",
+    "evidence_carrier_tree": "4917b9609f73c1429a075745af85cff06c44ae3e",
+    "ancestry": {
+      "runtime_is_ancestor_of_evidence_carrier": true,
+      "evidence_carrier_is_ancestor_of_candidate": true,
+      "merge_base_runtime_to_candidate": "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc"
+    },
+    "managed_result": {
+      "sprint_id": "msv1-99559169b6513e1d081b2a7f9522cdb8a08babf09042ae878a44420b9d378ad5",
+      "assignment_id": "assignment-f4d18f438073c9b6998592ab",
+      "result_key": "result-fe428854ee2d31c8b35544ed7b0866deb58c4b1fd6600d26d6c1e8f73ac601d4",
+      "accepted_at": "2026-10-22T09:11:27.623987+00:00",
+      "observed_at_execution_revision": 156,
+      "outcome": "PASS",
+      "from_commit": "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc",
+      "result_commit": "725c9f3ed2699cda3c8c2e65fee8431fa70d19b5",
+      "request_fingerprint": "506aff8f63f499cd5a878dcc47ec9369ec15ef11bb82ffc570455b1353c48fb0",
+      "summary_utf8_bytes": 2039,
+      "summary_sha256": "f273340da7d12f5d2c6c72ec9b39b4c9fc7cc5698e222f17fe6340cf74ac7603",
+      "reported_outcomes": {
+        "unique_selected_tests": 649,
+        "subtests": 882,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0
+      },
+      "review_disposition": "REWORK_ENQUEUED",
+      "review_rejection_reasons": [
+        "reachable_refs counted the manifest at depth 1 instead of depth 0",
+        "no durable exact test-ID and per-run receipt ledger existed for the reported 649 tests and 882 subtests"
+      ]
+    },
+    "ledger_limitations": {
+      "durable_exact_test_id_ledger_present": false,
+      "durable_per_run_receipts_present": false,
+      "loader_fixture_process_and_unexpected_success_counts_recorded": false,
+      "can_reconstruct_exact_historical_selection": false,
+      "effect": "The immutable managed result supports only the reported aggregate baseline. It is not relabelled as the current 910-test regression partition or as a current exact-head pass."
+    },
+    "benchmark_artifacts": {
+      "raw_carrier": {
+        "path": "docs/evidence/prompt-storage-compaction-v1/psc-006-a05-a16-a17-benchmark.raw.json.base64",
+        "byte_size": 21553,
+        "sha256": "1e27f79429fa1161e9fd93970e59aeb9775312b61997e3318535d9d87e19994e",
+        "git_blob": "d4df7979488b3667990eca69de32a1b3b74944a0",
+        "decoded_byte_size": 16163,
+        "decoded_sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1"
+      },
+      "adjudication": {
+        "path": "docs/evidence/prompt-storage-compaction-v1/psc-006-benchmark-adjudication.json",
+        "byte_size": 7398,
+        "sha256": "1ab44d24f2fa19b5d7c51b60a946736b2710d10459950bec13d9f2169b7f6238",
+        "git_blob": "6e534becacdd561a6c82672f89d4846e40ec916e",
+        "decision": "PASS"
+      },
+      "machine_result": {
+        "overall_pass": false,
+        "psc_a05": false,
+        "psc_a16": true,
+        "psc_a17": true,
+        "sole_false_predicate": "middle_delete_more_objects_than_right_append"
+      },
+      "normative_adjudication": {
+        "status": "PASS",
+        "reason": "The sole false predicate compared newly created object count, which is not the normative O(N) middle-rewrite measure; the original false value remains disclosed."
+      },
+      "duration_seconds": 29461.751633899985,
+      "duration_is_contractual_minimum": false
+    },
+    "historical_measurements_retained_only_at_source_version": {
+      "workload_transition_count": 7,
+      "workload_manifest_sha256": "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1",
+      "cas_put_attempts": 67586,
+      "cas_new_objects": 10327,
+      "cas_dedup_hits": 57259,
+      "cas_dedup_ratio": 0.847202,
+      "middle_insert_put_attempts": 15150,
+      "middle_delete_put_attempts": 14921,
+      "historical_latency_memory_and_distribution_relabelled_as_current": false
+    }
+  },
+  "diff_binding": {
+    "from_evidence_carrier_commit": "725c9f3ed2699cda3c8c2e65fee8431fa70d19b5",
+    "to_tested_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+    "from_is_ancestor_of_to": true,
+    "commit_chain": [
+      {"commit": "7c6389ab5868c9b409db98d107fd16c3b06aadb6", "tree": "458056fe4960b7c56fe9471f2b57f070958edb18", "subject": "fix: honor manifest-zero archive depth"},
+      {"commit": "eb4ed7354e1a7051607fd815e939302b4cffe584", "tree": "06b2403230e2fe7a4795667caa27d2f9816548e1", "subject": "test: add exact-head PSC benchmark"},
+      {"commit": "c976334dd1dfa0bb4bfd872277dd1f1ffd0d0b9a", "tree": "6bd0a0d5ddca55c810859e18b4bde8e36ef7a1cd", "subject": "test: add exact-head PSC qualification ledger"},
+      {"commit": "e3540dfd1486aef5f5332404d2937d2c4abe6cd9", "tree": "4a288049a1b0183db9c0f4f6e1d69706f4eb685d", "subject": "fix: harden PSC qualification evidence"},
+      {"commit": "7a9af600c41056c8cc10a6aad271be04172ef1fe", "tree": "c2d4fe29be8ee090e5fc9c42275a6f29803d3e61", "subject": "fix: allow managed workspace under service state"},
+      {"commit": "9ff42b3419c86ec4381a583af2f3dc57ac517e83", "tree": "a12284e48b2818e6a27fe49e51d89572f270252f", "subject": "fix: close PSC qualification path guard gaps"},
+      {"commit": "9d4f8508696cf421f0394646bef54f291c943f86", "tree": "83b8122dfd78f4b9fde1cc2a8233b1354d5e3075", "subject": "fix: preserve full benchmark isolation contract"},
+      {"commit": "200bc9286424035ef9da3fec0e25c491683dd6d9", "tree": "1a5f63c13a4756d9b9f4b15ebdb8c403f98d172c", "subject": "test: harden PSC delta qualification evidence"},
+      {"commit": "3dbf2d5e2690113a3ffbb0981cf436f85c828168", "tree": "8bb1b89660491c760f677c78610a2a403cd1f5fd", "subject": "test: close PSC Git integrity gaps"},
+      {"commit": "cc48b56ad229c8be4e7794488d07423dd8456137", "tree": "c36ec91e68a76704a51d9a71bb9f3dea5cb2e1d8", "subject": "fix: verify locked Git config after guard install"},
+      {"commit": "e862224c3e0d757d2cb799cc849503e837a01b00", "tree": "f2550c899256fbbc8b6836f4dd3903eba8701508", "subject": "fix: allow guarded subprocess pipe wrapping"}
+    ],
+    "production_delta": {
+      "files": ["nginx_qa/prompt_archive_incremental.py"],
+      "old_blob": "1fcd3796ccacde3c6c9ceab6464cb094a1ab2405",
+      "new_blob": "04963ebc3361fbd04227ef7e627a22aa0c47d4d9",
+      "semantic_change": "reachable_refs starts traversal with visit(manifest_ref, 0), matching the frozen contract's manifest depth zero.",
+      "direct_runtime_consumers": [
+        "normal and shadow publication plan creation",
+        "offline publication plan creation",
+        "publication plan validation",
+        "recovery graph verification"
+      ]
+    },
+    "nonproduction_changed_files": [
+      "orchestration/sprints/prompt-storage-compaction-v1/qualification-selectors-v1.json",
+      "tests/test_prompt_archive_native_manifest.py",
+      "tests/test_prompt_archive_runtime.py",
+      "tests/test_psc_exact_head_benchmark.py",
+      "tests/test_psc_qualification_runner.py",
+      "tools/run_psc_exact_head_benchmark.py",
+      "tools/run_psc_qualification.py"
+    ],
+    "unchanged_component_conclusion": "No API, UI, Telegram, managed-continuity, schema, or proposal production file changed. Their historical results stay historical baseline facts; no exact per-category inheritance count is claimed because the old ID ledger is absent."
+  },
+  "current_selector_inventory": {
+    "path": "orchestration/sprints/prompt-storage-compaction-v1/qualification-selectors-v1.json",
+    "byte_size": 15434,
+    "sha256": "3f3dc698fedfbb1a2baea167e879d40d05b8ab321f2ed3e05d6ad0c64f66e834",
+    "git_blob": "2d1131c49d591dc1575a5798e235bdb8e7a1a424",
+    "expected_unique_tests": 956,
+    "expected_test_ids_sha256": "8ce005a04d6df61a522bbf1a48e426f7defb6f19f202c9bff13b5a29cd4d3f01",
+    "psc_a15_regression_partition": {
+      "expected_unique_tests": 910,
+      "expected_test_ids_sha256": "5866a1c6ad5e4c7e0f24a0d631519416fef98af6421086f4dd25a8edd82d5e8f"
+    },
+    "qualification_tooling_partition": {
+      "expected_unique_tests": 46,
+      "expected_test_ids_sha256": "a02c999f33363513be31684f46def41d5aa481f650e559be060078dc9c8d429e"
+    },
+    "executed_as_full_suite_on_candidate": false,
+    "943_test_claim_supported": false
+  },
+  "fresh_targeted_checks": {
+    "status": "PASS",
+    "selection_rule": "Run every test in each changed production module's direct archive/runtime boundary modules, three directly related publication/recovery integrations, and every benchmark/selector/finalize tooling test.",
+    "unique_test_count": 95,
+    "test_ids_sha256": "a4b812b04f0dbc19f396cd3eb69027a6491d07d491a0e9cab8941a2a0168df40",
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "groups": [
+      {
+        "id": "reachable_refs_archive_runtime",
+        "tested_commit": "3dbf2d5e2690113a3ffbb0981cf436f85c828168",
+        "tested_tree": "8bb1b89660491c760f677c78610a2a403cd1f5fd",
+        "command": "python -B -m unittest -v tests.test_prompt_archive_native_manifest tests.test_prompt_archive_runtime",
+        "modules": ["tests.test_prompt_archive_native_manifest", "tests.test_prompt_archive_runtime"],
+        "unique_tests": 46,
+        "test_ids_sha256": "302c54cfc13b9f326fd894ac94ac2f8e5d40673954abb9b903600cbc79b1524e",
+        "test_duration_seconds": 2308.572,
+        "command_wall_seconds": 2340.1,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0,
+        "priority_regressions": [
+          "tests.test_prompt_archive_native_manifest.PromptArchiveNativeManifestTests.test_reachable_refs_accepts_reference_at_exact_depth_512",
+          "tests.test_prompt_archive_native_manifest.PromptArchiveNativeManifestTests.test_reachable_refs_rechecks_shallow_first_shared_node_at_depth_513",
+          "tests.test_prompt_archive_runtime.PromptArchiveRuntimeTests.test_recovery_graph_verification_accepts_exact_depth_512_without_mutation",
+          "tests.test_prompt_archive_runtime.PromptArchiveRuntimeTests.test_recovery_graph_verification_rejects_depth_513_before_mutation"
+        ]
+      },
+      {
+        "id": "publication_recovery_integrations",
+        "tested_commit": "3dbf2d5e2690113a3ffbb0981cf436f85c828168",
+        "tested_tree": "8bb1b89660491c760f677c78610a2a403cd1f5fd",
+        "modules": ["tests.test_prompt_archive_runtime_integration"],
+        "test_ids": [
+          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_authoritative_cross_component_boundaries_recover_exactly_once",
+          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_shadow_writes_exact_committed_bytes_and_publishes_after_legacy",
+          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_verified_graph_recovers_after_legacy_source_deleted"
+        ],
+        "unique_tests": 3,
+        "test_ids_sha256": "02ae1038ccdcea4e302aede9b12bd0b0f6004c584f0728102cbbbf102023ccc1",
+        "test_duration_seconds": 1223.048,
+        "command_wall_seconds": 1268.3,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0
+      },
+      {
+        "id": "benchmark_selector_finalize_and_runner_blockers",
+        "tested_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+        "tested_tree": "f2550c899256fbbc8b6836f4dd3903eba8701508",
+        "command": "python -B -m unittest -v tests.test_psc_exact_head_benchmark tests.test_psc_qualification_runner",
+        "modules": ["tests.test_psc_exact_head_benchmark", "tests.test_psc_qualification_runner"],
+        "unique_tests": 46,
+        "test_ids_sha256": "a02c999f33363513be31684f46def41d5aa481f650e559be060078dc9c8d429e",
+        "test_duration_seconds_approx": 13.8,
+        "failures": 0,
+        "errors": 0,
+        "skips": 0
+      }
+    ],
+    "cross_commit_applicability": "Commits after 3dbf2d5 changed only the benchmark runner and its tests. They did not change archive/runtime production code or the three integration tests, so the 46+3 results remain applicable to that unchanged content while tooling was rerun on e862224.",
+    "additional_targeted_dependency_found_by_read_only_diff_audit": false,
+    "raw_unittest_log_committed": false
+  },
+  "runner_blockers": [
+    {
+      "id": "managed_workspace_below_service_state",
+      "original_failure": "The qualification preflight rejected the exact managed workspace because service_state was its protected parent.",
+      "fix_commit": "7a9af600c41056c8cc10a6aad271be04172ef1fe",
+      "post_fix_proof": "Strict workspace-subtree carveout accepts only the exact managed workspace and still rejects siblings, parents, device aliases, runtime, prompt, and live roots."
+    },
+    {
+      "id": "windows_alias_reparse_and_guard_order",
+      "original_failure": "Windows 8.3/device/reparse aliases and toolchain discovery order were not fully inside the fail-closed access boundary.",
+      "fix_commit": "9ff42b3419c86ec4381a583af2f3dc57ac517e83",
+      "post_fix_proof": "Focused regressions cover component boundaries, SUBST/device equivalence, 8.3 aliases, existing reparse chains, and guard-before-discovery ordering."
+    },
+    {
+      "id": "locked_git_config_reopened_after_guard",
+      "original_failure": "The first real delta attempt failed before run-root creation with BENCHMARK_GIT_CONFIG_INVALID because locked .git/config was reopened through the installed path guard.",
+      "fix_commit": "cc48b56ad229c8be4e7794488d07423dd8456137",
+      "post_fix_proof": "The already locked Win32 handle is read, rewound, and hashed directly; concurrent write/delete remains denied and digest drift fails closed."
+    },
+    {
+      "id": "subprocess_pipe_io_open",
+      "original_failure": "The second real delta attempt failed before run-root creation with BENCHMARK_FAILED_CLOSED when subprocess wrapped pipe descriptors through io.open.",
+      "fix_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+      "post_fix_proof": "io.open is allowed only for pipe/character non-disk descriptors; disk descriptors retain all root and mutation checks, and a real subprocess regression passes."
+    }
+  ],
+  "delta_benchmark": {
+    "status": "DELTA_GAP_PASS",
+    "kind": "psc_a05_a16_a17_delta_gap_probe_v1_evidence",
+    "candidate_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+    "candidate_tree": "f2550c899256fbbc8b6836f4dd3903eba8701508",
+    "qualification_mode": "baseline_plus_diff",
+    "full_exact_head_rerun": false,
+    "satisfies_exact_head_selector": false,
+    "not_a_full_qualification": true,
+    "workload": {
+      "profile": "delta-gap-v1",
+      "manifest_sha256": "2b93dbf32f1ea5f3f3753a25405921d2ee73bac30aa93e47482617021be863ab",
+      "transition_count": 4,
+      "revisions": [8, 9, 10, 11],
+      "checkpoint_depth": 12,
+      "unknown_alias_depth": 16,
+      "middle_insert_delete_included": false
+    },
+    "sealed_evidence": {
+      "raw_byte_size": 23086,
+      "raw_sha256": "ddd51b85f46efeaaf318bb4fed35fe7e62b723e905deb73ac06ba957c54a27a4",
+      "payload_sha256": "ca67d3a0a8d0d5605501fe3ccc434cd1d044ec5614bfbbfdef5b2ae7b1d3f8cf",
+      "detached_digest_verified": true,
+      "committed_gzip_base64_carrier": {
+        "path": "docs/evidence/prompt-storage-compaction-v1/psc-006-delta-gap-e862224.json.gzip.base64",
+        "carrier_byte_size": 9225,
+        "carrier_sha256": "b7b21953410b035f2be0c1fcaee513983af89b96f310161d5c981bec2cf22839",
+        "gzip_byte_size": 6917,
+        "gzip_sha256": "1ac7dcdead1ed2b4cda4062b4baef0fb88c5288d9b1c983f475ebfceb0cfc820",
+        "decoded_raw_byte_size": 23086,
+        "decoded_raw_sha256": "ddd51b85f46efeaaf318bb4fed35fe7e62b723e905deb73ac06ba957c54a27a4"
+      }
+    },
+    "duration_seconds": 10163.915257800138,
+    "aggregate": {
+      "logical_input_bytes_total": 253289,
+      "cas_put_attempts": 3759,
+      "cas_new_object_count": 1061,
+      "cas_dedup_hits": 2698,
+      "cas_dedup_ratio": 0.7177440808725725,
+      "cas_new_stored_bytes": 773971,
+      "write_api_call_count_total": 1280,
+      "write_api_payload_bytes_total": 1541448,
+      "final_touched_content_footprint_bytes_total": 1283496,
+      "final_all_physical_content_bytes": 1262373,
+      "final_all_physical_allocated_bytes": 4748848,
+      "final_file_count": 1211,
+      "final_directory_count": 1378,
+      "temporary_file_count": 0,
+      "max_write_peak_tracemalloc_increment_bytes": 456869344,
+      "max_read_peak_tracemalloc_increment_bytes": 19434340
+    },
+    "acceptance_checks": {
+      "psc_a05_delta_true_checks": 13,
+      "psc_a16_delta_true_checks": 8,
+      "psc_a17_delta_true_checks": 12,
+      "all_roundtrips_exact": true,
+      "all_reads_non_mutating": true,
+      "append_bounds_pass": true,
+      "write_api_telemetry_nonzero": true,
+      "complete_content_and_allocation_inventory_recorded": true,
+      "forbidden_attempts": 0,
+      "unsafe_alias_attempts": 0,
+      "protected_fixture_benchmark_attempts": 0,
+      "protected_full_inventory_equal": true,
+      "candidate_native_guard_entrypoints": 3
+    },
+    "historical_measurements_not_relabelled_as_current": true,
+    "historical_latency_and_distribution_not_remeasured": true
+  },
+  "benchmark_applicability": {
+    "historical_results_that_remain_source_version_facts": [
+      "seven-transition workload identity and exact roundtrips",
+      "65-to-68 append and moved-alias observations",
+      "middle insert/delete O(N) put-attempt evidence",
+      "historical CAS, latency, memory, and dedup measurements"
+    ],
+    "measurements_invalidated_for_current_head": [
+      "manifest depth 512/513 semantics",
+      "current write-API call and payload counts",
+      "current NTFS allocation accounting",
+      "complete root and directory inventory",
+      "hardened Windows alias/reparse/native/Git isolation behavior"
+    ],
+    "minimal_closure": {
+      "depth_semantics": "closed by focused 512/513 archive and recovery regressions",
+      "archive_publication_recovery": "closed by three selected integration tests",
+      "instrumentation_and_isolation": "closed by all 46 tooling regressions and the four-transition current-head delta probe",
+      "reason_full_historical_workload_not_repeated": "The unchanged long append/middle distribution remains historical evidence, while only the instrumentation, isolation, and depth gaps required fresh current-head checks. Duration alone is not an acceptance criterion."
+    }
+  },
+  "independent_read_only_audits": [
+    {
+      "scope": "final security re-audit of subprocess descriptor carveout",
+      "decision": "GO",
+      "finding": "Only pipe/character non-disk io.open is permitted; disk descriptor and mutation controls remain fail-closed."
+    },
+    {
+      "scope": "locked Git config and Win32 handle verification",
+      "decision": "GO",
+      "finding": "Handle signatures, seek/read/count/digest checks, write/delete denial, and post-guard no-reopen behavior are correct."
+    },
+    {
+      "scope": "diff-to-targeted-test dependency mapping",
+      "decision": "GO",
+      "finding": "No concrete dependency requires a test beyond 46 archive/runtime, 3 integrations, 46 tooling tests, and the delta benchmark."
+    }
+  ],
+  "preservation": {
+    "generated_delta_run_root_deleted": false,
+    "quarantined_ignored_pycache": [
+      {"label": "preserved-pycache-3dbf2d5-20261022-01", "directories": 4, "files": 72, "bytes": 7710696, "copy_hash_and_length_verified": true},
+      {"label": "preserved-pycache-cc48b56-20261022-02", "directories": 3, "files": 15, "bytes": 1369855, "copy_hash_and_length_verified": true},
+      {"label": "preserved-pycache-e862224-20261022-03", "directories": 3, "files": 15, "bytes": 1370525, "copy_hash_and_length_verified": true}
+    ],
+    "preserved_git_stashes_dropped": false
+  },
+  "restrictions": {
+    "real_prompt_content_read_or_written": false,
+    "services_restarted_or_stopped": false,
+    "runtime_state_or_sqlite_mutated": false,
+    "durable_archive_or_blob_deleted": false,
+    "storage_gc_run": false,
+    "production_authoritative_mode_enabled": false,
+    "merge_or_deploy_performed": false,
+    "start_from_git_or_sprint_import_performed": false,
+    "managed_result_submitted_before_evidence_completion": false
+  },
+  "acceptance": {
+    "status": "BASELINE_PLUS_DIFF_PASS",
+    "criteria": [
+      {"id": "reachable_refs_depth_and_recovery", "basis": ["fresh_targeted_checks"], "status": "PASS"},
+      {"id": "archive_publication_recovery", "basis": ["fresh_targeted_checks"], "status": "PASS"},
+      {"id": "benchmark_selector_finalize", "basis": ["fresh_targeted_checks", "delta_benchmark"], "status": "PASS"},
+      {"id": "runner_fail_closed_blockers", "basis": ["fresh_targeted_checks", "independent_read_only_audits", "delta_benchmark"], "status": "PASS"},
+      {"id": "historical_unchanged_regression", "basis": ["historical_baseline", "diff_binding"], "status": "PASS_WITH_DISCLOSED_AGGREGATE_ONLY_LIMITATION"},
+      {"id": "current_full_exact_head_956", "basis": ["current_selector_inventory"], "status": "NOT_RUN_NOT_CLAIMED"}
+    ],
+    "blocking_defects_found_in_current_scope": [],
+    "limitations": [
+      "The historical 649-test result has no durable exact-ID/per-run receipt ledger.",
+      "The current 956-test selector was not executed as a full suite on e862224.",
+      "The delta workload does not rerun historical middle insert/delete or the full 65-to-68 distribution.",
+      "No current-head full qualification claim is made."
+    ]
+  },
+  "evidence_carrier": {
+    "tested_commit": "e862224c3e0d757d2cb799cc849503e837a01b00",
+    "tested_tree": "f2550c899256fbbc8b6836f4dd3903eba8701508",
+    "carrier_commit": null,
+    "carrier_is_evidence_only": true,
+    "note": "The Git commit containing this record supplies the carrier commit; it cannot be self-recorded inside its own content."
+  },
+  "integrity": {
+    "algorithm": "sha256",
+    "canonicalization": "python-json-sort-keys-utf8-without-integrity-payload-sha256-v1",
+    "payload_sha256": "c6180c6b31ae15bb9ba02adc4f5c14a7a3b6f9f908e5f12bc21b8c46ba856dbc"
+  }
+}
