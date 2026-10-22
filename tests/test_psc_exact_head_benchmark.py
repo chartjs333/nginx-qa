@@ -255,6 +255,17 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
 
                 locked_digest = benchmark._ensure_git_config_lock()
                 self.assertEqual(locked_digest, _sha256(benign_config))
+                with mock.patch.object(
+                    benchmark,
+                    "_read_and_validate_local_git_config",
+                    side_effect=AssertionError("locked verification reopened path"),
+                ):
+                    self.assertEqual(
+                        benchmark._ensure_git_config_lock(), locked_digest
+                    )
+                    self.assertEqual(
+                        benchmark._verify_git_config_lock(), locked_digest
+                    )
                 from ctypes import wintypes
 
                 kernel32 = benchmark.ctypes.WinDLL("kernel32", use_last_error=True)
@@ -290,7 +301,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
 
                 with mock.patch.object(
                     benchmark,
-                    "_read_and_validate_local_git_config",
+                    "_read_locked_git_config",
                     return_value=(benign_config, "0" * 64),
                 ), self.assertRaisesRegex(
                     BenchmarkFailure, "BENCHMARK_GIT_CONFIG_CHANGED"

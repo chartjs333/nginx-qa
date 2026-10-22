@@ -335,13 +335,9 @@ def verify_sealed_evidence_bytes(raw: bytes) -> dict[str, Any]:
     return document
 
 
-def _read_and_validate_local_git_config() -> tuple[bytes, str]:
-    path = REPOSITORY_ROOT / ".git" / "config"
-    try:
-        with _ORIGINAL_BUILTIN_OPEN(path, "rb") as stream:
-            raw = stream.read(65_537)
-    except OSError:
-        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID") from None
+def _validate_local_git_config_bytes(raw: bytes) -> tuple[bytes, str]:
+    if type(raw) is not bytes:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
     if len(raw) > 65_536 or b"\x00" in raw:
         raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
     try:
@@ -393,6 +389,65 @@ def _read_and_validate_local_git_config() -> tuple[bytes, str]:
     return raw, _sha256(raw)
 
 
+def _read_and_validate_local_git_config() -> tuple[bytes, str]:
+    path = REPOSITORY_ROOT / ".git" / "config"
+    try:
+        with _ORIGINAL_BUILTIN_OPEN(path, "rb") as stream:
+            raw = stream.read(65_537)
+    except OSError:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID") from None
+    return _validate_local_git_config_bytes(raw)
+
+
+def _read_locked_git_config(handle: int) -> tuple[bytes, str]:
+    """Read the preflight-locked config without reopening its denied path."""
+
+    if os.name != "nt":
+        raise BenchmarkFailure("BENCHMARK_WINDOWS_ISOLATION_REQUIRED")
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    get_size = kernel32.GetFileSizeEx
+    get_size.argtypes = (wintypes.HANDLE, ctypes.POINTER(ctypes.c_longlong))
+    get_size.restype = wintypes.BOOL
+    set_pointer = kernel32.SetFilePointerEx
+    set_pointer.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_longlong,
+        ctypes.POINTER(ctypes.c_longlong),
+        wintypes.DWORD,
+    )
+    set_pointer.restype = wintypes.BOOL
+    read_file = kernel32.ReadFile
+    read_file.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    )
+    read_file.restype = wintypes.BOOL
+    native_handle = wintypes.HANDLE(handle)
+    size = ctypes.c_longlong()
+    if not get_size(native_handle, ctypes.byref(size)) or not 0 <= size.value <= 65_536:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    if not set_pointer(native_handle, 0, None, 0):  # FILE_BEGIN
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    buffer = ctypes.create_string_buffer(max(1, size.value))
+    read = wintypes.DWORD()
+    if not read_file(
+        native_handle,
+        buffer,
+        size.value,
+        ctypes.byref(read),
+        None,
+    ) or read.value != size.value:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    if not set_pointer(native_handle, 0, None, 0):
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    return _validate_local_git_config_bytes(buffer.raw[: size.value])
+
+
 def _close_git_config_lock() -> None:
     global _GIT_CONFIG_LOCK
     if _GIT_CONFIG_LOCK is None or os.name != "nt":
@@ -414,11 +469,9 @@ def _close_git_config_lock() -> None:
 
 def _ensure_git_config_lock() -> str:
     global _GIT_CONFIG_LOCK
-    _raw, digest = _read_and_validate_local_git_config()
     if _GIT_CONFIG_LOCK is not None:
-        if _GIT_CONFIG_LOCK[1] != digest:
-            raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
-        return digest
+        return _verify_git_config_lock()
+    _raw, digest = _read_and_validate_local_git_config()
     if os.name != "nt":
         raise BenchmarkFailure("BENCHMARK_WINDOWS_ISOLATION_REQUIRED")
     from ctypes import wintypes
@@ -449,7 +502,7 @@ def _ensure_git_config_lock() -> str:
         raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_LOCK_FAILED")
     _GIT_CONFIG_LOCK = (int(handle), digest)
     atexit.register(_close_git_config_lock)
-    _raw_after, digest_after = _read_and_validate_local_git_config()
+    _raw_after, digest_after = _read_locked_git_config(int(handle))
     if digest_after != digest:
         _close_git_config_lock()
         raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
@@ -459,8 +512,9 @@ def _ensure_git_config_lock() -> str:
 def _verify_git_config_lock() -> str:
     if _GIT_CONFIG_LOCK is None:
         raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_LOCK_MISSING")
-    _raw, digest = _read_and_validate_local_git_config()
-    if digest != _GIT_CONFIG_LOCK[1]:
+    handle, expected = _GIT_CONFIG_LOCK
+    _raw, digest = _read_locked_git_config(handle)
+    if digest != expected:
         raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
     return digest
 
