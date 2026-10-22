@@ -2375,7 +2375,13 @@ class _AccessGuard:
                     "PSC benchmark denied unbound file descriptor"
                 ) from None
             if descriptor_path is None:
-                if event in {"open", "os.fstat", "os.read", "os.write"}:
+                if event in {
+                    "open",
+                    "io.open",
+                    "os.fstat",
+                    "os.read",
+                    "os.write",
+                }:
                     return
                 self.audit["unsafe_alias_attempts"].append({"event": event})
                 raise PermissionError(

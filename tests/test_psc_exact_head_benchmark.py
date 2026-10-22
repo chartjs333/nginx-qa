@@ -954,6 +954,8 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             r"""
             import builtins
             import os
+            import subprocess
+            import sys
             import tempfile
             from pathlib import Path
             from tools.run_psc_exact_head_benchmark import (
@@ -1068,6 +1070,17 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             benchmark._write_exclusive(exclusive_file, b"exact-evidence")
             if exclusive_file.read_bytes() != b"exact-evidence":
                 raise SystemExit(9)
+            child = subprocess.run(
+                [sys.executable, "-B", "-c", "print('pipe-ok')"],
+                input=b"",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            if child.returncode != 0 or child.stdout != b"pipe-ok\r\n":
+                raise SystemExit(10)
+            if audit["descriptor_checks_by_event"].get("io.open", 0) < 1:
+                raise SystemExit(11)
             os.close(repository_fd)
             os.close(protected_fd)
             os.close(safe_fd)
