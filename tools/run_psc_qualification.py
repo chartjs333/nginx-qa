@@ -2944,7 +2944,10 @@ def _verify_external_evidence(
     evidence: Mapping[str, Any], specification: Mapping[str, Any]
 ) -> None:
     if (
-        evidence.get("schema_version") != specification["expected_schema_version"]
+        type(evidence.get("schema_version"))
+        is not type(specification["expected_schema_version"])
+        or evidence.get("schema_version")
+        != specification["expected_schema_version"]
         or evidence.get("kind") != specification["expected_kind"]
     ):
         raise QualificationError("PSC_QUALIFICATION_EVIDENCE_CONTRACT_INVALID")
@@ -2957,7 +2960,8 @@ def _verify_external_evidence(
     if _sha256(_canonical_json_bytes(payload)) != seal:
         raise QualificationError("PSC_QUALIFICATION_EVIDENCE_INTEGRITY_MISMATCH")
     for pointer, expected in specification["required_pointer_values"].items():
-        if _json_pointer(evidence, pointer) != expected:
+        actual = _json_pointer(evidence, pointer)
+        if type(actual) is not type(expected) or actual != expected:
             raise QualificationError("PSC_QUALIFICATION_EVIDENCE_NOT_PASSING")
 
 

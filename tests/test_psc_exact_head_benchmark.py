@@ -59,14 +59,109 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             _sha256(_canonical_json(frozen_workload_manifest())),
             FROZEN_WORKLOAD_MANIFEST_SHA256,
         )
+        benchmark.validate_delta_gap_workload()
+        delta = benchmark.delta_gap_workload()
+        self.assertEqual([item["record_count"] for item in delta], [8, 9, 10, 11])
+        self.assertEqual(
+            [item["alias_location"] for item in delta],
+            ["project_state", "project_state", "assignment", "assignment"],
+        )
+        self.assertEqual(
+            {
+                item["label"]: (len(item["raw"]), _sha256(item["raw"]))
+                for item in delta
+            },
+            benchmark.DELTA_GAP_FROZEN_INPUTS,
+        )
+        self.assertEqual(
+            _sha256(_canonical_json(benchmark.delta_gap_workload_manifest())),
+            benchmark.DELTA_GAP_WORKLOAD_MANIFEST_SHA256,
+        )
+        self.assertFalse(
+            benchmark.delta_gap_workload_manifest()["middle_insert_delete_included"]
+        )
 
     def test_committed_predecessor_carrier_is_exact_and_has_same_workload(self) -> None:
+        self.assertEqual(
+            benchmark.READ_ONLY_GIT_COMMAND_DISCLOSURE,
+            (
+                "branch --show-current",
+                "ls-files --others --directory --no-empty-directory",
+                "merge-base --is-ancestor",
+                "rev-parse",
+                "show",
+                (
+                    "status --porcelain=v1 --untracked-files=no "
+                    "--ignore-submodules=all"
+                ),
+            ),
+        )
+        self.assertEqual(
+            benchmark.FORBIDDEN_GIT_METADATA_CONTROLS,
+            (
+                ".gitmodules",
+                ".git/config.worktree",
+                ".git/info/grafts",
+                ".git/objects/info/alternates",
+                ".git/objects/info/http-alternates",
+                ".git/shallow",
+            ),
+        )
         document = _decode_predecessor_evidence()
         carrier = (REPOSITORY_ROOT / PREDECESSOR_EVIDENCE_PATH).read_bytes()
         decoded = base64.b64decode(b"".join(carrier.split()), validate=True)
         self.assertEqual(len(decoded), PREDECESSOR_DECODED_BYTES)
         self.assertEqual(hashlib.sha256(decoded).hexdigest(), PREDECESSOR_DECODED_SHA256)
         self.assertEqual(document["kind"], "psc_a05_a16_a17_isolated_qualification_evidence")
+        context = benchmark._validate_delta_baseline(benchmark._git("rev-parse", "HEAD"))
+        self.assertTrue(context["runtime_is_ancestor_of_carrier"])
+        self.assertTrue(context["carrier_is_ancestor_of_candidate"])
+        self.assertEqual(
+            context["raw_carrier_byte_size"], benchmark.PREDECESSOR_CARRIER_BYTES
+        )
+        with mock.patch.object(benchmark, "_git_is_ancestor", return_value=False):
+            with self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_BASELINE_ANCESTRY_INVALID"
+            ):
+                benchmark._validate_delta_baseline(benchmark._git("rev-parse", "HEAD"))
+        self.assertTrue(
+            benchmark._validate_repository_git_layout()[
+                "ordinary_in_worktree_git_directory"
+            ]
+        )
+        text_result = mock.Mock(returncode=0, stdout="value\n")
+        bytes_result = mock.Mock(returncode=0, stdout=b"value\n")
+        with mock.patch.object(
+            benchmark.subprocess,
+            "run",
+            side_effect=(text_result, bytes_result, bytes_result),
+        ) as run:
+            self.assertEqual(benchmark._git("rev-parse", "HEAD"), "value")
+            self.assertEqual(benchmark._git_bytes("show", "HEAD:" + PREDECESSOR_EVIDENCE_PATH), b"value\n")
+            self.assertTrue(benchmark._git_is_ancestor("a" * 40, "b" * 40))
+        for call in run.call_args_list:
+            command = call.args[0]
+            environment = call.kwargs["env"]
+            self.assertIn("--no-optional-locks", command)
+            self.assertIn("--no-replace-objects", command)
+            self.assertIn("core.fsmonitor=false", command)
+            self.assertIn("core.untrackedCache=false", command)
+            self.assertIn("maintenance.auto=false", command)
+            self.assertEqual(environment["GIT_OPTIONAL_LOCKS"], "0")
+            self.assertEqual(environment["GIT_CONFIG_NOSYSTEM"], "1")
+            self.assertEqual(environment["GIT_NO_LAZY_FETCH"], "1")
+            self.assertEqual(environment["GIT_NO_REPLACE_OBJECTS"], "1")
+            self.assertEqual(environment["GIT_TERMINAL_PROMPT"], "0")
+        with self.assertRaisesRegex(
+            BenchmarkFailure, "BENCHMARK_GIT_COMMAND_NOT_ALLOWED"
+        ):
+            benchmark._read_only_git_invocation("branch", "-D", "unsafe")
+        regular_file = mock.Mock(st_mode=benchmark.stat.S_IFREG, st_file_attributes=0)
+        with mock.patch.object(benchmark, "_ORIGINAL_LSTAT", return_value=regular_file):
+            with self.assertRaisesRegex(
+                BenchmarkFailure, "BENCHMARK_GIT_LAYOUT_INVALID"
+            ):
+                benchmark._validate_repository_git_layout()
 
     def test_windows_lexical_deny_matching_has_component_boundary(self) -> None:
         root = _lexical_windows_path(r"D:\Prompt")
@@ -174,6 +269,8 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
         )
 
         guard.check("os.stat", r"C:\service-state\managed\workspace\file.py")
+        with self.assertRaises(PermissionError):
+            guard.check("os.truncate", 987654321, write_intent=True)
         for denied in (
             r"C:\service-state\managed\sibling\file.py",
             r"T:\managed\workspace\file.py",
@@ -181,9 +278,65 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
         ):
             with self.subTest(path=denied), self.assertRaises(PermissionError):
                 guard.check("os.stat", denied)
+        for event, denied, write_intent in (
+            (
+                "os.remove",
+                r"C:\service-state\managed\workspace\tracked.py",
+                None,
+            ),
+            (
+                "open",
+                r"C:\service-state\managed\workspace\.git\config",
+                False,
+            ),
+            (
+                "os.open",
+                r"C:\service-state\managed\workspace\tracked.py",
+                True,
+            ),
+        ):
+            with self.subTest(event=event), self.assertRaises(PermissionError):
+                guard.check(event, denied, write_intent=write_intent)
         self.assertEqual(
             audit["forbidden_attempts"],
-            [{"event": "os.stat", "root_label": "service_state"}] * 3,
+            [
+                {"event": "os.stat", "root_label": "service_state"},
+                {"event": "os.stat", "root_label": "service_state"},
+                {"event": "os.stat", "root_label": "service_state"},
+                {"event": "os.remove", "root_label": "service_state"},
+                {"event": "open", "root_label": "service_state"},
+                {"event": "os.open", "root_label": "service_state"},
+            ],
+        )
+
+        ordinary = mock.Mock(
+            st_mode=benchmark.stat.S_IFDIR,
+            st_file_attributes=0,
+        )
+        redirected = mock.Mock(
+            st_mode=benchmark.stat.S_IFDIR,
+            st_file_attributes=0x400,
+        )
+
+        def lstat(path: Path):
+            return redirected if str(path).casefold().endswith("\\junction") else ordinary
+
+        reparse_guard = _AccessGuard(
+            forbidden=(state_root,),
+            protected=Path(r"D:\isolated\protected"),
+            allowed_roots=(Path(r"C:\service-state\managed\workspace"),),
+            audit=audit,
+            lstat_function=lstat,
+            device_query=query,
+        )
+        with self.assertRaises(PermissionError):
+            reparse_guard.check(
+                "os.stat",
+                r"C:\service-state\managed\workspace\junction\outside.json",
+            )
+        self.assertEqual(
+            audit["unsafe_alias_attempts"],
+            [{"event": "os.truncate"}, {"event": "os.stat"}],
         )
 
     def test_preflight_rejects_repository_subst_equivalent_to_forbidden_root(self) -> None:
@@ -324,6 +477,17 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
         middle = [record(15_150, 127_875, 255_671), record(14_921, 86_975, 214_771)]
         checks, _observations = evaluate_a05_append_bounds(initial, append, middle)
         self.assertTrue(all(checks.values()))
+        delta_checks, delta_observations = benchmark.evaluate_delta_append_bounds(
+            initial, append
+        )
+        self.assertTrue(all(delta_checks.values()))
+        self.assertEqual(
+            delta_observations["sample_kind"],
+            "append_only_delta_gap_no_synthetic_middle",
+        )
+        self.assertNotIn(
+            "middle_minimum_to_append_max_put_attempt_ratio", delta_observations
+        )
         o_n_append = copy.deepcopy(append)
         for item in o_n_append:
             item["cas"]["put_attempts"] = 15_000
@@ -405,7 +569,8 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             from pathlib import Path
             import tools.run_psc_exact_head_benchmark as benchmark
 
-            denied = r"C:\psc-native-denied-never-create"
+            denied = r"C:\service-state"
+            managed_repository = r"C:\service-state\managed\workspace"
             audit = {
                 "phase": "benchmark",
                 "forbidden_attempts": [],
@@ -429,6 +594,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             guard = benchmark._AccessGuard(
                 forbidden=forbidden,
                 protected=Path(r"C:\psc-native-protected-never-create"),
+                allowed_roots=(Path(managed_repository),),
                 audit=audit,
             )
             benchmark._ACTIVE_ACCESS_GUARD = guard
@@ -436,7 +602,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             benchmark._install_candidate_native_guards(audit)
             try:
                 benchmark.CandidateStorageModule._windows_open_pinned_directory(
-                    Path(denied)
+                    Path(managed_repository)
                 )
             except PermissionError:
                 pass
@@ -476,6 +642,19 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn('"code":"BENCHMARK_FAILED_CLOSED"', stderr.getvalue())
         self.assertNotIn("sensitive detail", stderr.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            benchmark._parser().parse_args(
+                [
+                    "--run-root",
+                    r"C:\isolated-never-created",
+                    "--expected-head",
+                    "0" * 40,
+                    "--expected-tree",
+                    "1" * 40,
+                    "--workload-profile",
+                    "unknown",
+                ]
+            )
 
     def test_evidence_seal_is_canonical_and_excludes_its_own_field(self) -> None:
         payload = {"z": [3, 2, 1], "a": "Без потерь"}
@@ -518,6 +697,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             r"""
             import builtins
             import os
+            import tempfile
             from pathlib import Path
             from tools.run_psc_exact_head_benchmark import (
                 _device_lexical_windows_path,
@@ -525,6 +705,17 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
             )
 
             denied = r"C:\psc-benchmark-denied-never-create"
+            fixture_root = Path(tempfile.mkdtemp(prefix="psc-guard-fd-"))
+            protected_root = fixture_root / "protected"
+            protected_root.mkdir()
+            protected_file = protected_root / "sentinel.bin"
+            protected_file.write_bytes(b"protected")
+            safe_file = fixture_root / "safe.bin"
+            safe_file.write_bytes(b"safe-data")
+            repository_file = Path.cwd() / "tools" / "run_psc_exact_head_benchmark.py"
+            protected_fd = os.open(protected_file, os.O_RDWR)
+            safe_fd = os.open(safe_file, os.O_RDWR)
+            repository_fd = os.open(repository_file, os.O_RDONLY)
             audit = {
                 "phase": "benchmark",
                 "forbidden_attempts": [],
@@ -533,6 +724,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
                 "authorized_fixture_inventory_events": 0,
                 "guard_checks_by_event": {},
                 "descriptor_checks_by_event": {},
+                "write_telemetry": {"active_transition": None, "by_transition": {}},
             }
             _install_access_guards(
                 forbidden=({
@@ -540,7 +732,7 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
                     "lexical_path": denied.lower(),
                     "device_path": _device_lexical_windows_path(denied),
                 },),
-                protected=Path(r"C:\psc-benchmark-protected-never-create"),
+                protected=protected_root,
                 audit=audit,
             )
             checks = (
@@ -582,6 +774,52 @@ class PscExactHeadBenchmarkTests(unittest.TestCase):
                     raise SystemExit(5)
             if len(audit["unsafe_alias_attempts"]) != len(aliases):
                 raise SystemExit(6)
+            os.fstat(repository_fd)
+            os.read(repository_fd, 1)
+            for operation in (
+                lambda: os.write(repository_fd, b"x"),
+                lambda: os.ftruncate(repository_fd, 0),
+                lambda: os.fsync(repository_fd),
+            ):
+                try:
+                    operation()
+                except PermissionError:
+                    pass
+                else:
+                    raise SystemExit(7)
+            for operation in (
+                lambda: os.fstat(protected_fd),
+                lambda: os.read(protected_fd, 1),
+                lambda: os.write(protected_fd, b"x"),
+                lambda: os.ftruncate(protected_fd, 0),
+                lambda: os.fsync(protected_fd),
+                lambda: os.fdopen(protected_fd, "rb", closefd=False),
+            ):
+                try:
+                    operation()
+                except PermissionError:
+                    pass
+                else:
+                    raise SystemExit(8)
+            os.fstat(safe_fd)
+            os.read(safe_fd, 1)
+            os.write(safe_fd, b"x")
+            os.ftruncate(safe_fd, 4)
+            os.fsync(safe_fd)
+            exclusive_file = fixture_root / "evidence.bin"
+            import tools.run_psc_exact_head_benchmark as benchmark
+            benchmark._write_exclusive(exclusive_file, b"exact-evidence")
+            if exclusive_file.read_bytes() != b"exact-evidence":
+                raise SystemExit(9)
+            os.close(repository_fd)
+            os.close(protected_fd)
+            os.close(safe_fd)
+            audit["phase"] = "pre_inventory"
+            os.remove(protected_file)
+            os.remove(safe_file)
+            os.remove(exclusive_file)
+            os.rmdir(protected_root)
+            os.rmdir(fixture_root)
             """
         )
         completed = subprocess.run(

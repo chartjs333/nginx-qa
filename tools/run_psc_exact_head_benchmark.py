@@ -1,7 +1,9 @@
 """Run the frozen PSC-A05/A16/A17 workload on one exact clean Git head.
 
-The benchmark is intentionally slow and sequential.  It accepts only a new,
-explicit, isolated run root; never discovers fixtures; never deletes or garbage
+The default full benchmark is intentionally slow and sequential.  The optional
+``delta-gap-v1`` profile is supplemental baseline-plus-diff evidence and can
+never satisfy the full exact-head selector.  Both profiles accept only a new,
+explicit, isolated run root; never discover fixtures; never delete or garbage
 collects durable archives or blobs; and treats any attempted access beneath a
 lexical or device-equivalent forbidden root as a terminal error.  Internal
 exclusive-create, temporary-file cleanup, and atomic control-file replacement
@@ -17,6 +19,7 @@ It enables PAS1 authoritative mode only inside the supplied isolated run root.
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import builtins
 import ctypes
@@ -45,6 +48,9 @@ _CANDIDATE_MODULES_LOADED = False
 _CANDIDATE_NATIVE_WRAPPERS_INSTALLED = False
 _ACTIVE_ACCESS_GUARD = None
 _ORIGINAL_LSTAT = os.lstat
+_ORIGINAL_READLINK = os.readlink
+_ORIGINAL_BUILTIN_OPEN = builtins.open
+_GIT_CONFIG_LOCK: tuple[int, str] | None = None
 
 
 def _load_candidate_modules() -> None:
@@ -101,8 +107,29 @@ def _load_candidate_modules() -> None:
 PROJECT_ID = "9000"
 MAIN_SPRINT = "sprint-psc-a05-a16-a17-append"
 MIDDLE_SPRINT = "sprint-psc-a05-middle-ordinal"
+DELTA_GAP_SPRINT = "sprint-psc-a05-delta-gap-v1"
+FULL_WORKLOAD_PROFILE = "full-frozen-v1"
+DELTA_GAP_WORKLOAD_PROFILE = "delta-gap-v1"
 OUTPUT_NAME = "psc-a05-a16-a17-exact-head.json"
 OUTPUT_DIGEST_NAME = OUTPUT_NAME + ".sha256"
+DELTA_GAP_OUTPUT_NAME = "psc-a05-a16-a17-delta-gap-v1.json"
+DELTA_GAP_OUTPUT_DIGEST_NAME = DELTA_GAP_OUTPUT_NAME + ".sha256"
+READ_ONLY_GIT_COMMAND_DISCLOSURE = (
+    "branch --show-current",
+    "ls-files --others --directory --no-empty-directory",
+    "merge-base --is-ancestor",
+    "rev-parse",
+    "show",
+    "status --porcelain=v1 --untracked-files=no --ignore-submodules=all",
+)
+FORBIDDEN_GIT_METADATA_CONTROLS = (
+    ".gitmodules",
+    ".git/config.worktree",
+    ".git/info/grafts",
+    ".git/objects/info/alternates",
+    ".git/objects/info/http-alternates",
+    ".git/shallow",
+)
 RUNNER_PATH = "tools/run_psc_exact_head_benchmark.py"
 PREDECESSOR_EVIDENCE_PATH = (
     "docs/evidence/prompt-storage-compaction-v1/"
@@ -112,6 +139,24 @@ PREDECESSOR_DECODED_SHA256 = (
     "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1"
 )
 PREDECESSOR_DECODED_BYTES = 16_163
+PREDECESSOR_CARRIER_BYTES = 21_553
+PREDECESSOR_CARRIER_SHA256 = (
+    "1e27f79429fa1161e9fd93970e59aeb9775312b61997e3318535d9d87e19994e"
+)
+PREDECESSOR_CARRIER_BLOB = "d4df7979488b3667990eca69de32a1b3b74944a0"
+BASELINE_ADJUDICATION_PATH = (
+    "docs/evidence/prompt-storage-compaction-v1/"
+    "psc-006-benchmark-adjudication.json"
+)
+BASELINE_ADJUDICATION_BYTES = 7_398
+BASELINE_ADJUDICATION_SHA256 = (
+    "1ab44d24f2fa19b5d7c51b60a946736b2710d10459950bec13d9f2169b7f6238"
+)
+BASELINE_ADJUDICATION_BLOB = "6e534becacdd561a6c82672f89d4846e40ec916e"
+HISTORICAL_BASELINE_COMMIT = "54d9eb716a88a195e3b9ade19ed7a480ffee9ccc"
+HISTORICAL_BASELINE_TREE = "c8d171a65558884aac3e3fc283c48c038185346d"
+EVIDENCE_CARRIER_COMMIT = "725c9f3ed2699cda3c8c2e65fee8431fa70d19b5"
+EVIDENCE_CARRIER_TREE = "4917b9609f73c1429a075745af85cff06c44ae3e"
 BUILTIN_FORBIDDEN_ROOTS = (("live_prompt", r"D:\Prompt"),)
 REQUIRED_FORBIDDEN_ROOT_LABELS = frozenset(
     {"live_prompt", "service_runtime", "service_prompt", "service_state", "service_root"}
@@ -198,8 +243,29 @@ FROZEN_INPUTS = {
         "ae97f0fab548fdeb8c1b3945ac7257af8c80fd425e8866111718adb6df26171d",
     ),
 }
+DELTA_GAP_FROZEN_INPUTS = {
+    "delta-0008-baseline": (
+        56_021,
+        "f13804457095265395ead0078d3e5e9ccd0c6de022c2636662d2efcb4abb8708",
+    ),
+    "delta-0009-pure": (
+        60_888,
+        "748024b05e5067e0cd2045114b28b3617de624508a11dc3329f5df0701aa0ad4",
+    ),
+    "delta-0010-alias-move": (
+        65_756,
+        "1f56bcdbc5640c84bee6eefb81b25c586e3c2bbe476001a5b6fd3556baf5b0a4",
+    ),
+    "delta-0011-pure": (
+        70_624,
+        "0150166f5c943c071c9eef0aa1ea377720c8cd277b95d2b16fb4795db4035e22",
+    ),
+}
 FROZEN_WORKLOAD_MANIFEST_SHA256 = (
     "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1"
+)
+DELTA_GAP_WORKLOAD_MANIFEST_SHA256 = (
+    "2b93dbf32f1ea5f3f3753a25405921d2ee73bac30aa93e47482617021be863ab"
 )
 # Frozen qualification bounds derived with margin from the committed predecessor
 # evidence.  They make the append assertion quantitative: an implementation that
@@ -211,6 +277,8 @@ FROZEN_APPEND_MAX_DURABLE_BYTES_PER_LOGICAL_DELTA = 64.0
 FROZEN_APPEND_MAX_ALLOCATION_BYTES_PER_LOGICAL_DELTA = 1_024.0
 FROZEN_APPEND_MAX_WRITE_API_PAYLOAD_BYTES_PER_LOGICAL_DELTA = 512.0
 FROZEN_MIDDLE_TO_APPEND_MIN_PUT_ATTEMPT_RATIO = 10.0
+FROZEN_CHECKPOINT_DEPTH = 12
+FROZEN_UNKNOWN_ALIAS_DEPTH = 16
 
 
 class BenchmarkFailure(RuntimeError):
@@ -263,42 +331,271 @@ def verify_sealed_evidence_bytes(raw: bytes) -> dict[str, Any]:
     return document
 
 
-def _git(*arguments: str) -> str:
-    completed = subprocess.run(
-        ["git", "-C", str(REPOSITORY_ROOT), *arguments],
-        input="",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        text=True,
-        encoding="utf-8",
+def _read_and_validate_local_git_config() -> tuple[bytes, str]:
+    path = REPOSITORY_ROOT / ".git" / "config"
+    try:
+        with _ORIGINAL_BUILTIN_OPEN(path, "rb") as stream:
+            raw = stream.read(65_537)
+    except OSError:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID") from None
+    if len(raw) > 65_536 or b"\x00" in raw:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID") from None
+    allowed = {
+        "core": {
+            "bare",
+            "filemode",
+            "ignorecase",
+            "longpaths",
+            "logallrefupdates",
+            "repositoryformatversion",
+            "symlinks",
+        },
+        'remote "origin"': {"fetch", "url"},
+    }
+    required_values = {
+        ("core", "bare"): "false",
+        ("core", "repositoryformatversion"): "0",
+        ("core", "symlinks"): "false",
+        ('remote "origin"', "fetch"): "+refs/heads/*:refs/remotes/origin/*",
+        ('remote "origin"', "url"): "https://github.com/chartjs333/nginx-qa.git",
+    }
+    section: str | None = None
+    observed: dict[tuple[str, str], str] = {}
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if raw_line.rstrip().endswith("\\"):
+            raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+        if line.startswith("[") and line.endswith("]"):
+            section = line[1:-1].strip().casefold()
+            if section not in allowed:
+                raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+            continue
+        if section is None or "=" not in line:
+            raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+        key, value = (item.strip() for item in line.split("=", 1))
+        key = key.casefold()
+        identity = (section, key)
+        if key not in allowed[section] or identity in observed:
+            raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+        observed[identity] = value
+    if any(observed.get(identity) != value for identity, value in required_values.items()):
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_INVALID")
+    return raw, _sha256(raw)
+
+
+def _close_git_config_lock() -> None:
+    global _GIT_CONFIG_LOCK
+    if _GIT_CONFIG_LOCK is None or os.name != "nt":
+        _GIT_CONFIG_LOCK = None
+        return
+    handle, _digest = _GIT_CONFIG_LOCK
+    try:
+        from ctypes import wintypes
+
+        close_handle = ctypes.WinDLL(
+            "kernel32", use_last_error=True
+        ).CloseHandle
+        close_handle.argtypes = (wintypes.HANDLE,)
+        close_handle.restype = wintypes.BOOL
+        close_handle(wintypes.HANDLE(handle))
+    finally:
+        _GIT_CONFIG_LOCK = None
+
+
+def _ensure_git_config_lock() -> str:
+    global _GIT_CONFIG_LOCK
+    _raw, digest = _read_and_validate_local_git_config()
+    if _GIT_CONFIG_LOCK is not None:
+        if _GIT_CONFIG_LOCK[1] != digest:
+            raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
+        return digest
+    if os.name != "nt":
+        raise BenchmarkFailure("BENCHMARK_WINDOWS_ISOLATION_REQUIRED")
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
     )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(REPOSITORY_ROOT / ".git" / "config"),
+        0x80000000,  # GENERIC_READ
+        0x00000001,  # FILE_SHARE_READ; deny concurrent write/delete opens
+        None,
+        3,  # OPEN_EXISTING
+        0x00000080,  # FILE_ATTRIBUTE_NORMAL
+        None,
+    )
+    invalid = ctypes.c_void_p(-1).value
+    if handle in (None, 0, invalid):
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_LOCK_FAILED")
+    _GIT_CONFIG_LOCK = (int(handle), digest)
+    atexit.register(_close_git_config_lock)
+    _raw_after, digest_after = _read_and_validate_local_git_config()
+    if digest_after != digest:
+        _close_git_config_lock()
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
+    return digest
+
+
+def _verify_git_config_lock() -> str:
+    if _GIT_CONFIG_LOCK is None:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_LOCK_MISSING")
+    _raw, digest = _read_and_validate_local_git_config()
+    if digest != _GIT_CONFIG_LOCK[1]:
+        raise BenchmarkFailure("BENCHMARK_GIT_CONFIG_CHANGED")
+    return digest
+
+
+def _read_only_git_arguments_allowed(arguments: tuple[str, ...]) -> bool:
+    if arguments in {
+        ("branch", "--show-current"),
+        (
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=no",
+            "--ignore-submodules=all",
+        ),
+        ("ls-files", "--others", "--directory", "--no-empty-directory"),
+        ("rev-parse", "--path-format=absolute", "--git-dir"),
+        ("rev-parse", "--path-format=absolute", "--git-common-dir"),
+        ("rev-parse", "--path-format=absolute", "--show-toplevel"),
+    }:
+        return True
+    if len(arguments) == 2 and arguments[0] == "rev-parse":
+        return arguments[1] in {
+            "HEAD",
+            "HEAD^{tree}",
+            f"HEAD:{RUNNER_PATH}",
+            f"HEAD:{PREDECESSOR_EVIDENCE_PATH}",
+            f"{HISTORICAL_BASELINE_COMMIT}^{{tree}}",
+            f"{EVIDENCE_CARRIER_COMMIT}^{{tree}}",
+            f"{EVIDENCE_CARRIER_COMMIT}:{PREDECESSOR_EVIDENCE_PATH}",
+            f"{EVIDENCE_CARRIER_COMMIT}:{BASELINE_ADJUDICATION_PATH}",
+        }
+    if len(arguments) == 2 and arguments[0] == "show":
+        return arguments[1] in {
+            f"HEAD:{PREDECESSOR_EVIDENCE_PATH}",
+            f"{EVIDENCE_CARRIER_COMMIT}:{PREDECESSOR_EVIDENCE_PATH}",
+            f"{EVIDENCE_CARRIER_COMMIT}:{BASELINE_ADJUDICATION_PATH}",
+        }
+    return (
+        len(arguments) == 4
+        and arguments[:2] == ("merge-base", "--is-ancestor")
+        and HEX_40.fullmatch(arguments[2]) is not None
+        and HEX_40.fullmatch(arguments[3]) is not None
+    )
+
+
+def _read_only_git_invocation(*arguments: str) -> tuple[list[str], dict[str, str]]:
+    if not _read_only_git_arguments_allowed(arguments):
+        raise BenchmarkFailure("BENCHMARK_GIT_COMMAND_NOT_ALLOWED")
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    environment.update(
+        {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
+    return (
+        [
+            "git",
+            "--no-optional-locks",
+            "--no-replace-objects",
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "core.untrackedCache=false",
+            "-c",
+            "maintenance.auto=false",
+            "-C",
+            str(REPOSITORY_ROOT),
+            *arguments,
+        ],
+        environment,
+    )
+
+
+def _git(*arguments: str) -> str:
+    command, environment = _read_only_git_invocation(*arguments)
+    _ensure_git_config_lock()
+    try:
+        completed = subprocess.run(
+            command,
+            input="",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            text=True,
+            encoding="utf-8",
+            env=environment,
+        )
+    finally:
+        _verify_git_config_lock()
     if completed.returncode != 0:
         raise BenchmarkFailure("BENCHMARK_GIT_PRECONDITION_FAILED")
     return completed.stdout.strip()
 
 
 def _git_bytes(*arguments: str) -> bytes:
-    completed = subprocess.run(
-        ["git", "-C", str(REPOSITORY_ROOT), *arguments],
-        input=b"",
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
+    command, environment = _read_only_git_invocation(*arguments)
+    _ensure_git_config_lock()
+    try:
+        completed = subprocess.run(
+            command,
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+    finally:
+        _verify_git_config_lock()
     if completed.returncode != 0:
         raise BenchmarkFailure("BENCHMARK_GIT_PRECONDITION_FAILED")
     return completed.stdout
 
 
 def _candidate_snapshot() -> dict[str, Any]:
-    status = _git("status", "--porcelain=v1", "--untracked-files=all")
+    status = _git(
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=no",
+        "--ignore-submodules=all",
+    )
+    untracked = _git("ls-files", "--others", "--directory", "--no-empty-directory")
+    status_binding = status.encode("utf-8") + b"\x00" + untracked.encode("utf-8")
     return {
         "commit": _git("rev-parse", "HEAD"),
         "tree": _git("rev-parse", "HEAD^{tree}"),
         "branch": _git("branch", "--show-current"),
-        "clean": status == "",
-        "status_sha256": _sha256(status.encode("utf-8")),
+        "clean": status == "" and untracked == "",
+        "status_sha256": _sha256(status_binding),
+        "tracked_status_sha256": _sha256(status.encode("utf-8")),
+        "untracked_inventory_sha256": _sha256(untracked.encode("utf-8")),
+        "local_git_config_sha256": _verify_git_config_lock(),
         "runner_git_blob": _git("rev-parse", f"HEAD:{RUNNER_PATH}"),
         "predecessor_evidence_git_blob": _git(
             "rev-parse", f"HEAD:{PREDECESSOR_EVIDENCE_PATH}"
@@ -317,8 +614,123 @@ def _validate_candidate(
         raise BenchmarkFailure("BENCHMARK_EXACT_HEAD_PRECONDITION_FAILED")
 
 
-def _decode_predecessor_evidence() -> dict[str, Any]:
-    carrier = _git_bytes("show", f"HEAD:{PREDECESSOR_EVIDENCE_PATH}")
+def _assert_tree_contains_no_reparse_points(root: Path) -> None:
+    pending = [root]
+    top_git = os.path.normcase(os.path.abspath(root / ".git"))
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as entries:
+                for entry in entries:
+                    metadata = entry.stat(follow_symlinks=False)
+                    if entry.is_symlink() or (
+                        int(getattr(metadata, "st_file_attributes", 0)) & 0x400
+                    ):
+                        raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID")
+                    if (
+                        entry.name.casefold() == ".git"
+                        and os.path.normcase(os.path.abspath(entry.path)) != top_git
+                    ):
+                        raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID")
+                    if stat.S_ISDIR(metadata.st_mode):
+                        pending.append(Path(entry.path))
+        except BenchmarkFailure:
+            raise
+        except OSError:
+            raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID") from None
+
+
+def _validate_repository_git_layout() -> dict[str, Any]:
+    """Require ordinary, in-worktree Git metadata before child Git is used."""
+
+    metadata = REPOSITORY_ROOT / ".git"
+    try:
+        metadata_stat = _ORIGINAL_LSTAT(metadata)
+    except OSError:
+        raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID") from None
+    reparse_flag = int(getattr(metadata_stat, "st_file_attributes", 0)) & 0x400
+    if not stat.S_ISDIR(metadata_stat.st_mode) or reparse_flag:
+        raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID")
+    _assert_existing_chain_not_redirected(metadata, lstat_function=_ORIGINAL_LSTAT)
+    _assert_tree_contains_no_reparse_points(REPOSITORY_ROOT)
+    for relative_control in FORBIDDEN_GIT_METADATA_CONTROLS:
+        forbidden_control = REPOSITORY_ROOT / relative_control
+        try:
+            _ORIGINAL_LSTAT(forbidden_control)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID") from None
+        else:
+            raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID")
+    expected = os.path.normcase(os.path.abspath(metadata))
+    git_dir = os.path.normcase(
+        os.path.abspath(
+            _git("rev-parse", "--path-format=absolute", "--git-dir")
+        )
+    )
+    common_dir = os.path.normcase(
+        os.path.abspath(
+            _git("rev-parse", "--path-format=absolute", "--git-common-dir")
+        )
+    )
+    worktree = os.path.normcase(
+        os.path.abspath(
+            _git("rev-parse", "--path-format=absolute", "--show-toplevel")
+        )
+    )
+    if (
+        git_dir != expected
+        or common_dir != expected
+        or worktree != os.path.normcase(os.path.abspath(REPOSITORY_ROOT))
+    ):
+        raise BenchmarkFailure("BENCHMARK_GIT_LAYOUT_INVALID")
+    return {
+        "ordinary_in_worktree_git_directory": True,
+        "git_dir_equals_common_dir": True,
+        "git_worktree_equals_candidate_root": True,
+        "git_worktree_tree_contains_no_reparse_points": True,
+        "git_metadata_tree_contains_no_reparse_points": True,
+        "git_object_alternates_absent": True,
+        "git_grafts_absent": True,
+        "git_shallow_boundary_absent": True,
+        "git_replace_objects_disabled": True,
+        "git_submodules_and_nested_git_directories_absent": True,
+        "local_git_config_locked_against_write_and_delete": True,
+        "local_git_config_sha256": _verify_git_config_lock(),
+        "git_optional_locks_disabled": True,
+        "git_fsmonitor_disabled": True,
+        "git_untracked_cache_disabled": True,
+        "git_global_and_system_config_disabled": True,
+        "git_lazy_fetch_disabled": True,
+    }
+
+
+def _git_is_ancestor(ancestor: str, descendant: str) -> bool:
+    command, environment = _read_only_git_invocation(
+        "merge-base", "--is-ancestor", ancestor, descendant
+    )
+    _ensure_git_config_lock()
+    try:
+        completed = subprocess.run(
+            command,
+            input=b"",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+            env=environment,
+        )
+    finally:
+        _verify_git_config_lock()
+    if completed.returncode == 0:
+        return True
+    if completed.returncode == 1:
+        return False
+    raise BenchmarkFailure("BENCHMARK_GIT_PRECONDITION_FAILED")
+
+
+def _decode_predecessor_evidence(source_commit: str = "HEAD") -> dict[str, Any]:
+    carrier = _git_bytes("show", f"{source_commit}:{PREDECESSOR_EVIDENCE_PATH}")
     try:
         compact = b"".join(carrier.split())
         decoded = base64.b64decode(compact, validate=True)
@@ -376,6 +788,87 @@ def _decode_predecessor_evidence() -> dict[str, Any]:
     if predecessor_sequence != current_sequence:
         raise BenchmarkFailure("BENCHMARK_PREDECESSOR_WORKLOAD_MISMATCH")
     return document
+
+
+def _validate_delta_baseline(candidate_commit: str) -> dict[str, Any]:
+    if (
+        _git("rev-parse", f"{HISTORICAL_BASELINE_COMMIT}^{{tree}}")
+        != HISTORICAL_BASELINE_TREE
+        or _git("rev-parse", f"{EVIDENCE_CARRIER_COMMIT}^{{tree}}")
+        != EVIDENCE_CARRIER_TREE
+        or not _git_is_ancestor(
+            HISTORICAL_BASELINE_COMMIT, EVIDENCE_CARRIER_COMMIT
+        )
+        or not _git_is_ancestor(EVIDENCE_CARRIER_COMMIT, candidate_commit)
+    ):
+        raise BenchmarkFailure("BENCHMARK_BASELINE_ANCESTRY_INVALID")
+
+    carrier = _git_bytes(
+        "show", f"{EVIDENCE_CARRIER_COMMIT}:{PREDECESSOR_EVIDENCE_PATH}"
+    )
+    adjudication_raw = _git_bytes(
+        "show", f"{EVIDENCE_CARRIER_COMMIT}:{BASELINE_ADJUDICATION_PATH}"
+    )
+    if (
+        len(carrier) != PREDECESSOR_CARRIER_BYTES
+        or _sha256(carrier) != PREDECESSOR_CARRIER_SHA256
+        or _git(
+            "rev-parse", f"{EVIDENCE_CARRIER_COMMIT}:{PREDECESSOR_EVIDENCE_PATH}"
+        )
+        != PREDECESSOR_CARRIER_BLOB
+        or len(adjudication_raw) != BASELINE_ADJUDICATION_BYTES
+        or _sha256(adjudication_raw) != BASELINE_ADJUDICATION_SHA256
+        or _git(
+            "rev-parse", f"{EVIDENCE_CARRIER_COMMIT}:{BASELINE_ADJUDICATION_PATH}"
+        )
+        != BASELINE_ADJUDICATION_BLOB
+    ):
+        raise BenchmarkFailure("BENCHMARK_BASELINE_ARTIFACT_INVALID")
+
+    predecessor = _decode_predecessor_evidence(EVIDENCE_CARRIER_COMMIT)
+    try:
+        adjudication = json.loads(adjudication_raw)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise BenchmarkFailure("BENCHMARK_BASELINE_ADJUDICATION_INVALID") from None
+    if (
+        type(adjudication) is not dict
+        or adjudication.get("kind")
+        != "psc_006_benchmark_acceptance_adjudication"
+        or adjudication.get("decision") != "PASS"
+        or adjudication.get("decision_scope") != ["PSC-A05", "PSC-A16", "PSC-A17"]
+        or adjudication.get("candidate", {}).get("commit")
+        != HISTORICAL_BASELINE_COMMIT
+        or adjudication.get("candidate", {}).get("tree") != HISTORICAL_BASELINE_TREE
+        or adjudication.get("source_evidence", {}).get("sha256")
+        != PREDECESSOR_DECODED_SHA256
+        or adjudication.get("source_evidence", {}).get("byte_size")
+        != PREDECESSOR_DECODED_BYTES
+        or predecessor.get("candidate", {}).get("commit")
+        != HISTORICAL_BASELINE_COMMIT
+        or predecessor.get("candidate", {}).get("tree") != HISTORICAL_BASELINE_TREE
+    ):
+        raise BenchmarkFailure("BENCHMARK_BASELINE_ADJUDICATION_INVALID")
+    return {
+        "decision": "PASS",
+        "runtime_commit": HISTORICAL_BASELINE_COMMIT,
+        "runtime_tree": HISTORICAL_BASELINE_TREE,
+        "carrier_commit": EVIDENCE_CARRIER_COMMIT,
+        "carrier_tree": EVIDENCE_CARRIER_TREE,
+        "runtime_is_ancestor_of_carrier": True,
+        "carrier_is_ancestor_of_candidate": True,
+        "raw_carrier_path": PREDECESSOR_EVIDENCE_PATH,
+        "raw_carrier_byte_size": PREDECESSOR_CARRIER_BYTES,
+        "raw_carrier_sha256": PREDECESSOR_CARRIER_SHA256,
+        "raw_carrier_git_blob": PREDECESSOR_CARRIER_BLOB,
+        "raw_decoded_byte_size": PREDECESSOR_DECODED_BYTES,
+        "raw_decoded_sha256": PREDECESSOR_DECODED_SHA256,
+        "adjudication_path": BASELINE_ADJUDICATION_PATH,
+        "adjudication_byte_size": BASELINE_ADJUDICATION_BYTES,
+        "adjudication_sha256": BASELINE_ADJUDICATION_SHA256,
+        "adjudication_git_blob": BASELINE_ADJUDICATION_BLOB,
+        "predecessor_candidate_commit": predecessor["candidate"]["commit"],
+        "predecessor_candidate_tree": predecessor["candidate"]["tree"],
+    }
 
 
 def _lexical_windows_path(value: str | os.PathLike[str]) -> str:
@@ -979,6 +1472,34 @@ def frozen_workload() -> tuple[dict[str, Any], ...]:
     )
 
 
+def delta_gap_workload() -> tuple[dict[str, Any], ...]:
+    """Return the four-transition current-head probe, not a full rerun."""
+
+    definitions = (
+        ("delta-0008-baseline", "initial_delta_gap_series", 8, "project_state"),
+        ("delta-0009-pure", "right_append", 9, "project_state"),
+        (
+            "delta-0010-alias-move",
+            "right_append_plus_unknown_alias_move",
+            10,
+            "assignment",
+        ),
+        ("delta-0011-pure", "right_append", 11, "assignment"),
+    )
+    return tuple(
+        {
+            "label": label,
+            "change_kind": change_kind,
+            "revision": count,
+            "sprint_id": DELTA_GAP_SPRINT,
+            "raw": _encoded(_main_document(count, alias_location)),
+            "record_count": count,
+            "alias_location": alias_location,
+        }
+        for label, change_kind, count, alias_location in definitions
+    )
+
+
 def validate_frozen_workload() -> None:
     observed = {
         item["label"]: (len(item["raw"]), _sha256(item["raw"]))
@@ -990,6 +1511,19 @@ def validate_frozen_workload() -> None:
         FROZEN_WORKLOAD_MANIFEST_SHA256
     ):
         raise BenchmarkFailure("BENCHMARK_FROZEN_WORKLOAD_MISMATCH")
+
+
+def validate_delta_gap_workload() -> None:
+    observed = {
+        item["label"]: (len(item["raw"]), _sha256(item["raw"]))
+        for item in delta_gap_workload()
+    }
+    if observed != DELTA_GAP_FROZEN_INPUTS:
+        raise BenchmarkFailure("BENCHMARK_DELTA_GAP_WORKLOAD_MISMATCH")
+    if _sha256(_canonical_json(delta_gap_workload_manifest())) != (
+        DELTA_GAP_WORKLOAD_MANIFEST_SHA256
+    ):
+        raise BenchmarkFailure("BENCHMARK_DELTA_GAP_WORKLOAD_MISMATCH")
 
 
 def _timestamp(revision: int, offset: int = 0) -> str:
@@ -1111,6 +1645,39 @@ def frozen_workload_manifest() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "kind": "psc_a05_a16_a17_frozen_workload_manifest",
+        "transitions": transitions,
+    }
+
+
+def delta_gap_workload_manifest() -> dict[str, Any]:
+    transitions: list[dict[str, Any]] = []
+    for item in delta_gap_workload():
+        occurrence = _occurrence_fields(
+            "0" * 40,
+            item["sprint_id"],
+            item["label"],
+            item["revision"],
+        )
+        occurrence["source"]["source_commit"] = "<exact-candidate-commit>"
+        transitions.append(
+            {
+                "label": item["label"],
+                "change_kind": item["change_kind"],
+                "sprint_id": item["sprint_id"],
+                "revision": item["revision"],
+                "record_count": item["record_count"],
+                "alias_location": item["alias_location"],
+                "raw_byte_size": len(item["raw"]),
+                "raw_sha256": _sha256(item["raw"]),
+                "occurrence": occurrence,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": "psc_a05_a16_a17_delta_gap_v1_frozen_workload_manifest",
+        "checkpoint_depth": FROZEN_CHECKPOINT_DEPTH,
+        "unknown_alias_depth": FROZEN_UNKNOWN_ALIAS_DEPTH,
+        "middle_insert_delete_included": False,
         "transitions": transitions,
     }
 
@@ -1453,6 +2020,105 @@ def evaluate_a05_append_bounds(
     return checks, observations
 
 
+def evaluate_delta_append_bounds(
+    initial: Mapping[str, Any],
+    append_records: Sequence[Mapping[str, Any]],
+) -> tuple[dict[str, bool], dict[str, Any]]:
+    """Evaluate only real append samples; no synthetic middle observation."""
+
+    if not append_records:
+        raise BenchmarkFailure("BENCHMARK_A05_SAMPLE_SET_INVALID")
+    append_attempts = [item["cas"]["put_attempts"] for item in append_records]
+    append_cas = [item["cas"]["new_stored_bytes"] for item in append_records]
+    append_footprints = [
+        item["physical"]["final_touched_content_footprint_bytes"]
+        for item in append_records
+    ]
+    append_allocations = [
+        item["physical"]["final_touched_allocation_footprint_bytes"]
+        for item in append_records
+    ]
+    append_write_payloads = [
+        item["write_api"]["payload_bytes"] for item in append_records
+    ]
+    append_deltas = [max(1, item["logical_change_bytes"]) for item in append_records]
+    max_append_attempts = max(append_attempts)
+    maximum_cas_ratio = max(
+        value / delta for value, delta in zip(append_cas, append_deltas)
+    )
+    maximum_footprint_ratio = max(
+        value / delta for value, delta in zip(append_footprints, append_deltas)
+    )
+    maximum_allocation_ratio = max(
+        value / delta for value, delta in zip(append_allocations, append_deltas)
+    )
+    maximum_write_payload_ratio = max(
+        value / delta for value, delta in zip(append_write_payloads, append_deltas)
+    )
+    checks = {
+        "append_put_attempts_within_frozen_bound": (
+            max_append_attempts <= FROZEN_APPEND_MAX_PUT_ATTEMPTS
+        ),
+        "append_cas_amplification_within_frozen_bound": (
+            maximum_cas_ratio <= FROZEN_APPEND_MAX_CAS_BYTES_PER_LOGICAL_DELTA
+        ),
+        "append_final_touched_footprint_within_frozen_bound": (
+            maximum_footprint_ratio
+            <= FROZEN_APPEND_MAX_DURABLE_BYTES_PER_LOGICAL_DELTA
+        ),
+        "append_final_touched_allocation_within_frozen_bound": (
+            maximum_allocation_ratio
+            <= FROZEN_APPEND_MAX_ALLOCATION_BYTES_PER_LOGICAL_DELTA
+        ),
+        "append_write_api_payload_within_frozen_bound": (
+            maximum_write_payload_ratio
+            <= FROZEN_APPEND_MAX_WRITE_API_PAYLOAD_BYTES_PER_LOGICAL_DELTA
+        ),
+        "append_write_api_telemetry_nonzero": all(
+            item["write_api"]["write_calls"] > 0
+            and item["write_api"]["payload_bytes"] > 0
+            for item in append_records
+        ),
+        "append_cas_below_initial": (
+            max(append_cas) < initial["cas"]["new_stored_bytes"]
+        ),
+        "append_final_touched_footprint_below_initial": (
+            max(append_footprints)
+            < initial["physical"]["final_touched_content_footprint_bytes"]
+        ),
+    }
+    observations = {
+        "sample_kind": "append_only_delta_gap_no_synthetic_middle",
+        "append_max_put_attempts": max_append_attempts,
+        "append_max_cas_bytes_per_logical_delta": maximum_cas_ratio,
+        "append_max_final_touched_footprint_per_logical_delta": (
+            maximum_footprint_ratio
+        ),
+        "append_max_final_touched_allocation_per_logical_delta": (
+            maximum_allocation_ratio
+        ),
+        "append_max_write_api_payload_per_logical_delta": (
+            maximum_write_payload_ratio
+        ),
+        "bounds": {
+            "append_max_put_attempts": FROZEN_APPEND_MAX_PUT_ATTEMPTS,
+            "append_max_cas_bytes_per_logical_delta": (
+                FROZEN_APPEND_MAX_CAS_BYTES_PER_LOGICAL_DELTA
+            ),
+            "append_max_final_touched_footprint_per_logical_delta": (
+                FROZEN_APPEND_MAX_DURABLE_BYTES_PER_LOGICAL_DELTA
+            ),
+            "append_max_final_touched_allocation_per_logical_delta": (
+                FROZEN_APPEND_MAX_ALLOCATION_BYTES_PER_LOGICAL_DELTA
+            ),
+            "append_max_write_api_payload_per_logical_delta": (
+                FROZEN_APPEND_MAX_WRITE_API_PAYLOAD_BYTES_PER_LOGICAL_DELTA
+            ),
+        },
+    }
+    return checks, observations
+
+
 def _create_protected_fixture(root: Path) -> None:
     nested = root / "nested"
     nested.mkdir(parents=True)
@@ -1467,6 +2133,70 @@ def _create_protected_fixture(root: Path) -> None:
     for fixture_file in root.rglob("*"):
         if fixture_file.is_file():
             os.utime(fixture_file, ns=(fixed_ns, fixed_ns))
+
+
+def _descriptor_filesystem_path(descriptor: int) -> str | None:
+    """Resolve a CRT descriptor without following a pathname supplied by work.
+
+    ``None`` denotes a pipe/character device.  Such descriptors are useful only
+    while ``subprocess`` wraps its own pipes; they are never filesystem mutation
+    authorities.  Every disk descriptor is converted back to a canonical path
+    and sent through the same lexical/device/root checks as path-based access.
+    """
+
+    if type(descriptor) is not int or descriptor < 0:
+        raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND")
+    if os.name != "nt":
+        try:
+            target = _ORIGINAL_READLINK(f"/proc/self/fd/{descriptor}")
+        except OSError:
+            raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND") from None
+        if target.startswith(("pipe:", "socket:", "anon_inode:")):
+            return None
+        if not os.path.isabs(target):
+            raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND")
+        return target
+
+    try:
+        import msvcrt
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(descriptor)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_file_type = kernel32.GetFileType
+        get_file_type.argtypes = (wintypes.HANDLE,)
+        get_file_type.restype = wintypes.DWORD
+        file_type = int(get_file_type(wintypes.HANDLE(handle)))
+        if file_type in {2, 3}:  # FILE_TYPE_CHAR / FILE_TYPE_PIPE
+            return None
+        if file_type != 1:  # FILE_TYPE_DISK
+            raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND")
+        get_final_path = kernel32.GetFinalPathNameByHandleW
+        get_final_path.argtypes = (
+            wintypes.HANDLE,
+            wintypes.LPWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+        )
+        get_final_path.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32_768)
+        length = int(
+            get_final_path(
+                wintypes.HANDLE(handle), buffer, len(buffer), 0
+            )
+        )
+    except (OSError, ValueError, OverflowError):
+        raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND") from None
+    if length <= 0 or length >= len(buffer):
+        raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND")
+    target = buffer.value
+    if target.startswith("\\\\?\\UNC\\"):
+        target = "\\\\" + target[8:]
+    elif re.match(r"^\\\\\?\\[A-Za-z]:\\", target):
+        target = target[4:]
+    elif not LOCAL_DRIVE_PATH_RE.match(target):
+        raise BenchmarkFailure("BENCHMARK_DESCRIPTOR_UNBOUND")
+    return target
 
 
 class _AccessGuard:
@@ -1537,9 +2267,24 @@ class _AccessGuard:
     ) -> None:
         if value is None:
             value = os.getcwd()
-        if isinstance(value, int):
+        if type(value) is int:
             descriptor_checks = self.audit["descriptor_checks_by_event"]
             descriptor_checks[event] = descriptor_checks.get(event, 0) + 1
+            try:
+                descriptor_path = _descriptor_filesystem_path(value)
+            except BenchmarkFailure:
+                self.audit["unsafe_alias_attempts"].append({"event": event})
+                raise PermissionError(
+                    "PSC benchmark denied unbound file descriptor"
+                ) from None
+            if descriptor_path is None:
+                if event in {"open", "os.fstat", "os.read", "os.write"}:
+                    return
+                self.audit["unsafe_alias_attempts"].append({"event": event})
+                raise PermissionError(
+                    "PSC benchmark denied non-disk descriptor mutation"
+                )
+            self.check(event, descriptor_path, write_intent=write_intent)
             return
         try:
             candidate = self._candidate_forms(value)
@@ -1619,7 +2364,15 @@ class _AccessGuard:
 def _native_guard_check(event: str, path: str | os.PathLike[str]) -> None:
     if _ACTIVE_ACCESS_GUARD is None:
         raise BenchmarkFailure("BENCHMARK_NATIVE_GUARD_MISSING")
-    _ACTIVE_ACCESS_GUARD.check(event, path)
+    _ACTIVE_ACCESS_GUARD.check(
+        event,
+        path,
+        write_intent=event
+        in {
+            "prompt_archive_storage.CreateFileW",
+            "prompt_archive_occurrence_store.CreateFileW",
+        },
+    )
     checks = _ACTIVE_ACCESS_GUARD.audit["native_path_checks_by_entrypoint"]
     checks[event] = checks.get(event, 0) + 1
 
@@ -1754,6 +2507,10 @@ def _install_access_guards(
     original_listdir = os.listdir
     original_scandir = os.scandir
     original_open = os.open
+    original_fstat = os.fstat
+    original_fsync = os.fsync
+    original_ftruncate = os.ftruncate
+    original_read = os.read
     original_write = os.write
     original_readlink = os.readlink
     original_access = os.access
@@ -1809,7 +2566,24 @@ def _install_access_guards(
         )
         return original_open(path, flags, mode, dir_fd=dir_fd)
 
+    def guarded_fstat(descriptor):
+        guard.check("os.fstat", descriptor, write_intent=False)
+        return original_fstat(descriptor)
+
+    def guarded_fsync(descriptor):
+        guard.check("os.fsync", descriptor, write_intent=True)
+        return original_fsync(descriptor)
+
+    def guarded_ftruncate(descriptor, length):
+        guard.check("os.ftruncate", descriptor, write_intent=True)
+        return original_ftruncate(descriptor, length)
+
+    def guarded_read(descriptor, byte_count):
+        guard.check("os.read", descriptor, write_intent=False)
+        return original_read(descriptor, byte_count)
+
     def guarded_write(descriptor, payload):
+        guard.check("os.write", descriptor, write_intent=True)
         written = original_write(descriptor, payload)
         record_write(written)
         return written
@@ -1865,6 +2639,10 @@ def _install_access_guards(
     os.listdir = guarded_listdir
     os.scandir = guarded_scandir
     os.open = guarded_open
+    os.fstat = guarded_fstat
+    os.fsync = guarded_fsync
+    os.ftruncate = guarded_ftruncate
+    os.read = guarded_read
     os.write = guarded_write
     os.readlink = guarded_readlink
     os.access = guarded_access
@@ -1902,10 +2680,12 @@ def _write_exclusive(path: Path, raw: bytes) -> None:
 def _run(args: argparse.Namespace) -> dict[str, Any]:
     expected_head = args.expected_head.lower()
     expected_tree = args.expected_tree.lower()
+    workload_profile = args.workload_profile
     if HEX_40.fullmatch(expected_head) is None or HEX_40.fullmatch(expected_tree) is None:
         raise BenchmarkFailure("BENCHMARK_GIT_ID_INVALID")
     forbidden = parse_forbidden_roots(args.forbid_root)
     isolation = _preflight_path_isolation(args.run_root, forbidden)
+    git_layout = _validate_repository_git_layout()
     protected = args.run_root / "isolated-protected-fixture"
     audit: dict[str, Any] = {
         "phase": "guard_installation",
@@ -1933,8 +2713,22 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     )
     before = _candidate_snapshot()
     _validate_candidate(before, expected_head, expected_tree)
-    predecessor = _decode_predecessor_evidence()
-    validate_frozen_workload()
+    baseline_context: dict[str, Any] | None = None
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        predecessor = _decode_predecessor_evidence()
+        validate_frozen_workload()
+        workload = frozen_workload()
+        workload_manifest_sha256 = FROZEN_WORKLOAD_MANIFEST_SHA256
+        main_sprint_id = MAIN_SPRINT
+    elif workload_profile == DELTA_GAP_WORKLOAD_PROFILE:
+        baseline_context = _validate_delta_baseline(expected_head)
+        predecessor = _decode_predecessor_evidence(EVIDENCE_CARRIER_COMMIT)
+        validate_delta_gap_workload()
+        workload = delta_gap_workload()
+        workload_manifest_sha256 = DELTA_GAP_WORKLOAD_MANIFEST_SHA256
+        main_sprint_id = DELTA_GAP_SPRINT
+    else:
+        raise BenchmarkFailure("BENCHMARK_WORKLOAD_PROFILE_INVALID")
     audit["phase"] = "candidate_import"
     _load_candidate_modules()
     _install_candidate_native_guards(audit)
@@ -1964,11 +2758,10 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     started = time.perf_counter()
     audit["phase"] = "benchmark"
     tracemalloc.start(1)
-    workload = frozen_workload()
     main_records: list[dict[str, Any]] = []
     middle_records: list[dict[str, Any]] = []
     alias_roots: list[str] = []
-    prior_size = {MAIN_SPRINT: 0, MIDDLE_SPRINT: 0}
+    prior_size = {item["sprint_id"]: 0 for item in workload}
     try:
         for item in workload:
             sprint_id = item["sprint_id"]
@@ -1977,7 +2770,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 if not prior_size[sprint_id]
                 else abs(len(item["raw"]) - prior_size[sprint_id])
             )
-            if sprint_id == MAIN_SPRINT:
+            if sprint_id == main_sprint_id:
                 main_inventory, record = _run_transition(
                     commit=expected_head,
                     runtime=main_runtime,
@@ -2018,17 +2811,27 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
 
     append_bound = main_records[1:]
     initial = main_records[0]
-    insert_case, delete_case = middle_records[1:]
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        insert_case, delete_case = middle_records[1:]
+    else:
+        insert_case = None
+        delete_case = None
     append_attempts = [item["cas"]["put_attempts"] for item in append_bound]
     all_records = main_records + middle_records
     total_attempts = sum(item["cas"]["put_attempts"] for item in all_records)
     total_hits = sum(item["cas"]["dedup_hits"] for item in all_records)
     protected_equal = full_inventory_equal(protected_pre, protected_post)
-    append_checks, append_observations = evaluate_a05_append_bounds(
-        initial,
-        append_bound,
-        (insert_case, delete_case),
-    )
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        append_checks, append_observations = evaluate_a05_append_bounds(
+            initial,
+            append_bound,
+            (insert_case, delete_case),
+        )
+    else:
+        append_checks, append_observations = evaluate_delta_append_bounds(
+            initial,
+            append_bound,
+        )
 
     a05_checks = {
         "all_roundtrips_exact": all(item["exact_roundtrip"] for item in all_records),
@@ -2044,11 +2847,12 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         ),
         "unknown_moved_alias_value_root_reused": len(set(alias_roots)) == 1,
         **append_checks,
-        "middle_cases_disclosed_separately": all(
+    }
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        a05_checks["middle_cases_disclosed_separately"] = all(
             "explicit_o_n" in item["change_kind"]
             for item in (insert_case, delete_case)
-        ),
-    }
+        )
     a16_checks = {
         "logical_input_recorded": all(
             item["logical_input_bytes"] > 0 for item in all_records
@@ -2125,16 +2929,33 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             > 0
         ),
     }
-    acceptance = {
-        "PSC-A05": {"pass": all(a05_checks.values()), "checks": a05_checks},
-        "PSC-A16": {"pass": all(a16_checks.values()), "checks": a16_checks},
-        "PSC-A17": {"pass": all(a17_checks.values()), "checks": a17_checks},
-    }
-    acceptance["overall_pass"] = all(
-        acceptance[name]["pass"] for name in ("PSC-A05", "PSC-A16", "PSC-A17")
-    )
-    if acceptance["overall_pass"] is not True:
+    if not all(
+        all(checks.values()) for checks in (a05_checks, a16_checks, a17_checks)
+    ):
         raise BenchmarkFailure("BENCHMARK_MANDATORY_ACCEPTANCE_FAILED")
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        acceptance = {
+            "PSC-A05": {"pass": True, "checks": a05_checks},
+            "PSC-A16": {"pass": True, "checks": a16_checks},
+            "PSC-A17": {"pass": True, "checks": a17_checks},
+            "overall_pass": True,
+        }
+    else:
+        acceptance = {
+            "status": "DELTA_GAP_PASS",
+            "qualification_mode": "baseline_plus_diff",
+            "full_exact_head_rerun": False,
+            "satisfies_exact_head_selector": False,
+            "not_a_full_qualification": True,
+            "fresh_probe": {
+                "status": "PASS",
+                "checks_by_gap_area": {
+                    "PSC-A05-delta": a05_checks,
+                    "PSC-A16-delta": a16_checks,
+                    "PSC-A17-delta": a17_checks,
+                },
+            },
+        }
 
     final_content = (
         main_inventory["summary"]["content_bytes"]
@@ -2155,21 +2976,50 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         for item in forbidden
     ]
     audit["phase"] = "complete"
+    if workload_profile == FULL_WORKLOAD_PROFILE:
+        qualification = {
+            "qualification_mode": "full_exact_head",
+            "full_exact_head_rerun": True,
+            "satisfies_exact_head_selector": True,
+            "not_a_full_qualification": False,
+        }
+    else:
+        if baseline_context is None:
+            raise BenchmarkFailure("BENCHMARK_BASELINE_ARTIFACT_INVALID")
+        qualification = {
+            "qualification_mode": "baseline_plus_diff",
+            "full_exact_head_rerun": False,
+            "satisfies_exact_head_selector": False,
+            "not_a_full_qualification": True,
+            "baseline": baseline_context,
+            "historical_measurements_not_relabelled_as_current": True,
+            "historical_latency_and_distribution_not_remeasured": True,
+        }
     evidence = {
         "schema_version": 2,
-        "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
+        "kind": (
+            "psc_a05_a16_a17_exact_head_benchmark_evidence"
+            if workload_profile == FULL_WORKLOAD_PROFILE
+            else "psc_a05_a16_a17_delta_gap_probe_v1_evidence"
+        ),
         "candidate": before,
+        "qualification": qualification,
         "predecessor_evidence": {
             "path": PREDECESSOR_EVIDENCE_PATH,
             "decoded_byte_size": PREDECESSOR_DECODED_BYTES,
             "decoded_sha256": PREDECESSOR_DECODED_SHA256,
             "candidate_commit": predecessor["candidate"]["commit"],
             "candidate_tree": predecessor["candidate"]["tree"],
-            "role": "frozen workload and predecessor measurements only",
+            "role": (
+                "frozen workload and predecessor measurements only"
+                if workload_profile == FULL_WORKLOAD_PROFILE
+                else "accepted historical baseline; inherited, not remeasured"
+            ),
         },
         "workload_identity": {
             "schema_version": 1,
-            "manifest_sha256": FROZEN_WORKLOAD_MANIFEST_SHA256,
+            "profile": workload_profile,
+            "manifest_sha256": workload_manifest_sha256,
             "transition_count": len(all_records),
             "binds_order_group_revision_occurrence_and_raw_input": True,
         },
@@ -2191,7 +3041,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
             "managed_repository_subtree_exemption_labels": list(
                 isolation["repository_parent_labels"]
             ),
-            "repository_and_package_chain_lstat_precondition_only": True,
+            "repository_and_package_chain_lstat_precondition_completed": True,
+            "repository_git_metadata_read_only_exception": True,
+            "repository_git_child_process_io_outside_python_guard_counters": True,
+            "repository_git_layout": git_layout,
+            "repository_git_read_only_commands": list(
+                READ_ONLY_GIT_COMMAND_DISCLOSURE
+            ),
             "services_called_or_restarted": False,
             "production_authoritative_mode_enabled": False,
             "isolated_authoritative_mode_only": True,
@@ -2202,6 +3058,7 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "run_root": "<redacted:sha256-in-parent>",
                 "expected_head": expected_head,
                 "expected_tree": expected_tree,
+                "workload_profile": workload_profile,
                 "forbidden_root_count": len(forbidden),
             },
         },
@@ -2218,29 +3075,44 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
         },
         "append_series": {
             "model": (
-                "65 baseline -> pure append 66 -> append plus unknown alias "
-                "move 67 -> pure append 68"
+                (
+                    "65 baseline -> pure append 66 -> append plus unknown alias "
+                    "move 67 -> pure append 68"
+                )
+                if workload_profile == FULL_WORKLOAD_PROFILE
+                else (
+                    "8 baseline -> pure append 9 -> append plus unknown alias "
+                    "move 10 -> pure append 11"
+                )
             ),
-            "checkpoint_depth": 12,
-            "unknown_alias_depth": 16,
+            "checkpoint_depth": FROZEN_CHECKPOINT_DEPTH,
+            "unknown_alias_depth": FROZEN_UNKNOWN_ALIAS_DEPTH,
             "unknown_alias_root_digests": alias_roots,
             "frozen_quantitative_bound": append_observations,
             "transitions": main_records,
         },
-        "middle_insert_delete": {
-            "classification": (
-                "explicit V1 O(N) ordinal-index metadata cases; excluded from "
-                "the append bound"
-            ),
-            "minimum_middle_to_maximum_append_put_attempt_ratio": (
-                min(
-                    insert_case["cas"]["put_attempts"],
-                    delete_case["cas"]["put_attempts"],
-                )
-                / max(append_attempts)
-            ),
-            "transitions": middle_records,
-        },
+        "middle_insert_delete": (
+            {
+                "classification": (
+                    "explicit V1 O(N) ordinal-index metadata cases; excluded from "
+                    "the append bound"
+                ),
+                "minimum_middle_to_maximum_append_put_attempt_ratio": (
+                    min(
+                        insert_case["cas"]["put_attempts"],
+                        delete_case["cas"]["put_attempts"],
+                    )
+                    / max(append_attempts)
+                ),
+                "transitions": middle_records,
+            }
+            if workload_profile == FULL_WORKLOAD_PROFILE
+            else {
+                "included": False,
+                "status": "INHERITED_NOT_REMEASURED",
+                "transitions": [],
+            }
+        ),
         "aggregate": {
             "transition_count": len(all_records),
             "logical_input_bytes_total": sum(
@@ -2297,8 +3169,13 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
                 "root content. If the managed repository is strictly below "
                 "service_state, internal preflight lstats only the ancestor "
                 "chains through the repository and nginx_qa package root; the "
-                "guard exempts exactly the repository subtree in both lexical "
-                "and device form, never siblings or SUBST aliases."
+                "guard allows only read-only, non-.git access in the repository "
+                "subtree after checking every existing component for reparse "
+                "redirection; writes, siblings, and SUBST aliases remain denied. "
+                "Bounded Git child commands read the repository and its ordinary "
+                "in-tree .git directory outside Python audit counters; optional "
+                "locks, fsmonitor, untracked-cache writes, maintenance, lazy "
+                "fetch, and external Git configuration are disabled."
             ),
         },
         "acceptance": acceptance,
@@ -2315,30 +3192,55 @@ def _run(args: argparse.Namespace) -> dict[str, Any]:
     sealed = seal_evidence(evidence)
     raw = _canonical_json(sealed) + b"\n"
     digest = _sha256(raw)
-    _write_exclusive(run_root / OUTPUT_NAME, raw)
+    output_name = (
+        OUTPUT_NAME
+        if workload_profile == FULL_WORKLOAD_PROFILE
+        else DELTA_GAP_OUTPUT_NAME
+    )
+    output_digest_name = (
+        OUTPUT_DIGEST_NAME
+        if workload_profile == FULL_WORKLOAD_PROFILE
+        else DELTA_GAP_OUTPUT_DIGEST_NAME
+    )
+    _write_exclusive(run_root / output_name, raw)
     _write_exclusive(
-        run_root / OUTPUT_DIGEST_NAME,
-        f"{digest}  {OUTPUT_NAME}\n".encode("ascii"),
+        run_root / output_digest_name,
+        f"{digest}  {output_name}\n".encode("ascii"),
     )
     try:
-        published_raw = (run_root / OUTPUT_NAME).read_bytes()
-        published_digest = (run_root / OUTPUT_DIGEST_NAME).read_text(
+        published_raw = (run_root / output_name).read_bytes()
+        published_digest = (run_root / output_digest_name).read_text(
             encoding="ascii"
         )
     except OSError:
         raise BenchmarkFailure("BENCHMARK_EVIDENCE_WRITE_FAILED") from None
     verify_sealed_evidence_bytes(published_raw)
-    if published_raw != raw or published_digest != f"{digest}  {OUTPUT_NAME}\n":
+    if published_raw != raw or published_digest != f"{digest}  {output_name}\n":
         raise BenchmarkFailure("BENCHMARK_EVIDENCE_INTEGRITY_FAILED")
-    return {
-        "kind": "psc_exact_head_benchmark_receipt",
-        "status": "PASS",
+    receipt = {
+        "kind": (
+            "psc_exact_head_benchmark_receipt"
+            if workload_profile == FULL_WORKLOAD_PROFILE
+            else "psc_delta_gap_probe_v1_receipt"
+        ),
+        "status": (
+            "PASS" if workload_profile == FULL_WORKLOAD_PROFILE else "DELTA_GAP_PASS"
+        ),
+        "qualification_mode": (
+            "full_exact_head"
+            if workload_profile == FULL_WORKLOAD_PROFILE
+            else "baseline_plus_diff"
+        ),
+        "full_exact_head_rerun": workload_profile == FULL_WORKLOAD_PROFILE,
+        "satisfies_exact_head_selector": workload_profile == FULL_WORKLOAD_PROFILE,
+        "not_a_full_qualification": workload_profile != FULL_WORKLOAD_PROFILE,
         "candidate_commit": expected_head,
         "candidate_tree": expected_tree,
-        "evidence_file": OUTPUT_NAME,
+        "evidence_file": output_name,
         "evidence_sha256": digest,
         "payload_sha256": sealed["payload_sha256"],
     }
+    return receipt
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -2346,6 +3248,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", required=True, type=Path)
     parser.add_argument("--expected-head", required=True)
     parser.add_argument("--expected-tree", required=True)
+    parser.add_argument(
+        "--workload-profile",
+        choices=(FULL_WORKLOAD_PROFILE, DELTA_GAP_WORKLOAD_PROFILE),
+        default=FULL_WORKLOAD_PROFILE,
+        help=(
+            "full-frozen-v1 is the exact-head seven-transition benchmark; "
+            "delta-gap-v1 is supplemental baseline-plus-diff evidence only"
+        ),
+    )
     parser.add_argument(
         "--forbid-root",
         action="append",

@@ -47,6 +47,24 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "psc_a05_a16_a17_exact_head_benchmark_evidence",
         )
         required = selector["external_evidence"][0]["required_pointer_values"]
+        self.assertEqual(
+            required["/qualification/qualification_mode"], "full_exact_head"
+        )
+        self.assertIs(required["/qualification/full_exact_head_rerun"], True)
+        self.assertIs(
+            required["/qualification/satisfies_exact_head_selector"], True
+        )
+        self.assertIs(
+            required["/qualification/not_a_full_qualification"], False
+        )
+        self.assertEqual(
+            required["/workload_identity/profile"], "full-frozen-v1"
+        )
+        self.assertEqual(
+            required["/workload_identity/manifest_sha256"],
+            "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1",
+        )
+        self.assertEqual(required["/workload_identity/transition_count"], 7)
         self.assertIs(required["/execution_policy/durable_archive_or_blob_delete"], False)
         self.assertIs(required["/execution_policy/storage_gc"], False)
         self.assertNotIn(
@@ -80,22 +98,55 @@ class PscQualificationRunnerTests(unittest.TestCase):
         self.assertNotIn("variants", specification)
         delta = {
             "schema_version": 2,
-            "kind": "psc_a05_a16_a17_baseline_plus_delta_gap_v1_evidence",
+            "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
             "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
             "qualification": {
                 "qualification_mode": "baseline_plus_delta",
                 "full_exact_head_rerun": False,
+                "satisfies_exact_head_selector": False,
+                "not_a_full_qualification": True,
+            },
+            "workload_identity": {
+                "profile": "delta-gap-v1",
+                "manifest_sha256": "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1",
+                "transition_count": 7,
+                "binds_order_group_revision_occurrence_and_raw_input": True,
+            },
+            "predecessor_evidence": {
+                "decoded_byte_size": 16163,
+                "decoded_sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1",
             },
             "acceptance": {
+                "overall_pass": True,
+                "PSC-A05": {"pass": True},
+                "PSC-A16": {"pass": True},
+                "PSC-A17": {"pass": True},
                 "status": "BASELINE_PLUS_DELTA_PASS",
                 "not_a_full_benchmark_pass": True,
+            },
+            "execution_policy": {
+                "generated_fixture_only": True,
+                "sequential": True,
+                "durable_archive_or_blob_delete": False,
+                "storage_gc": False,
+                "services_called_or_restarted": False,
+                "production_authoritative_mode_enabled": False,
+                "isolated_authoritative_mode_only": True,
+            },
+            "restrictions": {
+                "live_data_read_or_written": False,
+                "runtime_state_or_sqlite_mutated": False,
+                "service_restart": False,
+                "merge_or_deploy": False,
+                "start_from_git_or_sprint_import": False,
+                "generated_run_root_deleted": False,
             },
         }
         delta[specification["seal_field"]] = runner._sha256(
             runner._canonical_json_bytes(delta)
         )
         self.assertQualificationCode(
-            "PSC_QUALIFICATION_EVIDENCE_CONTRACT_INVALID",
+            "PSC_QUALIFICATION_EVIDENCE_NOT_PASSING",
             runner._verify_external_evidence,
             delta,
             specification,
@@ -691,6 +742,22 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "schema_version": 2,
             "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
             "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+            "qualification": {
+                "qualification_mode": "full_exact_head",
+                "full_exact_head_rerun": True,
+                "satisfies_exact_head_selector": True,
+                "not_a_full_qualification": False,
+            },
+            "workload_identity": {
+                "profile": "full-frozen-v1",
+                "manifest_sha256": "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1",
+                "transition_count": 7,
+                "binds_order_group_revision_occurrence_and_raw_input": True,
+            },
+            "predecessor_evidence": {
+                "decoded_byte_size": 16163,
+                "decoded_sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1",
+            },
             "acceptance": {
                 "overall_pass": True,
                 "PSC-A05": {"pass": True},
@@ -719,6 +786,30 @@ class PscQualificationRunnerTests(unittest.TestCase):
             runner._canonical_json_bytes(evidence)
         )
         runner._verify_external_evidence(evidence, specification)
+        float_schema = copy.deepcopy(evidence)
+        float_schema["schema_version"] = 2.0
+        float_schema.pop("payload_sha256")
+        float_schema["payload_sha256"] = runner._sha256(
+            runner._canonical_json_bytes(float_schema)
+        )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_EVIDENCE_CONTRACT_INVALID",
+            runner._verify_external_evidence,
+            float_schema,
+            specification,
+        )
+        integer_boolean = copy.deepcopy(evidence)
+        integer_boolean["qualification"]["full_exact_head_rerun"] = 1
+        integer_boolean.pop("payload_sha256")
+        integer_boolean["payload_sha256"] = runner._sha256(
+            runner._canonical_json_bytes(integer_boolean)
+        )
+        self.assertQualificationCode(
+            "PSC_QUALIFICATION_EVIDENCE_NOT_PASSING",
+            runner._verify_external_evidence,
+            integer_boolean,
+            specification,
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             workspace = root / "workspace"
@@ -885,6 +976,22 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "schema_version": 2,
             "kind": "psc_a05_a16_a17_exact_head_benchmark_evidence",
             "candidate": {"commit": "a" * 40, "tree": "b" * 40, "clean": True},
+            "qualification": {
+                "qualification_mode": "full_exact_head",
+                "full_exact_head_rerun": True,
+                "satisfies_exact_head_selector": True,
+                "not_a_full_qualification": False,
+            },
+            "workload_identity": {
+                "profile": "full-frozen-v1",
+                "manifest_sha256": "d33a5f95407e68c4db1c69d1111cb43594377db9e095fc03977f262855659ac1",
+                "transition_count": 7,
+                "binds_order_group_revision_occurrence_and_raw_input": True,
+            },
+            "predecessor_evidence": {
+                "decoded_byte_size": 16163,
+                "decoded_sha256": "d036665e1512640091d0d82e9d47becedecd3dbb59d67e681fd9e66af93603d1",
+            },
             "acceptance": {
                 "overall_pass": True,
                 "PSC-A05": {"pass": True},
