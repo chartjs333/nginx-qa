@@ -946,6 +946,26 @@ def _query_dos_device(drive: str) -> str:
     return buffer.value
 
 
+def _get_long_path_name(path: str) -> str:
+    """Resolve an existing Windows path without accepting an 8.3 spelling."""
+
+    if os.name != "nt":
+        raise QualificationError("PSC_QUALIFICATION_WINDOWS_REQUIRED")
+    from ctypes import wintypes
+
+    resolve = ctypes.WinDLL("kernel32", use_last_error=True).GetLongPathNameW
+    resolve.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+    resolve.restype = wintypes.DWORD
+    required = resolve(path, None, 0)
+    if required == 0:
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    buffer = ctypes.create_unicode_buffer(required)
+    written = resolve(path, buffer, required)
+    if written == 0 or written >= required:
+        raise QualificationError("PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED")
+    return buffer.value
+
+
 def _device_lexical_windows_path(
     value: str | os.PathLike[str],
     *,
@@ -1109,12 +1129,13 @@ def _validate_path_isolation(
     # exempts this exact workspace subtree, not siblings or either parent.
     for root in protected:
         overlaps = _forms_overlap(work, root)
-        workspace_is_below = all(
-            _under(work[key], root[key]) for key in ("lexical_path", "device_path")
+        workspace_is_strictly_below = all(
+            _under(work[key], root[key]) and work[key] != root[key]
+            for key in ("lexical_path", "device_path")
         )
         if overlaps and (
             root["label"] not in {"service_root", "service_state"}
-            or not workspace_is_below
+            or not workspace_is_strictly_below
         ):
             raise QualificationError("PSC_QUALIFICATION_WORKSPACE_OVERLAP")
     if inspect_existing:
@@ -1180,12 +1201,14 @@ class QualificationAccessGuard:
         protected_roots: Sequence[Mapping[str, str]],
         allowed_roots: Sequence[pathlib.Path],
         device_query=_query_dos_device,
+        long_path_query=_get_long_path_name,
     ) -> None:
         self.protected_roots = tuple(dict(item) for item in protected_roots)
         self.allowed_roots = tuple(
             _path_forms(item, device_query=device_query) for item in allowed_roots
         )
         self.device_query = device_query
+        self.long_path_query = long_path_query
         self.protected_attempts: list[dict[str, str]] = []
         self.unsafe_alias_attempts: list[dict[str, str]] = []
         self.network_attempts: list[dict[str, str]] = []
@@ -1240,6 +1263,18 @@ class QualificationAccessGuard:
                 raise QualificationError(
                     "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
                 )
+            partial = drive + "\\"
+            for component in components:
+                partial = ntpath.join(partial, component)
+                if "~" not in component:
+                    continue
+                resolved = self.long_path_query(partial)
+                if ntpath.normcase(ntpath.normpath(resolved)) != ntpath.normcase(
+                    ntpath.normpath(partial)
+                ):
+                    raise QualificationError(
+                        "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED"
+                    )
             prefix = drive + "\\" + "\\".join(components[:alias_index])
             prefix_forms = _path_forms(prefix, device_query=self.device_query)
             boundaries = (*self.protected_roots, *self.allowed_roots)
@@ -1536,12 +1571,11 @@ def _collect_command(args: argparse.Namespace) -> dict[str, Any]:
     if not args.allow_dirty and not git_before["clean"]:
         raise QualificationError("PSC_QUALIFICATION_WORKTREE_DIRTY")
 
-    # Package metadata enumeration can encounter stale third-party dist-info
-    # names containing a literal ``~``.  Bind the toolchain before installing
-    # the irreversible path guard; the guard is active before any selected
-    # test module is imported and remains active for all candidate work.
-    toolchain = _toolchain()
     guard.install()
+    # Package metadata enumeration is part of the evidence boundary.  The
+    # guard distinguishes existing literal-tilde package directories from DOS
+    # 8.3 aliases, so toolchain discovery remains instrumented as well.
+    toolchain = _toolchain()
     _ensure_workspace_import_path(workspace)
     tests, categories, loader_errors = _collect_owned_tests(selector)
     if loader_errors:

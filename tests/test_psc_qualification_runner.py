@@ -1,4 +1,5 @@
 import copy
+import inspect
 import json
 import pathlib
 import subprocess
@@ -237,6 +238,10 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "D:": r"\Device\HarddiskVolumeD",
             "E:": "\\??\\D:\\",
             "F:": "\\??\\C:\\state",
+            "G:": r"\Device\HarddiskVolumeG",
+            "H:": r"\Device\HarddiskVolumeH",
+            "I:": r"\Device\HarddiskVolumeI",
+            "J:": r"\Device\HarddiskVolumeJ",
         }
 
         def query(drive):
@@ -299,6 +304,7 @@ class PscQualificationRunnerTests(unittest.TestCase):
             protected_roots=roots,
             allowed_roots=(pathlib.Path(r"C:\service\managed-workspace"),),
             device_query=query,
+            long_path_query=lambda path: path,
         )
         guard._original_lstat = lambda _path: ordinary
         guard.check("open", runner.os.devnull)
@@ -346,6 +352,64 @@ class PscQualificationRunnerTests(unittest.TestCase):
             "PSC_QUALIFICATION_PATH_ALIAS_UNSUPPORTED",
             runner._strict_local_windows_path,
             r"\\?\D:\Prompt",
+        )
+
+        disjoint_roots = runner._parse_protected_roots(
+            [
+                r"service_root=G:\service",
+                r"service_state=H:\state",
+                r"service_runtime=I:\runtime",
+                r"service_prompt=J:\prompt",
+            ],
+            device_query=query,
+        )
+        for exact_root in (pathlib.Path(r"G:\service"), pathlib.Path(r"H:\state")):
+            self.assertQualificationCode(
+                "PSC_QUALIFICATION_WORKSPACE_OVERLAP",
+                runner._validate_path_isolation,
+                pathlib.Path(r"C:\qualification"),
+                exact_root,
+                disjoint_roots,
+                device_query=query,
+                inspect_existing=False,
+            )
+        for prohibited_subtree in (
+            pathlib.Path(r"I:\runtime\workspace"),
+            pathlib.Path(r"J:\prompt\workspace"),
+            pathlib.Path(r"D:\Prompt\workspace"),
+        ):
+            self.assertQualificationCode(
+                "PSC_QUALIFICATION_WORKSPACE_OVERLAP",
+                runner._validate_path_isolation,
+                pathlib.Path(r"C:\qualification"),
+                prohibited_subtree,
+                disjoint_roots,
+                device_query=query,
+                inspect_existing=False,
+            )
+        runner._validate_path_isolation(
+            pathlib.Path(r"C:\qualification"),
+            pathlib.Path(r"H:\state\managed-workspace"),
+            disjoint_roots,
+            device_query=query,
+            inspect_existing=False,
+        )
+
+        alias_guard = runner.QualificationAccessGuard(
+            protected_roots=disjoint_roots,
+            allowed_roots=(pathlib.Path(r"G:\service\managed-workspace"),),
+            device_query=query,
+            long_path_query=lambda _path: r"C:\Program Files",
+        )
+        alias_guard._original_lstat = lambda _path: ordinary
+        with self.assertRaises(PermissionError):
+            alias_guard.check("open", r"C:\PROGRA~1")
+        self.assertEqual(alias_guard.unsafe_alias_attempts, [{"event": "open"}])
+
+        collect_source = inspect.getsource(runner._collect_command)
+        self.assertLess(
+            collect_source.index("guard.install()"),
+            collect_source.index("toolchain = _toolchain()"),
         )
 
     def test_existing_reparse_chain_is_rejected(self) -> None:
