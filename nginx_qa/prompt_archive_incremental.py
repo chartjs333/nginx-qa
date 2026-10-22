@@ -5021,7 +5021,9 @@ class PromptArchiveIncremental:
                 active.remove(typed_key)
 
         with self._reference_budget():
-            visit(manifest_ref, 1)
+            # PAS1 defines the manifest itself as depth zero.  Every
+            # serialized ref contained by it advances to depth one.
+            visit(manifest_ref, 0)
         return tuple(
             observed[key]
             for key in sorted(

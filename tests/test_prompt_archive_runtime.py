@@ -607,9 +607,13 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
             ),
         )
 
-    def test_recovery_graph_verification_rejects_deep_shared_subtree_before_mutation(
+    def _recovery_depth_plan(
         self,
-    ) -> None:
+        *,
+        deep_path_wrappers: int,
+    ) -> tuple[PromptArchiveRuntime, dict]:
+        """Build a recovery-plan graph with shallow-first shared-DAG reuse."""
+
         runtime = self.registry(mode="authoritative").for_project(PROJECT_ID)
         incremental = PromptArchiveIncremental(
             runtime.storage,
@@ -637,7 +641,7 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
             return wrapped
 
         shared = wrap(terminal_ref, 1)
-        deep_root = wrap(shared, 510)
+        deep_root = wrap(shared, deep_path_wrappers)
         manifest = {
             "a_shallow": shared,
             "z_deep": deep_root,
@@ -657,20 +661,47 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
                 "document": manifest,
                 "manifest_ref": manifest_ref,
             },
-            # This is the complete unique typed closure.  The old traversal
-            # incorrectly accepted it after memoizing ``shared`` shallowly.
+            # Bind the complete unique typed closure even though ``shared``
+            # is reachable through both the shallow and deep paths.
             "planned_reachable_set": _reachable_set_document(tuple(refs)),
         }
-        journal = {"state": "intent"}
+        return runtime, plan
 
-        def filesystem_snapshot() -> dict[str, bytes]:
-            return {
-                path.relative_to(self.root).as_posix(): path.read_bytes()
-                for path in self.root.rglob("*")
-                if path.is_file()
-            }
+    def _filesystem_snapshot(self) -> dict[str, bytes]:
+        return {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in self.root.rglob("*")
+            if path.is_file()
+        }
 
-        before = filesystem_snapshot()
+    def test_recovery_graph_verification_accepts_exact_depth_512_without_mutation(
+        self,
+    ) -> None:
+        # Manifest depth 0 -> deep root depth 1 -> shared depth 511 ->
+        # terminal depth 512. Recovery validation must accept the boundary.
+        runtime, plan = self._recovery_depth_plan(deep_path_wrappers=510)
+        before = self._filesystem_snapshot()
+
+        with mock.patch.object(
+            runtime,
+            "_intended_pointer_is_published",
+            return_value=True,
+        ):
+            self.assertIsNone(
+                runtime._perform_state_action(plan, {"state": "intent"})
+            )
+
+        self.assertEqual(self._filesystem_snapshot(), before)
+
+    def test_recovery_graph_verification_rejects_depth_513_before_mutation(
+        self,
+    ) -> None:
+        # One additional wrapper reaches the shared node at depth 512 and its
+        # terminal at forbidden depth 513, even though the shallow path was
+        # validated first.
+        runtime, plan = self._recovery_depth_plan(deep_path_wrappers=511)
+        before = self._filesystem_snapshot()
+
         with mock.patch.object(
             runtime,
             "_intended_pointer_is_published",
@@ -678,10 +709,12 @@ class PromptArchiveRuntimeTests(unittest.TestCase):
         ):
             self.assert_code(
                 "PROMPT_ARCHIVE_LIMIT_EXCEEDED",
-                lambda: runtime._perform_state_action(plan, journal),
+                lambda: runtime._perform_state_action(
+                    plan, {"state": "intent"}
+                ),
             )
 
-        self.assertEqual(filesystem_snapshot(), before)
+        self.assertEqual(self._filesystem_snapshot(), before)
 
     def test_metadata_lookup_never_reads_leaf_closure_but_content_does(self) -> None:
         runtime = self.registry().for_project(PROJECT_ID)

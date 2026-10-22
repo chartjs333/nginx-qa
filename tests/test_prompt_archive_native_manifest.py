@@ -1094,13 +1094,14 @@ class PromptArchiveNativeManifestTests(unittest.TestCase):
 
     def test_reachable_refs_accepts_reference_at_exact_depth_512(self) -> None:
         _envelope_stream, terminal_ref = self.native_graph_depth_fixture()
-        # The manifest is depth 1; 510 wrappers put the terminal at depth 512.
-        root = self.wrap_native_graph_ref(terminal_ref, 510)
+        # The manifest is depth 0. Its root is depth 1, so 511 wrappers put
+        # the terminal exactly at the allowed depth 512.
+        root = self.wrap_native_graph_ref(terminal_ref, 511)
         manifest_ref = self.reachable_manifest_ref({"root": root})
 
         refs = self.archive.reachable_refs(manifest_ref)
 
-        self.assertEqual(len(refs), 512)
+        self.assertEqual(len(refs), 513)
         self.assertIn(terminal_ref, refs)
 
     def test_reachable_refs_rechecks_shallow_first_shared_node_at_depth_513(
@@ -1110,7 +1111,7 @@ class PromptArchiveNativeManifestTests(unittest.TestCase):
         shared = self.wrap_native_graph_ref(terminal_ref, 1)
         # Canonical key order visits ``a_shallow`` first.  The deep path then
         # reaches ``shared`` at depth 512 and its terminal at forbidden 513.
-        deep_root = self.wrap_native_graph_ref(shared, 510)
+        deep_root = self.wrap_native_graph_ref(shared, 511)
         manifest_ref = self.reachable_manifest_ref(
             {"a_shallow": shared, "z_deep": deep_root}
         )
