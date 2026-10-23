@@ -171,7 +171,7 @@
     "status": "PASS",
     "selection_rule": "Run every test in each changed production module's direct archive/runtime boundary modules, three directly related publication/recovery integrations, and every benchmark/selector/finalize tooling test.",
     "unique_test_count": 95,
-    "test_ids_sha256": "a4b812b04f0dbc19f396cd3eb69027a6491d07d491a0e9cab8941a2a0168df40",
+    "test_ids_sha256": "481bfe62364b1148574580d6e9b491c0a28266acf4d967ec3b49167ada2cff06",
     "failures": 0,
     "errors": 0,
     "skips": 0,
@@ -203,11 +203,11 @@
         "modules": ["tests.test_prompt_archive_runtime_integration"],
         "test_ids": [
           "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_authoritative_cross_component_boundaries_recover_exactly_once",
-          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_shadow_writes_exact_committed_bytes_and_publishes_after_legacy",
-          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_verified_graph_recovers_after_legacy_source_deleted"
+          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_shadow_uses_exact_committed_bytes_and_publishes_after_legacy",
+          "tests.test_prompt_archive_runtime_integration.PromptArchiveRuntimeIntegrationTests.test_verified_graph_recovers_after_legacy_source_is_deleted"
         ],
         "unique_tests": 3,
-        "test_ids_sha256": "02ae1038ccdcea4e302aede9b12bd0b0f6004c584f0728102cbbbf102023ccc1",
+        "test_ids_sha256": "5dd0428e594b6b08ef25b443c799e813ca435123a307c145f6700b9548bcb5e9",
         "test_duration_seconds": 1223.048,
         "command_wall_seconds": 1268.3,
         "failures": 0,
@@ -414,6 +414,6 @@
   "integrity": {
     "algorithm": "sha256",
     "canonicalization": "python-json-sort-keys-utf8-without-integrity-payload-sha256-v1",
-    "payload_sha256": "c6180c6b31ae15bb9ba02adc4f5c14a7a3b6f9f908e5f12bc21b8c46ba856dbc"
+    "payload_sha256": "b2aeade55c2ff199a4fd8dc1567376af0aff0713ef007839727e24c3d93552e7"
   }
 }
