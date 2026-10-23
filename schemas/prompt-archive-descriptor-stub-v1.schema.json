@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-descriptor-stub-v1.schema.json",
+  "title": "Prompt archive route-neutral compatibility descriptor stub v1",
+  "description": "Immutable route-neutral compatibility evidence persisted at legacy response filenames. Request correlation, agent phone, authorization material, and URLs are synthesized only by the authenticated API and are forbidden here.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "stub_id",
+    "archive_id",
+    "archive_format",
+    "scope",
+    "integrity",
+    "pointer_id",
+    "manifest_ref",
+    "created_at",
+    "published_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_descriptor_stub"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "stub_id": {
+      "description": "PAS1-ID-v1 descriptor-stub-id over the flattened ordered scalar fields frozen by PROMPT_ARCHIVE_STORAGE_V1.md.",
+      "type": "string",
+      "pattern": "^parstub1-[0-9a-f]{64}$"
+    },
+    "archive_id": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
+    "archive_format": {
+      "$ref": "prompt-archive-manifest-v1.schema.json#/properties/archive_format"
+    },
+    "scope": {"$ref": "#/$defs/sprintScope"},
+    "integrity": {
+      "$ref": "prompt-archive-manifest-v1.schema.json#/properties/integrity"
+    },
+    "pointer_id": {
+      "type": "string",
+      "pattern": "^parptr1-[0-9a-f]{64}$"
+    },
+    "manifest_ref": {"$ref": "#/$defs/manifestRef"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sprintScope": {
+      "allOf": [
+        {"$ref": "prompt-archive-manifest-v1.schema.json#/$defs/scope"},
+        {
+          "required": ["sprint_id"],
+          "properties": {"sprint_id": {"$ref": "#/$defs/safeId"}}
+        }
+      ]
+    },
+    "manifestRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "manifest"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+            }
+          }
+        }
+      ]
+    }
+  },
+  "additionalProperties": false
+}

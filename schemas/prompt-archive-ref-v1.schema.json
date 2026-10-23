@@ -1,0 +1,364 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-ref-v1.schema.json",
+  "title": "Prompt archive content reference v1",
+  "description": "A closed, path-free content-addressed reference. The digest identifies the exact uncompressed bytes; stored_sha256 identifies the exact stored representation.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "hash_algorithm",
+    "digest",
+    "logical_kind",
+    "media_type",
+    "content_encoding",
+    "uncompressed_size",
+    "stored_size",
+    "stored_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_blob_ref"},
+    "hash_algorithm": {"const": "sha256"},
+    "digest": {"$ref": "#/$defs/sha256"},
+    "logical_kind": {
+      "enum": [
+        "raw_chunk",
+        "payload_chunk",
+        "render_plan_chunk",
+        "literal_chunk",
+        "event_record",
+        "patch_record",
+        "history_text_record",
+        "result_record",
+        "feedback_record",
+        "review_context_record",
+        "execution_audit_record",
+        "source_metadata_record",
+        "current_field_record",
+        "json_value",
+        "json_edge",
+        "index_node",
+        "manifest",
+        "publication_plan",
+        "journal",
+        "pointer",
+        "archive_locator",
+        "descriptor_stub",
+        "latest_slot",
+        "source_inventory",
+        "pending_operation_registry"
+      ]
+    },
+    "media_type": {
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,62}$"
+    },
+    "content_encoding": {"enum": ["identity", "gzip"]},
+    "encoding_parameters": {"const": "gzip-rfc1952-zlib-1.2.13-level9-v1"},
+    "uncompressed_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16777216
+    },
+    "stored_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 16842752
+    },
+    "stored_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"content_encoding": {"const": "gzip"}},
+        "required": ["content_encoding"]
+      },
+      "then": {"required": ["encoding_parameters"]},
+      "else": {"not": {"required": ["encoding_parameters"]}}
+    },
+    {
+      "if": {
+        "properties": {
+          "uncompressed_size": {"maximum": 1023}
+        },
+        "required": ["uncompressed_size"]
+      },
+      "then": {
+        "properties": {"content_encoding": {"const": "identity"}}
+      },
+      "else": {
+        "properties": {"content_encoding": {"const": "gzip"}}
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "raw_chunk"}},
+        "required": ["logical_kind"]
+      },
+      "then": {"properties": {"media_type": {"const": "application/json"}}}
+    },
+    {
+      "if": {
+        "properties": {
+          "logical_kind": {
+            "enum": [
+              "event_record",
+              "patch_record",
+              "result_record",
+              "feedback_record",
+              "review_context_record",
+              "execution_audit_record",
+              "source_metadata_record"
+            ]
+          }
+        },
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-record-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "current_field_record"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-record-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "history_text_record"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-record-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "payload_chunk"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "description": "Must equal the media type of the parent record payload.",
+            "enum": [
+              "application/json",
+              "application/vnd.nginx-qa.prompt-archive-source-metadata-v1+json",
+              "application/vnd.nginx-qa.prompt-archive-json-string-fragment-v1"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "render_plan_chunk"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-response-envelope-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "literal_chunk"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-json-fragment-v1"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "json_value"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-json-value-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "json_edge"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-json-edge-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "index_node"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-index-node-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "manifest"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "publication_plan"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "journal"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-journal-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "pointer"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "archive_locator"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "descriptor_stub"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "latest_slot"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-latest-slot-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"logical_kind": {"const": "source_inventory"}},
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "logical_kind": {"const": "pending_operation_registry"}
+        },
+        "required": ["logical_kind"]
+      },
+      "then": {
+        "properties": {
+          "media_type": {
+            "const": "application/vnd.nginx-qa.prompt-archive-pending-operation-registry-v1+json"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false
+}

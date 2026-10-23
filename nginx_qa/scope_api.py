@@ -59,6 +59,12 @@ def register_scope_api(host):
             raise HTTPException(403, {"error": "OPERATOR_CSRF_REQUIRED"})
         return current["actor"]
 
+    # Other local operator-only adapters reuse this exact authentication
+    # boundary instead of approximating session, CSRF, Origin, or admin-token
+    # semantics.  The callable closes over the private in-memory session map;
+    # no session or credential material is exposed on the host.
+    host.scope_api_operator = operator
+
     async def body(request):
         same_origin(request)
         data = await request.body()

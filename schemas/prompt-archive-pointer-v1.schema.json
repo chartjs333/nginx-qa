@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-pointer-v1.schema.json",
+  "title": "Prompt archive immutable response pointer v1",
+  "description": "An immutable, response-scoped create-or-verify pointer. Its sole legitimate generation is 1 with no predecessor: an absent target is created, the exact target already present is success, and any different target at the response-pointer key is a conflict.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "id_algorithm",
+    "pointer_id",
+    "project_id",
+    "sprint_id",
+    "response_id",
+    "archive_id",
+    "generation",
+    "previous_pointer_id",
+    "manifest_ref",
+    "published_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_pointer"},
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "pointer_id": {
+      "type": "string",
+      "pattern": "^parptr1-[0-9a-f]{64}$"
+    },
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "sprint_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/safeId"},
+        {"type": "null"}
+      ]
+    },
+    "response_id": {
+      "type": "string",
+      "pattern": "^parresp1-[0-9a-f]{64}$"
+    },
+    "archive_id": {
+      "type": "string",
+      "pattern": "^par1-[0-9a-f]{64}$"
+    },
+    "generation": {"const": 1},
+    "previous_pointer_id": {"type": "null"},
+    "manifest_ref": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind"],
+          "properties": {"logical_kind": {"const": "manifest"}}
+        }
+      ]
+    },
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "additionalProperties": false
+}

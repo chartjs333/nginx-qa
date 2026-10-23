@@ -1,0 +1,1276 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-publication-plan-v1.schema.json",
+  "title": "Prompt archive publication plan v1",
+  "description": "A small, closed, payload-free replay blueprint persisted before the publication journal. It contains only durable locators, complete content identities, fencing data, and timestamps; raw paths, response payloads, credentials, and secrets are not fields in this contract.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "operation_id",
+    "operation_kind",
+    "scope",
+    "occurrence",
+    "recovery_locator",
+    "pending_registry",
+    "compatibility_publication",
+    "frozen_timestamps"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_publication_plan"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-publication-plan-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "operation_id": {
+      "type": "string",
+      "pattern": "^parop1-[0-9a-f]{32}$"
+    },
+    "operation_kind": {
+      "enum": [
+        "shadow_publish",
+        "native_publish",
+        "offline_migration",
+        "legacy_latest_publish"
+      ]
+    },
+    "scope": {"$ref": "#/$defs/scope"},
+    "occurrence": {"$ref": "#/$defs/occurrence"},
+    "recovery_locator": {"$ref": "#/$defs/recoveryLocator"},
+    "pending_registry": {"$ref": "#/$defs/pendingRegistryPlan"},
+    "source_locator": {"$ref": "#/$defs/sourceLocator"},
+    "intended_manifest": {"$ref": "#/$defs/intendedManifest"},
+    "intended_pointer": {"$ref": "#/$defs/intendedPointer"},
+    "intended_archive_locator": {"$ref": "#/$defs/intendedArchiveLocator"},
+    "planned_reachable_set": {"$ref": "#/$defs/reachableSet"},
+    "pointer_precondition": {"$ref": "#/$defs/pointerPrecondition"},
+    "compatibility_publication": {
+      "$ref": "#/$defs/compatibilityPublication"
+    },
+    "legacy_latest": {"$ref": "#/$defs/legacyLatest"},
+    "frozen_timestamps": {"$ref": "#/$defs/frozenTimestamps"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "shadow_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "required": [
+          "source_locator",
+          "intended_manifest",
+          "intended_pointer",
+          "intended_archive_locator",
+          "planned_reachable_set",
+          "pointer_precondition"
+        ],
+        "not": {"required": ["legacy_latest"]},
+        "properties": {
+          "source_locator": {"$ref": "#/$defs/runtimeSourceLocator"},
+          "intended_manifest": {
+            "properties": {
+              "document": {
+                "properties": {
+                  "publication": {
+                    "properties": {"mode": {"const": "shadow"}},
+                    "required": ["mode"]
+                  }
+                }
+              }
+            }
+          },
+          "compatibility_publication": {"$ref": "#/$defs/noCompatibility"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "native_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "required": [
+          "source_locator",
+          "intended_manifest",
+          "intended_pointer",
+          "intended_archive_locator",
+          "planned_reachable_set",
+          "pointer_precondition"
+        ],
+        "not": {"required": ["legacy_latest"]},
+        "properties": {
+          "source_locator": {"$ref": "#/$defs/runtimeSourceLocator"},
+          "intended_manifest": {
+            "properties": {
+              "document": {
+                "properties": {
+                  "publication": {
+                    "properties": {"mode": {"const": "authoritative"}},
+                    "required": ["mode"]
+                  }
+                }
+              }
+            }
+          },
+          "compatibility_publication": {
+            "$ref": "#/$defs/authoritativeCompatibility"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "offline_migration"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "required": [
+          "source_locator",
+          "intended_manifest",
+          "intended_pointer",
+          "intended_archive_locator",
+          "planned_reachable_set",
+          "pointer_precondition"
+        ],
+        "not": {"required": ["legacy_latest"]},
+        "properties": {
+          "occurrence": {
+            "properties": {"occurrence_kind": {"const": "migration"}},
+            "required": ["occurrence_kind"]
+          },
+          "source_locator": {"$ref": "#/$defs/inventorySourceLocator"},
+          "intended_manifest": {
+            "properties": {
+              "document": {
+                "properties": {
+                  "publication": {
+                    "properties": {"mode": {"const": "migration"}},
+                    "required": ["mode"]
+                  }
+                }
+              }
+            }
+          },
+          "compatibility_publication": {"$ref": "#/$defs/noCompatibility"}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "legacy_latest_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "required": ["legacy_latest"],
+        "properties": {
+          "occurrence": {
+            "properties": {
+              "response_kind": {
+                "enum": [
+                  "identity-response",
+                  "transition-response",
+                  "state-response"
+                ]
+              },
+              "occurrence_kind": {
+                "enum": ["transition", "identity-state"]
+              }
+            },
+            "required": ["response_kind", "occurrence_kind"]
+          },
+          "compatibility_publication": {
+            "$ref": "#/$defs/legacyLatestCompatibility"
+          }
+        },
+        "not": {
+          "anyOf": [
+            {"required": ["source_locator"]},
+            {"required": ["intended_manifest"]},
+            {"required": ["intended_pointer"]},
+            {"required": ["intended_archive_locator"]},
+            {"required": ["planned_reachable_set"]},
+            {"required": ["pointer_precondition"]}
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["legacy_latest"],
+        "properties": {
+          "legacy_latest": {
+            "required": ["write_kind"],
+            "properties": {"write_kind": {"const": "transition"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "occurrence": {
+            "properties": {
+              "response_kind": {"const": "transition-response"},
+              "occurrence_kind": {"const": "transition"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["legacy_latest"],
+        "properties": {
+          "legacy_latest": {
+            "required": ["write_kind"],
+            "properties": {"write_kind": {"const": "identity"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "occurrence": {
+            "properties": {
+              "response_kind": {"const": "identity-response"},
+              "occurrence_kind": {"const": "identity-state"},
+              "transition_id": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["legacy_latest"],
+        "properties": {
+          "legacy_latest": {
+            "required": ["write_kind"],
+            "properties": {"write_kind": {"const": "state"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "occurrence": {
+            "properties": {
+              "response_kind": {"const": "state-response"},
+              "occurrence_kind": {"const": "identity-state"},
+              "transition_id": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["legacy_latest"],
+        "properties": {
+          "legacy_latest": {
+            "required": ["write_kind"],
+            "properties": {"write_kind": {"const": "rollback"}}
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "occurrence": {
+            "properties": {
+              "response_kind": {
+                "enum": ["identity-response", "state-response"]
+              },
+              "occurrence_kind": {"const": "identity-state"},
+              "transition_id": {"type": "null"}
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"operation_kind": {"const": "legacy_latest_publish"}},
+        "required": ["operation_kind"]
+      },
+      "then": {
+        "properties": {
+          "frozen_timestamps": {"$ref": "#/$defs/legacyLatestFrozenTimestamps"}
+        }
+      },
+      "else": {
+        "properties": {
+          "frozen_timestamps": {"$ref": "#/$defs/archiveFrozenTimestamps"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "scope": {
+      "type": "object",
+      "required": ["project_id", "sprint_id"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "occurrence": {
+      "type": "object",
+      "required": [
+        "response_id",
+        "response_kind",
+        "occurrence_kind",
+        "occurrence_id",
+        "transition_id"
+      ],
+      "properties": {
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "response_kind": {
+          "enum": [
+            "identity-response",
+            "transition-response",
+            "state-response",
+            "migration-snapshot"
+          ]
+        },
+        "occurrence_kind": {
+          "enum": ["transition", "identity-state", "migration"]
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "transition_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"occurrence_kind": {"const": "transition"}},
+            "required": ["occurrence_kind"]
+          },
+          "then": {"properties": {"transition_id": {"$ref": "#/$defs/safeId"}}},
+          "else": {"properties": {"transition_id": {"type": "null"}}}
+        },
+        {
+          "if": {
+            "properties": {"occurrence_kind": {"const": "migration"}},
+            "required": ["occurrence_kind"]
+          },
+          "then": {"properties": {"response_kind": {"const": "migration-snapshot"}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "recoveryLocator": {
+      "description": "Path-free lookup key. Values MUST equal the enclosing plan scope, occurrence, and operation_id. recovery_key is PAS1-ID-v1 over that tuple under the prompt-archive-publication-locator-v1 domain.",
+      "type": "object",
+      "required": [
+        "locator_version",
+        "recovery_key",
+        "project_id",
+        "sprint_id",
+        "response_id",
+        "occurrence_id",
+        "operation_id"
+      ],
+      "properties": {
+        "locator_version": {
+          "const": "prompt-archive-publication-locator-v1"
+        },
+        "recovery_key": {
+          "type": "string",
+          "pattern": "^parloc1-[0-9a-f]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        },
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "runtimeSourceLocator": {
+      "type": "object",
+      "required": [
+        "locator_kind",
+        "locator_version",
+        "runtime_instance_id",
+        "runtime_occurrence_id",
+        "state_revision"
+      ],
+      "properties": {
+        "locator_kind": {"const": "runtime_occurrence"},
+        "locator_version": {
+          "const": "prompt-archive-runtime-occurrence-locator-v1"
+        },
+        "runtime_instance_id": {"$ref": "#/$defs/safeId"},
+        "runtime_occurrence_id": {"$ref": "#/$defs/safeId"},
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      },
+      "additionalProperties": false
+    },
+    "inventorySourceLocator": {
+      "description": "A path-free locator for a frozen source inventory. inventory_ref identifies the exact typed inventory bytes reached through the stable logical key inventories/v1/<inventory_id>.json; inventory_id, format, digest, entry count, and ref must semantically match that document. migration_binding additionally commits the accepted per-entry plan to the immutable operator-gated outer batch-plan SHA and its exact reserved source entry.",
+      "type": "object",
+      "required": [
+        "locator_kind",
+        "locator_version",
+        "inventory_id",
+        "inventory_format",
+        "inventory_sha256",
+        "entry_count",
+        "inventory_ref",
+        "migration_binding"
+      ],
+      "properties": {
+        "locator_kind": {"const": "isolated_inventory"},
+        "locator_version": {
+          "const": "prompt-archive-isolated-inventory-locator-v1"
+        },
+        "inventory_id": {
+          "type": "string",
+          "pattern": "^parinv1-[0-9a-f]{64}$"
+        },
+        "inventory_format": {
+          "const": "prompt-archive-isolated-inventory-v1"
+        },
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "entry_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "inventory_ref": {"$ref": "#/$defs/sourceInventoryRef"},
+        "migration_binding": {
+          "type": "object",
+          "required": ["batch_id", "batch_plan_sha256", "reservation"],
+          "properties": {
+            "batch_id": {
+              "type": "string",
+              "pattern": "^parmb1-[0-9a-f]{64}$"
+            },
+            "batch_plan_sha256": {"$ref": "#/$defs/sha256"},
+            "reservation": {
+              "type": "object",
+              "required": [
+                "ordinal",
+                "entry_id",
+                "path_sha256",
+                "source_byte_size",
+                "source_sha256",
+                "operation_id",
+                "occurrence_id",
+                "response_id",
+                "decision_occurrence_id"
+              ],
+              "properties": {
+                "ordinal": {"type": "integer", "minimum": 0, "maximum": 999999},
+                "entry_id": {
+                  "type": "string",
+                  "pattern": "^parme1-[0-9a-f]{64}$"
+                },
+                "path_sha256": {"$ref": "#/$defs/sha256"},
+                "source_byte_size": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 536870912
+                },
+                "source_sha256": {"$ref": "#/$defs/sha256"},
+                "operation_id": {
+                  "type": "string",
+                  "pattern": "^parop1-[0-9a-f]{32}$"
+                },
+                "occurrence_id": {
+                  "type": "string",
+                  "pattern": "^migration-[0-9a-f]{64}$"
+                },
+                "response_id": {
+                  "type": "string",
+                  "pattern": "^parresp1-[0-9a-f]{64}$"
+                },
+                "decision_occurrence_id": {
+                  "type": "string",
+                  "pattern": "^decision-[0-9a-f]{64}$"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "sourceLocator": {
+      "oneOf": [
+        {"$ref": "#/$defs/runtimeSourceLocator"},
+        {"$ref": "#/$defs/inventorySourceLocator"}
+      ]
+    },
+    "manifestRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "manifest"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-manifest-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "pointerRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "pointer"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-pointer-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "archiveLocatorRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "archive_locator"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-locator-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "indexNodeRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "index_node"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-index-node-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "descriptorRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "descriptor_stub"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "sourceInventoryRef": {
+      "description": "Typed CAS reference for the exact frozen source inventory document addressed by the inventory locator's stable inventory_id key.",
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "source_inventory"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "registryShardIdentity": {
+      "description": "The bounded startup-discovery shard. shard_id is the first two lowercase hex characters of SHA-256 over the UTF-8 recovery_key, yielding exactly 256 stable project-scoped shard targets.",
+      "type": "object",
+      "required": [
+        "project_id",
+        "shard_algorithm",
+        "shard_id",
+        "max_entries"
+      ],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "shard_algorithm": {"const": "sha256-recovery-key-prefix-2-v1"},
+        "shard_id": {"type": "string", "pattern": "^[0-9a-f]{2}$"},
+        "max_entries": {"const": 1024}
+      },
+      "additionalProperties": false
+    },
+    "pendingRegistryEntryPrecondition": {
+      "description": "A key-level precondition. Whole-shard generations and refs are deliberately not frozen: under the shard lock the writer rebases this mutation onto the latest valid shard while preserving unrelated entries.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {"kind": {"const": "absent"}},
+      "additionalProperties": false
+    },
+    "pendingRegistryPlan": {
+      "description": "The exact key-level bounded-registry insertion intent persisted in the plan. shard.project_id, intended operation_id, and recovery_key must semantically equal the enclosing plan; shard_id is derived from that recovery_key. The plan CAS bytes are written first. Then, under the shard lock, the writer loads the latest valid shard, verifies only this recovery_key is absent or already equals the exact intended planned entry, preserves every unrelated entry, deterministically inserts in canonical order, and publishes the next whole-shard CAS generation. Unrelated same-shard changes cause a re-read/rebase, never a permanent conflict; only a different value at this recovery_key conflicts. plan_ref_binding means the canonical ref of this plan after it is persisted, avoiding an impossible content-hash self-cycle. A crash before insertion leaves an unreachable no-effect plan CAS object; a crash after insertion is discoverable as state=planned and deterministically creates journal intent.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "shard",
+        "entry_precondition",
+        "intended_mutation"
+      ],
+      "properties": {
+        "protocol": {"const": "prompt-archive-pending-registry-cas-v1"},
+        "shard": {"$ref": "#/$defs/registryShardIdentity"},
+        "entry_precondition": {
+          "$ref": "#/$defs/pendingRegistryEntryPrecondition"
+        },
+        "intended_mutation": {
+          "type": "object",
+          "required": [
+            "mutation",
+            "operation_id",
+            "recovery_key",
+            "plan_ref_binding",
+            "state",
+            "journal_ref",
+            "created_at",
+            "updated_at",
+            "published_at"
+          ],
+          "properties": {
+            "mutation": {"const": "upsert_planned"},
+            "operation_id": {
+              "type": "string",
+              "pattern": "^parop1-[0-9a-f]{32}$"
+            },
+            "recovery_key": {
+              "type": "string",
+              "pattern": "^parloc1-[0-9a-f]{64}$"
+            },
+            "plan_ref_binding": {"const": "canonical_current_plan_ref"},
+            "state": {"const": "planned"},
+            "journal_ref": {"type": "null"},
+            "created_at": {"type": "string", "format": "date-time"},
+            "updated_at": {"type": "string", "format": "date-time"},
+            "published_at": {"type": "string", "format": "date-time"}
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "intendedManifest": {
+      "description": "The complete intended manifest document and its path-free CAS identity. archive_id and manifest_ref must semantically equal document.archive_id and the canonical document bytes.",
+      "type": "object",
+      "required": [
+        "identity_version",
+        "archive_id",
+        "manifest_ref",
+        "document"
+      ],
+      "properties": {
+        "identity_version": {
+          "const": "prompt-archive-intended-manifest-identity-v1"
+        },
+        "archive_id": {
+          "type": "string",
+          "pattern": "^par1-[0-9a-f]{64}$"
+        },
+        "manifest_ref": {"$ref": "#/$defs/manifestRef"},
+        "document": {"$ref": "prompt-archive-manifest-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "intendedPointer": {
+      "description": "The exact immutable pointer document and its CAS identity, fixed before intent. Publication is create-or-verify: an absent target is created, the exact target already present is success, and any other target is a conflict. Its generation is always 1, previous_pointer_id is always null, and its manifest/scope/archive fields must semantically equal the intended manifest and plan.",
+      "type": "object",
+      "required": ["identity_version", "pointer_id", "pointer_ref", "document"],
+      "properties": {
+        "identity_version": {
+          "const": "prompt-archive-intended-pointer-identity-v1"
+        },
+        "pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "pointer_ref": {"$ref": "#/$defs/pointerRef"},
+        "document": {"$ref": "prompt-archive-pointer-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "intendedArchiveLocator": {
+      "description": "The exact immutable archive-id lookup document and its CAS identity, fixed before intent. Its scope, archive, pointer, manifest, and published_at fields must semantically equal the corresponding plan artifacts.",
+      "type": "object",
+      "required": ["identity_version", "locator_id", "locator_ref", "document"],
+      "properties": {
+        "identity_version": {
+          "const": "prompt-archive-intended-locator-identity-v1"
+        },
+        "locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "locator_ref": {"$ref": "#/$defs/archiveLocatorRef"},
+        "document": {"$ref": "prompt-archive-locator-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "noCompatibility": {
+      "type": "object",
+      "required": ["mode"],
+      "properties": {"mode": {"const": "none"}},
+      "additionalProperties": false
+    },
+    "descriptorArtifact": {
+      "description": "One exact route-neutral descriptor-stub document shared by the immutable transition stub and the project-global latest slot. Its stub_id and published_at must semantically equal transition_stub, and its archive/scope/pointer/manifest/integrity fields must equal the intended archive artifacts. Request-specific API descriptors are synthesized at read time and are not persisted here.",
+      "type": "object",
+      "required": ["identity_version", "descriptor_ref", "document"],
+      "properties": {
+        "identity_version": {
+          "const": "prompt-archive-descriptor-stub-identity-v1"
+        },
+        "descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+        "document": {"$ref": "prompt-archive-descriptor-stub-v1.schema.json"}
+      },
+      "additionalProperties": false
+    },
+    "transitionStub": {
+      "type": "object",
+      "required": [
+        "publication_mode",
+        "stub_id",
+        "response_id",
+        "descriptor_ref",
+        "published_at"
+      ],
+      "properties": {
+        "publication_mode": {"const": "immutable_create_or_verify"},
+        "stub_id": {
+          "type": "string",
+          "pattern": "^parstub1-[0-9a-f]{64}$"
+        },
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+        "published_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "archiveOwner": {
+      "description": "A closed, path-free proof binding descriptor/latest publication to one exact authoritative outer archive plan and one physical latest-response authority. outer_plan_identity_sha256 is SHA-256 over the canonical JSON projection of every field below except protocol and the digest itself; transition_stub_name must additionally equal <response_kind>-<response_id>.json.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "project_id",
+        "sprint_id",
+        "response_id",
+        "response_kind",
+        "operation_id",
+        "recovery_key",
+        "outer_plan_identity_sha256",
+        "archive_id",
+        "pointer_id",
+        "locator_id",
+        "target_authority_id",
+        "transition_stub_name",
+        "descriptor_stub_id"
+      ],
+      "properties": {
+        "protocol": {"const": "prompt-archive-latest-archive-owner-v1"},
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {"$ref": "#/$defs/safeId"},
+        "response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "response_kind": {
+          "enum": [
+            "identity-response",
+            "transition-response",
+            "state-response"
+          ]
+        },
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        },
+        "recovery_key": {
+          "type": "string",
+          "pattern": "^parloc1-[0-9a-f]{64}$"
+        },
+        "outer_plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "archive_id": {
+          "type": "string",
+          "pattern": "^par1-[0-9a-f]{64}$"
+        },
+        "pointer_id": {
+          "type": "string",
+          "pattern": "^parptr1-[0-9a-f]{64}$"
+        },
+        "locator_id": {
+          "type": "string",
+          "pattern": "^pararc1-[0-9a-f]{64}$"
+        },
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
+        "transition_stub_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 240,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+        },
+        "descriptor_stub_id": {
+          "type": "string",
+          "pattern": "^parstub1-[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "latestOrdering": {
+      "description": "A deterministic total order compared lexicographically by source_revision, occurrence_id, then operation_id, but only after revision_authority exactly matches. The source revision is allocated from a durable project/slot high-water mark that is never reset by a process, launcher, or runtime-root restart. If that continuity cannot be restored, publication fails closed instead of allocating a lower revision.",
+      "type": "object",
+      "required": [
+        "revision_authority",
+        "source_revision",
+        "occurrence_id",
+        "operation_id"
+      ],
+      "properties": {
+        "revision_authority": {"$ref": "#/$defs/revisionAuthority"},
+        "source_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "revisionAuthority": {
+      "description": "The stable V1 revision domain is the enclosing (project_id, slot_scope, slot_id). Epoch rollover is not defined in V1: the durable high-water mark must be restored, or allocation and publication fail closed.",
+      "type": "object",
+      "required": ["protocol", "epoch", "reset_policy"],
+      "properties": {
+        "protocol": {
+          "const": "prompt-archive-durable-project-latest-revision-v1"
+        },
+        "epoch": {"const": 1},
+        "reset_policy": {"const": "restore_high_water_mark_or_fail_closed"}
+      },
+      "additionalProperties": false
+    },
+    "latestBootstrapPrecondition": {
+      "description": "Used only while no sidecar is enrolled. Under the one physical lock collocated with the resolved external latest-response target, the writer observes the target, durably publishes the intended bytes plus retained/current enrollment intent, and only then may unlock. That discoverable marker makes every legacy writer drain or fail closed. The writer performs the non-nested pending-registry mutation while no latest/operation/response lock is held, then reacquires the same latest lock, revalidates marker and observation, and holds it through content and first-slot reconciliation. Every code path capable of writing legacy latest-response bytes, including default legacy with no archive root and the legacy writer accompanying shadow mode, locates and takes that same lock. Once any valid marker/slot exists, ordered intent semantics supersede the bootstrap observation.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "lock_scope",
+        "slot_id",
+        "registry_shard_count",
+        "writer_lock_policy",
+        "lock_location_policy",
+        "registration_order",
+        "bootstrap_completion_barrier",
+        "kind"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "prompt-archive-project-global-bootstrap-enrollment-v1"
+        },
+        "lock_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "registry_shard_count": {"const": 256},
+        "writer_lock_policy": {
+          "const": "all-latest-writers-pre-and-post-enrollment-v1"
+        },
+        "lock_location_policy": {
+          "const": "external-latest-colocated-stable-lock-v1"
+        },
+        "registration_order": {
+          "const": "observe-mark-unlock-register-relock-reconcile-v1"
+        },
+        "bootstrap_completion_barrier": {
+          "const": "durable-marker-before-unlock-content-slot-before-final-unlock-v1"
+        },
+        "kind": {"enum": ["enrolled", "absent", "legacy_bytes"]},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {"kind": {"const": "enrolled"}},
+          "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["byte_size"]}]}
+        },
+        {
+          "properties": {"kind": {"const": "absent"}},
+          "not": {"anyOf": [{"required": ["sha256"]}, {"required": ["byte_size"]}]}
+        },
+        {
+          "required": ["kind", "sha256", "byte_size"],
+          "properties": {
+            "kind": {"const": "legacy_bytes"}
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "latestContentIntent": {
+      "description": "A predecessor-independent project-global latest-response content intent. The plan freezes content, provenance, ordering, bootstrap observation, and timestamp, but not a mutable whole-slot generation/ref. Under the stable project-global lock: an exact same intent succeeds; a slot with a greater order makes this operation a safe superseded no-op; a lower ordered slot is atomically advanced by deriving generation=current+1 and previous_slot_id=current id; mixed content/sidecar state is reconciled before unlock. Thus unrelated later generations never turn an older recoverable operation into conflict.",
+      "type": "object",
+      "required": [
+        "identity_version",
+        "intent_id",
+        "project_id",
+        "slot_scope",
+        "slot_id",
+        "publication_protocol",
+        "ordering",
+        "bootstrap_precondition",
+        "content_kind",
+        "content_sha256",
+        "content_size",
+        "descriptor_ref",
+        "source_sprint_id",
+        "source_response_id",
+        "published_at"
+      ],
+      "properties": {
+        "identity_version": {"const": "prompt-archive-latest-content-intent-v1"},
+        "intent_id": {
+          "type": "string",
+          "pattern": "^parlatestintent1-[0-9a-f]{64}$"
+        },
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "slot_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "publication_protocol": {
+          "const": "prompt-archive-project-global-ordered-latest-intent-v1"
+        },
+        "ordering": {"$ref": "#/$defs/latestOrdering"},
+        "bootstrap_precondition": {
+          "$ref": "#/$defs/latestBootstrapPrecondition"
+        },
+        "content_kind": {"enum": ["descriptor_stub", "legacy_inline"]},
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "content_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "descriptor_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/descriptorRef"},
+            {"type": "null"}
+          ]
+        },
+        "source_sprint_id": {
+          "oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]
+        },
+        "source_response_id": {
+          "oneOf": [
+            {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+            {"type": "null"}
+          ]
+        },
+        "published_at": {"type": "string", "format": "date-time"}
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"content_kind": {"const": "descriptor_stub"}},
+            "required": ["content_kind"]
+          },
+          "then": {
+            "properties": {
+              "descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+              "source_sprint_id": {"$ref": "#/$defs/safeId"},
+              "source_response_id": {
+                "type": "string",
+                "pattern": "^parresp1-[0-9a-f]{64}$"
+              }
+            }
+          },
+          "else": {"properties": {"descriptor_ref": {"type": "null"}}}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "descriptorLatestIntent": {
+      "allOf": [
+        {"$ref": "#/$defs/latestContentIntent"},
+        {"properties": {"content_kind": {"const": "descriptor_stub"}}}
+      ]
+    },
+    "legacyLatestIntent": {
+      "allOf": [
+        {"$ref": "#/$defs/latestContentIntent"},
+        {
+          "properties": {
+            "content_kind": {"const": "legacy_inline"},
+            "descriptor_ref": {"type": "null"}
+          }
+        }
+      ]
+    },
+    "authoritativeCompatibility": {
+      "type": "object",
+      "required": [
+        "mode",
+        "target_authority_id",
+        "archive_owner",
+        "descriptor",
+        "transition_stub",
+        "latest_intent"
+      ],
+      "properties": {
+        "mode": {"const": "authoritative_descriptor_stubs"},
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
+        "archive_owner": {"$ref": "#/$defs/archiveOwner"},
+        "descriptor": {"$ref": "#/$defs/descriptorArtifact"},
+        "transition_stub": {"$ref": "#/$defs/transitionStub"},
+        "latest_intent": {"$ref": "#/$defs/descriptorLatestIntent"}
+      },
+      "additionalProperties": false
+    },
+    "legacyLatestCompatibility": {
+      "type": "object",
+      "required": ["mode", "target_authority_id", "latest_intent"],
+      "properties": {
+        "mode": {"const": "legacy_latest_publish"},
+        "target_authority_id": {
+          "type": "string",
+          "pattern": "^parlatestauthority1-[0-9a-f]{64}$"
+        },
+        "latest_intent": {"$ref": "#/$defs/legacyLatestIntent"}
+      },
+      "additionalProperties": false
+    },
+    "compatibilityPublication": {
+      "oneOf": [
+        {"$ref": "#/$defs/noCompatibility"},
+        {"$ref": "#/$defs/authoritativeCompatibility"},
+        {"$ref": "#/$defs/legacyLatestCompatibility"}
+      ]
+    },
+    "authoritativeDrainBarrier": {
+      "description": "A retry-stable proof captured while holding the same project-global latest-response lock used for publication. Every retry rechecks this barrier. All pending authoritative operations are reconciled to a terminal journal state before legacy bytes may be written; observed_incomplete_operation_ids is therefore empty. The bounded 256-shard pending-operation registry is the startup/recovery index used instead of scanning operation directories.",
+      "type": "object",
+      "required": [
+        "protocol",
+        "lock_scope",
+        "slot_id",
+        "registry_shard_count",
+        "observed_incomplete_operation_ids",
+        "observed_at"
+      ],
+      "properties": {
+        "protocol": {
+          "const": "reconcile-authoritative-before-legacy-latest-write-v1"
+        },
+        "lock_scope": {"const": "project"},
+        "slot_id": {"const": "latest-response"},
+        "registry_shard_count": {"const": 256},
+        "observed_incomplete_operation_ids": {
+          "type": "array",
+          "maxItems": 0,
+          "items": {
+            "type": "string",
+            "pattern": "^parop1-[0-9a-f]{32}$"
+          }
+        },
+        "observed_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "legacyLatest": {
+      "description": "The exact external legacy latest-response bytes for a normal transition, identity, or state publication, or an operator rollback. Every legacy writer before, during, and after sidecar enrollment MUST use the same physical project-global lock; it blocks on or helps reconcile registered pending latest intents before writing, and after enrollment it uses this journaled publication path. Raw bytes never appear inline: payload_root is a typed index-node root over immutable raw chunks, and content_sha256/content_size bind the fully hydrated byte stream. The authoritative drain barrier is revalidated under the project-global slot lock before every legacy external write.",
+      "type": "object",
+      "required": [
+        "identity_version",
+        "write_kind",
+        "content_media_type",
+        "content_sha256",
+        "content_size",
+        "payload_root",
+        "authoritative_drain_barrier"
+      ],
+      "properties": {
+        "identity_version": {
+          "const": "prompt-archive-legacy-latest-payload-v1"
+        },
+        "write_kind": {
+          "enum": ["transition", "identity", "state", "rollback"]
+        },
+        "content_media_type": {"const": "application/json"},
+        "content_sha256": {"$ref": "#/$defs/sha256"},
+        "content_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "payload_root": {"$ref": "#/$defs/indexNodeRef"},
+        "authoritative_drain_barrier": {
+          "$ref": "#/$defs/authoritativeDrainBarrier"
+        }
+      },
+      "additionalProperties": false
+    },
+    "frozenTimestamps": {
+      "oneOf": [
+        {"$ref": "#/$defs/archiveFrozenTimestamps"},
+        {"$ref": "#/$defs/legacyLatestFrozenTimestamps"}
+      ]
+    },
+    "archiveFrozenTimestamps": {
+      "description": "Retry-stable control timestamps fixed in the durable plan. Journal event times and every embedded document/output timestamp must semantically equal the corresponding field; replay never substitutes a wall clock.",
+      "type": "object",
+      "required": [
+        "source_observed_at",
+        "planned_at",
+        "intent_at",
+        "blobs_verified_at",
+        "manifest_verified_at",
+        "pointer_published_at",
+        "locator_published_at",
+        "compatibility_published_at",
+        "completed_at",
+        "aborted_at"
+      ],
+      "properties": {
+        "source_observed_at": {"type": "string", "format": "date-time"},
+        "planned_at": {"type": "string", "format": "date-time"},
+        "intent_at": {"type": "string", "format": "date-time"},
+        "blobs_verified_at": {"type": "string", "format": "date-time"},
+        "manifest_verified_at": {"type": "string", "format": "date-time"},
+        "pointer_published_at": {"type": "string", "format": "date-time"},
+        "locator_published_at": {"type": "string", "format": "date-time"},
+        "compatibility_published_at": {"type": "string", "format": "date-time"},
+        "completed_at": {"type": "string", "format": "date-time"},
+        "aborted_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "legacyLatestFrozenTimestamps": {
+      "description": "Retry-stable timestamps for the legacy latest-response publication state machine only; archive-publication stage timestamps are intentionally absent.",
+      "type": "object",
+      "required": [
+        "source_observed_at",
+        "planned_at",
+        "intent_at",
+        "legacy_payload_verified_at",
+        "compatibility_published_at",
+        "completed_at",
+        "aborted_at"
+      ],
+      "properties": {
+        "source_observed_at": {"type": "string", "format": "date-time"},
+        "planned_at": {"type": "string", "format": "date-time"},
+        "intent_at": {"type": "string", "format": "date-time"},
+        "legacy_payload_verified_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "compatibility_published_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "completed_at": {"type": "string", "format": "date-time"},
+        "aborted_at": {"type": "string", "format": "date-time"}
+      },
+      "additionalProperties": false
+    },
+    "reachableSet": {
+      "description": "Digest of the unique reachable CAS identities including the manifest. For prompt-archive-reachable-set-digest-v1, each identity line is logical_kind, digest, stored_sha256, uncompressed_size, and stored_size separated by NUL and terminated by LF; duplicate lines are removed, remaining UTF-8 byte strings are sorted lexicographically, and SHA-256 is computed over the ASCII version label plus LF followed by the sorted lines.",
+      "type": "object",
+      "required": [
+        "digest_version",
+        "hash_algorithm",
+        "digest",
+        "unique_ref_count",
+        "includes_manifest"
+      ],
+      "properties": {
+        "digest_version": {
+          "const": "prompt-archive-reachable-set-digest-v1"
+        },
+        "hash_algorithm": {"const": "sha256"},
+        "digest": {"$ref": "#/$defs/sha256"},
+        "unique_ref_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "includes_manifest": {"const": true}
+      },
+      "additionalProperties": false
+    },
+    "pointerPrecondition": {
+      "description": "Response pointers are immutable create-or-verify targets. An absent target is created; the exact intended target already present is success; any other target is a conflict.",
+      "type": "object",
+      "required": ["expected_generation", "previous_pointer_id"],
+      "properties": {
+        "expected_generation": {"const": 0},
+        "previous_pointer_id": {"type": "null"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

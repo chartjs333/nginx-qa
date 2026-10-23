@@ -1,0 +1,208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-state-view-v1.schema.json",
+  "title": "Prompt archive bounded state view v1",
+  "description": "A verified root-to-head traversal of immutable occurrence archives. Occurrence documents retain all response-scoped evidence; state.history is only a bounded index and state.current is the head projection.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "scope",
+    "integrity",
+    "occurrences",
+    "state"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_state_view"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-state-view-v1+json"
+    },
+    "scope": {"$ref": "#/$defs/scope"},
+    "integrity": {"$ref": "#/$defs/integrity"},
+    "occurrences": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 256,
+      "items": {"$ref": "#/$defs/occurrenceEntry"}
+    },
+    "state": {"$ref": "#/$defs/state"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "archiveId": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"},
+    "responseId": {
+      "type": "string",
+      "pattern": "^parresp1-[0-9a-f]{64}$"
+    },
+    "pointerId": {"type": "string", "pattern": "^parptr1-[0-9a-f]{64}$"},
+    "scope": {
+      "type": "object",
+      "required": [
+        "project_id",
+        "sprint_id",
+        "root_archive_id",
+        "head_archive_id",
+        "head_response_id",
+        "occurrence_count"
+      ],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {"$ref": "#/$defs/safeId"},
+        "root_archive_id": {"$ref": "#/$defs/archiveId"},
+        "head_archive_id": {"$ref": "#/$defs/archiveId"},
+        "head_response_id": {"$ref": "#/$defs/responseId"},
+        "occurrence_count": {"type": "integer", "minimum": 1, "maximum": 256}
+      },
+      "additionalProperties": false
+    },
+    "integrity": {
+      "type": "object",
+      "required": ["algorithm", "chain_sha256", "aggregate_hydrated_bytes"],
+      "properties": {
+        "algorithm": {"const": "sha256"},
+        "chain_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "aggregate_hydrated_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        }
+      },
+      "additionalProperties": false
+    },
+    "occurrenceEntry": {
+      "type": "object",
+      "required": [
+        "ordinal",
+        "archive_id",
+        "pointer_id",
+        "manifest_sha256",
+        "predecessor_archive_id",
+        "document"
+      ],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 255},
+        "archive_id": {"$ref": "#/$defs/archiveId"},
+        "pointer_id": {"$ref": "#/$defs/pointerId"},
+        "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "predecessor_archive_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/archiveId"},
+            {"type": "null"}
+          ]
+        },
+        "document": {
+          "$ref": "prompt-archive-occurrence-document-v1.schema.json"
+        }
+      },
+      "additionalProperties": false
+    },
+    "current": {
+      "type": "object",
+      "required": [
+        "occurrence_ordinal",
+        "archive_id",
+        "response_id",
+        "state_revision",
+        "execution_response",
+        "evidence_delta"
+      ],
+      "properties": {
+        "occurrence_ordinal": {"type": "integer", "minimum": 0, "maximum": 255},
+        "archive_id": {"$ref": "#/$defs/archiveId"},
+        "response_id": {"$ref": "#/$defs/responseId"},
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "execution_response": {
+          "$ref": "prompt-archive-compact-response-v1.schema.json"
+        },
+        "evidence_delta": {
+          "$ref": "prompt-archive-occurrence-document-v1.schema.json#/$defs/evidenceDelta"
+        }
+      },
+      "additionalProperties": false
+    },
+    "historyEntry": {
+      "type": "object",
+      "required": [
+        "occurrence_ordinal",
+        "archive_id",
+        "response_id",
+        "response_kind",
+        "occurrence_kind",
+        "occurrence_id",
+        "transition_id",
+        "state_revision",
+        "created_at",
+        "evidence_keys"
+      ],
+      "properties": {
+        "occurrence_ordinal": {"type": "integer", "minimum": 0, "maximum": 255},
+        "archive_id": {"$ref": "#/$defs/archiveId"},
+        "response_id": {"$ref": "#/$defs/responseId"},
+        "response_kind": {
+          "enum": ["identity-response", "transition-response", "state-response"]
+        },
+        "occurrence_kind": {"enum": ["transition", "identity-state"]},
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "transition_id": {
+          "oneOf": [{"$ref": "#/$defs/safeId"}, {"type": "null"}]
+        },
+        "state_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "created_at": {"type": "string", "format": "date-time"},
+        "evidence_keys": {
+          "type": "array",
+          "maxItems": 14,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "result",
+              "feedback",
+              "review",
+              "reviews",
+              "review_context",
+              "transition",
+              "pending_transition",
+              "last_transition",
+              "transition_applied",
+              "completed_assignment",
+              "source_commit",
+              "from_commit",
+              "git_commit",
+              "git_branch"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "state": {
+      "type": "object",
+      "required": ["current", "history"],
+      "properties": {
+        "current": {"$ref": "#/$defs/current"},
+        "history": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/historyEntry"}
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

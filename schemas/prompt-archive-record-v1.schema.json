@@ -1,0 +1,259 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-record-v1.schema.json",
+  "title": "Prompt archive immutable record v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "id_algorithm",
+    "record_id",
+    "record_type",
+    "ordinal",
+    "scope",
+    "payload",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_record"},
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "record_id": {
+      "type": "string",
+      "pattern": "^parrec1-[0-9a-f]{64}$"
+    },
+    "record_type": {
+      "enum": [
+        "event",
+        "patch",
+        "history_text_fragment",
+        "result",
+        "feedback",
+        "review_context",
+        "execution_audit",
+        "source_metadata",
+        "current_field"
+      ]
+    },
+    "ordinal": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9223372036854775807
+    },
+    "occurred_at": {
+      "oneOf": [
+        {"type": "string", "format": "date-time"},
+        {"type": "null"}
+      ]
+    },
+    "scope": {"$ref": "#/$defs/scope"},
+    "payload": {"$ref": "#/$defs/payload"},
+    "provenance": {"$ref": "#/$defs/provenance"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"record_type": {"const": "source_metadata"}},
+        "required": ["record_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["representation"],
+            "properties": {
+              "representation": {"const": "recursive_json_merkle_v1"},
+              "media_type": {
+                "const": "application/vnd.nginx-qa.prompt-archive-source-metadata-v1+json"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"record_type": {"const": "history_text_fragment"}},
+        "required": ["record_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["representation"],
+            "properties": {
+              "representation": {"const": "opaque_chunks_v1"},
+              "media_type": {
+                "const": "application/vnd.nginx-qa.prompt-archive-json-string-fragment-v1"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "record_type": {
+            "enum": [
+              "event",
+              "patch",
+              "result",
+              "feedback",
+              "review_context",
+              "execution_audit",
+              "current_field"
+            ]
+          }
+        },
+        "required": ["record_type"]
+      },
+      "then": {
+        "properties": {
+          "payload": {
+            "required": ["representation"],
+            "properties": {
+              "representation": {"const": "recursive_json_merkle_v1"},
+              "media_type": {"const": "application/json"}
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "gitObjectId": {
+      "type": "string",
+      "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+    },
+    "scope": {
+      "description": "Authorization scope only. Origin response and transition identities belong in provenance so an immutable record may be reused by descendant manifests in the same scope.",
+      "type": "object",
+      "required": ["project_id", "sprint_id"],
+      "properties": {
+        "project_id": {"$ref": "#/$defs/safeId"},
+        "sprint_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "indexRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind"],
+          "properties": {"logical_kind": {"const": "index_node"}}
+        }
+      ]
+    },
+    "jsonValueRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "json_value"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-json-value-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "payload": {
+      "description": "Complete JSON values use the recursive exact-byte Merkle representation. The history-text string fragment is the only opaque payload and remains an ordered payload_chunk sequence. byte_size and sha256 always bind the exact reconstructed payload bytes.",
+      "type": "object",
+      "required": [
+        "representation",
+        "media_type",
+        "byte_size",
+        "sha256"
+      ],
+      "properties": {
+        "representation": {
+          "enum": ["opaque_chunks_v1", "recursive_json_merkle_v1"]
+        },
+        "chunks_root": {"$ref": "#/$defs/indexRef"},
+        "value_root": {"$ref": "#/$defs/jsonValueRef"},
+        "media_type": {
+          "enum": [
+            "application/json",
+            "application/vnd.nginx-qa.prompt-archive-source-metadata-v1+json",
+            "application/vnd.nginx-qa.prompt-archive-json-string-fragment-v1"
+          ]
+        },
+        "byte_size": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "representation": {"const": "opaque_chunks_v1"}
+          },
+          "required": ["chunks_root"],
+          "not": {"required": ["value_root"]}
+        },
+        {
+          "properties": {
+            "representation": {"const": "recursive_json_merkle_v1"},
+            "byte_size": {"minimum": 1}
+          },
+          "required": ["value_root"],
+          "not": {"required": ["chunks_root"]}
+        }
+      ],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "required": [
+        "source_kind",
+        "origin_response_id",
+        "origin_transition_id"
+      ],
+      "properties": {
+        "source_kind": {
+          "enum": [
+            "runtime_transition",
+            "runtime_identity",
+            "legacy_migration",
+            "synthetic_test"
+          ]
+        },
+        "origin_response_id": {
+          "type": "string",
+          "pattern": "^parresp1-[0-9a-f]{64}$"
+        },
+        "origin_transition_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/safeId"},
+            {"type": "null"}
+          ]
+        },
+        "source_id": {"$ref": "#/$defs/safeId"},
+        "source_commit": {"$ref": "#/$defs/gitObjectId"},
+        "assignment_id": {"$ref": "#/$defs/safeId"},
+        "review_id": {"$ref": "#/$defs/safeId"},
+        "result_key": {"$ref": "#/$defs/safeId"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

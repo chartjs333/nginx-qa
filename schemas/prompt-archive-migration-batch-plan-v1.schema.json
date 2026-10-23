@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-batch-plan-v1.schema.json",
+  "title": "Prompt archive offline migration batch plan v1",
+  "description": "Closed, path-free, immutable reservation for one explicitly authorized offline migration batch.",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "id_algorithm", "batch_id", "operation_kind", "contract_version", "tool_version", "tool_source_sha256", "project_id", "sprint_id", "source_root_handle_id", "operator_authorization", "source_inventory", "source_safety", "reservations", "created_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_batch_plan"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-batch-plan-v1+json"},
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "batch_id": {"$ref": "#/$defs/batchId"},
+    "operation_kind": {"const": "offline_migration_batch"},
+    "contract_version": {"const": "prompt-archive-offline-migration-contract-v1"},
+    "tool_version": {"const": "prompt-archive-migration-v1"},
+    "tool_source_sha256": {"$ref": "#/$defs/sha256"},
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "sprint_id": {"type": "null"},
+    "source_root_handle_id": {"$ref": "#/$defs/safeId"},
+    "operator_authorization": {"$ref": "#/$defs/authorization"},
+    "source_inventory": {"$ref": "#/$defs/inventoryLocator"},
+    "source_safety": {"$ref": "#/$defs/sourceSafety"},
+    "reservations": {"type": "array", "minItems": 1, "maxItems": 1000000, "items": {"$ref": "#/$defs/reservation"}},
+    "created_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "batchId": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "authorization": {
+      "type": "object",
+      "required": ["gate", "principal_kind", "principal_id", "scope_source"],
+      "properties": {
+        "gate": {"const": "prompt-archive-offline-migration-v1"},
+        "principal_kind": {"const": "offline_operator"},
+        "principal_id": {"$ref": "#/$defs/safeId"},
+        "scope_source": {"const": "offline_operator_gate"}
+      },
+      "additionalProperties": false
+    },
+    "blobRef": {
+      "type": "object",
+      "required": ["schema_version", "kind", "hash_algorithm", "digest", "logical_kind", "media_type", "content_encoding", "uncompressed_size", "stored_size", "stored_sha256"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "prompt_archive_blob_ref"},
+        "hash_algorithm": {"const": "sha256"},
+        "digest": {"$ref": "#/$defs/sha256"},
+        "logical_kind": {"const": "source_inventory"},
+        "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-source-inventory-v1+json"},
+        "content_encoding": {"enum": ["identity", "gzip"]},
+        "encoding_parameters": {"const": "gzip-rfc1952-zlib-1.2.13-level9-v1"},
+        "uncompressed_size": {"type": "integer", "minimum": 0, "maximum": 16777216},
+        "stored_size": {"type": "integer", "minimum": 0, "maximum": 16842752},
+        "stored_sha256": {"$ref": "#/$defs/sha256"}
+      },
+      "allOf": [
+        {"if": {"properties": {"content_encoding": {"const": "gzip"}}, "required": ["content_encoding"]}, "then": {"required": ["encoding_parameters"]}, "else": {"not": {"required": ["encoding_parameters"]}}},
+        {"if": {"properties": {"uncompressed_size": {"maximum": 1023}}, "required": ["uncompressed_size"]}, "then": {"properties": {"content_encoding": {"const": "identity"}}}, "else": {"properties": {"content_encoding": {"const": "gzip"}}}}
+      ],
+      "additionalProperties": false
+    },
+    "inventoryLocator": {
+      "type": "object",
+      "required": ["locator_kind", "locator_version", "inventory_id", "inventory_format", "inventory_sha256", "entry_count", "inventory_ref"],
+      "properties": {
+        "locator_kind": {"const": "isolated_inventory"},
+        "locator_version": {"const": "prompt-archive-isolated-inventory-locator-v1"},
+        "inventory_id": {"type": "string", "pattern": "^parinv1-[0-9a-f]{64}$"},
+        "inventory_format": {"const": "prompt-archive-isolated-inventory-v1"},
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "inventory_ref": {"$ref": "#/$defs/blobRef"}
+      },
+      "additionalProperties": false
+    },
+    "sourceSafety": {
+      "type": "object",
+      "required": ["source_root_identity_sha256", "safety_snapshot_sha256", "total_bytes"],
+      "properties": {
+        "source_root_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "safety_snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "total_bytes": {"type": "integer", "minimum": 0, "maximum": 68719476736}
+      },
+      "additionalProperties": false
+    },
+    "reservation": {
+      "type": "object",
+      "required": ["ordinal", "entry_id", "path_sha256", "source_byte_size", "source_sha256", "operation_id", "occurrence_id", "response_id", "decision_occurrence_id"],
+      "properties": {
+        "ordinal": {"type": "integer", "minimum": 0, "maximum": 999999},
+        "entry_id": {"type": "string", "pattern": "^parme1-[0-9a-f]{64}$"},
+        "path_sha256": {"$ref": "#/$defs/sha256"},
+        "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912},
+        "source_sha256": {"$ref": "#/$defs/sha256"},
+        "operation_id": {"type": "string", "pattern": "^parop1-[0-9a-f]{32}$"},
+        "occurrence_id": {"type": "string", "pattern": "^migration-[0-9a-f]{64}$"},
+        "response_id": {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+        "decision_occurrence_id": {"type": "string", "pattern": "^decision-[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

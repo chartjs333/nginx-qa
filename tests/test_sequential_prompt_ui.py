@@ -8,6 +8,7 @@ from unittest.mock import patch
 from fastapi import HTTPException, Request
 
 import main
+from nginx_qa.prompt_archive_storage import PromptArchiveStorageError
 
 
 def request_for_port(port: int = 8025) -> Request:
@@ -63,6 +64,35 @@ class SequentialPromptUiTests(unittest.TestCase):
             "launchPromptStatus",
         ):
             self.assertEqual(self.html.count(f'id="{element_id}"'), 1)
+        self.assertIn(
+            "Путь последнего архива/дескриптора проекта",
+            self.html,
+        )
+        self.assertNotIn("Последний полный ответ проекта", self.html)
+        self.assertIn("Путь архива/дескриптора графа", self.html)
+
+    def test_legacy_latest_authority_is_physical_target_scoped(self) -> None:
+        project = {
+            "project_name": "Shared Repo",
+            "git_address": "https://github.com/acme/shared.git",
+            "git_context_key": "github.com/acme/shared",
+        }
+        first = main._sequential_latest_project_id(
+            {"project_id": "9000"},
+            project,
+            git_context_key=project["git_context_key"],
+            git_address=project["git_address"],
+            project_name=project["project_name"],
+        )
+        second = main._sequential_latest_project_id(
+            {"project_phone": "9001"},
+            project,
+            git_context_key=project["git_context_key"],
+            git_address=project["git_address"],
+            project_name=project["project_name"],
+        )
+        self.assertEqual(first, second)
+        self.assertTrue(first.startswith("prompt-target-"))
 
     def test_ui_requests_selected_context_and_supports_public_or_local_url(self) -> None:
         for marker in (
@@ -88,6 +118,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.original_sequential_prompt_storage_lock = (
             main.sequential_prompt_storage_lock
         )
+        self.original_prompt_archive_runtime = main.prompt_archive_runtime
         main.git_config_path = self.temp_path / "port_git_map.json"
         main.history_path = self.temp_path / "conversation_log.jsonl"
         self.agent_latest_file_template = str(
@@ -97,6 +128,12 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         )
         main.git_config_lock = asyncio.Lock()
         main.sequential_prompt_storage_lock = asyncio.Lock()
+        # The direct JSON readers below are deliberate legacy-writer contract
+        # tests, not descriptor-aware consumers.
+        main.prompt_archive_runtime = main.PromptArchiveRuntimeRegistry(
+            main.PromptArchiveRuntimeConfig(mode="legacy")
+        )
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         main.git_config_path.write_text(
             json.dumps(
                 {
@@ -132,6 +169,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         main.sequential_prompt_storage_lock = (
             self.original_sequential_prompt_storage_lock
         )
+        main.prompt_archive_runtime = self.original_prompt_archive_runtime
         self.temp_dir.cleanup()
 
     def write_tunnel_url(self, value: str) -> None:
@@ -187,6 +225,17 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("намеренно не", result["prompt"])
         self.assertIn("включаются в HTTP-ответ", result["prompt"])
         self.assertIn("response_compact=true", result["prompt"])
+        self.assertIn("prompt_archive_descriptor_stub", result["prompt"])
+        self.assertIn("Отсутствие верхнеуровневого kind", result["prompt"])
+        self.assertIn(
+            "Ровно одно строковое kind=prompt_archive_descriptor_stub",
+            result["prompt"],
+        )
+        self.assertIn("Повторяющийся kind", result["prompt"])
+        self.assertIn("неизвестный kind", result["prompt"])
+        self.assertIn("нестроковый kind", result["prompt"])
+        self.assertIn("fail closed", result["prompt"])
+        self.assertIn("response_archive_available=false", result["prompt"])
         self.assertNotIn(
             "используй его как полный ответ текущего шага",
             result["prompt"],
@@ -216,6 +265,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(result["selected_whoami_url"], result["prompt"])
 
     async def test_graph_response_is_saved_with_id_and_recovery_path_first(self) -> None:
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         response = {
             "answer": "Полный ответ перехода",
             "project_id": "9001",
@@ -309,12 +359,22 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
             agent_prompt["project_state_url"], stored["project_state_url"]
         )
         self.assertIn("намеренно", stored["full_response_instructions"])
+        instructions = stored["full_response_instructions"]
+        self.assertIn("отсутствие верхнеуровневого kind", instructions)
+        self.assertIn(
+            "ровно одно строковое kind=prompt_archive_descriptor_stub",
+            instructions,
+        )
+        self.assertIn("Повторяющийся kind", instructions)
+        self.assertIn("неизвестный kind", instructions)
+        self.assertIn("нестроковый kind", instructions)
+        self.assertIn("fail closed", instructions)
         self.assertLess(
             expected_agent_file.stat().st_size,
             response_file.stat().st_size,
         )
 
-    def test_compact_response_keeps_task_body_and_removes_duplicate_context(
+    def test_compact_response_keeps_complete_task_and_removes_outer_history(
         self,
     ) -> None:
         task_message = "Точное тело назначения 🚀\n" * 500
@@ -383,16 +443,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
 
         compact = main.compact_sequential_agent_prompt_response(response)
 
-        self.assertEqual(compact["active_task"]["message"], task_message)
-        self.assertEqual(
-            compact["active_task"]["metadata"]["assignment_id"],
-            "assignment-1",
-        )
-        for duplicate_key in ("agent", "tasks", "workflow"):
-            self.assertNotIn(
-                duplicate_key,
-                compact["active_task"]["metadata"],
-            )
+        self.assertEqual(compact["active_task"], response["active_task"])
         self.assertNotIn("groups", compact["project"])
         self.assertNotIn("profile", compact["agent"])
         self.assertNotIn("profile", compact["team"][0])
@@ -410,7 +461,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(compact["active_task_message_complete"])
         self.assertLess(
             len(json.dumps(compact, ensure_ascii=False).encode("utf-8")),
-            64 * 1024,
+            len(json.dumps(response, ensure_ascii=False).encode("utf-8")),
         )
 
     async def test_transition_uses_caller_phone_and_terminal_response_still_persists(
@@ -477,6 +528,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_agent_latest_files_overwrite_independently_with_compact_utf8_json(
         self,
     ) -> None:
+        self.assertEqual(main.prompt_archive_runtime.config.mode, "legacy")
         project = {
             "project_name": "Omega",
             "git_address": "https://github.com/acme/omega.git",
@@ -649,17 +701,23 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         real_write = main.write_prompt_text_if_changed
 
         def fail_archive_writes(target_path: Path, prompt: str) -> None:
-            if (
-                target_path.name == "latest-response.json"
-                or target_path.name.startswith("identity-response-")
-            ):
+            if target_path.name.startswith("identity-response-"):
                 raise OSError(f"archive unavailable: {target_path.name}")
             real_write(target_path, prompt)
 
-        with patch.object(
-            main,
-            "write_prompt_text_if_changed",
-            side_effect=fail_archive_writes,
+        with (
+            patch.object(
+                main,
+                "write_prompt_text_if_changed",
+                side_effect=fail_archive_writes,
+            ),
+            patch.object(
+                main.ExternalLatestCoordinator,
+                "publish",
+                side_effect=PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_UNAVAILABLE"
+                ),
+            ),
         ):
             stored = await main.attach_sequential_graph_response_storage(
                 {

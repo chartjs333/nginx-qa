@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-verification-v1.schema.json",
+  "title": "Prompt archive migration rollback verification evidence v1",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "batch_id", "migration_evidence_sha256", "private_evidence_sha256", "entry_count", "originals_equal", "archives_readable"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_verification"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"const": "rollback-verify"},
+    "status": {"const": "verified"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "migration_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "private_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "originals_equal": {"const": true},
+    "archives_readable": {"const": true}
+  },
+  "additionalProperties": false
+}

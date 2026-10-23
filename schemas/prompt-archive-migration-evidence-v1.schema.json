@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-evidence-v1.schema.json",
+  "title": "Prompt archive offline migration completion evidence v1",
+  "description": "Closed path-free public evidence for a completed lossless offline migration batch.",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "batch_id", "project_id", "sprint_id", "contract_version", "tool_version", "tool_source_sha256", "plan_sha256", "source_inventory", "journal", "archives", "private_evidence", "safety", "created_at", "completed_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_evidence"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"const": "migrate"},
+    "status": {"const": "complete"},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "sprint_id": {"type": "null"},
+    "contract_version": {"const": "prompt-archive-offline-migration-contract-v1"},
+    "tool_version": {"const": "prompt-archive-migration-v1"},
+    "tool_source_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_sha256": {"$ref": "#/$defs/sha256"},
+    "source_inventory": {
+      "type": "object",
+      "required": ["inventory_id", "source_root_identity_sha256", "inventory_sha256", "entry_count", "selected_archive_count"],
+      "properties": {
+        "inventory_id": {"type": "string", "pattern": "^parinv1-[0-9a-f]{64}$"},
+        "source_root_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "inventory_sha256": {"$ref": "#/$defs/sha256"},
+        "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000},
+        "selected_archive_count": {"type": "integer", "minimum": 1, "maximum": 1000000}
+      },
+      "additionalProperties": false
+    },
+    "journal": {
+      "type": "object",
+      "required": ["generation", "sha256", "state", "pre_inventory", "post_inventory"],
+      "properties": {
+        "generation": {"type": "integer", "minimum": 2, "maximum": 1000001},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "state": {"const": "complete"},
+        "pre_inventory": {"$ref": "#/$defs/inventory"},
+        "post_inventory": {"$ref": "#/$defs/inventory"}
+      },
+      "additionalProperties": false
+    },
+    "archives": {"type": "array", "minItems": 1, "maxItems": 1000000, "items": {"$ref": "#/$defs/result"}},
+    "private_evidence": {
+      "type": "object",
+      "required": ["sha256", "byte_size"],
+      "properties": {"sha256": {"$ref": "#/$defs/sha256"}, "byte_size": {"type": "integer", "minimum": 1, "maximum": 536870912}},
+      "additionalProperties": false
+    },
+    "safety": {
+      "type": "object",
+      "required": ["explicit_isolated_roots", "public_paths_persisted", "operator_gate_verified", "originals_modified", "originals_deleted", "archive_gc_performed", "live_rewrite_performed"],
+      "properties": {
+        "explicit_isolated_roots": {"const": true},
+        "public_paths_persisted": {"const": false},
+        "operator_gate_verified": {"const": true},
+        "originals_modified": {"const": false},
+        "originals_deleted": {"const": false},
+        "archive_gc_performed": {"const": false},
+        "live_rewrite_performed": {"const": false}
+      },
+      "additionalProperties": false
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeId": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "inventory": {
+      "type": "object",
+      "required": ["inventory_sha256", "entry_count", "source_root_identity_sha256", "safety_snapshot_sha256", "total_bytes"],
+      "properties": {"inventory_sha256": {"$ref": "#/$defs/sha256"}, "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000}, "source_root_identity_sha256": {"$ref": "#/$defs/sha256"}, "safety_snapshot_sha256": {"$ref": "#/$defs/sha256"}, "total_bytes": {"type": "integer", "minimum": 0, "maximum": 68719476736}},
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "required": ["entry_id", "ordinal", "operation_id", "response_id", "archive_id", "pointer_id", "source_byte_size", "source_sha256", "matched"],
+      "properties": {"entry_id": {"type": "string", "pattern": "^parme1-[0-9a-f]{64}$"}, "ordinal": {"type": "integer", "minimum": 0}, "operation_id": {"type": "string", "pattern": "^parop1-[0-9a-f]{32}$"}, "response_id": {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"}, "archive_id": {"type": "string", "pattern": "^par1-[0-9a-f]{64}$"}, "pointer_id": {"type": "string", "pattern": "^parptr1-[0-9a-f]{64}$"}, "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912}, "source_sha256": {"$ref": "#/$defs/sha256"}, "matched": {"const": true}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

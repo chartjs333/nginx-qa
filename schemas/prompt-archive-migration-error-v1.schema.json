@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-error-v1.schema.json",
+  "title": "Prompt archive migration stable error evidence v1",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "error", "message", "fail_closed"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_error"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"enum": ["analyze", "migrate", "resume-operation", "reconstruct", "rollback-verify"]},
+    "status": {"const": "failed"},
+    "error": {"enum": ["PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID", "PROMPT_ARCHIVE_MIGRATION_ROOT_OVERLAP", "PROMPT_ARCHIVE_MIGRATION_SOURCE_UNSAFE", "PROMPT_ARCHIVE_MIGRATION_SOURCE_CHANGED", "PROMPT_ARCHIVE_MIGRATION_STATE_CONFLICT", "PROMPT_ARCHIVE_MIGRATION_INTEGRITY_MISMATCH", "PROMPT_ARCHIVE_MIGRATION_NOT_COMPLETE", "PROMPT_ARCHIVE_MIGRATION_LIMIT_EXCEEDED", "PROMPT_ARCHIVE_MIGRATION_UNAVAILABLE"]},
+    "message": {"const": "Prompt archive migration failed safely."},
+    "fail_closed": {"const": true}
+  },
+  "additionalProperties": false
+}

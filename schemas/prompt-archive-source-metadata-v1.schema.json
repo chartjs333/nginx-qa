@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-source-metadata-v1.schema.json",
+  "title": "Prompt archive native source metadata projection v1",
+  "description": "Closed, bounded, data-only provenance projected before CAS publication. Values have already passed prompt-archive-source-redaction-v1 and cannot configure an adapter or executor.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "projection_version",
+    "redaction_version",
+    "source_type",
+    "redaction_count",
+    "redacted_fields",
+    "discarded_field_count"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_source_metadata"},
+    "projection_version": {"const": "prompt-archive-source-projection-v1"},
+    "redaction_version": {"const": "prompt-archive-source-redaction-v1"},
+    "source_type": {
+      "enum": ["api", "email", "folder", "manual", "telegram", "unknown"]
+    },
+    "conversation_id": {"$ref": "#/$defs/opaqueIdentifier"},
+    "thread_id": {"$ref": "#/$defs/opaqueIdentifier"},
+    "message_id": {"$ref": "#/$defs/opaqueIdentifier"},
+    "sender_label": {"$ref": "#/$defs/safeDisplay"},
+    "title": {"$ref": "#/$defs/safeDisplay"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "redaction_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 5
+    },
+    "redacted_fields": {
+      "type": "array",
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "conversation_id",
+          "thread_id",
+          "message_id",
+          "sender_label",
+          "title"
+        ]
+      }
+    },
+    "discarded_field_count": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1024
+    }
+  },
+  "$defs": {
+    "opaqueIdentifier": {
+      "description": "A source identifier is one-way projected with SHA-256 over its exact UTF-8 source bytes, or wholly redacted; raw external identifiers are never archived natively.",
+      "type": "string",
+      "pattern": "^(?:sha256:[0-9a-f]{64}|\\[REDACTED\\])$"
+    },
+    "safeDisplay": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    }
+  },
+  "additionalProperties": false
+}

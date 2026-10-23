@@ -13,6 +13,7 @@ import random
 import re
 import secrets
 import shutil
+import stat
 import subprocess
 import threading
 import time as time_module
@@ -20,8 +21,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
+from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from contextlib import asynccontextmanager, contextmanager
+from dataclasses import replace
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -29,7 +32,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import uvicorn
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer
 
@@ -48,6 +51,7 @@ from nginx_qa.inbound_proposals import (
     correlation_id_from_values,
     create_request_fingerprint,
     is_canonical_bearer_token,
+    load_producer_registry,
     schema_issues as inbound_proposal_schema_issues,
 )
 from nginx_qa.managed_import import (
@@ -106,6 +110,37 @@ from nginx_qa.managed_continuity import (
 from nginx_qa.process_supervisor import (
     ManagedProcessSupervisor,
 )
+from nginx_qa.prompt_archive_incremental import (
+    ArchiveOccurrence,
+    pas1_id_v1 as prompt_archive_pas1_id_v1,
+    response_id_v1 as prompt_archive_response_id_v1,
+)
+from nginx_qa.prompt_archive_latest import (
+    ExternalLatestCoordinator,
+)
+from nginx_qa.prompt_archive_metrics import PromptArchiveMetrics
+from nginx_qa.prompt_archive_occurrence_store import (
+    PromptArchiveOccurrenceReceiptStore,
+    PromptArchiveOccurrenceSourceReader,
+)
+from nginx_qa.prompt_archive_response import (
+    build_authoritative_occurrence_document,
+)
+from nginx_qa.prompt_archive_runtime import (
+    PromptArchiveCompatibilityPublisher,
+    PromptArchivePublication,
+    PromptArchiveRuntimeConfig,
+    PromptArchiveRuntimeRegistry,
+)
+from nginx_qa.prompt_archive_source_metadata import (
+    SourceMetadataScreenSnapshot,
+    freeze_source_metadata_screen,
+)
+from nginx_qa.prompt_archive_storage import (
+    PromptArchiveStorageError,
+    canonical_json_bytes_v1 as prompt_archive_canonical_json_bytes_v1,
+    resolved_path_from_open_descriptor,
+)
 from nginx_qa.sprint_types import (
     SprintPipeline,
     SprintTypeSelection,
@@ -123,19 +158,99 @@ _MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA = json.loads(
         / "managed-current-identity-response-v1.schema.json"
     ).read_text(encoding="utf-8")
 )
+_PROMPT_ARCHIVE_COMPACT_RESPONSE_SCHEMA = json.loads(
+    (
+        Path(__file__).resolve().parent
+        / "schemas"
+        / "prompt-archive-compact-response-v1.schema.json"
+    ).read_text(encoding="utf-8")
+)
+# The standalone contract intentionally names the canonical descriptor schema
+# with an absolute identifier so validators can register it once.  The served
+# whoami OpenAPI document must remain usable offline, however.  Bundle the
+# descriptor and its two schema dependencies under document-local definitions,
+# rewriting their refs without recursively duplicating schema subtrees.  The
+# checked-in compact contract is left unchanged.
+_PROMPT_ARCHIVE_OPENAPI_RESOURCES = {
+    "prompt-archive-descriptor-v1.schema.json": "promptArchiveDescriptorV1",
+    "prompt-archive-manifest-v1.schema.json": "promptArchiveManifestV1",
+    "prompt-archive-ref-v1.schema.json": "promptArchiveReferenceV1",
+}
+
+
+def _prompt_archive_openapi_resource(filename: str) -> dict[str, Any]:
+    schema_root = Path(__file__).resolve().parent / "schemas"
+    resource_name = _PROMPT_ARCHIVE_OPENAPI_RESOURCES[filename]
+    document = json.loads((schema_root / filename).read_text(encoding="utf-8"))
+
+    def localize(value: Any) -> Any:
+        if isinstance(value, list):
+            return [localize(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        reference = value.get("$ref")
+        if isinstance(reference, str):
+            file_part, separator, fragment = reference.partition("#")
+            target_name = resource_name
+            if file_part:
+                if file_part not in _PROMPT_ARCHIVE_OPENAPI_RESOURCES:
+                    raise RuntimeError(
+                        "Prompt archive OpenAPI bundle has an external reference"
+                    )
+                target_name = _PROMPT_ARCHIVE_OPENAPI_RESOURCES[file_part]
+            localized = f"#/$defs/{target_name}"
+            if separator:
+                if fragment and not fragment.startswith("/"):
+                    raise RuntimeError(
+                        "Prompt archive OpenAPI bundle has an invalid pointer"
+                    )
+                localized += fragment
+            siblings = {
+                key: localize(item)
+                for key, item in value.items()
+                if key != "$ref"
+            }
+            return (
+                {"allOf": [{"$ref": localized}, siblings]}
+                if siblings
+                else {"$ref": localized}
+            )
+        return {
+            key: localize(item)
+            for key, item in value.items()
+            if key not in {"$schema", "$id"}
+        }
+
+    localized = localize(document)
+    if not isinstance(localized, dict):
+        raise RuntimeError("Prompt archive OpenAPI schema is invalid")
+    return localized
+
+
+_PROMPT_ARCHIVE_COMPACT_RESPONSE_SCHEMA.setdefault("$defs", {}).update(
+    {
+        resource_name: _prompt_archive_openapi_resource(filename)
+        for filename, resource_name in _PROMPT_ARCHIVE_OPENAPI_RESOURCES.items()
+    }
+)
+_PROMPT_ARCHIVE_COMPACT_RESPONSE_SCHEMA["properties"]["prompt_archive"] = {
+    "$ref": "#/$defs/promptArchiveDescriptorV1"
+}
 _PROJECT_AGENT_IDENTITY_RESPONSE_SCHEMA = {
     "oneOf": [
         _MANAGED_CURRENT_IDENTITY_RESPONSE_SCHEMA,
+        _PROMPT_ARCHIVE_COMPACT_RESPONSE_SCHEMA,
         {
-            "title": "Existing non-current-identity response",
+            "title": "Existing managed submission receipt",
             "description": (
-                "Existing managed result/review/recovery receipts and legacy "
-                "whoami responses are unchanged."
+                "Existing managed result/review/recovery receipts are unchanged."
             ),
             "type": "object",
             "not": {
-                "properties": {"managed": {"const": True}},
-                "required": ["managed"],
+                "anyOf": [
+                    {"required": ["managed"]},
+                    {"required": ["response_compact"]},
+                ]
             },
             "additionalProperties": True,
         },
@@ -150,6 +265,1148 @@ managed_continuity_runtime: ManagedContinuityRuntime | None = None
 managed_continuity_stop_event: threading.Event | None = None
 managed_continuity_thread: threading.Thread | None = None
 _MANAGED_CONTINUITY_RECONCILE_SECONDS = 5.0
+prompt_archive_runtime_metrics = PromptArchiveMetrics()
+prompt_archive_runtime = PromptArchiveRuntimeRegistry(
+    PromptArchiveRuntimeConfig(),
+    metrics=prompt_archive_runtime_metrics,
+)
+prompt_archive_occurrence_receipt_path: Path | None = None
+prompt_archive_metrics_lock = threading.Lock()
+prompt_archive_metrics: dict[str, int] = {
+    "shadow_published": 0,
+    "shadow_skipped": 0,
+    "shadow_failed": 0,
+}
+
+
+def prompt_archive_template_base(
+    template: str,
+    *,
+    file_template: bool,
+) -> Path:
+    """Return the non-variable root which owns a prompt output template.
+
+    A placeholder may occur inside a path component.  In that case the owning
+    root is the parent before that entire component.  This is intentionally
+    conservative: a template beginning with a placeholder protects the drive
+    root rather than guessing one possible expansion.
+    """
+
+    expanded = os.path.expandvars(os.path.expanduser(str(template)))
+    marker = "__nginx_qa_prompt_template_value__"
+    concrete = expanded
+    for placeholder in (
+        "{repository}",
+        "{project}",
+        "{git_context_key}",
+        "{agent_phone}",
+    ):
+        concrete = concrete.replace(placeholder, marker)
+    path = Path(concrete)
+    if not path.is_absolute():
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    for index, component in enumerate(path.parts):
+        if marker in component:
+            if index == 0:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+            return Path(*path.parts[:index])
+    return path.parent if file_template else path
+
+
+def prompt_archive_protected_roots(
+    environ: Mapping[str, str] | None = None,
+) -> tuple[Path, ...]:
+    """Return configured roots which PAS1 must never overlap.
+
+    No directory is opened here.  Strict existence, alias and reparse checks
+    remain owned by ``PromptArchiveStorage`` when a configured archive root is
+    actually used.
+    """
+
+    source = os.environ if environ is None else environ
+    raw_values: list[str] = [str(Path(__file__).resolve().parent)]
+    for name in (
+        "NGINX_QA_SERVICE_ROOT",
+        "NGINX_QA_RUNTIME_ROOT",
+        "NGINX_QA_MANAGED_ROOT",
+        "NGINX_QA_PROMPT_ROOT",
+    ):
+        value = str(source.get(name) or "").strip()
+        if value:
+            raw_values.append(value)
+    protected_raw = str(source.get("NGINX_QA_PROTECTED_ROOTS") or "").strip()
+    if protected_raw:
+        try:
+            protected_values = json.loads(protected_raw)
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID") from exc
+        if not isinstance(protected_values, list) or any(
+            not isinstance(value, str) or not value.strip()
+            for value in protected_values
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        raw_values.extend(value.strip() for value in protected_values)
+
+    # The sequential prompt location is persisted independently of process
+    # environment.  Protect both actual templates as well as the optional
+    # NGINX_QA_PROMPT_ROOT; otherwise a shadow root could overlap D:\Prompt
+    # while the environment points somewhere unrelated.
+    prompt_settings = read_sequential_prompt_settings_file()
+    raw_values.extend(
+        (
+            str(
+                prompt_archive_template_base(
+                    prompt_settings["directory_template"],
+                    file_template=False,
+                )
+            ),
+            str(
+                prompt_archive_template_base(
+                    prompt_settings["agent_latest_file_template"],
+                    file_template=True,
+                )
+            ),
+        )
+    )
+
+    result: list[Path] = []
+    seen: set[str] = set()
+    for raw in raw_values:
+        path = Path(raw)
+        if not path.is_absolute():
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        key = os.path.normcase(str(path.resolve(strict=False)))
+        if key not in seen:
+            seen.add(key)
+            result.append(path)
+    return tuple(result)
+
+
+def prompt_archive_occurrence_receipt_root(
+    environ: Mapping[str, str],
+    config: PromptArchiveRuntimeConfig,
+) -> Path:
+    """Return an isolated durable control root for runtime occurrence proofs."""
+
+    runtime_value = str(environ.get("NGINX_QA_RUNTIME_ROOT") or "").strip()
+    if not runtime_value or config.root is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    root = Path(runtime_value) / "prompt-archive-occurrences" / "v1"
+    if not root.is_absolute():
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    return root
+
+
+def _prompt_archive_paths_overlap(first: Path, second: Path) -> bool:
+    try:
+        first_value = os.path.normcase(str(first.resolve(strict=False)))
+        second_value = os.path.normcase(str(second.resolve(strict=False)))
+        common = os.path.commonpath((first_value, second_value))
+    except (OSError, ValueError):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID") from None
+    return common in {first_value, second_value}
+
+
+def validate_prompt_archive_occurrence_receipt_root(
+    root: Path,
+    config: PromptArchiveRuntimeConfig,
+    environ: Mapping[str, str],
+) -> None:
+    """Keep occurrence proof authority separate from CAS and prompt bytes."""
+
+    if not root.is_absolute() or config.root is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    settings = read_sequential_prompt_settings_file()
+    source_roots = [
+        prompt_archive_template_base(
+            settings["directory_template"],
+            file_template=False,
+        ),
+        prompt_archive_template_base(
+            settings["agent_latest_file_template"],
+            file_template=True,
+        ),
+    ]
+    prompt_root = str(environ.get("NGINX_QA_PROMPT_ROOT") or "").strip()
+    if prompt_root:
+        source_roots.append(Path(prompt_root))
+    if _prompt_archive_paths_overlap(root, config.root) or any(
+        _prompt_archive_paths_overlap(root, source_root)
+        for source_root in source_roots
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+
+def _prompt_archive_existing_chain(
+    path: Path,
+) -> tuple[tuple[Path, tuple[int, ...]], ...] | None:
+    """Snapshot one existing local path chain while rejecting redirects."""
+
+    absolute = Path(os.path.normpath(os.path.abspath(path)))
+    if not absolute.is_absolute() or not absolute.anchor:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    try:
+        relative = absolute.relative_to(Path(absolute.anchor))
+    except ValueError:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    current = Path(absolute.anchor)
+    snapshots: list[tuple[Path, tuple[int, ...]]] = []
+    reparse_flag = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    for index, component in enumerate(relative.parts):
+        if (
+            not component
+            or component in {".", ".."}
+            or (os.name == "nt" and ":" in component)
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        current /= component
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if stat.S_ISLNK(metadata.st_mode) or (
+            reparse_flag and attributes & reparse_flag
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        leaf = index == len(relative.parts) - 1
+        if (leaf and not stat.S_ISREG(metadata.st_mode)) or (
+            not leaf and not stat.S_ISDIR(metadata.st_mode)
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        identity = [
+            int(metadata.st_dev),
+            int(metadata.st_ino),
+            int(metadata.st_mode),
+        ]
+        if leaf:
+            identity.extend(
+                (
+                    int(metadata.st_nlink),
+                    int(metadata.st_size),
+                    int(metadata.st_mtime_ns),
+                    int(metadata.st_ctime_ns),
+                )
+            )
+        snapshots.append((current, tuple(identity)))
+    return tuple(snapshots)
+
+
+def _read_prompt_archive_source_file(
+    path: Path,
+    *,
+    trusted_root: Path,
+    maximum_bytes: int,
+) -> bytes | None:
+    """Read a regular immutable-observation candidate with a strict bound."""
+
+    if type(maximum_bytes) is not int or maximum_bytes < 1:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    trusted = Path(os.path.normpath(os.path.abspath(trusted_root)))
+    expected = Path(os.path.normpath(os.path.abspath(path)))
+    try:
+        if os.path.commonpath(
+            (os.path.normcase(str(trusted)), os.path.normcase(str(expected)))
+        ) != os.path.normcase(str(trusted)):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    except ValueError:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID") from None
+    before = _prompt_archive_existing_chain(expected)
+    if before is None:
+        return None
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(expected, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        opened_snapshot = (
+            int(metadata.st_dev),
+            int(metadata.st_ino),
+            int(metadata.st_mode),
+            int(metadata.st_nlink),
+            int(metadata.st_size),
+            int(metadata.st_mtime_ns),
+            int(metadata.st_ctime_ns),
+        )
+        initial_snapshot = before[-1][1]
+        # On Windows, Path.lstat() and fd fstat() can expose ctime through
+        # different Win32 timestamp projections even for the same untouched
+        # file.  Device/inode plus every other stable leaf field still binds
+        # the handle; ctime remains mandatory on POSIX and in the fd-to-fd
+        # post-read comparison below.
+        if (
+            opened_snapshot[:6] != initial_snapshot[:6]
+            or (os.name != "nt" and opened_snapshot[6] != initial_snapshot[6])
+        ):
+            # Bind the opened handle to the exact leaf observed in the initial
+            # chain snapshot.  Pre/post pathname equality alone cannot detect
+            # an A->B->A replacement between snapshot and open.
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if metadata.st_size > maximum_bytes:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+        resolved = resolved_path_from_open_descriptor(descriptor)
+        if resolved is None:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+        resolved_value = os.path.normcase(
+            os.path.normpath(os.path.abspath(resolved))
+        )
+        expected_value = os.path.normcase(str(expected))
+        trusted_value = os.path.normcase(str(trusted))
+        try:
+            inside_trusted = (
+                os.path.commonpath((trusted_value, resolved_value))
+                == trusted_value
+            )
+        except ValueError:
+            inside_trusted = False
+        if not inside_trusted or resolved_value != expected_value:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        identity = (metadata.st_dev, metadata.st_ino)
+        observed = 0
+        chunks: list[bytes] = []
+        while observed <= maximum_bytes:
+            chunk = os.read(
+                descriptor,
+                min(64 * 1024, maximum_bytes + 1 - observed),
+            )
+            if not chunk:
+                break
+            observed += len(chunk)
+            chunks.append(chunk)
+        after_handle = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(after_handle.st_mode)
+            or after_handle.st_nlink != 1
+            or (after_handle.st_dev, after_handle.st_ino) != identity
+            or after_handle.st_mode != metadata.st_mode
+            or after_handle.st_size != metadata.st_size
+            or after_handle.st_mtime_ns != metadata.st_mtime_ns
+            or after_handle.st_ctime_ns != metadata.st_ctime_ns
+            or after_handle.st_size != observed
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    except FileNotFoundError:
+        return None
+    except PromptArchiveStorageError:
+        raise
+    except OSError:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+    finally:
+        if descriptor != -1:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    after = _prompt_archive_existing_chain(expected)
+    if after is None or after != before:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return b"".join(chunks)
+
+
+def read_prompt_archive_legacy_source(
+    *,
+    project_id: str,
+    response_key: str,
+    response_kind: str,
+    maximum_bytes: int,
+) -> bytes | None:
+    """Resolve one closed legacy response identity from trusted local config."""
+
+    if re.fullmatch(r"[0-9a-f]{20}", response_key) is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if response_kind not in {"identity-response", "transition-response"}:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    safe_kind = response_kind
+    try:
+        with git_config_file_lock():
+            git_config = read_git_config_file()
+        matching_context_keys = [
+            context_key
+            for context_key, entry in project_registry_from_config(
+                git_config
+            ).items()
+            if normalize_project_phone(entry.get("project_phone")) == project_id
+        ]
+        if len(matching_context_keys) != 1:
+            return None
+        context_key = matching_context_keys[0]
+        context = (
+            configured_git_context_for_key(git_config, context_key)
+            if context_key
+            else None
+        )
+        if context is None or normalize_project_phone(
+            context.get("project_phone")
+        ) != project_id:
+            return None
+        settings_path = sequential_prompt_settings_path()
+        if settings_path.exists():
+            with settings_path.open("r", encoding="utf-8") as settings_file:
+                raw_settings = json.load(settings_file)
+            if not isinstance(raw_settings, dict):
+                raise ValueError("invalid prompt settings")
+            settings = {
+                "directory_template": (
+                    validate_sequential_prompt_directory_template(
+                        raw_settings.get("directory_template")
+                    )
+                ),
+                "agent_latest_file_template": (
+                    validate_sequential_agent_latest_file_template(
+                        raw_settings.get("agent_latest_file_template")
+                    )
+                ),
+            }
+        else:
+            settings = {
+                "directory_template": DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+                "agent_latest_file_template": (
+                    DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE
+                ),
+            }
+        prompt_directory = resolve_sequential_prompt_directory(
+            settings["directory_template"],
+            project_name=str(context.get("project_name") or "").strip(),
+            git_address=str(context.get("git_address") or "").strip(),
+            git_context_key=str(context.get("git_context_key") or "").strip(),
+        )
+    except PromptArchiveStorageError:
+        raise
+    except (HTTPException, OSError, UnicodeError, ValueError, TypeError):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+    return _read_prompt_archive_source_file(
+        prompt_directory / f"{safe_kind}-{response_key}.json",
+        trusted_root=prompt_directory,
+        maximum_bytes=maximum_bytes,
+    )
+
+
+def _prompt_archive_project_prompt_directory(
+    project_id: str,
+    *,
+    create: bool = False,
+) -> Path:
+    """Resolve one trusted, project-exclusive compatibility authority."""
+
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", project_id) is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    try:
+        with git_config_file_lock():
+            git_config = read_git_config_file()
+        matches = [
+            context_key
+            for context_key, entry in project_registry_from_config(
+                git_config
+            ).items()
+            if normalize_project_phone(entry.get("project_phone")) == project_id
+        ]
+        if len(matches) != 1:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_NOT_FOUND")
+        context = configured_git_context_for_key(git_config, matches[0])
+        if context is None or normalize_project_phone(
+            context.get("project_phone")
+        ) != project_id:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_NOT_FOUND")
+        settings = read_sequential_prompt_settings_file()
+        base = resolve_sequential_prompt_directory(
+            settings["directory_template"],
+            project_name=str(context.get("project_name") or "").strip(),
+            git_address=str(context.get("git_address") or "").strip(),
+            git_context_key=str(context.get("git_context_key") or "").strip(),
+        )
+        selected = base / ".nginx-qa-projects" / project_id
+        if create:
+            selected.mkdir(parents=True, exist_ok=True)
+        elif not selected.is_dir():
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+        return selected
+    except PromptArchiveStorageError:
+        raise
+    except (HTTPException, OSError, UnicodeError, ValueError, TypeError):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+
+
+class SequentialPromptArchiveCompatibilityPublisher(
+    PromptArchiveCompatibilityPublisher
+):
+    """Bind a path-free archive plan to one trusted prompt target."""
+
+    def __init__(
+        self,
+        *,
+        project_id: str,
+        transition_stub_path: Path,
+        latest_path: Path,
+        archive_owner_verifier: Callable[
+            [Mapping[str, Any], Mapping[str, Any]], bool
+        ],
+    ) -> None:
+        self.transition_stub_path = transition_stub_path
+        self.coordinator = ExternalLatestCoordinator(
+            latest_path,
+            project_id=project_id,
+            archive_owner_verifier=archive_owner_verifier,
+        )
+
+    @property
+    def target_authority_id(self) -> str:
+        return self.coordinator.target_authority_id
+
+    def prepare_authoritative(
+        self,
+        *,
+        descriptor_bytes: bytes,
+        descriptor_ref: Mapping[str, Any],
+        occurrence: ArchiveOccurrence,
+        operation_id: str,
+        published_at: str,
+    ) -> Mapping[str, Any]:
+        if occurrence.sprint_id is None:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        return self.coordinator.prepare_descriptor_intent(
+            descriptor_bytes,
+            transition_stub_path=self.transition_stub_path,
+            occurrence_id=occurrence.occurrence_id,
+            operation_id=operation_id,
+            published_at=published_at,
+            source_response_id=occurrence.response_id,
+            source_sprint_id=occurrence.sprint_id,
+            source_revision=occurrence.state_revision,
+            descriptor_ref=descriptor_ref,
+        )
+
+    def publish_authoritative(
+        self,
+        compatibility_publication: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        descriptor = compatibility_publication.get("descriptor")
+        if not isinstance(descriptor, Mapping) or not isinstance(
+            descriptor.get("document"), Mapping
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        descriptor_bytes = prompt_archive_canonical_json_bytes_v1(
+            descriptor["document"],
+            maximum=64 * 1024,
+        )
+        result = self.coordinator.publish_prepared_descriptor(
+            descriptor_bytes,
+            prepared_intent=compatibility_publication.get("latest_intent"),
+            transition_stub_path=self.transition_stub_path,
+            archive_owner=compatibility_publication.get("archive_owner"),
+            expected_target_authority_id=compatibility_publication.get(
+                "target_authority_id"
+            ),
+        )
+        return self._result_mapping(result)
+
+    @staticmethod
+    def _result_mapping(result: Any) -> dict[str, Any]:
+        return {
+            "outcome": result.outcome,
+            "intent_id": result.intent_id,
+            "latest_slot_id": result.latest_slot_id,
+            "latest_slot_ref": deepcopy(dict(result.latest_slot_ref)),
+            "source_revision": result.source_revision,
+            "generation": result.generation,
+            "content_sha256": result.content_sha256,
+            "content_size": result.content_size,
+            "recovered": result.recovered,
+        }
+
+    def verify_authoritative(
+        self,
+        compatibility_publication: Mapping[str, Any],
+        publication: Mapping[str, Any],
+    ) -> Mapping[str, Any]:
+        verified = self.coordinator.verify_prepared_publication(
+            prepared_intent=compatibility_publication.get("latest_intent"),
+            publication=publication,
+            archive_owner=compatibility_publication.get("archive_owner"),
+        )
+        return self._result_mapping(verified)
+
+    def prepare_legacy_intent(
+        self,
+        content: bytes,
+        *,
+        write_kind: str,
+        occurrence_id: str,
+        operation_id: str,
+        published_at: str,
+        source_response_id: str,
+        source_sprint_id: str | None,
+        source_revision: int,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Mapping[str, Any]:
+        """Freeze a typed legacy intent for the common publication plan."""
+
+        return self.coordinator.prepare_legacy_intent(
+            content,
+            write_kind=write_kind,
+            occurrence_id=occurrence_id,
+            operation_id=operation_id,
+            published_at=published_at,
+            source_response_id=source_response_id,
+            source_sprint_id=source_sprint_id,
+            source_revision=source_revision,
+            authoritative_drain_verifier=authoritative_drain_verifier,
+        )
+
+    def publish_prepared_legacy(
+        self,
+        content: bytes,
+        *,
+        prepared: Mapping[str, Any],
+        write_kind: str,
+        authoritative_drain_verifier: Callable[[Mapping[str, Any]], bool],
+    ) -> Any:
+        """Apply only the exact common-plan-owned legacy publication."""
+
+        return self.coordinator.publish_prepared_legacy(
+            content,
+            prepared=prepared,
+            write_kind=write_kind,
+            authoritative_drain_verifier=authoritative_drain_verifier,
+        )
+
+
+def resolve_prompt_archive_compatibility_publisher(
+    project_id: str,
+    plan: Mapping[str, Any],
+) -> PromptArchiveCompatibilityPublisher:
+    occurrence = plan.get("occurrence")
+    if not isinstance(occurrence, Mapping):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    response_kind = occurrence.get("response_kind")
+    response_id = occurrence.get("response_id")
+    if response_kind not in {
+        "identity-response",
+        "transition-response",
+        "state-response",
+    } or not isinstance(response_id, str) or re.fullmatch(
+        r"parresp1-[0-9a-f]{64}", response_id
+    ) is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    if project_id.startswith("prompt-target-"):
+        try:
+            with git_config_file_lock():
+                git_config = read_git_config_file()
+            settings = read_sequential_prompt_settings_file()
+            matching_directories: dict[str, Path] = {}
+            for context in configured_git_contexts_from_config(git_config):
+                candidate_id = _prompt_archive_shared_target_project_id(
+                    git_context_key=str(context.get("git_context_key") or "").strip(),
+                    git_address=str(context.get("git_address") or "").strip(),
+                    project_name=str(context.get("project_name") or "").strip(),
+                )
+                if candidate_id != project_id:
+                    continue
+                candidate = resolve_sequential_prompt_directory(
+                    settings["directory_template"],
+                    project_name=str(context.get("project_name") or "").strip(),
+                    git_address=str(context.get("git_address") or "").strip(),
+                    git_context_key=str(context.get("git_context_key") or "").strip(),
+                )
+                key = os.path.normcase(os.path.abspath(os.fspath(candidate)))
+                matching_directories[key] = candidate
+            if len(matching_directories) != 1:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            directory = next(iter(matching_directories.values()))
+        except PromptArchiveStorageError:
+            raise
+        except (HTTPException, OSError, UnicodeError, ValueError, TypeError):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE") from None
+    else:
+        directory = _prompt_archive_project_prompt_directory(project_id)
+    response_path = directory / f"{response_kind}-{response_id}.json"
+    runtime = prompt_archive_runtime.for_project(project_id)
+    return SequentialPromptArchiveCompatibilityPublisher(
+        project_id=project_id,
+        transition_stub_path=response_path,
+        latest_path=directory / "latest-response.json",
+        archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+    )
+
+
+def configure_prompt_archive_runtime(
+    environ: Mapping[str, str] | None = None,
+    *,
+    occurrence_source_reader: PromptArchiveOccurrenceSourceReader | None = None,
+    occurrence_receipt_root: str | os.PathLike[str] | None = None,
+) -> PromptArchiveRuntimeRegistry:
+    """Build the disabled-by-default PAS1 registry from process config."""
+
+    global prompt_archive_runtime, prompt_archive_occurrence_receipt_path
+    source = os.environ if environ is None else environ
+    config = PromptArchiveRuntimeConfig.from_environment(
+        source,
+        protected_roots=prompt_archive_protected_roots(source),
+    )
+    occurrence_prover = None
+    selected_receipt_root: Path | None = None
+    if config.mode != "legacy":
+        # Validate archive/protected-root separation before constructing the
+        # receipt store, whose constructor durably creates its root.
+        PromptArchiveRuntimeRegistry(config).validate_and_recover(())
+        selected_receipt_root = (
+            Path(occurrence_receipt_root)
+            if occurrence_receipt_root is not None
+            else prompt_archive_occurrence_receipt_root(source, config)
+        )
+        validate_prompt_archive_occurrence_receipt_root(
+            selected_receipt_root,
+            config,
+            source,
+        )
+        occurrence_prover = PromptArchiveOccurrenceReceiptStore(
+            selected_receipt_root,
+            occurrence_source_reader or read_prompt_archive_legacy_source,
+            max_source_bytes=config.max_hydrated_bytes,
+        )
+    configured = PromptArchiveRuntimeRegistry(
+        config,
+        occurrence_prover=occurrence_prover,
+        compatibility_resolver=resolve_prompt_archive_compatibility_publisher,
+        metrics=prompt_archive_runtime_metrics,
+    )
+    prompt_archive_runtime = configured
+    prompt_archive_occurrence_receipt_path = selected_receipt_root
+    return configured
+
+
+_PROMPT_ARCHIVE_FIXED_CREDENTIAL_ENV_NAMES = frozenset(
+    {
+        "GEMINI_API_KEY",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "NGINX_QA_SCOPE_CONTROL_ADMIN_TOKEN",
+        "NGINX_QA_SMTP_USERNAME",
+        "NGINX_QA_SMTP_PASSWORD",
+    }
+)
+_PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME = re.compile(
+    r"^NGINX_QA_SCOPE_CONTROL_ROLE_TOKEN_[0-9]+$",
+    re.ASCII,
+)
+
+
+def _prompt_archive_env_credential_locator(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    provider, separator, locator = value.partition(":")
+    if separator != ":" or provider != "env" or not locator:
+        return None
+    return locator
+
+
+def _prompt_archive_project_credential_references(
+    config: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Enumerate only credential fields supported by project Git wiring."""
+
+    raw_projects = config.get(PROJECTS_KEY)
+    projects = raw_projects if isinstance(raw_projects, Mapping) else {}
+    references: set[str] = set()
+    for project in projects.values():
+        if not isinstance(project, Mapping):
+            continue
+        locator = _prompt_archive_env_credential_locator(
+            project.get("credential_reference")
+        )
+        if locator is not None:
+            references.add(locator)
+        raw_repositories = project.get("repositories")
+        repositories = (
+            raw_repositories
+            if isinstance(raw_repositories, Mapping)
+            else {}
+        )
+        for repository in repositories.values():
+            if not isinstance(repository, Mapping):
+                continue
+            locator = _prompt_archive_env_credential_locator(
+                repository.get("credential_reference")
+            )
+            if locator is not None:
+                references.add(locator)
+    return tuple(sorted(references))
+
+
+def _prompt_archive_managed_credential_references(
+    state: Mapping[str, Any],
+) -> tuple[str, ...]:
+    """Enumerate the two credential locations admitted by managed runtime."""
+
+    references: set[str] = set()
+    repository = state.get("repository")
+    if isinstance(repository, Mapping):
+        locator = _prompt_archive_env_credential_locator(
+            repository.get("credential_reference")
+        )
+        if locator is not None:
+            references.add(locator)
+    processes = state.get("processes")
+    for process in processes if isinstance(processes, list) else ():
+        if not isinstance(process, Mapping):
+            continue
+        environment = process.get("environment_redacted")
+        if not isinstance(environment, Mapping):
+            continue
+        for value in environment.values():
+            if not isinstance(value, Mapping) or set(value) != {"secret_ref"}:
+                continue
+            locator = _prompt_archive_env_credential_locator(
+                value.get("secret_ref")
+            )
+            if locator is not None:
+                references.add(locator)
+    return tuple(sorted(references))
+
+
+def _prompt_archive_configured_credential_references(
+    project_id: str | None = None,
+) -> tuple[str, ...]:
+    """Read current project credential wiring, never payload-shaped guesses.
+
+    A source projection is occurrence/project scoped.  Historical terminal
+    managed sprints and other projects are not credential authorities for that
+    occurrence; including them would turn a removed stale reference into a
+    permanent hot-path outage.
+    """
+
+    with git_config_file_lock():
+        config = read_git_config_file()
+    raw_projects = config.get(PROJECTS_KEY)
+    projects = raw_projects if isinstance(raw_projects, Mapping) else {}
+    selected_projects = {
+        key: value
+        for key, value in projects.items()
+        if isinstance(value, Mapping)
+        and (
+            project_id is None
+            or str(value.get("project_phone") or "").strip() == project_id
+        )
+    }
+    references = set(
+        _prompt_archive_project_credential_references(
+            {PROJECTS_KEY: selected_projects}
+        )
+    )
+
+    # Managed repository/process references live in validated durable runtime
+    # rows rather than the public project registry.  Reuse the already-open
+    # singleton when present; taking a credential snapshot must never create a
+    # managed runtime or reconcile/mutate its state.
+    runtime = managed_continuity_runtime
+    if runtime is not None:
+        project_ids = (
+            {project_id}
+            if project_id is not None
+            else {
+                str(project.get("project_phone") or "").strip()
+                for project in selected_projects.values()
+                if isinstance(project, Mapping)
+                and str(project.get("project_phone") or "").strip()
+            }
+        )
+        for selected_project_id in sorted(project_ids):
+            state = runtime.store.active_runtime_state(selected_project_id)
+            if isinstance(state, Mapping):
+                references.update(
+                    _prompt_archive_managed_credential_references(state)
+                )
+    return tuple(sorted(references))
+
+
+def _prompt_archive_pending_access_tokens() -> tuple[str, ...]:
+    """Snapshot durable Pending-Sprints capabilities for redaction only."""
+
+    with pending_sprints_file_lock():
+        storage = read_pending_sprints_file()
+    projects = storage.get("projects") if isinstance(storage, Mapping) else None
+    if not isinstance(projects, Mapping):
+        return ()
+    return tuple(
+        sorted(
+            {
+                token
+                for project in projects.values()
+                if isinstance(project, Mapping)
+                and (token := str(project.get("access_token") or "").strip())
+            }
+        )
+    )
+
+
+def prompt_archive_source_metadata_screen_snapshot(
+    environ: Mapping[str, str] | None = None,
+    *,
+    project_id: str | None = None,
+    credential_references: Sequence[str] | None = None,
+    pending_access_tokens: Sequence[str] | None = None,
+    producer_token_sha256: Sequence[str] | None = None,
+) -> SourceMetadataScreenSnapshot:
+    """Take one ephemeral, value-free-to-persist source redaction screen.
+
+    Unlike the inbound request validator, Prompt Archive must retain configured
+    values of one through three Unicode scalars for exact-whole matching.  The
+    snapshot is created lazily only after the durable projection store reports
+    a miss; retries therefore do not consult a rotated environment.
+    """
+
+    source = os.environ if environ is None else environ
+    configured: list[str] = []
+    observed: set[str] = set()
+
+    def remember(value: Any) -> None:
+        if type(value) is not str:
+            return
+        # Credential consumers normalize configured env/reference values with
+        # ``strip()`` before use.  Protect both the stored representation and
+        # the operational value so surrounding whitespace cannot bypass the
+        # native projection screen.
+        for candidate in (value, value.strip()):
+            if not candidate or candidate in observed:
+                continue
+            if len(observed) >= 4096:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            observed.add(candidate)
+            configured.append(candidate)
+
+    reference_names = (
+        _prompt_archive_configured_credential_references(project_id)
+        if credential_references is None
+        else tuple(credential_references)
+    )
+    selected_names = set(_PROMPT_ARCHIVE_FIXED_CREDENTIAL_ENV_NAMES)
+    selected_names.update(
+        name
+        for name in source
+        if type(name) is str
+        and _PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+    )
+    for reference_name in reference_names:
+        if type(reference_name) is not str or not reference_name:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        selected_names.add(reference_name)
+
+    required_reference_names = set(reference_names)
+    for name in sorted(selected_names):
+        raw_value = source.get(name)
+        if type(raw_value) is not str or not raw_value:
+            if name in required_reference_names:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_UNAVAILABLE")
+            continue
+        remember(raw_value)
+        try:
+            decoded = json.loads(raw_value)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        stack = [decoded]
+        visited = 0
+        while stack:
+            visited += 1
+            if visited > 4096:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
+            candidate = stack.pop()
+            if type(candidate) is str:
+                remember(candidate)
+            elif isinstance(candidate, Mapping):
+                stack.extend(candidate.values())
+            elif isinstance(candidate, list):
+                stack.extend(candidate)
+
+    durable_access_tokens = (
+        _prompt_archive_pending_access_tokens()
+        if pending_access_tokens is None
+        else tuple(pending_access_tokens)
+    )
+    for value in durable_access_tokens:
+        remember(value)
+
+    registry_configured = bool(
+        str(source.get(INBOUND_PRODUCER_REGISTRY_ENV) or "").strip()
+    )
+    registered_token_sha256 = (
+        tuple(producer_token_sha256)
+        if producer_token_sha256 is not None
+        else (
+            tuple(
+                principal.token_sha256
+                for principal in load_producer_registry(
+                    str(source[INBOUND_PRODUCER_REGISTRY_ENV]).strip(),
+                    require_protected_acl=True,
+                )
+            )
+            if registry_configured
+            else ()
+        )
+    )
+    return freeze_source_metadata_screen(
+        configured_values=configured,
+        registered_token_sha256=registered_token_sha256,
+    )
+
+
+def prompt_archive_source_metadata_from_occurrence(
+    occurrence: ArchiveOccurrence,
+) -> dict[str, Any]:
+    """Project only immutable occurrence facts into the production source seam.
+
+    This is deliberately independent of pending proposals, adapters, mutable
+    latest aliases, and executor payloads.  Identifiers are still raw here so
+    the projector hashes/screens them exactly once before durable planning.
+    """
+
+    return {
+        "source_type": "api",
+        "conversation_id": occurrence.sprint_id,
+        "message_id": occurrence.occurrence_id,
+        "title": f"{occurrence.response_kind}:{occurrence.occurrence_kind}",
+        "observed_at": occurrence.created_at,
+    }
+
+
+def validate_prompt_archive_template_roots(
+    directory_template: str,
+    agent_latest_file_template: str,
+) -> None:
+    """Reject a runtime prompt-root change that would overlap PAS1 storage."""
+
+    config = prompt_archive_runtime.config
+    if config.root is None:
+        return
+    template_roots = (
+        prompt_archive_template_base(directory_template, file_template=False),
+        prompt_archive_template_base(agent_latest_file_template, file_template=True),
+    )
+    if any(
+        _prompt_archive_paths_overlap(config.root, candidate)
+        for candidate in template_roots
+    ):
+        # A recovery-disabled registry intentionally retains its validated CAS
+        # root for bounded reads.  Legacy write mode must not make that root
+        # eligible as a later prompt destination.
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if prompt_archive_occurrence_receipt_path is not None and any(
+        _prompt_archive_paths_overlap(
+            prompt_archive_occurrence_receipt_path,
+            candidate,
+        )
+        for candidate in template_roots
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if config.mode == "legacy":
+        return
+    candidates = (
+        *config.protected_roots,
+        *template_roots,
+    )
+    protected: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = os.path.normcase(str(candidate.resolve(strict=False)))
+        if key not in seen:
+            seen.add(key)
+            protected.append(candidate)
+    probe = PromptArchiveRuntimeRegistry(
+        PromptArchiveRuntimeConfig(
+            mode=config.mode,
+            root=config.root,
+            max_hydrated_bytes=config.max_hydrated_bytes,
+            operator_gate=config.operator_gate,
+            protected_roots=tuple(protected),
+        )
+    )
+    probe.validate_and_recover(())
+
+
+def record_prompt_archive_metric(name: str) -> None:
+    if name not in prompt_archive_metrics:
+        return
+    with prompt_archive_metrics_lock:
+        prompt_archive_metrics[name] += 1
+
+
+def disable_prompt_archive_shadow_after_recovery_failure(
+    configured: PromptArchiveRuntimeRegistry,
+) -> PromptArchiveRuntimeRegistry:
+    """Fail closed for PAS1 writes while preserving legacy service identity.
+
+    Explicit configuration/root validation has already succeeded before this
+    seam.  A replay failure must disable further shadow mutation for this
+    process, but shadow sidecar state is not allowed to make managed or compact
+    identity unavailable.  Keeping the same validated root permits bounded
+    reads of already-published archives while ``legacy`` makes every new
+    publication inert.
+    """
+
+    global prompt_archive_runtime, prompt_archive_occurrence_receipt_path
+    config = configured.config
+    disabled = PromptArchiveRuntimeRegistry(
+        PromptArchiveRuntimeConfig(
+            mode="legacy",
+            root=config.root,
+            max_hydrated_bytes=config.max_hydrated_bytes,
+            operator_gate=None,
+            protected_roots=config.protected_roots,
+            runtime_instance_id=config.runtime_instance_id,
+        ),
+        metrics=prompt_archive_runtime_metrics,
+        legacy_latest_publication_enabled=False,
+    )
+    prompt_archive_runtime = disabled
+    # Keep the already-validated receipt authority root as an isolation fence.
+    # Recovery degradation disables the occurrence prover and every new shadow
+    # mutation, but legacy prompt settings must still never be moved into the
+    # durable evidence directory that a later shadow restart will reopen.
+    record_prompt_archive_metric("shadow_failed")
+    return disabled
+
+
+async def recover_prompt_archive_runtime_for_startup(
+    configured: PromptArchiveRuntimeRegistry,
+    project_ids: Sequence[str],
+) -> PromptArchiveRuntimeRegistry:
+    """Recover a validated sidecar or atomically degrade it to read-only legacy."""
+
+    if configured.config.mode == "legacy" and (
+        configured.config.root is None or not configured.config.root.exists()
+    ):
+        # The default no-root launcher remains completely inert.  An existing
+        # configured root, however, may contain a common legacy_latest_publish
+        # operation and must be replayed before any latest writer is admitted.
+        return configured
+    try:
+        await asyncio.to_thread(
+            configured.validate_and_recover,
+            tuple(project_ids),
+        )
+    except PromptArchiveStorageError as exc:
+        prompt_archive_runtime_metrics.record_recovery_failure()
+        if exc.code in {
+            "PROMPT_ARCHIVE_BLOB_CORRUPT",
+            "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+        }:
+            prompt_archive_runtime_metrics.record_corruption_failure()
+        if configured.config.mode in {"authoritative", "legacy"}:
+            # Native mode has no legacy writer to fall back to.  Starting in a
+            # different write mode after incomplete recovery would violate the
+            # exact operator gate and external-latest ownership contract.  A
+            # root-enrolled legacy operation has the same fail-closed rule: a
+            # direct pre-enrollment fallback could otherwise overtake it.
+            raise
+        return disable_prompt_archive_shadow_after_recovery_failure(configured)
+    except Exception:
+        prompt_archive_runtime_metrics.record_recovery_failure()
+        if configured.config.mode in {"authoritative", "legacy"}:
+            raise
+        return disable_prompt_archive_shadow_after_recovery_failure(configured)
+    return configured
 
 
 def _reconcile_managed_continuity_background(
@@ -172,8 +1429,19 @@ def _reconcile_managed_continuity_background(
 async def app_lifespan(_: FastAPI):
     global managed_continuity_runtime, managed_process_supervisor
     global managed_continuity_stop_event, managed_continuity_thread
+    configured_archive_runtime = configure_prompt_archive_runtime()
+    startup_git_config: dict[str, Any] | None = None
+    archive_root = configured_archive_runtime.config.root
+    if configured_archive_runtime.config.mode != "legacy" or (
+        archive_root is not None and archive_root.exists()
+    ):
+        startup_git_config = await read_git_config()
+        configured_archive_runtime = await recover_prompt_archive_runtime_for_startup(
+            configured_archive_runtime,
+            tuple(sorted(prompt_archive_startup_project_ids(startup_git_config))),
+        )
     if os.environ.get(INBOUND_PRODUCER_REGISTRY_ENV):
-        inbound_config = await read_git_config()
+        inbound_config = startup_git_config or await read_git_config()
         configured_producer_registry(
             known_project_ids=inbound_known_project_ids(inbound_config),
         )
@@ -388,8 +1656,21 @@ SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS = (
     "полный для выполнения задачи JSON: текст active_task.message сохранён "
     "целиком вместе с необходимыми управляющими полями. Дублирующие metadata "
     "и project_state исключены намеренно, а не из-за "
-    "обрезки; актуальное состояние доступно по project_state_url, полный "
-    "диагностический JSON — в response_file_path. Если response_compact=true, "
+    "обрезки. В legacy/shadow диагностическое состояние может быть доступно по "
+    "project_state_url; в authoritative response-scoped occurrence загружается "
+    "по prompt_archive.content_url, а полный bounded PAS1 state view — только "
+    "явно по prompt_archive.state_url. Если response_file_path присутствует, "
+    "применяй точное правило dispatch: отсутствие верхнеуровневого kind означает "
+    "legacy inline JSON; ровно одно строковое "
+    "kind=prompt_archive_descriptor_stub означает указатель на архив, который "
+    "можно читать только через авторизованный prompt_archive.content_url, "
+    "prompt_archive.state_url или "
+    "штатный bounded reader. Повторяющийся kind, неизвестный kind и нестроковый "
+    "kind должны завершаться fail closed: не считай такой файл legacy и не "
+    "интерпретируй его как inline project_state. При "
+    "response_archive_available=false файловый "
+    "архив для read-only ответа намеренно не публиковался. "
+    "Если response_compact=true, "
     "считай ответ полным, не загружай архив только ради active_task и не "
     "сообщай пользователю об обрезке."
 )
@@ -8839,6 +10120,19 @@ def write_sequential_prompt_settings_file(
             ]
         )
     )
+    try:
+        validate_prompt_archive_template_roots(
+            normalized_template,
+            normalized_agent_file_template,
+        )
+    except PromptArchiveStorageError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": exc.code,
+                "message": "Prompt and archive roots must remain isolated",
+            },
+        ) from None
     write_json_file_atomic(
         sequential_prompt_settings_path(),
         {
@@ -9082,6 +10376,20 @@ def compact_sequential_agent_prompt_response(
     project_state = compact_response.pop("project_state", None)
     if isinstance(project_state, dict):
         omitted_fields.append("project_state")
+    # Historical adapters occasionally projected these cumulative roots at
+    # the response top level instead of nesting them under project_state.
+    # A compact response has one contract regardless of that legacy shape:
+    # retain only bounded summaries/references, never the cumulative values.
+    for cumulative_key in (
+        "history_with_patches",
+        "activity_with_patches",
+        "code_patches",
+        "recent_activity",
+        "execution_audit",
+    ):
+        if cumulative_key in compact_response:
+            compact_response.pop(cumulative_key, None)
+            omitted_fields.append(cumulative_key)
     if "full_response_instructions" in compact_response:
         compact_response["full_response_instructions"] = (
             SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS
@@ -9132,20 +10440,10 @@ def compact_sequential_agent_prompt_response(
         ]
         omitted_fields.append("team[*].profile_tasks_presence")
 
+    # ``active_task`` is the executable contract, not diagnostic history.
+    # Preserve it byte-for-value (including future metadata fields) so a
+    # compact prompt never loses task instructions or result controls.
     active_task = compact_response.get("active_task")
-    if isinstance(active_task, dict):
-        compact_active_task = dict(active_task)
-        metadata = active_task.get("metadata")
-        if isinstance(metadata, dict):
-            compact_metadata = dict(metadata)
-            for duplicate_key in ("agent", "tasks", "workflow"):
-                if duplicate_key in compact_metadata:
-                    compact_metadata.pop(duplicate_key)
-                    omitted_fields.append(
-                        f"active_task.metadata.{duplicate_key}"
-                    )
-            compact_active_task["metadata"] = compact_metadata
-        compact_response["active_task"] = compact_active_task
 
     def compact_transition(value: Any) -> Any:
         if not isinstance(value, dict):
@@ -9320,6 +10618,947 @@ def compact_sequential_agent_prompt_response(
     return compact_response
 
 
+def prompt_archive_occurrence_from_sequential_result(
+    result: Mapping[str, Any],
+    *,
+    response_kind: str,
+) -> ArchiveOccurrence | None:
+    """Freeze an archive occurrence from a committed sequential transaction.
+
+    This consumes only the state snapshot returned by the write transaction.
+    It never mines pending/last aliases or caller-controlled response metadata.
+    A settled transition must exactly equal the committed ``last_transition``;
+    an identity occurrence must be a newly-issued assignment with its persisted
+    ``started_at`` timestamp.  Other reads deliberately have no archive write.
+    """
+
+    assignment = result.get("assignment")
+    assignment_data = assignment if isinstance(assignment, dict) else {}
+    active_task = assignment_data.get("active_task")
+    active_task_data = active_task if isinstance(active_task, dict) else {}
+    task_metadata = active_task_data.get("metadata")
+    metadata = task_metadata if isinstance(task_metadata, dict) else {}
+    project_id = str(result.get("project_id") or result.get("project_phone") or "").strip()
+    sprint_id = str(
+        result.get("sprint_id")
+        or assignment_data.get("sprint_id")
+        or metadata.get("sprint_id")
+        or ""
+    ).strip()
+    if not project_id or not sprint_id:
+        return None
+
+    applied = result.get("transition_applied")
+    last_transition = assignment_data.get("last_transition")
+    transition = applied if isinstance(applied, dict) else None
+    if (
+        transition is not None
+        and isinstance(last_transition, dict)
+        and transition == last_transition
+        and str(transition.get("transition_id") or "").strip()
+        and str(transition.get("resolved_at") or "").strip()
+    ):
+        occurrence_kind = "transition"
+        transition_id: str | None = str(transition["transition_id"]).strip()
+        occurrence_id = transition_id
+        created_at = str(transition["resolved_at"]).strip()
+        source_assignment_id = str(
+            transition.get("source_assignment_id") or ""
+        ).strip()
+    elif result.get("newly_assigned") is True:
+        current_assignment_id = str(
+            assignment_data.get("current_assignment_id") or ""
+        ).strip()
+        raw_assignments = assignment_data.get("assignments")
+        durable_assignments = raw_assignments if isinstance(raw_assignments, list) else []
+        durable_assignment = next(
+            (
+                item
+                for item in durable_assignments
+                if isinstance(item, dict)
+                and str(item.get("assignment_id") or "").strip()
+                == current_assignment_id
+            ),
+            None,
+        )
+        if not isinstance(durable_assignment, dict):
+            return None
+        started_at = str(durable_assignment.get("started_at") or "").strip()
+        if not current_assignment_id or not started_at:
+            return None
+        occurrence_kind = "identity-state"
+        transition_id = None
+        occurrence_id = current_assignment_id
+        created_at = started_at
+        source_assignment_id = current_assignment_id
+    elif isinstance(result.get("completed_assignment"), dict):
+        # The non-graph sequential runtime has no separate transition object.
+        # Its final assignment completion is nevertheless a durable state
+        # occurrence and must not silently disappear from shadow publication.
+        # Use only the assignment record returned by the committed write
+        # transaction; never synthesize a transition identifier or consult a
+        # mutable pending/last alias.
+        completed_assignment = result["completed_assignment"]
+        completed_assignment_id = str(
+            completed_assignment.get("assignment_id") or ""
+        ).strip()
+        completed_at = str(
+            completed_assignment.get("completed_at") or ""
+        ).strip()
+        if not completed_assignment_id or not completed_at:
+            return None
+        occurrence_kind = "identity-state"
+        transition_id = None
+        occurrence_id = completed_assignment_id
+        created_at = completed_at
+        source_assignment_id = completed_assignment_id
+    else:
+        return None
+
+    source: dict[str, Any] = {
+        "source_kind": (
+            "native_runtime"
+            if prompt_archive_runtime.config.mode == "authoritative"
+            else "runtime_shadow"
+        )
+    }
+    source_commit = str(
+        metadata.get("source_commit")
+        or metadata.get("from_commit")
+        or ""
+    ).strip().lower()
+    if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source_commit):
+        source["source_commit"] = source_commit
+    for source_key, candidates in (
+        ("assignment_id", (source_assignment_id, metadata.get("assignment_id"))),
+        ("review_id", (metadata.get("review_id"),)),
+        ("result_key", (metadata.get("result_key"),)),
+    ):
+        value = next(
+            (str(item).strip() for item in candidates if str(item or "").strip()),
+            "",
+        )
+        if value:
+            source[source_key] = value
+
+    authorization = {
+        "auth_model_version": "prompt-archive-authorization-v1",
+        "principal_kind": "legacy_local_principal",
+        "principal_id": project_id,
+        "binding_id": None,
+        "scope_source": "legacy_project_context",
+        "effective_scope_revision": None,
+        "effective_scope_sha256": None,
+        "decision_occurrence_id": occurrence_id,
+    }
+    response_id = prompt_archive_response_id_v1(
+        project_id,
+        sprint_id,
+        response_kind,
+        occurrence_kind,
+        occurrence_id,
+    )
+    state_revision = assignment_data.get("revision")
+    if type(state_revision) is not int or state_revision < 0:
+        state_revision = 0
+    return ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=sprint_id,
+        response_id=response_id,
+        response_kind=response_kind,
+        occurrence_kind=occurrence_kind,
+        occurrence_id=occurrence_id,
+        transition_id=transition_id,
+        source=source,
+        authorization=authorization,
+        created_at=created_at,
+        verified_at=created_at,
+        state_revision=state_revision,
+    )
+
+
+def prompt_archive_occurrence_from_sequential_runtime(
+    runtime: Mapping[str, Any],
+) -> ArchiveOccurrence | None:
+    """Use a freshly dequeued durable task as an identity-state occurrence."""
+
+    if runtime.get("identity_reused") is not False:
+        return None
+    task = runtime.get("task")
+    task_data = task if isinstance(task, dict) else {}
+    metadata_value = task_data.get("metadata")
+    metadata = metadata_value if isinstance(metadata_value, dict) else {}
+    project_id = str(
+        runtime.get("project_id") or runtime.get("project_phone") or ""
+    ).strip()
+    sprint_id = str(
+        runtime.get("sprint_id") or metadata.get("sprint_id") or ""
+    ).strip()
+    occurrence_id = str(task_data.get("id") or "").strip()
+    created_at = str(task_data.get("queued_at") or "").strip()
+    if not all((project_id, sprint_id, occurrence_id, created_at)):
+        return None
+
+    source: dict[str, Any] = {
+        "source_kind": (
+            "native_runtime"
+            if prompt_archive_runtime.config.mode == "authoritative"
+            else "runtime_shadow"
+        )
+    }
+    source_commit = str(
+        metadata.get("source_commit") or metadata.get("from_commit") or ""
+    ).strip().lower()
+    if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", source_commit):
+        source["source_commit"] = source_commit
+    for key in ("assignment_id", "review_id", "result_key"):
+        value = str(metadata.get(key) or "").strip()
+        if value:
+            source[key] = value
+
+    authorization = {
+        "auth_model_version": "prompt-archive-authorization-v1",
+        "principal_kind": "legacy_local_principal",
+        "principal_id": project_id,
+        "binding_id": None,
+        "scope_source": "legacy_project_context",
+        "effective_scope_revision": None,
+        "effective_scope_sha256": None,
+        "decision_occurrence_id": occurrence_id,
+    }
+    assignment_value = runtime.get("assignment")
+    assignment = assignment_value if isinstance(assignment_value, dict) else {}
+    state_revision = assignment.get("revision")
+    if type(state_revision) is not int or state_revision < 0:
+        state_revision = 0
+    return ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=sprint_id,
+        response_id=prompt_archive_response_id_v1(
+            project_id,
+            sprint_id,
+            "identity-response",
+            "identity-state",
+            occurrence_id,
+        ),
+        response_kind="identity-response",
+        occurrence_kind="identity-state",
+        occurrence_id=occurrence_id,
+        transition_id=None,
+        source=source,
+        authorization=authorization,
+        created_at=created_at,
+        verified_at=created_at,
+        state_revision=state_revision,
+    )
+
+
+async def attach_prompt_archive_sprint_identity(
+    value: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Attach the durable current sprint to a legacy runtime snapshot.
+
+    Older sequential assignments and queue items predate the sprint-id field.
+    Every committed execution mutation already carries an append-only audit
+    checkpoint with the sprint and exact assignment revision. Use only that
+    same-revision checkpoint: consulting mutable ``current_sprint_id`` after
+    the transaction would introduce a cross-sprint race.
+    """
+
+    enriched = dict(value)
+    if str(enriched.get("sprint_id") or "").strip():
+        return enriched
+    assignment_value = enriched.get("assignment")
+    assignment = assignment_value if isinstance(assignment_value, dict) else {}
+    revision = assignment.get("revision", assignment.get("execution_revision"))
+    audit_value = assignment.get("execution_audit")
+    audit = audit_value if isinstance(audit_value, dict) else {}
+    checkpoints = audit.get("checkpoints")
+    if type(revision) is not int or not isinstance(checkpoints, list):
+        return enriched
+    assignment_without_audit = deepcopy(assignment)
+    assignment_without_audit.pop("execution_audit", None)
+    assignment_without_audit.pop("observability", None)
+    project_id = str(
+        enriched.get("project_id") or enriched.get("project_phone") or ""
+    ).strip()
+    for checkpoint in reversed(checkpoints):
+        if not isinstance(checkpoint, dict):
+            continue
+        snapshot = checkpoint.get("snapshot")
+        if (
+            checkpoint.get("execution_revision") != revision
+            or not isinstance(snapshot, dict)
+            or str(snapshot.get("project_id") or "").strip() != project_id
+            or snapshot.get("execution") != assignment_without_audit
+        ):
+            continue
+        try:
+            snapshot_digest = hashlib.sha256(
+                json.dumps(
+                    snapshot,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode()
+            ).hexdigest()
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if not hmac.compare_digest(
+            str(checkpoint.get("snapshot_sha256") or ""),
+            snapshot_digest,
+        ):
+            continue
+        sprint_id = str(snapshot.get("sprint_id") or "").strip()
+        if sprint_id:
+            enriched["sprint_id"] = sprint_id
+        break
+    return enriched
+
+
+def prompt_archive_local_descriptor(
+    publication: PromptArchivePublication,
+    *,
+    correlation_id: str,
+) -> dict[str, Any]:
+    """Create the route-specific descriptor only after successful publication."""
+
+    base_url = (
+        f"/api/v1/projects/{publication.project_id}/sprints/"
+        f"{publication.sprint_id}/prompt-archives/{publication.archive_id}"
+    )
+    return {
+        "schema_version": 1,
+        "kind": "prompt_archive_descriptor",
+        "media_type": "application/vnd.nginx-qa.prompt-archive-descriptor+json",
+        "correlation_id": correlation_id,
+        "route_context": "local_operator",
+        "agent_phone": None,
+        "archive_id": publication.archive_id,
+        "archive_format": publication.archive_format,
+        "scope": deepcopy(dict(publication.scope)),
+        "integrity": deepcopy(dict(publication.integrity)),
+        "created_at": publication.created_at,
+        "descriptor_url": base_url,
+        "manifest_url": base_url + "/manifest",
+        "content_url": base_url + "/content",
+        "state_url": base_url + "/state",
+    }
+
+
+def verified_prompt_archive_descriptor(
+    path: Path,
+    *,
+    occurrence: ArchiveOccurrence,
+) -> dict[str, Any] | None:
+    """Read and re-derive a bounded descriptor from a committed prompt.
+
+    A prompt is only a durable hint: its archive locator, pointer, manifest,
+    scope and route descriptor are reopened and checked through PAS1 before the
+    value may be used either for same-occurrence retention or as an incremental
+    predecessor.  No directory scan or caller-supplied filesystem path is used.
+    """
+
+    try:
+        raw = _read_prompt_archive_source_file(
+            path,
+            trusted_root=path.parent,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        if raw is None:
+            return None
+        value = json.loads(raw.decode("utf-8", errors="strict"))
+    except (
+        PromptArchiveStorageError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+    if not isinstance(value, dict):
+        return None
+    candidate = value.get("prompt_archive")
+    if not isinstance(candidate, dict):
+        return None
+    archive_id = candidate.get("archive_id")
+    correlation_id = candidate.get("correlation_id")
+    if not isinstance(archive_id, str) or not isinstance(correlation_id, str):
+        return None
+    try:
+        selected = prompt_archive_runtime.for_project(
+            occurrence.project_id
+        ).lookup_archive(
+            sprint_id=str(occurrence.sprint_id or ""),
+            archive_id=archive_id,
+        )
+        expected = prompt_archive_local_descriptor(
+            PromptArchivePublication(
+                project_id=occurrence.project_id,
+                sprint_id=str(occurrence.sprint_id or ""),
+                archive_id=selected.archive_id,
+                archive_format=selected.archive_format,
+                scope=deepcopy(dict(selected.scope)),
+                integrity=deepcopy(dict(selected.integrity)),
+                created_at=selected.created_at,
+                pointer_id=str(selected.pointer["pointer_id"]),
+                manifest_ref=deepcopy(dict(selected.pointer["manifest_ref"])),
+                locator=deepcopy(dict(selected.locator)),
+            ),
+            correlation_id=correlation_id,
+        )
+    except (PromptArchiveStorageError, KeyError, TypeError, ValueError):
+        return None
+    scope = selected.scope
+    return (
+        expected
+        if candidate == expected
+        and isinstance(scope, Mapping)
+        and scope.get("project_id") == occurrence.project_id
+        and scope.get("sprint_id") == occurrence.sprint_id
+        and scope.get("response_id") == correlation_id
+        else None
+    )
+
+
+def existing_prompt_archive_descriptor(
+    path: Path,
+    *,
+    occurrence: ArchiveOccurrence,
+) -> dict[str, Any] | None:
+    """Return a verified descriptor only for the exact retried occurrence."""
+
+    descriptor = verified_prompt_archive_descriptor(path, occurrence=occurrence)
+    return (
+        descriptor
+        if descriptor is not None
+        and descriptor.get("correlation_id") == occurrence.response_id
+        else None
+    )
+
+
+def verified_prompt_archive_descriptor_for_current_identity(
+    path: Path,
+    response: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Retain a prior verified archive while serving a read-only heartbeat."""
+
+    try:
+        raw = _read_prompt_archive_source_file(
+            path,
+            trusted_root=path.parent,
+            maximum_bytes=4 * 1024 * 1024,
+        )
+        value = None if raw is None else json.loads(raw.decode("utf-8"))
+    except (
+        PromptArchiveStorageError,
+        OSError,
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+    ):
+        return None
+    if not isinstance(value, dict):
+        return None
+    candidate = value.get("prompt_archive")
+    scope = candidate.get("scope") if isinstance(candidate, dict) else None
+    if not isinstance(candidate, dict) or not isinstance(scope, dict):
+        return None
+    active = response.get("active_task")
+    prior_active = value.get("active_task")
+    active_data = active if isinstance(active, dict) else {}
+    prior_active_data = prior_active if isinstance(prior_active, dict) else {}
+    active_metadata = active_data.get("metadata")
+    prior_metadata = prior_active_data.get("metadata")
+    current_assignment = str(
+        (
+            active_metadata.get("assignment_id")
+            if isinstance(active_metadata, dict)
+            else None
+        )
+        or active_data.get("id")
+        or ""
+    ).strip()
+    prior_assignment = str(
+        (
+            prior_metadata.get("assignment_id")
+            if isinstance(prior_metadata, dict)
+            else None
+        )
+        or prior_active_data.get("id")
+        or ""
+    ).strip()
+    project_id = str(
+        response.get("project_id") or response.get("project_phone") or ""
+    ).strip()
+    sprint_id = str(response.get("sprint_id") or "").strip()
+    correlation_id = candidate.get("correlation_id")
+    created_at = candidate.get("created_at")
+    if (
+        not current_assignment
+        or current_assignment != prior_assignment
+        or scope.get("project_id") != project_id
+        or scope.get("sprint_id") != sprint_id
+        or type(correlation_id) is not str
+        or type(created_at) is not str
+    ):
+        return None
+    try:
+        occurrence = ArchiveOccurrence(
+            project_id=project_id,
+            sprint_id=sprint_id,
+            response_id=correlation_id,
+            response_kind=str(scope.get("response_kind") or ""),
+            occurrence_kind=str(scope.get("occurrence_kind") or ""),
+            occurrence_id=str(scope.get("occurrence_id") or ""),
+            transition_id=scope.get("transition_id"),
+            source={},
+            authorization={},
+            created_at=created_at,
+            verified_at=created_at,
+        )
+    except (TypeError, ValueError):
+        return None
+    return verified_prompt_archive_descriptor(path, occurrence=occurrence)
+
+
+def descriptor_matches_committed_response(
+    descriptor: Mapping[str, Any],
+    committed: bytes,
+) -> bool:
+    integrity = descriptor.get("integrity")
+    return bool(
+        isinstance(integrity, dict)
+        and type(integrity.get("hydrated_size")) is int
+        and integrity["hydrated_size"] == len(committed)
+        and isinstance(integrity.get("hydrated_sha256"), str)
+        and hmac.compare_digest(
+            integrity["hydrated_sha256"],
+            hashlib.sha256(committed).hexdigest(),
+        )
+    )
+
+
+def _prompt_text_bytes(value: str) -> bytes:
+    """Return the exact bytes produced by ``Path.write_text`` on this host."""
+
+    return value.replace("\n", os.linesep).encode("utf-8", errors="strict")
+
+
+def _sequential_latest_project_id(
+    response: Mapping[str, Any],
+    project: Mapping[str, Any],
+    *,
+    git_context_key: str,
+    git_address: str,
+    project_name: str,
+) -> str:
+    # Legacy latest-response.json is scoped by its physical prompt target,
+    # which may be shared by multiple project registry entries for one Git
+    # context.  Use a target-stable authority identity instead of permanently
+    # enrolling the shared target to whichever project writes first.
+    return _prompt_archive_shared_target_project_id(
+        git_context_key=git_context_key,
+        git_address=git_address,
+        project_name=project_name,
+    )
+
+
+def _prompt_archive_shared_target_project_id(
+    *,
+    git_context_key: str,
+    git_address: str,
+    project_name: str,
+) -> str:
+    """Return the stable common-runtime identity of one shared latest target."""
+
+    stable_context = git_context_key or git_address or project_name
+    if not stable_context:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+    return "prompt-target-" + hashlib.sha256(
+        stable_context.encode("utf-8", errors="strict")
+    ).hexdigest()[:32]
+
+
+def _sequential_durable_project_id(
+    response: Mapping[str, Any],
+    project: Mapping[str, Any],
+    occurrence: ArchiveOccurrence | None,
+) -> str | None:
+    """Return only an explicit registry-style project identity, if present."""
+
+    candidates = (
+        occurrence.project_id if occurrence is not None else None,
+        response.get("project_id"),
+        response.get("project_phone"),
+        project.get("project_id"),
+        project.get("project_phone"),
+    )
+    for candidate in candidates:
+        normalized = normalize_project_phone(candidate)
+        if normalized and re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", normalized
+        ):
+            return normalized
+    return None
+
+
+def _legacy_latest_publication_identity(
+    *,
+    project_id: str,
+    sprint_id: str | None,
+    response_kind: str,
+    response_key: str,
+    content: bytes,
+) -> tuple[str, str, str, str]:
+    """Return stable content-bound identity for a legacy latest publication."""
+
+    content_sha256 = hashlib.sha256(content).hexdigest()
+    occurrence_id = f"legacy-latest-{response_key}-{content_sha256[:24]}"
+    occurrence_kind = (
+        "transition" if response_kind == "transition-response" else "identity-state"
+    )
+    source_response_id = prompt_archive_response_id_v1(
+        project_id,
+        sprint_id,
+        response_kind,
+        occurrence_kind,
+        occurrence_id,
+    )
+    write_kind = {
+        "transition-response": "transition",
+        "identity-response": "identity",
+        "state-response": "state",
+    }.get(response_kind)
+    if write_kind is None:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    operation_id = "parop1-" + prompt_archive_pas1_id_v1(
+        "legacy-latest-publication-operation",
+        (
+            ("project_id", project_id),
+            ("sprint_id", sprint_id),
+            ("response_id", source_response_id),
+            ("occurrence_id", occurrence_id),
+            ("write_kind", write_kind),
+        ),
+    )[:32]
+    # The compatibility response has no independent durable timestamp.  Its
+    # content-bound identity and coordinator revision define order; using a
+    # fixed timestamp keeps exact retries deterministic.
+    return (
+        occurrence_id,
+        operation_id,
+        source_response_id,
+        "1970-01-01T00:00:00Z",
+    )
+
+
+_LEGACY_LATEST_WRITE_KIND_BY_RESPONSE_KIND = {
+    "transition-response": "transition",
+    "identity-response": "identity",
+    "state-response": "state",
+}
+_PROMPT_ARCHIVE_OPERATOR_GATE = "prompt-archive-authoritative-v1"
+
+
+def _legacy_latest_write_kind(response_kind: str) -> str:
+    """Map one closed runtime response kind to its durable latest intent kind."""
+
+    if type(response_kind) is not str:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    write_kind = _LEGACY_LATEST_WRITE_KIND_BY_RESPONSE_KIND.get(response_kind)
+    if write_kind is None:
+        # Never let a new caller silently enter the generic legacy publication
+        # path.  Adding a response kind requires an explicit protocol choice and
+        # corresponding schema/recovery coverage.
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    return write_kind
+
+
+def _legacy_latest_occurrence(
+    *,
+    project_id: str,
+    sprint_id: str | None,
+    response_kind: str,
+    occurrence_id: str,
+    source_response_id: str,
+    published_at: str,
+    response: Mapping[str, Any],
+    committed_occurrence: ArchiveOccurrence | None,
+) -> ArchiveOccurrence:
+    """Project a legacy latest write onto the closed occurrence vocabulary."""
+
+    write_kind = _legacy_latest_write_kind(response_kind)
+    occurrence_kind = (
+        "transition" if write_kind == "transition" else "identity-state"
+    )
+    transition_id = occurrence_id if occurrence_kind == "transition" else None
+    state_revision: int | None = None
+    assignment_value = response.get("assignment")
+    assignment = assignment_value if isinstance(assignment_value, Mapping) else {}
+    for candidate in (assignment.get("revision"), response.get("revision")):
+        if type(candidate) is int and 0 <= candidate <= 9_223_372_036_854_775_807:
+            state_revision = candidate
+            break
+
+    source: Mapping[str, Any] = {"source_kind": "runtime_shadow"}
+    authorization: Mapping[str, Any] = {
+        "auth_model_version": "prompt-archive-authorization-v1",
+        "principal_kind": "legacy_local_principal",
+        "principal_id": project_id,
+        "binding_id": None,
+        "scope_source": "legacy_project_context",
+        "effective_scope_revision": None,
+        "effective_scope_sha256": None,
+        "decision_occurrence_id": occurrence_id,
+    }
+    created_at = published_at
+    verified_at = published_at
+    if committed_occurrence is not None:
+        if (
+            committed_occurrence.response_kind != response_kind
+            or committed_occurrence.occurrence_kind != occurrence_kind
+            or committed_occurrence.sprint_id != sprint_id
+            or (
+                not project_id.startswith("prompt-target-")
+                and committed_occurrence.project_id != project_id
+            )
+        ):
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+        expected_committed_response_id = prompt_archive_response_id_v1(
+            committed_occurrence.project_id,
+            committed_occurrence.sprint_id,
+            committed_occurrence.response_kind,
+            committed_occurrence.occurrence_kind,
+            committed_occurrence.occurrence_id,
+        )
+        if committed_occurrence.response_id != expected_committed_response_id:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if occurrence_kind == "transition":
+            if committed_occurrence.transition_id != committed_occurrence.occurrence_id:
+                raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        elif committed_occurrence.transition_id is not None:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        occurrence_id = committed_occurrence.occurrence_id
+        transition_id = committed_occurrence.transition_id
+        source_response_id = prompt_archive_response_id_v1(
+            project_id,
+            sprint_id,
+            response_kind,
+            occurrence_kind,
+            occurrence_id,
+        )
+        state_revision = committed_occurrence.state_revision
+        source = committed_occurrence.source
+        authorization = committed_occurrence.authorization
+        created_at = committed_occurrence.created_at
+        verified_at = committed_occurrence.verified_at
+    else:
+        expected_source_response_id = prompt_archive_response_id_v1(
+            project_id,
+            sprint_id,
+            response_kind,
+            occurrence_kind,
+            occurrence_id,
+        )
+        if source_response_id != expected_source_response_id:
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+        if state_revision is None:
+            # Once a latest target is enrolled, ordering is durable.  Inventing
+            # revision zero can silently supersede a valid response behind a
+            # higher current slot, so missing revision authority fails closed.
+            raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    if type(state_revision) is not int:
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+
+    return ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=sprint_id,
+        response_id=source_response_id,
+        response_kind=response_kind,
+        occurrence_kind=occurrence_kind,
+        occurrence_id=occurrence_id,
+        transition_id=transition_id,
+        source=source,
+        authorization=authorization,
+        created_at=created_at,
+        verified_at=verified_at,
+        state_revision=state_revision,
+    )
+
+
+def publish_prompt_archive_legacy_latest_rollback(
+    *,
+    project_id: str,
+    source_sprint_id: str,
+    source_response_id: str,
+    occurrence_id: str,
+    operation_id: str,
+    selected_response_id: str,
+    selected_operation_id: str,
+    published_at: str,
+    source_revision: int,
+    expected_content_sha256: str,
+    expected_content_size: int,
+    operator_gate: str,
+) -> Mapping[str, Any]:
+    """Publish verified rollback bytes through the enrolled latest protocol.
+
+    This is deliberately a narrow in-process operator seam, not an HTTP route.
+    Possession of arbitrary response bytes is insufficient: the running
+    instance must have its explicit archive operator gate enabled, the caller
+    must repeat that gate, and selection must name an already-complete common
+    operation whose immutable CAS root matches the approved size/digest.  The
+    durable selection receipt is then rebound to this rollback operation and
+    the project target must already be enrolled.  Therefore a mode toggle or an
+    unreviewed path can never turn into a rollback overwrite.
+    """
+
+    if (
+        operator_gate != _PROMPT_ARCHIVE_OPERATOR_GATE
+        or prompt_archive_runtime.config.operator_gate
+        != _PROMPT_ARCHIVE_OPERATOR_GATE
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if (
+        type(project_id) is not str
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", project_id) is None
+        or type(source_sprint_id) is not str
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}", source_sprint_id)
+        is None
+        or type(expected_content_sha256) is not str
+        or re.fullmatch(r"[0-9a-f]{64}", expected_content_sha256) is None
+        or type(expected_content_size) is not int
+        or expected_content_size < 1
+        or type(source_revision) is not int
+        or not 0 <= source_revision <= 9_223_372_036_854_775_807
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    if source_response_id != prompt_archive_response_id_v1(
+        project_id,
+        source_sprint_id,
+        "state-response",
+        "identity-state",
+        occurrence_id,
+    ):
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REFERENCE_INVALID")
+
+    prompt_directory = _prompt_archive_project_prompt_directory(project_id)
+    runtime = prompt_archive_runtime.for_project(project_id)
+    coordinator = ExternalLatestCoordinator(
+        prompt_directory / "latest-response.json",
+        project_id=project_id,
+        archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+    )
+    if not coordinator.enrolled():
+        raise PromptArchiveStorageError("PROMPT_ARCHIVE_REQUEST_INVALID")
+    occurrence = ArchiveOccurrence(
+        project_id=project_id,
+        sprint_id=source_sprint_id,
+        response_id=source_response_id,
+        response_kind="state-response",
+        occurrence_kind="identity-state",
+        occurrence_id=occurrence_id,
+        transition_id=None,
+        source={"source_kind": "operator_rollback"},
+        authorization={
+            "auth_model_version": "prompt-archive-authorization-v1",
+            "principal_kind": "legacy_local_principal",
+            "principal_id": project_id,
+            "binding_id": None,
+            "scope_source": "operator_gate",
+            "effective_scope_revision": None,
+            "effective_scope_sha256": None,
+            "decision_occurrence_id": occurrence_id,
+        },
+        created_at=published_at,
+        verified_at=published_at,
+        state_revision=source_revision,
+    )
+    payload = runtime.authorize_legacy_latest_rollback_selection(
+        occurrence=occurrence,
+        operation_id=operation_id,
+        selected_response_id=selected_response_id,
+        selected_operation_id=selected_operation_id,
+        expected_content_sha256=expected_content_sha256,
+        expected_content_size=expected_content_size,
+        expected_target_authority_id=coordinator.target_authority_id,
+        published_at=published_at,
+    )
+    publisher = SequentialPromptArchiveCompatibilityPublisher(
+        project_id=project_id,
+        transition_stub_path=(
+            prompt_directory / f"state-response-{source_response_id}.json"
+        ),
+        latest_path=prompt_directory / "latest-response.json",
+        archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+    )
+    receipt = runtime.publish_legacy_latest(
+        payload,
+        occurrence,
+        write_kind="rollback",
+        operation_id=operation_id,
+        published_at=published_at,
+        source_revision=source_revision,
+        compatibility_publisher=publisher,
+    )
+    return {
+        **dict(receipt),
+        "outcome": receipt.get("latest_slot_outcome"),
+        "latest_slot_id": receipt.get("result_latest_slot_id"),
+        "latest_slot_ref": receipt.get("result_latest_slot_ref"),
+        "generation": receipt.get("result_latest_slot_generation"),
+    }
+
+
+def _safe_sequential_storage_error_code(exc: BaseException) -> str:
+    """Project one closed, payload/path-free storage error code."""
+
+    if isinstance(exc, PromptArchiveStorageError):
+        return exc.code
+    return "SEQUENTIAL_RESPONSE_STORAGE_UNAVAILABLE"
+
+
+def _prompt_archive_publication_http_exception(
+    exc: PromptArchiveStorageError,
+    occurrence: ArchiveOccurrence | None,
+) -> HTTPException:
+    """Map authoritative publication failure to the stable PAS1 envelope."""
+
+    supplied_correlation_id = (
+        occurrence.response_id
+        if isinstance(occurrence, ArchiveOccurrence)
+        else None
+    )
+    correlation_id = (
+        supplied_correlation_id
+        if isinstance(supplied_correlation_id, str)
+        and re.fullmatch(r"parresp1-[0-9a-f]{64}", supplied_correlation_id)
+        is not None
+        else f"prompt-archive-request-{uuid4().hex}"
+    )
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "X-Correlation-ID": correlation_id,
+    }
+    if exc.code == "PROMPT_ARCHIVE_BUSY":
+        headers["Retry-After"] = "1"
+    return HTTPException(
+        status_code=exc.http_status,
+        detail={
+            "schema_version": 1,
+            "error": exc.code,
+            "message": exc.message,
+            "correlation_id": correlation_id,
+            "retryable": exc.retryable,
+        },
+        headers=headers,
+    )
+
+
 def materialize_sequential_graph_response(
     *,
     response: dict[str, Any],
@@ -9327,7 +11566,12 @@ def materialize_sequential_graph_response(
     agent_latest_file_template: str,
     response_kind: str,
     request_agent_phone: str = "",
+    archive_occurrence: ArchiveOccurrence | None = None,
+    archive_occurrence_failed: bool = False,
+    archive_source_metadata: Mapping[str, Any] | None = None,
+    archive_source_metadata_error: str | None = None,
 ) -> dict[str, Any]:
+    legacy_latest_write_kind = _legacy_latest_write_kind(response_kind)
     project = response.get("project")
     project_data = project if isinstance(project, dict) else {}
     project_name = str(project_data.get("project_name") or "Project").strip()
@@ -9343,19 +11587,172 @@ def materialize_sequential_graph_response(
         git_address=git_address,
         git_context_key=git_context_key,
     )
-    canonical_response = json.dumps(
-        {
-            "request_agent_phone": str(request_agent_phone or "").strip(),
-            "response": response,
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
+    if prompt_archive_runtime.config.mode == "authoritative":
+        assignment_value = response.get("assignment")
+        assignment_identity = (
+            assignment_value if isinstance(assignment_value, dict) else {}
+        )
+        canonical_response = json.dumps(
+            {
+                "request_agent_phone": str(request_agent_phone or "").strip(),
+                "archive_response_id": (
+                    archive_occurrence.response_id
+                    if isinstance(archive_occurrence, ArchiveOccurrence)
+                    else None
+                ),
+                "occurrence_id": (
+                    archive_occurrence.occurrence_id
+                    if isinstance(archive_occurrence, ArchiveOccurrence)
+                    else None
+                ),
+                "assignment_id": assignment_identity.get(
+                    "current_assignment_id"
+                ),
+                "state_revision": assignment_identity.get("revision"),
+                "response_kind": response_kind,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    else:
+        canonical_response = json.dumps(
+            {
+                "request_agent_phone": str(request_agent_phone or "").strip(),
+                "response": response,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
     response_id = hashlib.sha256(canonical_response.encode("utf-8")).hexdigest()[:20]
     safe_kind = sequential_prompt_path_segment(response_kind, "graph-response")
-    response_path = prompt_directory / f"{safe_kind}-{response_id}.json"
-    latest_path = prompt_directory / "latest-response.json"
+    compatibility_directory = prompt_directory
+    compatibility_response_id = response_id
+    compatibility_safe_kind = safe_kind
+    latest_project_id = _sequential_latest_project_id(
+        response,
+        project_data,
+        git_context_key=git_context_key,
+        git_address=git_address,
+        project_name=project_name,
+    )
+    durable_project_id = _sequential_durable_project_id(
+        response,
+        project_data,
+        archive_occurrence,
+    )
+    project_authority_selected = False
+    project_latest_enabled = True
+    project_latest_selection_error: str | None = None
+    if prompt_archive_runtime.config.mode == "authoritative" and isinstance(
+        archive_occurrence,
+        ArchiveOccurrence,
+    ):
+        # Re-resolve from the durable project registry instead of trusting a
+        # response-carried project label/path. Startup recovery uses this same
+        # resolver, so a completed plan can never drift to another target.
+        authority_runtime = prompt_archive_runtime.for_project(
+            archive_occurrence.project_id
+        )
+        bound_target = authority_runtime.latest_target_authority_id()
+        try:
+            compatibility_directory = _prompt_archive_project_prompt_directory(
+                archive_occurrence.project_id,
+                create=bound_target is None,
+            )
+        except PromptArchiveStorageError:
+            if bound_target is not None:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                ) from None
+            raise
+        if bound_target is not None:
+            try:
+                configured_target = (
+                    ExternalLatestCoordinator.target_authority_id_for_path(
+                        compatibility_directory / "latest-response.json"
+                    )
+                )
+            except PromptArchiveStorageError:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                ) from None
+            if configured_target != bound_target:
+                raise PromptArchiveStorageError(
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                )
+        compatibility_response_id = archive_occurrence.response_id
+        compatibility_safe_kind = sequential_prompt_path_segment(
+            archive_occurrence.response_kind,
+            "graph-response",
+        )
+        latest_project_id = archive_occurrence.project_id
+        project_authority_selected = True
+    elif durable_project_id is not None:
+        # Rollback/disable cannot create a second latest authority.  Once the
+        # trusted project-specific sidecar exists, every later legacy/shadow
+        # writer remains on that physical target and must reconcile it.  A
+        # corrupt or unverifiable owner fails closed in the coordinator; it
+        # never falls back to the shared pre-enrollment target.
+        durable_runtime = prompt_archive_runtime.for_project(durable_project_id)
+        bound_target = durable_runtime.latest_target_authority_id()
+        enrolled_candidate = prompt_directory / ".nginx-qa-projects" / durable_project_id
+        if bound_target is not None:
+            try:
+                enrolled_directory = _prompt_archive_project_prompt_directory(
+                    durable_project_id
+                )
+                configured_target = (
+                    ExternalLatestCoordinator.target_authority_id_for_path(
+                        enrolled_directory / "latest-response.json"
+                    )
+                )
+                if configured_target != bound_target:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                    )
+                compatibility_directory = enrolled_directory
+                latest_project_id = durable_project_id
+                project_authority_selected = True
+                if isinstance(archive_occurrence, ArchiveOccurrence):
+                    compatibility_response_id = archive_occurrence.response_id
+                    compatibility_safe_kind = sequential_prompt_path_segment(
+                        archive_occurrence.response_kind,
+                        "graph-response",
+                    )
+            except PromptArchiveStorageError:
+                # Never fall back to a second latest authority.  Legacy/shadow
+                # still writes the compact agent prompt and transition response,
+                # but skips the unsafe latest target with a stable closed code.
+                project_latest_enabled = False
+                project_latest_selection_error = (
+                    "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+                )
+        elif os.path.lexists(enrolled_candidate):
+            try:
+                enrolled_directory = _prompt_archive_project_prompt_directory(
+                    durable_project_id
+                )
+                enrolled_sidecar = enrolled_directory / "latest-response.json.nginx-qa-v1"
+                if os.path.lexists(enrolled_sidecar):
+                    compatibility_directory = enrolled_directory
+                    latest_project_id = durable_project_id
+                    project_authority_selected = True
+                    if isinstance(archive_occurrence, ArchiveOccurrence):
+                        compatibility_response_id = archive_occurrence.response_id
+                        compatibility_safe_kind = sequential_prompt_path_segment(
+                            archive_occurrence.response_kind,
+                            "graph-response",
+                        )
+            except PromptArchiveStorageError as exc:
+                project_latest_enabled = False
+                project_latest_selection_error = exc.code
+    response_path = (
+        compatibility_directory
+        / f"{compatibility_safe_kind}-{compatibility_response_id}.json"
+    )
+    latest_path = compatibility_directory / "latest-response.json"
     response_agent = response.get("agent")
     response_agent_data = response_agent if isinstance(response_agent, dict) else {}
     active_task = response.get("active_task")
@@ -9395,11 +11792,54 @@ def materialize_sequential_graph_response(
         )
         for phone in agent_phones
     }
+    # A hand-off changes the destination .prompt. On restart the process-local
+    # predecessor cache is empty, so inspect only the bounded, explicitly
+    # declared agent phones carried by this committed response. This is not a
+    # directory scan and no caller-supplied filesystem path is accepted.
+    archive_candidate_phones: list[str] = list(agent_phones)
+    archive_candidate_values: list[Any] = []
+    for collection_key in ("team", "project_agents", "completed_assignments"):
+        collection = response.get(collection_key)
+        if isinstance(collection, list):
+            archive_candidate_values.extend(collection)
+    assignment_value = response.get("assignment")
+    if isinstance(assignment_value, dict):
+        assignment_records = assignment_value.get("assignments")
+        if isinstance(assignment_records, list):
+            archive_candidate_values.extend(assignment_records)
+    for candidate in archive_candidate_values[:1024]:
+        if not isinstance(candidate, dict):
+            continue
+        phone = str(
+            candidate.get("phone") or candidate.get("agent_phone") or ""
+        ).strip()
+        if phone and phone not in archive_candidate_phones:
+            archive_candidate_phones.append(phone)
+    archive_candidate_paths = {
+        Path(
+            resolve_sequential_agent_latest_file(
+                agent_latest_file_template,
+                project_name=project_name,
+                git_address=git_address,
+                git_context_key=git_context_key,
+                agent_phone=phone,
+            )
+        )
+        for phone in archive_candidate_phones[:1024]
+    }
+    current_agent_prompt_paths = {
+        Path(path) for path in agent_latest_paths.values()
+    }
     primary_agent_latest_path = (
         agent_latest_paths[agent_phones[0]] if agent_phones else ""
     )
     storage_fields = {
-        "response_id": response_id,
+        "response_id": (
+            compatibility_response_id
+            if prompt_archive_runtime.config.mode == "authoritative"
+            and isinstance(archive_occurrence, ArchiveOccurrence)
+            else response_id
+        ),
         "latest_agent_prompt_file_path": primary_agent_latest_path,
         "agent_prompt_file_paths": agent_latest_paths,
         "response_file_path": str(response_path),
@@ -9408,6 +11848,156 @@ def materialize_sequential_graph_response(
             SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS
         ),
     }
+    if prompt_archive_runtime.config.mode == "authoritative":
+        # Build only the bounded working response.  In particular, do not copy
+        # or serialize cumulative project_state/history on the native hot path.
+        stored_response = {
+            **storage_fields,
+            **{
+                key: value
+                for key, value in response.items()
+                if key not in storage_fields
+            },
+        }
+        agent_prompt_response = compact_sequential_agent_prompt_response(
+            stored_response
+        )
+        if not isinstance(archive_occurrence, ArchiveOccurrence):
+            # Read-only heartbeat/identity responses are not durable archive
+            # occurrences.  Keep their working prompt compact and do not
+            # invent an occurrence or rewrite authoritative response aliases.
+            for unavailable_key in (
+                "response_id",
+                "response_file_path",
+                "latest_response_file_path",
+                "full_response_instructions",
+            ):
+                agent_prompt_response.pop(unavailable_key, None)
+            retained_descriptor = next(
+                (
+                    descriptor
+                    for path in current_agent_prompt_paths
+                    if (
+                        descriptor
+                        := verified_prompt_archive_descriptor_for_current_identity(
+                            path,
+                            response,
+                        )
+                    )
+                    is not None
+                ),
+                None,
+            )
+            agent_prompt_response["response_archive_available"] = (
+                retained_descriptor is not None
+            )
+            if retained_descriptor is not None:
+                agent_prompt_response["prompt_archive"] = retained_descriptor
+            agent_prompt_json = json.dumps(
+                agent_prompt_response,
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n"
+            for path in current_agent_prompt_paths:
+                write_prompt_text_if_changed(path, agent_prompt_json)
+            return agent_prompt_response
+        runtime = prompt_archive_runtime.for_project(archive_occurrence.project_id)
+        if archive_source_metadata_error is not None:
+            planned_occurrence = (
+                runtime.source_metadata_occurrence_from_existing_plan(
+                    archive_occurrence
+                )
+            )
+            if planned_occurrence is None:
+                raise PromptArchiveStorageError(archive_source_metadata_error)
+            archive_occurrence = planned_occurrence
+            archive_source_metadata = None
+        archive_response = deepcopy(agent_prompt_response)
+        # The executable prompt stays compact, while the archive receives the
+        # exact evidence for *this* committed occurrence.  Never copy cumulative
+        # assignment/work/history collections into the authoritative hot path.
+        archive_response.pop("completed_assignments", None)
+        for evidence_key in (
+            "result",
+            "feedback",
+            "review",
+            "reviews",
+            "review_context",
+            "transition",
+            "pending_transition",
+            "last_transition",
+            "transition_applied",
+            "completed_assignment",
+            "source_commit",
+            "from_commit",
+            "git_commit",
+            "git_branch",
+        ):
+            if evidence_key in stored_response:
+                archive_response[evidence_key] = deepcopy(
+                    stored_response[evidence_key]
+                )
+        full_assignment = stored_response.get("assignment")
+        if isinstance(full_assignment, dict):
+            for transition_key in ("pending_transition", "last_transition"):
+                if transition_key in full_assignment:
+                    archive_response[transition_key] = deepcopy(
+                        full_assignment[transition_key]
+                    )
+        archive_response.update(
+            {
+                "project_id": archive_occurrence.project_id,
+                "sprint_id": archive_occurrence.sprint_id,
+                "response_id": archive_occurrence.response_id,
+                "response_kind": archive_occurrence.response_kind,
+            }
+        )
+        occurrence_document = build_authoritative_occurrence_document(
+            archive_response,
+            archive_occurrence,
+            maximum_bytes=runtime.max_hydrated_bytes,
+        )
+        native_bytes = prompt_archive_canonical_json_bytes_v1(
+            occurrence_document,
+            maximum=runtime.max_hydrated_bytes,
+        )
+        compatibility_publisher = SequentialPromptArchiveCompatibilityPublisher(
+            project_id=archive_occurrence.project_id,
+            transition_stub_path=response_path,
+            latest_path=latest_path,
+            archive_owner_verifier=runtime.verify_authoritative_archive_owner,
+        )
+        publication = runtime.publish_authoritative(
+            native_bytes,
+            archive_occurrence,
+            compatibility_publisher=compatibility_publisher,
+            raw_source_metadata=archive_source_metadata,
+            source_metadata_screen_factory=(
+                lambda: prompt_archive_source_metadata_screen_snapshot(
+                    project_id=archive_occurrence.project_id
+                )
+                if archive_source_metadata is not None
+                else None
+            ),
+        )
+
+        published_prompt_response = dict(agent_prompt_response)
+        published_prompt_response["response_archive_available"] = True
+        published_prompt_response["prompt_archive"] = (
+            prompt_archive_local_descriptor(
+                publication,
+                correlation_id=archive_occurrence.response_id,
+            )
+        )
+        published_prompt_json = json.dumps(
+            published_prompt_response,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        for path in current_agent_prompt_paths:
+            write_prompt_text_if_changed(path, published_prompt_json)
+        return published_prompt_response
+
     response_payload = deepcopy(response)
     for storage_key in storage_fields:
         response_payload.pop(storage_key, None)
@@ -9426,27 +12016,124 @@ def materialize_sequential_graph_response(
         indent=2,
     ) + "\n"
     destinations: list[tuple[str, Path, bool]] = [
+        ("response_archive", response_path, False),
         *(
             (f"agent_latest:{phone}", Path(path), True)
             for phone, path in agent_latest_paths.items()
         ),
-        ("response_archive", response_path, False),
-        ("project_latest", latest_path, False),
     ]
     successful_destinations: list[tuple[Path, bool]] = []
     storage_errors: dict[str, str] = {}
     seen_destinations: set[Path] = set()
+    prior_archive_descriptors: dict[Path, dict[str, Any]] = {}
+    predecessor_descriptors: dict[str, dict[str, Any]] = {}
+    shadow_hint_failed = False
+    if (
+        prompt_archive_runtime.config.mode == "shadow"
+        and isinstance(archive_occurrence, ArchiveOccurrence)
+    ):
+        for candidate_path in archive_candidate_paths:
+            try:
+                descriptor = verified_prompt_archive_descriptor(
+                    candidate_path,
+                    occurrence=archive_occurrence,
+                )
+            except Exception:
+                # A predecessor prompt is an optional shadow-only hint.  An
+                # unexpected adapter/runtime failure must not run before or
+                # interfere with the authoritative legacy writes below.
+                shadow_hint_failed = True
+                prior_archive_descriptors.clear()
+                predecessor_descriptors.clear()
+                break
+            if descriptor is None:
+                continue
+            if (
+                candidate_path in current_agent_prompt_paths
+                and descriptor.get("correlation_id")
+                == archive_occurrence.response_id
+            ):
+                prior_archive_descriptors[candidate_path] = descriptor
+                continue
+            archive_id = descriptor.get("archive_id")
+            if isinstance(archive_id, str):
+                predecessor_descriptors[archive_id] = descriptor
+    predecessor_archive_ids: set[str] = set()
+    predecessor_ambiguous = False
+    if predecessor_descriptors:
+        newest_created_at = max(
+            str(item.get("created_at") or "")
+            for item in predecessor_descriptors.values()
+        )
+        newest_ids = {
+            archive_id
+            for archive_id, item in predecessor_descriptors.items()
+            if str(item.get("created_at") or "") == newest_created_at
+        }
+        # Equal-time ambiguity fails closed rather than guessing a stream head.
+        if len(newest_ids) == 1:
+            predecessor_archive_ids = newest_ids
+        elif len(newest_ids) > 1:
+            predecessor_ambiguous = True
+    prompt_payload_prepared = False
     for destination_name, destination_path, is_agent_prompt in destinations:
         if destination_path in seen_destinations:
             continue
         seen_destinations.add(destination_path)
+        if is_agent_prompt and not prompt_payload_prepared:
+            prompt_payload_prepared = True
+            if (
+                "response_archive" not in storage_errors
+                and prior_archive_descriptors
+            ):
+                try:
+                    committed_before_prompt = _read_prompt_archive_source_file(
+                        response_path,
+                        trusted_root=prompt_directory,
+                        maximum_bytes=(
+                            prompt_archive_runtime.config.max_hydrated_bytes
+                        ),
+                    )
+                    if committed_before_prompt is not None:
+                        retained_descriptor = next(
+                            (
+                                descriptor
+                                for descriptor in prior_archive_descriptors.values()
+                                if descriptor_matches_committed_response(
+                                    descriptor,
+                                    committed_before_prompt,
+                                )
+                            ),
+                            None,
+                        )
+                        if retained_descriptor is not None:
+                            agent_prompt_response = dict(agent_prompt_response)
+                            agent_prompt_response[
+                                "response_archive_available"
+                            ] = True
+                            agent_prompt_response["prompt_archive"] = deepcopy(
+                                retained_descriptor
+                            )
+                            agent_prompt_json = json.dumps(
+                                agent_prompt_response,
+                                ensure_ascii=False,
+                                indent=2,
+                            ) + "\n"
+                except Exception:
+                    # Descriptor retention is an optional shadow-only hint.
+                    # A bounded-read failure must never run before or prevent
+                    # the authoritative legacy .prompt write below.
+                    shadow_hint_failed = True
+                    committed_before_prompt = None
         try:
             write_prompt_text_if_changed(
                 destination_path,
                 agent_prompt_json if is_agent_prompt else response_json,
             )
         except (OSError, UnicodeError) as exc:
-            storage_errors[destination_name] = str(exc)
+            storage_errors[destination_name] = (
+                _safe_sequential_storage_error_code(exc)
+            )
         else:
             successful_destinations.append((destination_path, is_agent_prompt))
     if storage_errors:
@@ -9476,6 +12163,358 @@ def materialize_sequential_graph_response(
                 # original destination failure without turning a completed
                 # transition into an HTTP error.
                 pass
+
+    # Every legacy/shadow writer uses the same target-colocated coordinator.
+    # Once the target is enrolled there is no uncoordinated overwrite path;
+    # a failed latest publication leaves the already-written transition and
+    # compact prompt usable and is reported with the existing storage warning.
+    latest_sprint_id_value = str(
+        response.get("sprint_id") or metadata.get("sprint_id") or ""
+    ).strip()
+    latest_sprint_id = (
+        latest_sprint_id_value
+        if re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:-]{0,159}",
+            latest_sprint_id_value,
+        )
+        else None
+    )
+    latest_bytes = _prompt_text_bytes(response_json)
+    (
+        latest_occurrence_id,
+        latest_operation_id,
+        latest_source_response_id,
+        latest_published_at,
+    ) = _legacy_latest_publication_identity(
+        project_id=latest_project_id,
+        sprint_id=latest_sprint_id,
+        response_kind=response_kind,
+        response_key=response_id,
+        content=latest_bytes,
+    )
+    try:
+        if project_latest_selection_error is not None:
+            raise PromptArchiveStorageError(project_latest_selection_error)
+        if project_latest_enabled:
+            latest_runtime = prompt_archive_runtime.for_project(latest_project_id)
+            coordinator = ExternalLatestCoordinator(
+                latest_path,
+                project_id=latest_project_id,
+                archive_owner_verifier=(
+                    latest_runtime.verify_authoritative_archive_owner
+                ),
+            )
+
+            def publish_common_latest() -> None:
+                latest_occurrence = _legacy_latest_occurrence(
+                    project_id=latest_project_id,
+                    sprint_id=latest_sprint_id,
+                    response_kind=response_kind,
+                    occurrence_id=latest_occurrence_id,
+                    source_response_id=latest_source_response_id,
+                    published_at=latest_published_at,
+                    response=response,
+                    committed_occurrence=archive_occurrence,
+                )
+                latest_runtime.publish_legacy_latest(
+                    latest_bytes,
+                    latest_occurrence,
+                    write_kind=legacy_latest_write_kind,
+                    source_revision=latest_occurrence.state_revision,
+                    published_at=latest_occurrence.verified_at,
+                    compatibility_publisher=(
+                        SequentialPromptArchiveCompatibilityPublisher(
+                            project_id=latest_project_id,
+                            transition_stub_path=response_path,
+                            latest_path=latest_path,
+                            archive_owner_verifier=(
+                                latest_runtime.verify_authoritative_archive_owner
+                            ),
+                        )
+                    ),
+                )
+
+            def publish_private_latest(*, guarded: bool) -> None:
+                if not latest_runtime.legacy_latest_publication_enabled:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_VERSION_UNSUPPORTED"
+                    )
+
+                def apply() -> None:
+                    coordinator.publish(
+                        latest_bytes,
+                        write_kind=legacy_latest_write_kind,
+                        occurrence_id=latest_occurrence_id,
+                        operation_id=latest_operation_id,
+                        published_at=latest_published_at,
+                        source_response_id=latest_source_response_id,
+                        source_sprint_id=latest_sprint_id,
+                        source_revision=None,
+                        content_kind="legacy_inline",
+                        pre_enrollment_verifier=(
+                            (
+                                lambda: latest_runtime.latest_target_authority_id()
+                                is None
+                            )
+                            if guarded
+                            else None
+                        ),
+                    )
+
+                if not guarded:
+                    apply()
+                    return
+                compatibility_publisher = (
+                    SequentialPromptArchiveCompatibilityPublisher(
+                        project_id=latest_project_id,
+                        transition_stub_path=response_path,
+                        latest_path=latest_path,
+                        archive_owner_verifier=(
+                            latest_runtime.verify_authoritative_archive_owner
+                        ),
+                    )
+                )
+                with latest_runtime.legacy_latest_pre_enrollment_admission(
+                    compatibility_publisher
+                ):
+                    apply()
+
+            if latest_runtime.storage is None:
+                # With no common archive root, every write (including writes
+                # after target enrollment) stays on the typed colocated
+                # coordinator.  Its immutable plan/pending/slot sidecar is the
+                # documented recovery authority for rootless legacy mode.
+                publish_private_latest(guarded=False)
+            elif coordinator.operation_admitted(
+                latest_source_response_id,
+                latest_operation_id,
+            ):
+                # A configured-root bootstrap may have faulted after its
+                # immutable private plan was admitted.  Replay that exact
+                # operation before choosing the common path, even if a target
+                # binding appeared meanwhile.  Request equality is enforced
+                # by the private plan; this branch cannot admit a new write.
+                publish_private_latest(guarded=False)
+            elif (
+                project_authority_selected
+                or latest_runtime.latest_target_authority_id() is not None
+            ):
+                publish_common_latest()
+            else:
+                # A configured-root target without a durable revision may make
+                # exactly one private bootstrap write.  The common admission
+                # fence is held through the coordinator's atomic latest-lock
+                # precondition, so concurrent enrollment can only make this
+                # attempt fail before artifacts.  The attempt is also made
+                # when a private marker exists: only an exact already-admitted
+                # operation may recover/replay there; a new operation is
+                # rejected and retried through the common path.
+                try:
+                    publish_private_latest(guarded=True)
+                except PromptArchiveStorageError:
+                    if coordinator.operation_admitted(
+                        latest_source_response_id,
+                        latest_operation_id,
+                    ):
+                        # Preserve the original safe failure.  The next exact
+                        # request will enter the admitted replay branch above
+                        # instead of masking this fault with a common-path
+                        # missing-revision error.
+                        raise
+                    if (
+                        latest_runtime.latest_target_authority_id() is None
+                        and not coordinator.enrolled()
+                    ):
+                        raise
+                    publish_common_latest()
+    except (PromptArchiveStorageError, OSError, UnicodeError) as exc:
+        storage_errors["project_latest"] = _safe_sequential_storage_error_code(exc)
+        stored_response["response_storage_errors"] = storage_errors
+        response_json = json.dumps(
+            stored_response,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        agent_prompt_response = compact_sequential_agent_prompt_response(
+            stored_response
+        )
+        agent_prompt_json = json.dumps(
+            agent_prompt_response,
+            ensure_ascii=False,
+            indent=2,
+        ) + "\n"
+        for destination_path, is_agent_prompt in successful_destinations:
+            try:
+                write_prompt_text_if_changed(
+                    destination_path,
+                    agent_prompt_json if is_agent_prompt else response_json,
+                )
+            except (OSError, UnicodeError):
+                pass
+
+    # Shadow is additive and runs strictly after the authoritative legacy
+    # archive/latest writes (including their response_storage_errors rewrite).
+    # It consumes the bytes read back from the committed transition archive,
+    # not the pre-write text string, so Windows newline translation is covered
+    # by the raw-byte equality proof.  No guessed sprint or occurrence is ever
+    # published.
+    if prompt_archive_runtime.config.mode == "shadow":
+        if (
+            archive_occurrence is None
+            or archive_occurrence_failed
+            or "response_archive" in storage_errors
+        ):
+            record_prompt_archive_metric(
+                "shadow_failed"
+                if archive_occurrence_failed
+                else "shadow_skipped"
+            )
+        else:
+            committed_bytes: bytes | None = None
+            try:
+                if predecessor_ambiguous or shadow_hint_failed:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_GENERATION_CONFLICT"
+                    )
+                committed_bytes = _read_prompt_archive_source_file(
+                    response_path,
+                    trusted_root=prompt_directory,
+                    maximum_bytes=(
+                        prompt_archive_runtime.config.max_hydrated_bytes
+                    ),
+                )
+                if committed_bytes is None:
+                    raise PromptArchiveStorageError(
+                        "PROMPT_ARCHIVE_UNAVAILABLE"
+                    )
+                publication_occurrence = replace(
+                    archive_occurrence,
+                    source_response_key=response_id,
+                    source_byte_size=len(committed_bytes),
+                    source_sha256=hashlib.sha256(committed_bytes).hexdigest(),
+                )
+                if (
+                    len(predecessor_archive_ids) == 1
+                    and "predecessor_archive_id"
+                    not in publication_occurrence.source
+                ):
+                    publication_occurrence = replace(
+                        publication_occurrence,
+                        source={
+                            **dict(publication_occurrence.source),
+                            "predecessor_archive_id": next(
+                                iter(predecessor_archive_ids)
+                            ),
+                        },
+                    )
+                runtime = prompt_archive_runtime.for_project(
+                    publication_occurrence.project_id
+                )
+                if archive_source_metadata_error is not None:
+                    planned_occurrence = (
+                        runtime.source_metadata_occurrence_from_existing_plan(
+                            publication_occurrence
+                        )
+                    )
+                    if planned_occurrence is None:
+                        raise PromptArchiveStorageError(
+                            archive_source_metadata_error
+                        )
+                    publication_occurrence = planned_occurrence
+                    archive_source_metadata = None
+                publication = runtime.publish_shadow(
+                    committed_bytes,
+                    publication_occurrence,
+                    raw_source_metadata=archive_source_metadata,
+                    source_metadata_screen_factory=(
+                        lambda: prompt_archive_source_metadata_screen_snapshot(
+                            project_id=publication_occurrence.project_id
+                        )
+                        if archive_source_metadata is not None
+                        else None
+                    ),
+                )
+                if publication is not None:
+                    published_prompt_response = dict(agent_prompt_response)
+                    published_prompt_response[
+                        "response_archive_available"
+                    ] = True
+                    published_prompt_response["prompt_archive"] = (
+                        prompt_archive_local_descriptor(
+                            publication,
+                            correlation_id=archive_occurrence.response_id,
+                        )
+                    )
+                    published_prompt_json = json.dumps(
+                        published_prompt_response,
+                        ensure_ascii=False,
+                        indent=2,
+                    ) + "\n"
+                    for destination_path, is_agent_prompt in successful_destinations:
+                        if is_agent_prompt:
+                            write_prompt_text_if_changed(
+                                destination_path,
+                                published_prompt_json,
+                            )
+                    agent_prompt_response = published_prompt_response
+                    record_prompt_archive_metric("shadow_published")
+            except Exception as exc:
+                # The legacy response and compact prompt are already committed.
+                # A shadow failure is intentionally payload-free observability,
+                # never a partial descriptor or an execution-path error.
+                record_prompt_archive_metric("shadow_failed")
+                if (
+                    isinstance(exc, PromptArchiveStorageError)
+                    and exc.code
+                    in {
+                        "PROMPT_ARCHIVE_BLOB_CORRUPT",
+                        "PROMPT_ARCHIVE_INTEGRITY_MISMATCH",
+                    }
+                ):
+                    try:
+                        prompt_archive_runtime_metrics.record_corruption_failure()
+                    except Exception:
+                        pass
+                try:
+                    if committed_bytes is None:
+                        committed_bytes = _read_prompt_archive_source_file(
+                            response_path,
+                            trusted_root=prompt_directory,
+                            maximum_bytes=(
+                                prompt_archive_runtime.config.max_hydrated_bytes
+                            ),
+                        )
+                    retained_descriptor: dict[str, Any] | None = None
+                    if committed_bytes is not None:
+                        for destination_path, descriptor in prior_archive_descriptors.items():
+                            if not descriptor_matches_committed_response(
+                                descriptor,
+                                committed_bytes,
+                            ):
+                                continue
+                            retained = dict(agent_prompt_response)
+                            retained["response_archive_available"] = True
+                            retained["prompt_archive"] = deepcopy(descriptor)
+                            retained_json = json.dumps(
+                                retained,
+                                ensure_ascii=False,
+                                indent=2,
+                            ) + "\n"
+                            write_prompt_text_if_changed(destination_path, retained_json)
+                            retained_descriptor = descriptor
+                    if retained_descriptor is not None:
+                        agent_prompt_response = dict(agent_prompt_response)
+                        agent_prompt_response[
+                            "response_archive_available"
+                        ] = True
+                        agent_prompt_response["prompt_archive"] = deepcopy(
+                            retained_descriptor
+                        )
+                except Exception:
+                    # Descriptor retention is best-effort after an isolated
+                    # sidecar failure; the committed compact prompt remains the
+                    # authoritative usable fallback.
+                    pass
     return agent_prompt_response
 
 
@@ -9484,8 +12523,46 @@ async def attach_sequential_graph_response_storage(
     *,
     response_kind: str,
     request_agent_phone: str = "",
+    archive_occurrence: ArchiveOccurrence | None = None,
+    archive_occurrence_failed: bool = False,
+    archive_source_metadata: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
+        archive_mode = prompt_archive_runtime.config.mode
+        resolved_source_metadata = None
+        source_metadata_error = None
+        if archive_mode != "legacy":
+            try:
+                resolved_source_metadata = (
+                    None
+                    if archive_source_metadata is None
+                    else json.loads(
+                        prompt_archive_canonical_json_bytes_v1(
+                            archive_source_metadata,
+                            maximum=16 * 1024,
+                        ).decode("utf-8")
+                    )
+                )
+                if (
+                    resolved_source_metadata is None
+                    and isinstance(archive_occurrence, ArchiveOccurrence)
+                ):
+                    # The production owner uses only immutable facts returned
+                    # by the just-committed transition/runtime transaction.  It
+                    # never reads a pending proposal, latest alias, queue
+                    # payload, or adapter state.
+                    resolved_source_metadata = (
+                        prompt_archive_source_metadata_from_occurrence(
+                            archive_occurrence
+                        )
+                    )
+            except PromptArchiveStorageError as exc:
+                # Preserve only the safe stable code.  Materialization can now
+                # consult an immutable existing plan before deciding whether
+                # this is an idempotent retry (ignore raw) or a first write
+                # (authoritative fail / shadow isolation).
+                source_metadata_error = exc.code
+                resolved_source_metadata = None
         async with sequential_prompt_storage_lock:
             settings = await asyncio.to_thread(read_sequential_prompt_settings_file)
             return await asyncio.to_thread(
@@ -9497,12 +12574,23 @@ async def attach_sequential_graph_response_storage(
                 ],
                 response_kind=response_kind,
                 request_agent_phone=request_agent_phone,
+                archive_occurrence=archive_occurrence,
+                archive_occurrence_failed=archive_occurrence_failed,
+                archive_source_metadata=resolved_source_metadata,
+                archive_source_metadata_error=source_metadata_error,
             )
-    except (HTTPException, OSError, UnicodeError) as exc:
-        detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
+    except (HTTPException, PromptArchiveStorageError, OSError, UnicodeError) as exc:
+        if (
+            isinstance(exc, PromptArchiveStorageError)
+            and prompt_archive_runtime.config.mode == "authoritative"
+        ):
+            raise _prompt_archive_publication_http_exception(
+                exc,
+                archive_occurrence,
+            ) from None
         return compact_sequential_agent_prompt_response(
             {
-                "response_storage_error": str(detail),
+                "response_storage_error": _safe_sequential_storage_error_code(exc),
                 **response,
             }
         )
@@ -10206,34 +13294,32 @@ def read_history_file(
     if not history_path.exists():
         return []
 
-    with history_path.open("r", encoding="utf-8") as file:
-        lines = file.readlines()
-
     start_at = parse_date_boundary(date_from or local_today_iso(), end=False)
     end_before = parse_date_boundary(date_to, end=True) if date_to else None
     git_context_key = normalize_history_git_context_filter(git_context)
-    records: list[dict[str, Any]] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            record = {
-                "id": str(uuid4()),
-                "timestamp": utc_now(),
-                "event": "history_read_error",
-                "queue": "system",
-                "message": line,
-                "metadata": {"error": "Invalid JSONL record"},
-            }
+    records: deque[dict[str, Any]] = deque(maxlen=max(1, min(limit, 10000)))
+    with history_path.open("r", encoding="utf-8") as file:
+        for raw_line in file:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                record = {
+                    "id": str(uuid4()),
+                    "timestamp": utc_now(),
+                    "event": "history_read_error",
+                    "queue": "system",
+                    "message": line,
+                    "metadata": {"error": "Invalid JSONL record"},
+                }
 
-        if record_matches_date_range(record, start_at, end_before):
-            if record_matches_git_context(record, git_context_key):
-                records.append(record)
+            if record_matches_date_range(record, start_at, end_before):
+                if record_matches_git_context(record, git_context_key):
+                    records.append(record)
 
-    return records[-limit:]
+    return list(records)
 
 
 async def read_history(
@@ -10574,6 +13660,53 @@ async def project_history_with_patches_context(
     )
 
 
+def bounded_transition_review_context(
+    *,
+    assignment_id: str,
+    outcome: str,
+    result: str,
+    feedback: str,
+    from_commit: str | None,
+    git_commit: str | None,
+    git_branch: str | None,
+    generated_at: str,
+) -> dict[str, Any]:
+    """Build response-scoped review evidence without cumulative history/Git IO."""
+
+    submission = {
+        "assignment_id": assignment_id or None,
+        "outcome": outcome or None,
+        "from_commit": from_commit or None,
+        "git_commit": git_commit or None,
+        "git_branch": git_branch or None,
+    }
+    evidence = {
+        "type": "assignment_submission",
+        "submission": deepcopy(submission),
+        "result": result,
+        "feedback": feedback,
+    }
+    return {
+        "schema_version": 2,
+        "generated_at": generated_at,
+        "semantics": (
+            "Bounded committed assignment evidence. Patch bytes are not built "
+            "on the authoritative execution path; exact commits and branch are "
+            "the review provenance."
+        ),
+        "text": result,
+        "record_count": 1,
+        "patch_count": 0,
+        "patch_error_count": 0,
+        "deduplicated_by_commit_pair": True,
+        "content_included": False,
+        "compacted": True,
+        "timeline": [evidence],
+        "patches": [],
+        "submission": submission,
+    }
+
+
 def agent_history_direction(
     record: dict[str, Any],
     agent: dict[str, Any],
@@ -10649,6 +13782,77 @@ def read_agent_work_history_file(
             public_record["agent_direction"] = direction
             records.append(public_record)
     return records
+
+
+def read_agent_work_history_tail_file(
+    agent: dict[str, Any],
+    git_context_key: str,
+    created_at: str | None = None,
+    *,
+    max_records: int = 256,
+    max_scan_bytes: int = 4 * 1024 * 1024,
+) -> list[dict[str, Any]]:
+    """Return a bounded recent history window for execution-path reminders.
+
+    The legacy diagnostic reader above intentionally preserves its historical
+    full-file behavior for explicit diagnostic views.  Identity/task paths must
+    not copy an ever-growing JSONL history merely to calculate a reminder that
+    is later omitted from the compact prompt.  This reader admits only a fixed
+    tail of the file and a fixed number of matching records.
+    """
+
+    if (
+        type(max_records) is not int
+        or not 1 <= max_records <= 1024
+        or type(max_scan_bytes) is not int
+        or not 4096 <= max_scan_bytes <= 16 * 1024 * 1024
+        or not history_path.exists()
+    ):
+        return []
+    try:
+        size = history_path.stat().st_size
+        offset = max(0, size - max_scan_bytes)
+        with history_path.open("rb") as file:
+            file.seek(offset)
+            raw = file.read(max_scan_bytes)
+    except OSError:
+        return []
+    if offset:
+        newline = raw.find(b"\n")
+        raw = b"" if newline < 0 else raw[newline + 1 :]
+    try:
+        lines = raw.decode("utf-8", errors="strict").splitlines()
+    except UnicodeError:
+        return []
+
+    created_time = parse_utc_datetime(created_at)
+    records: deque[dict[str, Any]] = deque(maxlen=max_records)
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(record, dict):
+            continue
+        if git_context_key and not record_matches_git_context(
+            record,
+            git_context_key,
+        ):
+            continue
+        record_time = parse_history_timestamp(record.get("timestamp"))
+        if created_time is not None and (
+            record_time is None or record_time < created_time
+        ):
+            continue
+        direction = agent_history_direction(record, agent)
+        if not direction:
+            continue
+        public_record = deepcopy(record)
+        public_record["agent_direction"] = direction
+        records.append(public_record)
+    return list(records)
 
 
 def agent_work_history_summary(
@@ -14927,7 +18131,7 @@ def render_index_v2() -> str:
     <section>
       <div class="panel">
         <h2>Промпт запуска sequential sprint</h2>
-        <div class="subtle">Название и Git address берутся из активного Git context. Полный пользовательский запрос и полные JSON-ответы переходов сохраняются на диске, чтобы агент мог восстановить обрезанные данные.</div>
+        <div class="subtle">Название и Git address берутся из активного Git context. Полный пользовательский запрос и JSON-архивы либо дескрипторы переходов сохраняются на диске, чтобы агент мог восстановить обрезанные данные через разрешённый путь.</div>
         <div class="launch-prompt-meta">
           <div>
             <label for="launchPromptProjectName">Проект</label>
@@ -14967,7 +18171,7 @@ def render_index_v2() -> str:
             <input id="launchPromptFilePath" readonly>
           </div>
           <div class="full-width">
-            <label for="launchPromptLatestResponsePath">Последний полный ответ проекта</label>
+            <label for="launchPromptLatestResponsePath">Путь последнего архива/дескриптора проекта</label>
             <input id="launchPromptLatestResponsePath" readonly>
           </div>
         </div>
@@ -22657,7 +25861,7 @@ ${data.patch || ""}
         .catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
     copyLaunchResponsePathButtonEl.addEventListener("click", () => {
-      copyLaunchStoragePath(launchPromptLatestResponsePathEl.value, "Путь ответа графа")
+      copyLaunchStoragePath(launchPromptLatestResponsePathEl.value, "Путь архива/дескриптора графа")
         .catch((error) => setLaunchPromptStatus(error.message, "error"));
     });
     cycleGraphCycleSelectEl.addEventListener("change", () => {
@@ -30089,32 +33293,55 @@ async def identify_sequential_project_agent(
                 "pending_transition"
             )
             if graph_node_completed and isinstance(pending_transition, dict):
-                review_context = await project_history_with_patches_context(
-                    result["context_key"],
-                    str(result["project"].get("git_address") or ""),
-                    assignment_id=str(
-                        completed_assignment.get("assignment_id") or ""
-                    ).strip()
-                    or None,
-                )
-                review_context.update(
-                    {
-                        "schema_version": 1,
-                        "generated_at": seen_at,
-                        "semantics": (
-                            "A patch is inserted before the first message at a "
-                            "different commit; identical commit pairs are not repeated."
-                        ),
-                        "submission": {
-                            "assignment_id": completed_assignment.get(
-                                "assignment_id"
+                if prompt_archive_runtime.config.mode == "authoritative":
+                    review_context = bounded_transition_review_context(
+                        assignment_id=str(
+                            completed_assignment.get("assignment_id") or ""
+                        ).strip(),
+                        outcome=submitted_outcome,
+                        result=submitted_result,
+                        feedback=submitted_feedback,
+                        from_commit=submitted_from_commit or None,
+                        git_commit=str(
+                            completion_git_context.get("git_commit") or ""
+                        ).strip()
+                        or None,
+                        git_branch=str(
+                            completion_git_context.get("git_branch") or ""
+                        ).strip()
+                        or None,
+                        generated_at=seen_at,
+                    )
+                else:
+                    # Legacy and shadow intentionally preserve the historical
+                    # full diagnostic snapshot.  Only the explicitly gated
+                    # authoritative path makes the O(delta) hot-path claim.
+                    review_context = await project_history_with_patches_context(
+                        result["context_key"],
+                        str(result["project"].get("git_address") or ""),
+                        assignment_id=str(
+                            completed_assignment.get("assignment_id") or ""
+                        ).strip()
+                        or None,
+                    )
+                    review_context.update(
+                        {
+                            "schema_version": 1,
+                            "generated_at": seen_at,
+                            "semantics": (
+                                "A patch is inserted before the first message at a "
+                                "different commit; identical commit pairs are not repeated."
                             ),
-                            "from_commit": submitted_from_commit or None,
-                            "git_commit": completion_git_context.get("git_commit"),
-                            "git_branch": completion_git_context.get("git_branch"),
-                        },
-                    }
-                )
+                            "submission": {
+                                "assignment_id": completed_assignment.get(
+                                    "assignment_id"
+                                ),
+                                "from_commit": submitted_from_commit or None,
+                                "git_commit": completion_git_context.get("git_commit"),
+                                "git_branch": completion_git_context.get("git_branch"),
+                            },
+                        }
+                    )
                 updated_assignment = await run_group_write_transaction(
                     attach_transition_review_context_transaction,
                     project_id,
@@ -30124,6 +33351,19 @@ async def identify_sequential_project_agent(
                 )
                 result["assignment"] = updated_assignment
 
+        archive_occurrence: ArchiveOccurrence | None = None
+        archive_occurrence_failed = False
+        if prompt_archive_runtime.config.mode in {"shadow", "authoritative"}:
+            try:
+                result = await attach_prompt_archive_sprint_identity(result)
+                archive_occurrence = prompt_archive_occurrence_from_sequential_result(
+                    result,
+                    response_kind="transition-response",
+                )
+            except Exception:
+                if prompt_archive_runtime.config.mode == "authoritative":
+                    raise
+                archive_occurrence_failed = True
         agent = result.get("agent")
         if not isinstance(agent, dict):
             assignment = result.get("assignment") or {}
@@ -30138,6 +33378,11 @@ async def identify_sequential_project_agent(
                 "identity_request": request_message or "Кто я?",
                 "project_id": result["project_id"],
                 "project_phone": result["project_phone"],
+                **(
+                    {"sprint_id": result["sprint_id"]}
+                    if str(result.get("sprint_id") or "").strip()
+                    else {}
+                ),
                 "project": result["project"],
                 "assignment_mode": "sequential",
                 "all_completed": True,
@@ -30161,6 +33406,8 @@ async def identify_sequential_project_agent(
                 "next_identity_request": None,
                 "completed_assignments": assignment.get("assignments", []),
                 "removed_pending_tasks": removed_tasks,
+                "_prompt_archive_occurrence": archive_occurrence,
+                "_prompt_archive_occurrence_failed": archive_occurrence_failed,
             }
 
         assignment = result.get("assignment") or {}
@@ -30182,7 +33429,7 @@ async def identify_sequential_project_agent(
         created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
         async with history_lock:
             previous_work_history = await asyncio.to_thread(
-                read_agent_work_history_file,
+                read_agent_work_history_tail_file,
                 agent,
                 result["context_key"],
                 created_at,
@@ -30229,7 +33476,7 @@ async def identify_sequential_project_agent(
 
     async with history_lock:
         work_history = await asyncio.to_thread(
-            read_agent_work_history_file,
+            read_agent_work_history_tail_file,
             agent,
             result["context_key"],
             created_at,
@@ -30304,6 +33551,11 @@ async def identify_sequential_project_agent(
         "identity_request": request_message or "Кто я?",
         "project_id": result["project_id"],
         "project_phone": result["project_phone"],
+        **(
+            {"sprint_id": result["sprint_id"]}
+            if str(result.get("sprint_id") or "").strip()
+            else {}
+        ),
         "project": result["project"],
         "assignment_mode": "sequential",
         "all_completed": False,
@@ -30377,6 +33629,8 @@ async def identify_sequential_project_agent(
             and item.get("status")
             in {"completed", "transitioned", "review_rejected", "approved", "rejected"}
         ],
+        "_prompt_archive_occurrence": archive_occurrence,
+        "_prompt_archive_occurrence_failed": archive_occurrence_failed,
     }
 
 
@@ -31204,7 +34458,7 @@ async def sequential_runtime_agent_message_reminder(
     created_at = str(parameters.get("created_at") or "")
     async with history_lock:
         history = await asyncio.to_thread(
-            read_agent_work_history_file,
+            read_agent_work_history_tail_file,
             agent,
             runtime["context_key"],
             created_at or None,
@@ -31465,7 +34719,21 @@ async def identify_sequential_agent_from_repository(
         port=request_port(request),
         supplied_role_token=str(request.headers.get(ROLE_TOKEN_HEADER) or ""),
     )
+    archive_occurrence: ArchiveOccurrence | None = None
+    archive_occurrence_failed = False
+    if prompt_archive_runtime.config.mode in {"shadow", "authoritative"}:
+        try:
+            archive_runtime = await attach_prompt_archive_sprint_identity(runtime)
+            archive_occurrence = prompt_archive_occurrence_from_sequential_runtime(
+                archive_runtime
+            )
+        except Exception:
+            if prompt_archive_runtime.config.mode == "authoritative":
+                raise
+            archive_occurrence_failed = True
     response = sequential_runtime_response(runtime, request)
+    if archive_occurrence is not None:
+        response["sprint_id"] = archive_occurrence.sprint_id
     communication_reminder = await sequential_runtime_agent_message_reminder(
         runtime
     )
@@ -31479,21 +34747,27 @@ async def identify_sequential_agent_from_repository(
             response["communication"]["instructions"],
             communication_reminder,
         )
-    project_state = await project_state_json(project_phone)
-    response["communication"]["instructions"] += (
-        " Полная история сообщений и межкоммитные diff-блоки находятся в "
-        "project_state.activity_with_patches. Для одного commit patch не "
-        "повторяется; при смене commit patch расположен перед первым сообщением "
-        "нового commit. Сводка находится в project_state.code_patch_summary."
-    )
-    response["project_state"] = project_state
-    response["project_state_url"] = (
-        f"{str(request.base_url).rstrip('/')}"
-        f"/api/v1/projects/{project_phone}/state.json"
-    )
+    if prompt_archive_runtime.config.mode == "authoritative":
+        response["communication"]["instructions"] += (
+            " Response-scoped evidence is available only through the "
+            "authorized prompt_archive content endpoint returned after a "
+            "durable occurrence; identity/task responses do not build full state."
+        )
+    else:
+        response["communication"]["instructions"] += (
+            " Полная история сообщений и межкоммитные diff-блоки, включая "
+            "project_state.activity_with_patches, доступны только по "
+            "project_state_url; обычный identity/task response их не строит."
+        )
+        response["project_state_url"] = (
+            f"{str(request.base_url).rstrip('/')}"
+            f"/api/v1/projects/{project_phone}/state.json"
+        )
     return await attach_sequential_graph_response_storage(
         response,
         response_kind="identity-response",
+        archive_occurrence=archive_occurrence,
+        archive_occurrence_failed=archive_occurrence_failed,
     )
 
 
@@ -31501,7 +34775,7 @@ async def identify_sequential_agent_from_repository(
 @app.get("/api/v1/projects/{project_id}/state.json")
 async def get_project_state_json(
     project_id: str,
-    history_limit: int = 200,
+    history_limit: int = Query(default=200, ge=1, le=10000),
 ) -> dict[str, Any]:
     return await project_state_json(project_id, history_limit=history_limit)
 
@@ -31586,6 +34860,21 @@ def inbound_known_project_ids(config: dict[str, Any]) -> set[str]:
         if isinstance(entry, dict)
         if (phone := normalize_project_phone(entry.get("project_phone")))
     }
+
+
+def prompt_archive_startup_project_ids(config: dict[str, Any]) -> set[str]:
+    """Include durable projects and shared pre-enrollment target authorities."""
+
+    selected = inbound_known_project_ids(config)
+    for context in configured_git_contexts_from_config(config):
+        selected.add(
+            _prompt_archive_shared_target_project_id(
+                git_context_key=str(context.get("git_context_key") or "").strip(),
+                git_address=str(context.get("git_address") or "").strip(),
+                project_name=str(context.get("project_name") or "").strip(),
+            )
+        )
+    return selected
 
 
 def inbound_proposal_error_response(error: InboundProposalError) -> JSONResponse:
@@ -32387,13 +35676,30 @@ def _inline_openapi_schema(filename: str) -> dict[str, Any]:
         reference = value.get("$ref")
         if isinstance(reference, str):
             reference_file, _, fragment = reference.partition("#")
-            if urllib.parse.urlsplit(reference_file).scheme:
-                raise RuntimeError("OpenAPI schema reference must be local")
-            target_path = (
-                (current_path.parent / reference_file).resolve()
-                if reference_file
-                else current_path
-            )
+            parsed_reference = urllib.parse.urlsplit(reference_file)
+            if parsed_reference.scheme:
+                canonical_prefix = "/chartjs333/nginx-qa/schemas/"
+                if not (
+                    parsed_reference.scheme == "https"
+                    and parsed_reference.netloc == "github.com"
+                    and parsed_reference.path.startswith(canonical_prefix)
+                    and not parsed_reference.query
+                    and not parsed_reference.username
+                    and not parsed_reference.password
+                ):
+                    raise RuntimeError("OpenAPI schema reference must be local")
+                schema_name = parsed_reference.path.removeprefix(
+                    canonical_prefix
+                )
+                if not schema_name or "/" in schema_name:
+                    raise RuntimeError("OpenAPI schema reference is invalid")
+                target_path = (schema_root / schema_name).resolve()
+            else:
+                target_path = (
+                    (current_path.parent / reference_file).resolve()
+                    if reference_file
+                    else current_path
+                )
             key = (target_path, fragment)
             if key in stack:
                 raise RuntimeError("OpenAPI schema reference cycle is unsupported")
@@ -34595,15 +37901,25 @@ async def identify_project_agent(
                 ),
                 identity_payload=identity_payload,
             )
-            response["project_state"] = await project_state_json(project_id)
-            response["project_state_url"] = (
-                f"{str(request.base_url).rstrip('/')}"
-                f"/api/v1/projects/{snapshot['project_phone']}/state.json"
+            archive_occurrence = response.pop("_prompt_archive_occurrence", None)
+            archive_occurrence_failed = bool(
+                response.pop("_prompt_archive_occurrence_failed", False)
             )
+            if prompt_archive_runtime.config.mode != "authoritative":
+                response["project_state_url"] = (
+                    f"{str(request.base_url).rstrip('/')}"
+                    f"/api/v1/projects/{snapshot['project_phone']}/state.json"
+                )
             return await attach_sequential_graph_response_storage(
                 response,
                 response_kind="transition-response",
                 request_agent_phone=agent_phone,
+                archive_occurrence=(
+                    archive_occurrence
+                    if isinstance(archive_occurrence, ArchiveOccurrence)
+                    else None
+                ),
+                archive_occurrence_failed=archive_occurrence_failed,
             )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -34621,7 +37937,7 @@ async def identify_project_agent(
         )
     async with history_lock:
         previous_history = await asyncio.to_thread(
-            read_agent_work_history_file,
+            read_agent_work_history_tail_file,
             snapshot["agent"],
             snapshot["context_key"],
             None,
@@ -34685,7 +38001,7 @@ async def identify_project_agent(
     created_at = str(agent.get("parameters", {}).get("created_at") or seen_at)
     async with history_lock:
         work_history = await asyncio.to_thread(
-            read_agent_work_history_file,
+            read_agent_work_history_tail_file,
             agent,
             updated["context_key"],
             created_at,
@@ -36542,6 +39858,8 @@ async def get_test_design_legacy() -> None:
 from nginx_qa.scope_api import register_scope_api
 import sys as _scope_api_sys
 register_scope_api(_scope_api_sys.modules[__name__])
+from nginx_qa.prompt_archive_api import register_prompt_archive_api
+register_prompt_archive_api(_scope_api_sys.modules[__name__])
 
 
 if __name__ == "__main__":

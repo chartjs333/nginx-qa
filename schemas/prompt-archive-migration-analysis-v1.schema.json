@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-migration-analysis-v1.schema.json",
+  "title": "Prompt archive offline migration analysis evidence v1",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "command", "status", "batch_id", "project_id", "contract_version", "tool_version", "tool_source_sha256", "inventory", "selected_archives", "safety"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_migration_analysis"},
+    "media_type": {"const": "application/vnd.nginx-qa.prompt-archive-migration-evidence-v1+json"},
+    "command": {"const": "analyze"},
+    "status": {"enum": ["ready", "no_candidates"]},
+    "batch_id": {"type": "string", "pattern": "^parmb1-[0-9a-f]{64}$"},
+    "project_id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
+    "contract_version": {"const": "prompt-archive-offline-migration-contract-v1"},
+    "tool_version": {"const": "prompt-archive-migration-v1"},
+    "tool_source_sha256": {"$ref": "#/$defs/sha256"},
+    "inventory": {
+      "type": "object",
+      "required": ["inventory_sha256", "safety_snapshot_sha256", "entry_count", "total_bytes", "selected_archive_count"],
+      "properties": {"inventory_sha256": {"$ref": "#/$defs/sha256"}, "safety_snapshot_sha256": {"$ref": "#/$defs/sha256"}, "entry_count": {"type": "integer", "minimum": 1, "maximum": 1000000}, "total_bytes": {"type": "integer", "minimum": 0, "maximum": 68719476736}, "selected_archive_count": {"type": "integer", "minimum": 0, "maximum": 1000000}},
+      "additionalProperties": false
+    },
+    "selected_archives": {"type": "array", "maxItems": 1000000, "items": {"$ref": "#/$defs/selection"}},
+    "safety": {
+      "type": "object",
+      "required": ["read_only", "archive_root_opened", "public_paths_persisted", "originals_modified"],
+      "properties": {"read_only": {"const": true}, "archive_root_opened": {"const": false}, "public_paths_persisted": {"const": false}, "originals_modified": {"const": false}},
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "selection": {
+      "type": "object",
+      "required": ["ordinal", "path_sha256", "source_byte_size", "source_sha256"],
+      "properties": {"ordinal": {"type": "integer", "minimum": 0, "maximum": 999999}, "path_sha256": {"$ref": "#/$defs/sha256"}, "source_byte_size": {"type": "integer", "minimum": 0, "maximum": 536870912}, "source_sha256": {"$ref": "#/$defs/sha256"}},
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

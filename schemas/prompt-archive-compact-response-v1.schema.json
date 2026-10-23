@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nginx-qa.local/schemas/prompt-archive-compact-response-v1.schema.json",
+  "title": "Prompt Archive Compact Sequential Response V1",
+  "type": "object",
+  "required": [
+    "response_compact",
+    "active_task_message_complete",
+    "omitted_response_fields"
+  ],
+  "properties": {
+    "response_compact": {"const": true},
+    "active_task_message_complete": {"type": "boolean"},
+    "omitted_response_fields": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"type": "string", "minLength": 1, "maxLength": 160},
+      "uniqueItems": true
+    },
+    "active_task": {
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "description": "Complete executable task and result-control contract.",
+          "properties": {
+            "id": {"type": "string", "minLength": 1, "maxLength": 160},
+            "message": {"type": "string", "minLength": 1},
+            "metadata": {
+              "type": "object",
+              "properties": {
+                "assignment_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                "allowed_outcomes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "uniqueItems": true,
+                  "items": {"type": "string", "minLength": 1, "maxLength": 80}
+                },
+                "result_endpoint": {"type": "string", "minLength": 1, "maxLength": 2048},
+                "source_commit": {
+                  "type": "string",
+                  "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "anyOf": [
+                      {"required": ["allowed_outcomes"]},
+                      {"required": ["result_endpoint"]}
+                    ]
+                  },
+                  "then": {
+                    "required": [
+                      "assignment_id",
+                      "allowed_outcomes",
+                      "result_endpoint"
+                    ]
+                  }
+                }
+              ],
+              "additionalProperties": true
+            }
+          },
+          "additionalProperties": true
+        }
+      ]
+    },
+    "assignment": {"type": "object", "additionalProperties": true},
+    "completed_assignment": {"type": "object", "additionalProperties": true},
+    "response_archive_available": {"type": "boolean"},
+    "prompt_archive": {
+      "$ref": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-descriptor-v1.schema.json"
+    },
+    "response_id": {"type": "string", "minLength": 1, "maxLength": 160},
+    "response_file_path": {"type": "string"},
+    "latest_response_file_path": {"type": "string"},
+    "project_state_url": {"type": "string"},
+    "response_storage_error": {
+      "enum": [
+        "SEQUENTIAL_RESPONSE_STORAGE_UNAVAILABLE",
+        "PROMPT_ARCHIVE_UNAVAILABLE",
+        "PROMPT_ARCHIVE_REFERENCE_INVALID",
+        "PROMPT_ARCHIVE_GENERATION_CONFLICT",
+        "PROMPT_ARCHIVE_INTEGRITY_MISMATCH"
+      ]
+    },
+    "response_storage_errors": {
+      "type": "object",
+      "maxProperties": 64,
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[A-Z][A-Z0-9_]{1,95}$"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "active_task_message_complete": {"const": true},
+          "active_task": {"type": "object"}
+        },
+        "required": ["active_task_message_complete", "active_task"]
+      },
+      "then": {
+        "properties": {
+          "active_task": {"required": ["message"]}
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"response_archive_available": {"const": true}},
+        "required": ["response_archive_available"]
+      },
+      "then": {"required": ["prompt_archive"]}
+    },
+    {
+      "if": {"required": ["prompt_archive"]},
+      "then": {
+        "required": ["response_archive_available"],
+        "properties": {"response_archive_available": {"const": true}}
+      }
+    },
+    {
+      "not": {
+        "anyOf": [
+          {"required": ["project_state"]},
+          {"required": ["work_history"]},
+          {"required": ["history_with_patches"]},
+          {"required": ["activity_with_patches"]},
+          {"required": ["code_patches"]},
+          {"required": ["recent_activity"]},
+          {"required": ["execution_audit"]}
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,188 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-latest-slot-v1.schema.json",
+  "title": "Prompt archive project latest-response slot v1",
+  "description": "A durable, immutable wrapper in the project-global ordered latest-response sidecar chain. The one physical cross-process lock is collocated with and deterministically derived from the external latest-response target, so default legacy writers without archive-root configuration can find it; it is never derived from response, sprint, archive, operation, runtime-root, or archive-root identity. The wrapper persists the predecessor-independent intent_id and complete order tuple so recovery can prove equal, earlier, or later intent without freezing a mutable predecessor in the plan. Under the lock: an equal intent is success; a greater current order makes an older operation a safe superseded no-op; a lower current order derives generation=current+1 and previous_slot_id=current, then reconciles content bytes and sidecar before unlock. Bootstrap is two-phase: under this lock it observes the legacy bytes and durably publishes intended content plus retained/current enrollment markers, releases the lock, registers under the pending-registry shard lock alone, then reacquires this lock to revalidate and reconcile content and the first slot. Each wrapper is immutable and content-addressed. Descriptor and every normal legacy transition, identity, state, or rollback participate in this same serialization chain.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "id_algorithm",
+    "latest_slot_id",
+    "intent_id",
+    "project_id",
+    "slot_scope",
+    "slot_id",
+    "publication_protocol",
+    "ordering",
+    "generation",
+    "previous_slot_id",
+    "content_kind",
+    "content_sha256",
+    "content_size",
+    "descriptor_ref",
+    "source_sprint_id",
+    "source_response_id",
+    "published_at"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_latest_slot"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-latest-slot-v1+json"
+    },
+    "id_algorithm": {"const": "PAS1-ID-v1"},
+    "latest_slot_id": {
+      "description": "PAS1-ID-v1 latest-slot-id over the flattened ordered scalar fields frozen by PROMPT_ARCHIVE_STORAGE_V1.md.",
+      "type": "string",
+      "pattern": "^parlatest1-[0-9a-f]{64}$"
+    },
+    "intent_id": {
+      "description": "The predecessor-independent latest content intent represented by this wrapper.",
+      "type": "string",
+      "pattern": "^parlatestintent1-[0-9a-f]{64}$"
+    },
+    "project_id": {"$ref": "#/$defs/safeId"},
+    "slot_scope": {"const": "project"},
+    "slot_id": {"const": "latest-response"},
+    "publication_protocol": {
+      "const": "prompt-archive-project-global-ordered-latest-intent-v1"
+    },
+    "ordering": {"$ref": "#/$defs/latestOrdering"},
+    "generation": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9223372036854775807
+    },
+    "previous_slot_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^parlatest1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "content_kind": {"enum": ["descriptor_stub", "legacy_inline"]},
+    "content_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "content_size": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    },
+    "descriptor_ref": {
+      "oneOf": [
+        {"$ref": "#/$defs/descriptorRef"},
+        {"type": "null"}
+      ]
+    },
+    "source_sprint_id": {
+      "oneOf": [
+        {"$ref": "#/$defs/safeId"},
+        {"type": "null"}
+      ]
+    },
+    "source_response_id": {
+      "oneOf": [
+        {"type": "string", "pattern": "^parresp1-[0-9a-f]{64}$"},
+        {"type": "null"}
+      ]
+    },
+    "published_at": {"type": "string", "format": "date-time"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"generation": {"const": 1}},
+        "required": ["generation"]
+      },
+      "then": {"properties": {"previous_slot_id": {"type": "null"}}},
+      "else": {
+        "properties": {
+          "previous_slot_id": {
+            "type": "string",
+            "pattern": "^parlatest1-[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"content_kind": {"const": "descriptor_stub"}},
+        "required": ["content_kind"]
+      },
+      "then": {
+        "properties": {
+          "descriptor_ref": {"$ref": "#/$defs/descriptorRef"},
+          "source_sprint_id": {"$ref": "#/$defs/safeId"},
+          "source_response_id": {
+            "type": "string",
+            "pattern": "^parresp1-[0-9a-f]{64}$"
+          }
+        }
+      },
+      "else": {"properties": {"descriptor_ref": {"type": "null"}}}
+    }
+  ],
+  "$defs": {
+    "latestOrdering": {
+      "description": "The content intent total order, compared lexicographically by source_revision, occurrence_id, then operation_id only after revision_authority exactly matches. The persisted authority proves the revision belongs to the slot-durable, non-resettable project high-water mark rather than ephemeral runtime state.",
+      "type": "object",
+      "required": [
+        "revision_authority",
+        "source_revision",
+        "occurrence_id",
+        "operation_id"
+      ],
+      "properties": {
+        "revision_authority": {"$ref": "#/$defs/revisionAuthority"},
+        "source_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "occurrence_id": {"$ref": "#/$defs/safeId"},
+        "operation_id": {
+          "type": "string",
+          "pattern": "^parop1-[0-9a-f]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "revisionAuthority": {
+      "description": "The stable V1 revision domain is the enclosing (project_id, slot_scope, slot_id). Epoch rollover is not defined: restore the durable high-water mark or fail closed.",
+      "type": "object",
+      "required": ["protocol", "epoch", "reset_policy"],
+      "properties": {
+        "protocol": {
+          "const": "prompt-archive-durable-project-latest-revision-v1"
+        },
+        "epoch": {"const": 1},
+        "reset_policy": {"const": "restore_high_water_mark_or_fail_closed"}
+      },
+      "additionalProperties": false
+    },
+    "descriptorRef": {
+      "allOf": [
+        {"$ref": "prompt-archive-ref-v1.schema.json"},
+        {
+          "required": ["logical_kind", "media_type"],
+          "properties": {
+            "logical_kind": {"const": "descriptor_stub"},
+            "media_type": {
+              "const": "application/vnd.nginx-qa.prompt-archive-descriptor-stub-v1+json"
+            }
+          }
+        }
+      ]
+    },
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    }
+  },
+  "additionalProperties": false
+}

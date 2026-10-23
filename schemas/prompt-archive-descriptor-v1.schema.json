@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-descriptor-v1.schema.json",
+  "title": "Prompt archive API descriptor response v1",
+  "description": "A sprint-scoped, non-capability descriptor. The server semantically verifies that every URL embeds the same project_id, sprint_id, and archive_id declared by this object.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "kind",
+    "media_type",
+    "correlation_id",
+    "route_context",
+    "agent_phone",
+    "archive_id",
+    "archive_format",
+    "scope",
+    "integrity",
+    "created_at",
+    "descriptor_url",
+    "manifest_url",
+    "content_url",
+    "state_url"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_descriptor"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-descriptor+json"
+    },
+    "correlation_id": {"$ref": "#/$defs/safeId"},
+    "route_context": {"enum": ["local_operator", "managed_agent"]},
+    "agent_phone": {
+      "oneOf": [
+        {"type": "string", "pattern": "^[0-9]{1,16}$"},
+        {"type": "null"}
+      ]
+    },
+    "archive_id": {
+      "type": "string",
+      "pattern": "^par1-[0-9a-f]{64}$"
+    },
+    "archive_format": {
+      "$ref": "prompt-archive-manifest-v1.schema.json#/properties/archive_format"
+    },
+    "scope": {"$ref": "#/$defs/sprintScope"},
+    "integrity": {
+      "$ref": "prompt-archive-manifest-v1.schema.json#/properties/integrity"
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "descriptor_url": {"$ref": "#/$defs/descriptorUrl"},
+    "manifest_url": {"$ref": "#/$defs/manifestUrl"},
+    "content_url": {"$ref": "#/$defs/contentUrl"},
+    "state_url": {"$ref": "#/$defs/stateUrl"}
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {"route_context": {"const": "local_operator"}},
+        "required": ["route_context"]
+      },
+      "then": {
+        "properties": {
+          "agent_phone": {"type": "null"},
+          "descriptor_url": {"$ref": "#/$defs/localDescriptorUrl"},
+          "manifest_url": {"$ref": "#/$defs/localManifestUrl"},
+          "content_url": {"$ref": "#/$defs/localContentUrl"},
+          "state_url": {"$ref": "#/$defs/localStateUrl"}
+        }
+      },
+      "else": {
+        "properties": {
+          "agent_phone": {"type": "string", "pattern": "^[0-9]{1,16}$"},
+          "descriptor_url": {"$ref": "#/$defs/managedDescriptorUrl"},
+          "manifest_url": {"$ref": "#/$defs/managedManifestUrl"},
+          "content_url": {"$ref": "#/$defs/managedContentUrl"},
+          "state_url": {"$ref": "#/$defs/managedStateUrl"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 160,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    },
+    "sprintScope": {
+      "allOf": [
+        {
+          "$ref": "prompt-archive-manifest-v1.schema.json#/$defs/scope"
+        },
+        {
+          "required": ["sprint_id"],
+          "properties": {
+            "sprint_id": {"$ref": "#/$defs/safeId"}
+          }
+        }
+      ]
+    },
+    "descriptorUrl": {
+      "oneOf": [
+        {"$ref": "#/$defs/localDescriptorUrl"},
+        {"$ref": "#/$defs/managedDescriptorUrl"}
+      ]
+    },
+    "manifestUrl": {
+      "oneOf": [
+        {"$ref": "#/$defs/localManifestUrl"},
+        {"$ref": "#/$defs/managedManifestUrl"}
+      ]
+    },
+    "contentUrl": {
+      "oneOf": [
+        {"$ref": "#/$defs/localContentUrl"},
+        {"$ref": "#/$defs/managedContentUrl"}
+      ]
+    },
+    "stateUrl": {
+      "oneOf": [
+        {"$ref": "#/$defs/localStateUrl"},
+        {"$ref": "#/$defs/managedStateUrl"}
+      ]
+    },
+    "localDescriptorUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}$"
+    },
+    "localManifestUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/manifest$"
+    },
+    "localContentUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/content$"
+    },
+    "localStateUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/state$"
+    },
+    "managedDescriptorUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}$"
+    },
+    "managedManifestUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/manifest$"
+    },
+    "managedContentUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/content$"
+    },
+    "managedStateUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^/api/v1/projects/[A-Za-z0-9][A-Za-z0-9._:-]*/agents/[0-9]{1,16}/sprints/[A-Za-z0-9][A-Za-z0-9._:-]*/prompt-archives/par1-[0-9a-f]{64}/state$"
+    }
+  },
+  "additionalProperties": false
+}

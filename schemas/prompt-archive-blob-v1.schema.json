@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/prompt-archive-blob-v1.schema.json",
+  "title": "Prompt archive immutable blob metadata v1",
+  "description": "A closed, path-free metadata envelope used at module boundaries. Physical payload bytes remain opaque and are validated against ref.",
+  "type": "object",
+  "required": ["schema_version", "kind", "media_type", "ref"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "kind": {"const": "prompt_archive_blob"},
+    "media_type": {
+      "const": "application/vnd.nginx-qa.prompt-archive-blob-v1+json"
+    },
+    "ref": {"$ref": "prompt-archive-ref-v1.schema.json"}
+  },
+  "additionalProperties": false
+}
