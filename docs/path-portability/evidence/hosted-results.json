@@ -1,0 +1,26 @@
+{
+  "commit": "03638761e4c24cd6e585cfe43fe51323ad49c41d",
+  "run_id": 40102480305,
+  "url": "https://github.com/chartjs333/nginx-qa/actions/runs/40102480305",
+  "command": "python -m pytest -q @tests/path-portability.txt --junitxml=path-results.xml",
+  "jobs": [
+    {
+      "id": 120897287883,
+      "name": "paths (ubuntu-latest)",
+      "conclusion": "success",
+      "url": "https://github.com/chartjs333/nginx-qa/actions/runs/40102480305/job/120897287883",
+      "summary": [
+        "2026-10-24T14:27:34.6230919Z 93 passed, 14 skipped, 30 subtests passed in 8.74s"
+      ]
+    },
+    {
+      "id": 120897288145,
+      "name": "paths (windows-latest)",
+      "conclusion": "success",
+      "url": "https://github.com/chartjs333/nginx-qa/actions/runs/40102480305/job/120897288145",
+      "summary": [
+        "2026-10-24T14:27:43.1063581Z 106 passed, 1 skipped, 34 subtests passed in 63.46s (0:01:03)"
+      ]
+    }
+  ]
+}

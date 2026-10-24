@@ -5,6 +5,21 @@ Base: `main` at `627b478e29f5f7254d279363790f46e92c114d8d` (verified through Git
 The Agent Channel Bridge branch/PR is not included. No live services, queues,
 sprints, runtime-state or databases were modified; no merge/deployment occurred.
 
+## Final result
+
+The final path-only hosted run passed on both operating systems:
+https://github.com/chartjs333/nginx-qa/actions/runs/40102480305
+
+| Host | Result | Exit |
+| --- | --- | --- |
+| Ubuntu | 93 passed, 14 Windows-only skips, 30 subtests passed | 0 |
+| Windows | 106 passed, 1 POSIX-only skip, 34 subtests passed | 0 |
+
+Validated code commit: `03638761e4c24cd6e585cfe43fe51323ad49c41d`.
+Subsequent changes only record these results. Skips are never counted as passes.
+Actual Windows junction/reparse/ADS checks ran successfully. The local sandbox
+migration failure remains recorded below; that same test passed on both hosts.
+
 ## Baseline findings
 
 Four new reproductions run before production edits all failed:
@@ -128,11 +143,12 @@ The raw lint run exits 1 and is not represented as a fully clean application lin
 
 ## Remaining acceptance
 
-* Native Windows filesystem/junction/PowerShell/ADS tests cannot run on this Linux
-  sandbox. `.github/workflows/path-portability.yml` defines the exact limited
-  allowlist on Windows and Linux; actual remote results will be recorded separately.
+* Native Windows filesystem/junction/PowerShell/ADS checks passed in hosted CI;
+  the Linux sandbox itself cannot execute them. The sole Windows skip is the
+  POSIX-default-only test. Ubuntu skips the 14 Windows-only checks.
 * One local pre-existing migration path-security test remains blocked by missing
-  kernel descriptor-path exposure. No fallback that weakens identity proof was added.
+  kernel descriptor-path exposure; it passes on both hosted runners. No fallback
+  that weakens identity proof was added.
 * Existing full regression, unrelated integrations and live services were not run.
   Deployment and operational acceptance are outside this change.
 
@@ -204,3 +220,22 @@ mkdir -p "$T" && TMPDIR="$T" "$V/python" -m pytest -q \
 ```
 
 Result: **2 passed**, exit 0 (0.19s). Resolver lint and strict type check pass.
+
+### Final hosted rerun after the Windows correction
+
+Run: https://github.com/chartjs333/nginx-qa/actions/runs/40102480305
+Code commit: `03638761e4c24cd6e585cfe43fe51323ad49c41d`.
+Command remains `python -m pytest -q @tests/path-portability.txt --junitxml=path-results.xml`.
+`TMPDIR`, `TEMP`, and `TMP` are set to `${{ runner.temp }}` by the workflow.
+
+* Ubuntu job `120897287883`: **93 passed, 14 skipped, 30 subtests passed**, exit 0,
+  8.74s. https://github.com/chartjs333/nginx-qa/actions/runs/40102480305/job/120897287883
+* Windows job `120897288145`: **106 passed, 1 skipped, 34 subtests passed**, exit 0,
+  63.46s. https://github.com/chartjs333/nginx-qa/actions/runs/40102480305/job/120897288145
+
+The exact workflow command and summary lines are retained in
+`docs/path-portability/evidence/hosted-results.json`. The full remote logs are
+available from the linked jobs. All five original Windows validator function
+ASTs were also compared with main `627b478` and are unchanged.
+
+Draft PR: https://github.com/chartjs333/nginx-qa/pull/14
