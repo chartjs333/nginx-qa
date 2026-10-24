@@ -33,3 +33,9 @@ Idempotent request, persisted events, correlated replies, enforced project isola
 - For selected actions the researcher must step up authentication on the phone: local PIN to unlock a secure authenticator (never sent as reusable PIN), a one-time code from a trusted authenticator/device, or equivalent verified MFA. A PIN alone without a trusted verifier is insufficient for privileged equipment access.
 - The grant is independently verified server-side on each privileged request; a plugin installed on phone cannot self-assert access. Offline, expired, revoked or unapproved grant denies execution.
 - No QR scan, download or login may silently authorize hazardous or irreversible equipment actions. Such commands remain outside MVP.
+
+
+## Session authentication assurance levels
+- The researcher presents a registered cryptographic smart card to a trusted reader once at session start; continuous card presence is NOT required. A session is bound to user, workstation, project and expiry. Card presentation is authentication only, not blanket authorization.
+- Policy attribute `required_assurance_level` is configurable per operation/capability, with `session_assurance_level` recording how the user authenticated. Proposed illustrative levels: AAL1 basic authenticated session; AAL2 cryptographic card challenge (plus PIN if policy requires); AAL3 step-up with a fresh independent factor/approved hardware authenticator for especially sensitive actions. Final definitions must follow actual authenticator assurance, not infer strong assurance from a generic NFC UID.
+- Request is allowed only if session is valid, policy authorizes it and its effective assurance satisfies action requirement. For higher requirements perform step-up without automatically starting a new session. Session inactivity/maximum duration, explicit logout and administrator revocation invalidate further access. Shared-workstation switch locks previous user's context.
