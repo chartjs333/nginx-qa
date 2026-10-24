@@ -24,3 +24,12 @@ Durable outbox/inbox, explicit delivery status and idempotent retry. Waiting for
 4. Graph continues unrelated work while request awaits human input. Existing reviewers and sprint activation cannot be bypassed.
 ## Acceptance
 Idempotent request, persisted events, correlated replies, enforced project isolation, outage recovery, no accidental new sprint, no direct instrument actuation.
+
+
+## Agent identity, plugin capabilities and authorization
+- Each agent role (e.g. neurogeneticist, clinician, bioinformatician) has an explicit capability profile; role alone never grants device/plugin access. The effective permission is the intersection of agent grants, human-user grants, project policy, instrument policy, and current session scope.
+- A QR scan discovers device type, model and approved available plugin manifests via the Hub's registry. The QR may identify device and registry endpoint; it must not embed secrets, executable code or grant tokens.
+- A discovered or installed plugin is not authorized by default. The agent must request a scoped, expiring capability grant before invoking a privileged plugin operation. Grants specify subject, project, device/channel, plugin, action set, expiry and revocation.
+- For selected actions the researcher must step up authentication on the phone: local PIN to unlock a secure authenticator (never sent as reusable PIN), a one-time code from a trusted authenticator/device, or equivalent verified MFA. A PIN alone without a trusted verifier is insufficient for privileged equipment access.
+- The grant is independently verified server-side on each privileged request; a plugin installed on phone cannot self-assert access. Offline, expired, revoked or unapproved grant denies execution.
+- No QR scan, download or login may silently authorize hazardous or irreversible equipment actions. Such commands remain outside MVP.
