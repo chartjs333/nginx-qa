@@ -1,0 +1,545 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="17" skipped="9" tests="31" time="2.016" timestamp="2026-10-24T17:08:10.831868+03:00" hostname="3e707f400d8b"><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_dirty_verification_does_not_refresh_the_git_index" time="0.059"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmp6vaww3ln/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_drive_root_and_user_home_are_forbidden" time="0.085"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmppgax04vw/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_extra_push_url_is_rejected_and_preserved" time="0.044"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpmxvn_z4s/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_foreign_target_directory_is_preserved" time="0.094"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpcn6464_w/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_foreign_write_target_does_not_create_a_mirror_branch_or_pin" time="0.099"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpffzg2oo9/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_git_dir_indirection_outside_workspace_is_rejected" time="0.050"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpedpdmpp5/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_install_and_explicit_protected_roots_are_forbidden" time="0.068"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmp5_dof4hl/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_missing_frozen_workspace_is_not_recreated" time="0.060"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpdh1wwrrf/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_nested_mirror_ref_redirect_is_rejected_before_ref_write" time="0.062"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmphps6ob0t/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_nested_workspace_ref_redirect_is_rejected_and_preserved" time="0.050"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmp97k7quj2/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_no_destructive_git_recovery_commands_are_present" time="0.091"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpvj1algtl/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_parent_git_repository_is_rejected_before_workspace_creation" time="0.049"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpz7rsmpi5/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_parent_repository_appearing_after_start_is_rejected" time="0.047"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpckez6roq/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_tampered_frozen_workspace_facts_are_rejected" time="0.097"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmp8mqo3uwb/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_unsafe_external_path_segments_are_rejected" time="0.052"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpldbq0xsu/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_workspace_alternate_object_store_is_rejected_and_preserved" time="0.054"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpilio2pmu/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_workspace_safety.WorkspaceSafetyTests" name="test_workspace_remote_mismatch_is_preserved" time="0.063"><failure message="nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository">tests/managed_workspace_support.py:50: in setUp
+    self.manager = ManagedWorkspaceManager(
+nginx_qa/workspace_manager.py:137: in __init__
+    self._assert_root_is_isolated(self.managed_root)
+nginx_qa/workspace_manager.py:195: in _assert_root_is_isolated
+    self._assert_no_parent_repository(root, include_candidate=True)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+candidate = PosixPath('/workspace/scratch/6b32e2b88e04/test-tmp/tmpm5r0dffh/managed')
+include_candidate = True
+
+    @staticmethod
+    def _assert_no_parent_repository(
+        candidate: Path,
+        *,
+        include_candidate: bool = False,
+    ) -&gt; None:
+        current = candidate if include_candidate else candidate.parent
+        while True:
+            dot_git = current / ".git"
+            bare_marker = (
+                (current / "HEAD").is_file()
+                and (current / "objects").is_dir()
+                and (current / "config").is_file()
+            )
+            if dot_git.exists() or dot_git.is_symlink() or bare_marker:
+&gt;               raise WorkspaceError(
+                    "WORKSPACE_ROOT_MISMATCH",
+                    "candidate workspace is nested below another Git repository",
+                )
+E               nginx_qa.workspace_manager.WorkspaceError: candidate workspace is nested below another Git repository
+
+nginx_qa/workspace_manager.py:487: WorkspaceError</failure></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_canonical_guard_rejects_a_junction" time="0.001"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:554: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_environment_example_normalizes_to_the_frozen_staging_config" time="0.003" /><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_git_checkout_requires_standalone_directory_and_exact_remote_sha" time="0.001"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:618: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_launcher_contains_all_fail_closed_gates" time="0.001" /><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_launcher_rejects_each_mutable_boundary_override" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:328: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_live_and_previous_work_roots_are_explicitly_protected" time="0.001" /><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_mutable_roots_are_dedicated_state_base_children" time="0.001" /><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_ownership_marker_is_atomic_random_and_exact" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:460: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_premerge_inbound_hub_profile_is_isolated_and_valid" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:199: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_real_environment_file_stays_ignored_but_template_is_versioned" time="0.000" /><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_short_premerge_profile_is_isolated_and_valid" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:244: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_short_premerge_r2_profile_is_isolated_and_valid" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:286: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_snapshot_output_rejects_ads_device_and_unsafe_leaf_before_write" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:900: PowerShell behavior is Windows-specific</skipped></testcase><testcase classname="tests.test_staging_isolation.StagingIsolationTests" name="test_snapshot_output_rejects_junction_ancestor_before_write" time="0.000"><skipped type="pytest.skip" message="PowerShell behavior is Windows-specific">/workspace/scratch/6b32e2b88e04/nginx-paths/tests/test_staging_isolation.py:850: PowerShell behavior is Windows-specific</skipped></testcase></testsuite></testsuites>

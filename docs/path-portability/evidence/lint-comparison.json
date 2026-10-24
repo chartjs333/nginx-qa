@@ -1,0 +1,104 @@
+[
+  {
+    "file": "main.py",
+    "baseline": [
+      [
+        "F401",
+        "`nginx_qa.legacy_scope_control.SCOPE_CONTROL_SCHEMA_VERSION` imported but unused"
+      ],
+      [
+        "F821",
+        "Undefined name `scope_api_managed_effective`"
+      ],
+      [
+        "F821",
+        "Undefined name `scope_api_managed_effective`"
+      ],
+      [
+        "F841",
+        "Local variable `exc` is assigned to but never used"
+      ]
+    ],
+    "current": [
+      [
+        "F401",
+        "`nginx_qa.legacy_scope_control.SCOPE_CONTROL_SCHEMA_VERSION` imported but unused"
+      ],
+      [
+        "F821",
+        "Undefined name `scope_api_managed_effective`"
+      ],
+      [
+        "F821",
+        "Undefined name `scope_api_managed_effective`"
+      ],
+      [
+        "F841",
+        "Local variable `exc` is assigned to but never used"
+      ]
+    ],
+    "unchanged": true
+  },
+  {
+    "file": "nginx_qa/git_provider.py",
+    "baseline": [],
+    "current": [],
+    "unchanged": true
+  },
+  {
+    "file": "nginx_qa/managed_import.py",
+    "baseline": [],
+    "current": [],
+    "unchanged": true
+  },
+  {
+    "file": "nginx_qa/prompt_archive_migration.py",
+    "baseline": [
+      [
+        "F401",
+        "`contextlib.ExitStack` imported but unused"
+      ]
+    ],
+    "current": [
+      [
+        "F401",
+        "`contextlib.ExitStack` imported but unused"
+      ]
+    ],
+    "unchanged": true
+  },
+  {
+    "file": "nginx_qa/sprint_types.py",
+    "baseline": [
+      [
+        "F841",
+        "Local variable `source_node` is assigned to but never used"
+      ]
+    ],
+    "current": [
+      [
+        "F841",
+        "Local variable `source_node` is assigned to but never used"
+      ]
+    ],
+    "unchanged": true
+  },
+  {
+    "file": "nginx_qa/workspace_manager.py",
+    "baseline": [],
+    "current": [],
+    "unchanged": true
+  },
+  {
+    "file": "staging_host_app.py",
+    "baseline": [],
+    "current": [],
+    "unchanged": true
+  },
+  {
+    "file": "tests/test_sequential_prompt_ui.py",
+    "baseline": [],
+    "current": [],
+    "unchanged": true
+  }
+]

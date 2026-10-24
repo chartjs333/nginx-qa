@@ -618,11 +618,7 @@ class SequentialPromptApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(migrated["directory_template"], legacy_directory)
         self.assertEqual(
             migrated["agent_latest_file_template"],
-            r"D:\Prompt\{repository}_{agent_phone}-latest.prompt",
-        )
-        self.assertEqual(
             main.DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE,
-            r"D:\Prompt\{repository}_{agent_phone}-latest.prompt",
         )
 
         custom_agent_template = str(

@@ -31,11 +31,11 @@ from .git_provider import (
     RepositorySpec,
     TRANSIENT_GIT_ERROR_CODES,
 )
+from .paths import resolve_native_path
 from .sprint_types import (
     managed_node_path_segment,
     managed_project_path_segment,
     managed_sprint_path_segment,
-    windows_absolute_path_key,
     windows_path_segment_valid,
 )
 
@@ -147,33 +147,10 @@ class ManagedWorkspaceManager:
 
     @classmethod
     def _canonical_configured_root(cls, value: str | os.PathLike[str]) -> Path:
-        raw = Path(value)
-        if not raw.is_absolute():
-            raise WorkspaceError(
-                "WORKSPACE_ROOT_FORBIDDEN", "managed root must be absolute"
-            )
-        raw_text = str(value)
-        if "\x00" in raw_text:
-            raise WorkspaceError(
-                "WORKSPACE_ROOT_FORBIDDEN", "managed root contains NUL"
-            )
-        if os.name == "nt":
-            namespace = raw_text.replace("/", "\\")
-            if namespace.startswith(("\\\\", "\\\\?\\", "\\\\.\\", "\\??\\")):
-                raise WorkspaceError(
-                    "WORKSPACE_ROOT_FORBIDDEN",
-                    "UNC and device namespace roots are not permitted",
-                )
-            if windows_absolute_path_key(raw_text) is None:
-                raise WorkspaceError(
-                    "WORKSPACE_ROOT_FORBIDDEN", "managed root is not canonical"
-                )
-        resolved = Path(os.path.realpath(raw.resolve(strict=False)))
-        if _path_key(raw.absolute()) != _path_key(resolved):
-            raise WorkspaceError(
-                "WORKSPACE_ROOT_FORBIDDEN",
-                "managed root contains a symlink or junction alias",
-            )
+        try:
+            resolved = resolve_native_path(value)
+        except (OSError, ValueError) as exc:
+            raise WorkspaceError("WORKSPACE_ROOT_FORBIDDEN", str(exc)) from exc
         if _is_filesystem_root(resolved):
             raise WorkspaceError(
                 "WORKSPACE_ROOT_FORBIDDEN", "a filesystem root cannot be managed"

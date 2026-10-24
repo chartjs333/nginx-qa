@@ -1,0 +1,4 @@
+O_NOFOLLOW available: True
+descriptor resolver: None
+/proc/self/fd FileNotFoundError 2
+/dev/fd FileNotFoundError 2

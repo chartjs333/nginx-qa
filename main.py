@@ -54,6 +54,7 @@ from nginx_qa.inbound_proposals import (
     load_producer_registry,
     schema_issues as inbound_proposal_schema_issues,
 )
+from nginx_qa.paths import resolve_native_path, sequential_prompt_templates
 from nginx_qa.managed_import import (
     ManagedImportError,
     ManagedPortReservationRegistry,
@@ -1647,10 +1648,10 @@ evidence_folders_path = base_dir / "evidence_folders"
 sequential_launch_prompt_path = (
     base_dir / "prompts" / "sequential_sprint_launch_standard.txt"
 )
-DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE = r"D:\Prompt\{repository}"
-DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE = (
-    r"D:\Prompt\{repository}_{agent_phone}-latest.prompt"
-)
+(
+    DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE,
+    DEFAULT_SEQUENTIAL_AGENT_LATEST_FILE_TEMPLATE,
+) = sequential_prompt_templates()
 SEQUENTIAL_AGENT_PROMPT_RECOVERY_INSTRUCTIONS = (
     "HTTP-ответ и latest_agent_prompt_file_path содержат компактный, но "
     "полный для выполнения задачи JSON: текст active_task.message сохранён "
@@ -10186,13 +10187,13 @@ def resolve_sequential_prompt_directory(
     resolved = os.path.expandvars(os.path.expanduser(normalized_template))
     for placeholder, replacement in replacements.items():
         resolved = resolved.replace(placeholder, replacement)
-    prompt_directory = Path(resolved)
-    if not prompt_directory.is_absolute():
+    try:
+        return resolve_native_path(resolved)
+    except (OSError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Prompt directory must resolve to an absolute path",
-        )
-    return prompt_directory
+            detail="Prompt directory must resolve to a safe absolute path",
+        ) from exc
 
 
 def resolve_sequential_agent_latest_file(
@@ -10221,13 +10222,13 @@ def resolve_sequential_agent_latest_file(
     resolved = os.path.expandvars(os.path.expanduser(normalized_template))
     for placeholder, replacement in replacements.items():
         resolved = resolved.replace(placeholder, replacement)
-    latest_file = Path(resolved)
-    if not latest_file.is_absolute():
+    try:
+        return resolve_native_path(resolved)
+    except (OSError, ValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Agent latest response file must resolve to an absolute path",
-        )
-    return latest_file
+            detail="Agent latest response file must resolve to a safe absolute path",
+        ) from exc
 
 
 def write_prompt_text_if_changed(target_path: Path, prompt: str) -> None:
