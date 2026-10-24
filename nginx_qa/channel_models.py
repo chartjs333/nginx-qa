@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import math
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -135,6 +136,8 @@ def verify_signature(
         len(body) > 65536
         or not math.isfinite(instant)
         or abs(instant - now) > 60
+        or not isinstance(digest, str)
+        or re.fullmatch(r"[0-9a-f]{64}", digest) is None
         or not hmac.compare_digest(signature(key, timestamp, body), digest)
     ):
         raise BridgeError("CHANNEL_SIGNATURE_INVALID")

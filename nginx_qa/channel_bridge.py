@@ -13,10 +13,8 @@ import time
 from collections.abc import Callable
 from contextlib import closing, contextmanager
 from typing import Any
-from urllib.parse import urlsplit
 
-import httpx
-
+from .channel_hub_adapter import HubClient
 from .channel_models import (
     BINDING,
     TERMINAL,
@@ -25,7 +23,6 @@ from .channel_models import (
     CreateRequest,
     Event,
     canonical,
-    signature,
     strict_json,
     verify_signature,
 )
@@ -49,65 +46,6 @@ PROFILES = {
         "requested_capabilities": ["request_data", "send_message"],
     },
 }
-
-
-class HubClient:
-    """Signed, bounded, fixed-origin transport for the documented 1.1 adapter."""
-
-    def __init__(self, endpoint: str, key: bytes, client=None, clock=time.time):
-        url = urlsplit(endpoint)
-        if (
-            url.scheme != "https"
-            or not url.hostname
-            or url.username
-            or url.password
-            or url.query
-            or url.fragment
-            or len(key) < 32
-        ):
-            raise ValueError("configured HTTPS origin and 32-byte key required")
-        self.endpoint, self.key, self.clock = endpoint.rstrip("/"), key, clock
-        self.client = client or httpx.Client(
-            timeout=10, trust_env=False, follow_redirects=False
-        )
-
-    def call(self, action: str, payload: dict[str, Any]) -> dict[str, Any]:
-        body = canonical(
-            {"schema_version": "1.1", "action": action, "payload": payload}
-        )
-        timestamp = str(self.clock())
-        try:
-            with self.client.stream(
-                "POST",
-                self.endpoint + "/v1/nginx-qa-bridge",
-                content=body,
-                headers={
-                    "Content-Type": "application/json",
-                    "X-Timestamp": timestamp,
-                    "X-Signature": signature(self.key, timestamp, body),
-                },
-                follow_redirects=False,
-            ) as response:
-                raw = bytearray()
-                for chunk in response.iter_bytes():
-                    if len(raw) + len(chunk) > 65536:
-                        raise OSError("Hub response exceeds bound")
-                    raw.extend(chunk)
-                if response.status_code in (401, 403):
-                    raise BridgeError("CHANNEL_HUB_DENIED")
-                if response.status_code in (409, 422):
-                    raise BridgeError("CHANNEL_HUB_CONFLICT", 409)
-                if not response.is_success:
-                    raise OSError("Hub unavailable")
-                value = strict_json(bytes(raw))
-                if value.get("schema_version") != "1.1":
-                    raise OSError("Unsupported Hub adapter version")
-                return value
-        except (httpx.HTTPError, ValueError) as exc:
-            raise OSError("Hub unavailable or invalid response") from exc
-
-    def close(self):
-        self.client.close()
 
 
 def assignment(runtime, state: dict[str, Any], binding: Binding) -> dict[str, Any]:
