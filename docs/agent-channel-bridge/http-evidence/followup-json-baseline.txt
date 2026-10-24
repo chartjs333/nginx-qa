@@ -1,0 +1,474 @@
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+____________ test_deep_json_response_is_a_retryable_transport_error ____________
+tests/test_channel_http_contract.py:147: in test_deep_json_response_is_a_retryable_transport_error
+    hub.call("discover", {})
+nginx_qa/channel_hub_adapter.py:68: in call
+    value = strict_json(bytes(raw))
+            ^^^^^^^^^^^^^^^^^^^^^^^
+nginx_qa/channel_models.py:155: in strict_json
+    value = json.loads(
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py:359: in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py:338: in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py:354: in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+E   RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+______ test_deep_json_http_body_is_rejected_without_server_error[create] _______
+integration_tests/test_channel_bridge.py:613: in test_deep_json_http_body_is_rejected_without_server_error
+    assert s.nginx.post(url, content=raw, headers=headers).status_code == 422
+E   assert 500 == 422
+E    +  where 500 = <Response [500 Internal Server Error]>.status_code
+E    +    where <Response [500 Internal Server Error]> = post('/api/v1/projects/project-id/sprints/msv1-5f55f42e54a6ffccd983edbe38830972dc3b8e57ad82323cdb41f3008faa37f6/agents/builder/channel-requests', content=b'{"nested":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[...]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}', headers={'X-Nginx-QA-Scope-Token': 'agent-role-fixture-agent-role-fixture-agent-role-fixture-'})
+E    +      where post = <httpx.Client object at 0x7f60743b6180>.post
+E    +        where <httpx.Client object at 0x7f60743b6180> = namespace(fixture=<tests.test_managed_continuity.ManagedContinuityTests testMethod=runTest>, policy={'schema_version':...'/home/agent/.codex/skills/remote-skills/pytest-of-root/pytest-0/test_deep_json_http_body_is_re0/nginx-owned/tls.key')).nginx
+--------------------------- Captured stderr teardown ---------------------------
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1194, in __call__
+    await super().__call__(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 203, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/integration_tests/test_channel_bridge.py", line 102, in callback_outage
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 179, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2811, in app
+    await route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+    await effective_context.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 108, in create
+    payload = CreateRequest.model_validate(strict_json(await body(request)))
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_models.py", line 155, in strict_json
+    value = json.loads(
+            ^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 359, in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+---------------------------- Captured log teardown -----------------------------
+ERROR    uvicorn.error:httptools_impl.py:427 Exception in ASGI application
+Traceback (most recent call last):
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1194, in __call__
+    await super().__call__(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 203, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/integration_tests/test_channel_bridge.py", line 102, in callback_outage
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 179, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2811, in app
+    await route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+    await effective_context.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 108, in create
+    payload = CreateRequest.model_validate(strict_json(await body(request)))
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_models.py", line 155, in strict_json
+    value = json.loads(
+            ^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 359, in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+___ test_deep_json_http_body_is_rejected_without_server_error[introspection] ___
+integration_tests/test_channel_bridge.py:613: in test_deep_json_http_body_is_rejected_without_server_error
+    assert s.nginx.post(url, content=raw, headers=headers).status_code == 422
+E   assert 500 == 422
+E    +  where 500 = <Response [500 Internal Server Error]>.status_code
+E    +    where <Response [500 Internal Server Error]> = post('/api/v1/integrations/inbound-hub/agent-introspection', content=b'{"nested":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[...]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}', headers={'Authorization': 'Bearer introspection-fixture-introspection-fixture-introspection-fixture-'})
+E    +      where post = <httpx.Client object at 0x7f6074dd4050>.post
+E    +        where <httpx.Client object at 0x7f6074dd4050> = namespace(fixture=<tests.test_managed_continuity.ManagedContinuityTests testMethod=runTest>, policy={'schema_version':...'/home/agent/.codex/skills/remote-skills/pytest-of-root/pytest-0/test_deep_json_http_body_is_re1/nginx-owned/tls.key')).nginx
+--------------------------- Captured stderr teardown ---------------------------
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1194, in __call__
+    await super().__call__(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 203, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/integration_tests/test_channel_bridge.py", line 102, in callback_outage
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 179, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2811, in app
+    await route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+    await effective_context.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 183, in introspect
+    payload = Binding.model_validate(strict_json(await body(request)))
+                                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_models.py", line 155, in strict_json
+    value = json.loads(
+            ^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 359, in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+_____ test_deep_json_http_body_is_rejected_without_server_error[callback] ______
+integration_tests/test_channel_bridge.py:613: in test_deep_json_http_body_is_rejected_without_server_error
+    assert s.nginx.post(url, content=raw, headers=headers).status_code == 422
+E   assert 500 == 422
+E    +  where 500 = <Response [500 Internal Server Error]>.status_code
+E    +    where <Response [500 Internal Server Error]> = post('/api/v1/integrations/inbound-hub/channel-events', content=b'{"nested":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[...]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}', headers={'X-Timestamp': '1792855142.4070616', 'X-Signature': '2f4016304dff6095cba778b9ecde20928a2517dc61f965c508c8a4ff12ec94f0'})
+E    +      where post = <httpx.Client object at 0x7f607199c2f0>.post
+E    +        where <httpx.Client object at 0x7f607199c2f0> = namespace(fixture=<tests.test_managed_continuity.ManagedContinuityTests testMethod=runTest>, policy={'schema_version':...'/home/agent/.codex/skills/remote-skills/pytest-of-root/pytest-0/test_deep_json_http_body_is_re2/nginx-owned/tls.key')).nginx
+----------------------------- Captured stderr call -----------------------------
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1194, in __call__
+    await super().__call__(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 203, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/integration_tests/test_channel_bridge.py", line 102, in callback_outage
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 179, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2811, in app
+    await route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+    await effective_context.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 199, in callback
+    return await invoke(
+           ^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 69, in invoke
+    return await asyncio.to_thread(fn, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_bridge.py", line 429, in callback
+    event = Event.model_validate(strict_json(body))
+                                 ^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_models.py", line 155, in strict_json
+    value = json.loads(
+            ^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 359, in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+------------------------------ Captured log call -------------------------------
+ERROR    uvicorn.error:httptools_impl.py:427 Exception in ASGI application
+Traceback (most recent call last):
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/protocols/http/httptools_impl.py", line 422, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/uvicorn/middleware/proxy_headers.py", line 63, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/applications.py", line 1194, in __call__
+    await super().__call__(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/applications.py", line 96, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/telemetry/_asgi.py", line 151, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 203, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/integration_tests/test_channel_bridge.py", line 102, in callback_outage
+    return await call_next(request)
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 179, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/base.py", line 149, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/routing.py", line 678, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2811, in app
+    await route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1839, in handle
+    await self.original_router.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 2894, in handle
+    await included_router._handle_selected(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1865, in _handle_selected
+    await original_route.handle(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 1328, in handle
+    await effective_context.app(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 166, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 152, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 745, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-qa/.venv/lib/python3.12/site-packages/fastapi/routing.py", line 372, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 199, in callback
+    return await invoke(
+           ^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_api.py", line 69, in invoke
+    return await asyncio.to_thread(fn, *args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/asyncio/threads.py", line 25, in to_thread
+    return await loop.run_in_executor(None, func_call)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/concurrent/futures/thread.py", line 59, in run
+    result = self.fn(*self.args, **self.kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_bridge.py", line 429, in callback
+    event = Event.model_validate(strict_json(body))
+                                 ^^^^^^^^^^^^^^^^^
+  File "/workspace/scratch/6b32e2b88e04/nginx-http/nginx_qa/channel_models.py", line 155, in strict_json
+    value = json.loads(
+            ^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/__init__.py", line 359, in loads
+    return cls(**kw).decode(s)
+           ^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 338, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/json/decoder.py", line 354, in raw_decode
+    obj, end = self.scan_once(s, idx)
+               ^^^^^^^^^^^^^^^^^^^^^^
+RecursionError: maximum recursion depth exceeded while decoding a JSON array from a unicode string
+=========================== short test summary info ============================
+FAILED tests/test_channel_http_contract.py::test_deep_json_response_is_a_retryable_transport_error
+FAILED integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error[create]
+FAILED integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error[introspection]
+FAILED integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error[callback]
+4 failed in 4.47s

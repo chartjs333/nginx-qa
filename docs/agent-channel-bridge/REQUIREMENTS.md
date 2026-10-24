@@ -10,6 +10,8 @@ results are preserved in `VALIDATION-PR13-historical.md` and are not HTTP-only e
 | 1.1 discovery/validate/status/cancel/artifact | Wire-compatible remote client; response validation tested | Required service endpoint absent; BLOCKED |
 | Async request/response, provenance | Real nginx with independent 1.1 simulator | v1 request/mobile response/callback verified separately |
 | Restart and lost HTTP receipt | nginx store/runtime reopened; immutable request retry deduped by simulator | Actual Hub process restart/durable callbacks and v1 duplicate verified; >60s envelope retry rejected |
+| Missing remote contract during submit/status/cancel | Preserve durable intent, backoff/error and waiting gate; recover after reopening nginx state | Route remains missing; retry is not proof of 1.1 support |
+| Excessive JSON nesting | Decoder errors become HTTP 422 or retryable transport errors; subsequent exchanges succeed | nginx-side boundary protection; Hub source unchanged |
 | Duplicate/conflicting/forged/stale callback | Reject or dedupe, exact scope preserved | Actual response replay deduped by nginx |
 | Project/sprint/assignment/agent/research isolation | Negative binding tests, two concurrent agents and multiple channels | v1 rejects foreign agent through live introspection |
 | Current operation/channel entitlements | Enforced by nginx admission/dispatch; contract requires remote recheck | Stock active-only introspector ignores operation entitlements; BLOCKED |

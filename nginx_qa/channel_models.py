@@ -152,11 +152,14 @@ def strict_json(body: bytes) -> dict[str, Any]:
             result[key] = value
         return result
 
-    value = json.loads(
-        body,
-        object_pairs_hook=pairs,
-        parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
-    )
+    try:
+        value = json.loads(
+            body,
+            object_pairs_hook=pairs,
+            parse_constant=lambda _: (_ for _ in ()).throw(ValueError("nonfinite")),
+        )
+    except RecursionError:
+        raise ValueError("JSON nesting exceeds decoder limit") from None
     if not isinstance(value, dict):
         raise ValueError("object required")  # noqa: TRY004 - malformed wire JSON
     return value

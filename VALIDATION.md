@@ -5,10 +5,10 @@
 **Partial wire compatibility is confirmed; full adapter 1.1 compatibility with
 stock Hub PR #2 is NOT confirmed and is blocked by missing Hub service APIs.**
 
-The final targeted run passes **42 tests, zero failures/errors/skips**:
+The latest targeted run passes **49 tests, zero failures/errors/skips**:
 
-* 15 HTTP client/contract/security tests.
-* 22 real nginx runtime/API tests against an independent HTTPS **1.1 contract
+* 16 HTTP client/contract/security tests.
+* 28 real nginx runtime/API tests against an independent HTTPS **1.1 contract
   simulator**, covering retries, callback recovery, correlation, concurrency,
   waiting dependencies, independent assignments and existing review gates.
 * 5 tests against the **actual unchanged Hub executable** over public HTTP/HTTPS.
@@ -230,3 +230,103 @@ sha256sum /workspace/scratch/6b32e2b88e04/http-hub-dist/inbound_agent_channel_br
 
 Compilation passed. Wheel hash matches the value above. Hub `git status --short`
 is empty and its HEAD remains `d31f6bd54f70a7e7e2e4295b43424b81dc272155`.
+
+
+## Follow-up: recoverable contract outages and JSON decoder errors
+
+PR #15 was still Draft at `1b3932fe5d75fd652250f7e15a5f150aeb6434eb`; review
+comments and check-runs were empty. Hub PR #2 remained at the pinned commit above.
+No newly available remote 1.1 implementation was found.
+
+Two additional nginx-side defects were reproduced and fixed:
+
+* `CHANNEL_HUB_CONTRACT_UNAVAILABLE` was treated like a permission denial:
+  submit/status became terminal `rejected`, preventing recovery when a remote
+  route returned. Cancel retries did not use the transport retry counter.
+  The existing retry/backoff mechanism now handles this specific availability
+  error, preserves status and immutable request/cancel intent, and records the
+  explicit error. Permission denials remain terminal. Assignment/permission/
+  deadline checks still run before each attempt. Tests cover submit, status,
+  cancellation, reopened nginx state, no duplicate remote request, and the
+  unchanged external-input review gate.
+* JSON containing 20,000 nested arrays fits within the 64 KiB wire limit but
+  raised uncaught `RecursionError`: HTTP 500 on request/introspection/callback
+  routes, and an exception escaping the remote client. The common decoder now
+  converts that exception into the existing invalid-input path: HTTP 422 for
+  nginx requests, retryable transport error for remote responses. Signed callback
+  validation and size limits are unchanged; valid subsequent exchanges succeed.
+
+Commands below use the same `P`, `T`, and `W` defined above, in `nginx-http`.
+Before fixing runtime code:
+
+```sh
+mkdir -p "$T" && TMPDIR="$T" "$P" -m pytest -q \
+  tests/test_channel_http_contract.py::test_deep_json_response_is_a_retryable_transport_error \
+  integration_tests/test_channel_bridge.py::test_missing_contract_preserves_durable_work_until_recovery \
+  integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error \
+  --tb=short --junitxml=docs/agent-channel-bridge/http-evidence/followup-baseline.xml \
+  > docs/agent-channel-bridge/http-evidence/followup-baseline.txt 2>&1
+```
+
+**3 failed, 4 passed in 10.73s**, exit 1. The initial 2,000-level JSON fixtures
+reached schema validation on this interpreter, so they did not reproduce decoder
+exhaustion. Increasing only the fixtures to 20,000 levels, still below 64 KiB:
+
+```sh
+mkdir -p "$T" && TMPDIR="$T" "$P" -m pytest -q \
+  tests/test_channel_http_contract.py::test_deep_json_response_is_a_retryable_transport_error \
+  integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error \
+  --tb=short --junitxml=docs/agent-channel-bridge/http-evidence/followup-json-baseline.xml \
+  > docs/agent-channel-bridge/http-evidence/followup-json-baseline.txt 2>&1
+```
+
+**4 failed in 4.47s**, exit 1, reproducing decoder errors and HTTP 500 responses.
+After the two runtime corrections, rerun the seven regressions:
+
+```sh
+mkdir -p "$T" && TMPDIR="$T" "$P" -m pytest -q \
+  tests/test_channel_http_contract.py::test_deep_json_response_is_a_retryable_transport_error \
+  integration_tests/test_channel_bridge.py::test_missing_contract_preserves_durable_work_until_recovery \
+  integration_tests/test_channel_bridge.py::test_deep_json_http_body_is_rejected_without_server_error \
+  --tb=short --junitxml=docs/agent-channel-bridge/http-evidence/followup-fixed.xml \
+  > docs/agent-channel-bridge/http-evidence/followup-fixed.txt 2>&1
+```
+
+**7 passed in 10.26s**, exit 0, zero skips.
+
+Final targeted recheck (only API/auth/callback/async/recovery components):
+
+```sh
+mkdir -p "$T" && TMPDIR="$T" HUB_HTTP_WHEEL="$W" "$P" -m pytest -q \
+  tests/test_channel_http_contract.py \
+  integration_tests/test_channel_bridge.py \
+  integration_tests/test_hub_public_http.py \
+  --junitxml=docs/agent-channel-bridge/http-evidence/followup-targeted-final.xml \
+  > docs/agent-channel-bridge/http-evidence/followup-targeted-final.txt 2>&1
+```
+
+**49 passed in 61.10s**, exit 0, zero failures/errors/skips. This includes the
+five unchanged real-Hub public-API tests; the two gap-detection tests still do
+not qualify full 1.1 support.
+
+Changed-component checks:
+
+```sh
+"$P" -m ruff check nginx_qa/channel_bridge.py nginx_qa/channel_models.py \
+  tests/test_channel_http_contract.py integration_tests/test_channel_bridge.py \
+  integration_tests/http_peer.py
+"$P" -m mypy --follow-imports=skip --ignore-missing-imports --check-untyped-defs \
+  nginx_qa/channel_bridge.py nginx_qa/channel_models.py
+"$P" -m bandit -q nginx_qa/channel_bridge.py nginx_qa/channel_models.py
+"$P" scripts/export_channel_schemas.py --check
+"$P" -m compileall -q nginx_qa/channel_bridge.py nginx_qa/channel_models.py \
+  tests/test_channel_http_contract.py integration_tests/test_channel_bridge.py \
+  integration_tests/http_peer.py
+git diff --check
+```
+
+All passed, exit 0. No schema changes. The earlier three PR #14 coexistence checks
+remain evidence for correction commit `4e5aca0`; no path tests or additional PR #14
+overlay run was performed in this follow-up. No full regression or unrelated
+integration tests ran. Missing Hub service APIs, delayed-v1-retry rejection and
+operation-entitlement gaps remain open; local retries do not resolve those gaps.

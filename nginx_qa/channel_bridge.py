@@ -565,6 +565,11 @@ class ChannelBridge:
                             (self.clock() + 5, request.request_id),
                         )
             except BridgeError as exc:
+                if exc.code == "CHANNEL_HUB_CONTRACT_UNAVAILABLE":
+                    # A missing remote route is not an authorization decision. Keep the
+                    # immutable outbox/cancel intent until recovery or normal expiry.
+                    self._retry(row, exc.code)
+                    continue
                 with self.db() as db:
                     db.execute(
                         "UPDATE channel_requests SET status=CASE WHEN status IN ('cancelled','expired','response_received') THEN status ELSE 'rejected' END,error=?,due=? WHERE id=?",
@@ -572,12 +577,15 @@ class ChannelBridge:
                     )
                     self.audit(db, request.request_id, "denied", {"error": exc.code})
             except OSError:
-                with self.db() as db:
-                    db.execute(
-                        "UPDATE channel_requests SET attempts=attempts+1,due=?,error=? WHERE id=?",
-                        (
-                            self.clock() + min(60, 2 ** min(row["attempts"] + 1, 6)),
-                            "CHANNEL_HUB_UNAVAILABLE",
-                            request.request_id,
-                        ),
-                    )
+                self._retry(row, "CHANNEL_HUB_UNAVAILABLE")
+
+    def _retry(self, row, error):
+        with self.db() as db:
+            db.execute(
+                "UPDATE channel_requests SET attempts=attempts+1,due=?,error=? WHERE id=?",
+                (
+                    self.clock() + min(60, 2 ** min(row["attempts"] + 1, 6)),
+                    error,
+                    row["id"],
+                ),
+            )

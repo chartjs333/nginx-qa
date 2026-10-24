@@ -547,9 +547,76 @@ def test_callback_http_non_ascii_and_duplicate_headers_fail_closed(system):
         (b"X-Signature", b"\xff" * 64),
     ]
     assert s.nginx.post(CALLBACK, content=b"{}", headers=headers).status_code == 403
+
     headers = [
         ("X-Timestamp", str(time.time())),
         ("X-Timestamp", str(time.time())),
         ("X-Signature", "a" * 64),
     ]
     assert s.nginx.post(CALLBACK, content=b"{}", headers=headers).status_code == 403
+
+
+@pytest.mark.parametrize("phase", ["submit", "status", "cancel"])
+def test_missing_contract_preserves_durable_work_until_recovery(system, phase):
+    s = system
+    r = req(s, blocking=True)
+    assert post(s, r).status_code == 202
+    if phase != "submit":
+        s.bridge.tick()
+    if phase == "cancel":
+        assert change(s, r, "cancel").status_code == 200
+    s.peer.post("/__test/control", json={"modes": {"missing_contract": True}})
+    with s.bridge.db() as db:
+        db.execute("UPDATE channel_requests SET due=0")
+    s.bridge.tick()
+    current = status(s, r)
+    assert (
+        current["status"]
+        == {"submit": "pending", "status": "accepted", "cancel": "cancelled"}[phase]
+    )
+    assert current["error"] == "CHANNEL_HUB_CONTRACT_UNAVAILABLE"
+    assert current["cancel_pending"] is (phase == "cancel")
+    with s.bridge.db() as db:
+        row = db.execute("SELECT attempts,due FROM channel_requests").fetchone()
+        assert row["attempts"] == 1 and row["due"] > s.clock()
+    with pytest.raises(ManagedContinuityError, match="WAITING_FOR_EXTERNAL_INPUT"):
+        s.fixture.submit_result()
+
+    # Reopen nginx's durable state before the remote API becomes available.
+    runtime = restore_runtime(s.fixture.store.database_path, s.fixture.initial_state)
+    s.bridge = ChannelBridge(runtime, s.hub, KEY, lambda: s.policy)
+    s.app.state.channel_bridge = s.bridge
+    s.peer.post("/__test/control", json={"modes": {"missing_contract": False}})
+    with s.bridge.db() as db:
+        db.execute("UPDATE channel_requests SET due=0")
+    s.bridge.tick()
+    recovered = status(s, r)
+    assert recovered["error"] is None
+    assert recovered["cancel_pending"] is False
+    assert recovered["status"] == ("cancelled" if phase == "cancel" else "accepted")
+    assert s.peer.post("/__test/control", json={}).json()["requests"] == 1
+    if phase != "cancel":
+        respond(s, r)
+        assert status(s, r)["status"] == "response_received"
+
+
+@pytest.mark.parametrize("route", ["create", "introspection", "callback"])
+def test_deep_json_http_body_is_rejected_without_server_error(system, route):
+    s = system
+    r = req(s)
+    raw = b'{"nested":' + b"[" * 20000 + b"]" * 20000 + b"}"
+    stamp = str(time.time())
+    url, headers = {
+        "create": (base(r) + "/channel-requests", {ROLE_TOKEN_HEADER: ROLE}),
+        "introspection": (INTRO, {"Authorization": "Bearer " + INTROSPECTION}),
+        "callback": (
+            CALLBACK,
+            {"X-Timestamp": stamp, "X-Signature": signature(KEY, stamp, raw)},
+        ),
+    }[route]
+    assert s.nginx.post(url, content=raw, headers=headers).status_code == 422
+    # Malformed input must not damage the next ordinary exchange.
+    assert post(s, r).status_code == 202
+    s.bridge.tick()
+    respond(s, r)
+    assert status(s, r)["status"] == "response_received"

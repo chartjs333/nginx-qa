@@ -113,6 +113,8 @@ def main():
 
     def execute(action, value):
         with lock:
+            if modes.get("missing_contract"):
+                raise HTTPException(404)
             if modes.get("unavailable"):
                 raise HTTPException(503)
             if modes.get("deny"):

@@ -131,3 +131,19 @@ def test_retired_composition_cannot_start_hub():
 
     with pytest.raises(SystemExit, match="HTTP/HTTPS only"):
         main()
+
+
+def test_deep_json_response_is_a_retryable_transport_error():
+    raw = b'{"schema_version":"1.1","channels":' + b"[" * 20000 + b"]" * 20000 + b"}"
+    hub = HubClient(
+        "https://hub.invalid",
+        b"k" * 32,
+        httpx.Client(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200, content=raw))
+        ),
+    )
+    try:
+        with pytest.raises(OSError):
+            hub.call("discover", {})
+    finally:
+        hub.close()

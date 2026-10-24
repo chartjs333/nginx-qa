@@ -60,9 +60,16 @@ that stock Hub already implements them. No server-side 1.1 replacement is
 implemented inside nginx.
 
 A 404/405/501 returns `CHANNEL_HUB_CONTRACT_UNAVAILABLE` (502), not a permissive
-fallback. Invalid 2xx receipts remain retryable transport errors, so nginx's
+fallback or an authorization denial. The outbox retains its status and immutable
+request/cancel intent, records that error, and retries with the existing bounded
+backoff. Every attempt still checks assignment, permissions and deadline. Invalid
+2xx receipts remain retryable transport errors, so nginx's
 outbox is not falsely marked sent. Authentication/authorization denials remain
 terminal; cancellation intent remains durable until acknowledged.
+
+JSON decoder nesting errors are rejected as invalid input (422 on nginx routes)
+or retryable invalid remote responses. They do not escape as unhandled server or
+worker exceptions; the existing body-size and signature limits remain in force.
 
 ## nginx API and asynchronous state
 
