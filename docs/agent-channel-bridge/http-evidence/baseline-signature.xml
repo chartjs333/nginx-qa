@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.347" timestamp="2026-10-24T17:56:29.636828+03:00" hostname="3e707f400d8b"><testcase classname="tests.test_channel_http_contract" name="test_non_ascii_signature_is_rejected_without_server_error" time="0.001"><failure message="TypeError: comparing strings with non-ASCII characters is not supported">def test_non_ascii_signature_is_rejected_without_server_error():
+        from nginx_qa.channel_models import BridgeError, verify_signature
+        with pytest.raises(BridgeError, match='CHANNEL_SIGNATURE_INVALID'):
+&gt;           verify_signature(b'k' * 32, '1000', b'{}', '\u00e9' * 64, 1000)
+
+tests/test_channel_http_contract.py:59: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+key = b'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk', timestamp = '1000', body = b'{}'
+digest = 'éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé'
+now = 1000
+
+    def verify_signature(
+        key: bytes, timestamp: str, body: bytes, digest: str, now: float
+    ) -&gt; None:
+        try:
+            instant = float(timestamp)
+        except (ValueError, TypeError):
+            raise BridgeError("CHANNEL_SIGNATURE_INVALID") from None
+        if (
+            len(body) &gt; 65536
+            or not math.isfinite(instant)
+            or abs(instant - now) &gt; 60
+&gt;           or not hmac.compare_digest(signature(key, timestamp, body), digest)
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        ):
+E       TypeError: comparing strings with non-ASCII characters is not supported
+
+nginx_qa/channel_models.py:138: TypeError</failure></testcase></testsuite></testsuites>

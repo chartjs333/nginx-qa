@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="0.272" timestamp="2026-10-24T17:47:54.789383+03:00" hostname="3e707f400d8b"><testcase classname="tests.test_channel_http_contract" name="test_malformed_remote_success_is_not_an_ack[submit-payload0-response0]" time="0.002"><failure message="Failed: DID NOT RAISE OSError">action = 'submit', payload = {'request_id': 'original'}
+response = {'schema_version': '1.1', 'request_id': 'another'}
+
+    @pytest.mark.parametrize('action,payload,response', [
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1', 'request_id': 'another'}),
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1'}),
+        ('cancel', {}, {'schema_version': '1.1', 'status': 'queued'}),
+        ('status', {}, {'schema_version': '1.1', 'status': 'invented'}),
+        ('discover', {}, {'schema_version': '1.1', 'channels': 'invalid'}),
+    ])
+    def test_malformed_remote_success_is_not_an_ack(action, payload, response):
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
+        hub = HubClient('https://hub.invalid', b'k' * 32, client)
+        try:
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_channel_http_contract.py:22: Failed</failure></testcase><testcase classname="tests.test_channel_http_contract" name="test_malformed_remote_success_is_not_an_ack[submit-payload1-response1]" time="0.001"><failure message="Failed: DID NOT RAISE OSError">action = 'submit', payload = {'request_id': 'original'}
+response = {'schema_version': '1.1'}
+
+    @pytest.mark.parametrize('action,payload,response', [
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1', 'request_id': 'another'}),
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1'}),
+        ('cancel', {}, {'schema_version': '1.1', 'status': 'queued'}),
+        ('status', {}, {'schema_version': '1.1', 'status': 'invented'}),
+        ('discover', {}, {'schema_version': '1.1', 'channels': 'invalid'}),
+    ])
+    def test_malformed_remote_success_is_not_an_ack(action, payload, response):
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
+        hub = HubClient('https://hub.invalid', b'k' * 32, client)
+        try:
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_channel_http_contract.py:22: Failed</failure></testcase><testcase classname="tests.test_channel_http_contract" name="test_malformed_remote_success_is_not_an_ack[cancel-payload2-response2]" time="0.001"><failure message="Failed: DID NOT RAISE OSError">action = 'cancel', payload = {}
+response = {'schema_version': '1.1', 'status': 'queued'}
+
+    @pytest.mark.parametrize('action,payload,response', [
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1', 'request_id': 'another'}),
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1'}),
+        ('cancel', {}, {'schema_version': '1.1', 'status': 'queued'}),
+        ('status', {}, {'schema_version': '1.1', 'status': 'invented'}),
+        ('discover', {}, {'schema_version': '1.1', 'channels': 'invalid'}),
+    ])
+    def test_malformed_remote_success_is_not_an_ack(action, payload, response):
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
+        hub = HubClient('https://hub.invalid', b'k' * 32, client)
+        try:
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_channel_http_contract.py:22: Failed</failure></testcase><testcase classname="tests.test_channel_http_contract" name="test_malformed_remote_success_is_not_an_ack[status-payload3-response3]" time="0.001"><failure message="Failed: DID NOT RAISE OSError">action = 'status', payload = {}
+response = {'schema_version': '1.1', 'status': 'invented'}
+
+    @pytest.mark.parametrize('action,payload,response', [
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1', 'request_id': 'another'}),
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1'}),
+        ('cancel', {}, {'schema_version': '1.1', 'status': 'queued'}),
+        ('status', {}, {'schema_version': '1.1', 'status': 'invented'}),
+        ('discover', {}, {'schema_version': '1.1', 'channels': 'invalid'}),
+    ])
+    def test_malformed_remote_success_is_not_an_ack(action, payload, response):
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
+        hub = HubClient('https://hub.invalid', b'k' * 32, client)
+        try:
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_channel_http_contract.py:22: Failed</failure></testcase><testcase classname="tests.test_channel_http_contract" name="test_malformed_remote_success_is_not_an_ack[discover-payload4-response4]" time="0.001"><failure message="Failed: DID NOT RAISE OSError">action = 'discover', payload = {}
+response = {'schema_version': '1.1', 'channels': 'invalid'}
+
+    @pytest.mark.parametrize('action,payload,response', [
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1', 'request_id': 'another'}),
+        ('submit', {'request_id': 'original'}, {'schema_version': '1.1'}),
+        ('cancel', {}, {'schema_version': '1.1', 'status': 'queued'}),
+        ('status', {}, {'schema_version': '1.1', 'status': 'invented'}),
+        ('discover', {}, {'schema_version': '1.1', 'channels': 'invalid'}),
+    ])
+    def test_malformed_remote_success_is_not_an_ack(action, payload, response):
+        client = httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response)))
+        hub = HubClient('https://hub.invalid', b'k' * 32, client)
+        try:
+&gt;           with pytest.raises(OSError):
+                 ^^^^^^^^^^^^^^^^^^^^^^
+E           Failed: DID NOT RAISE OSError
+
+tests/test_channel_http_contract.py:22: Failed</failure></testcase><testcase classname="tests.test_channel_http_contract" name="test_runtime_has_no_hub_internal_imports" time="0.023"><failure message="AssertionError: ['channel_hub_adapter.py:30', 'channel_hub_adapter.py:275', 'channel_hub_service.py:22', 'channel_hub_service.py:26', 'channel_hub_service.py:27', 'channel_hub_service.py:28', ...]&#10;assert not ['channel_hub_adapter.py:30', 'channel_hub_adapter.py:275', 'channel_hub_service.py:22', 'channel_hub_service.py:26', 'channel_hub_service.py:27', 'channel_hub_service.py:28', ...]">def test_runtime_has_no_hub_internal_imports():
+        root = Path(__file__).parents[1]
+        violations = []
+        for path in (root / 'nginx_qa').glob('channel*.py'):
+            for node in ast.walk(ast.parse(path.read_text())):
+                if isinstance(node, ast.ImportFrom) and (node.module or '').startswith('agent_channel_bridge'):
+                    violations.append(f'{path.name}:{node.lineno}')
+                if isinstance(node, ast.Import):
+                    violations.extend(f'{path.name}:{node.lineno}' for item in node.names if item.name.startswith('agent_channel_bridge'))
+&gt;       assert not violations, violations
+E       AssertionError: ['channel_hub_adapter.py:30', 'channel_hub_adapter.py:275', 'channel_hub_service.py:22', 'channel_hub_service.py:26', 'channel_hub_service.py:27', 'channel_hub_service.py:28', ...]
+E       assert not ['channel_hub_adapter.py:30', 'channel_hub_adapter.py:275', 'channel_hub_service.py:22', 'channel_hub_service.py:26', 'channel_hub_service.py:27', 'channel_hub_service.py:28', ...]
+
+tests/test_channel_http_contract.py:37: AssertionError</failure></testcase></testsuite></testsuites>

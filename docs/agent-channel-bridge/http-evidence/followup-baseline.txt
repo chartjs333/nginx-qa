@@ -1,0 +1,25 @@
+.FFF...                                                                  [100%]
+=================================== FAILURES ===================================
+_____ test_missing_contract_preserves_durable_work_until_recovery[submit] ______
+integration_tests/test_channel_bridge.py:573: in test_missing_contract_preserves_durable_work_until_recovery
+    assert current["status"] == {
+E   AssertionError: assert 'rejected' == 'pending'
+E     
+E     - pending
+E     + rejected
+_____ test_missing_contract_preserves_durable_work_until_recovery[status] ______
+integration_tests/test_channel_bridge.py:573: in test_missing_contract_preserves_durable_work_until_recovery
+    assert current["status"] == {
+E   AssertionError: assert 'rejected' == 'accepted'
+E     
+E     - accepted
+E     + rejected
+_____ test_missing_contract_preserves_durable_work_until_recovery[cancel] ______
+integration_tests/test_channel_bridge.py:580: in test_missing_contract_preserves_durable_work_until_recovery
+    assert row["attempts"] == 1 and row["due"] > s.clock()
+E   assert (0 == 1)
+=========================== short test summary info ============================
+FAILED integration_tests/test_channel_bridge.py::test_missing_contract_preserves_durable_work_until_recovery[submit]
+FAILED integration_tests/test_channel_bridge.py::test_missing_contract_preserves_durable_work_until_recovery[status]
+FAILED integration_tests/test_channel_bridge.py::test_missing_contract_preserves_durable_work_until_recovery[cancel]
+3 failed, 4 passed in 10.73s

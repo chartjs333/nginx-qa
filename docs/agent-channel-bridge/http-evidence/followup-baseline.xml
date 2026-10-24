@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="3" skipped="0" tests="7" time="10.730" timestamp="2026-10-24T18:18:29.846962+03:00" hostname="3e707f400d8b"><testcase classname="tests.test_channel_http_contract" name="test_deep_json_response_is_a_retryable_transport_error" time="0.003" /><testcase classname="integration_tests.test_channel_bridge" name="test_missing_contract_preserves_durable_work_until_recovery[submit]" time="1.470"><failure message="AssertionError: assert 'rejected' == 'pending'&#10;  &#10;  - pending&#10;  + rejected">integration_tests/test_channel_bridge.py:573: in test_missing_contract_preserves_durable_work_until_recovery
+    assert current["status"] == {
+E   AssertionError: assert 'rejected' == 'pending'
+E     
+E     - pending
+E     + rejected</failure></testcase><testcase classname="integration_tests.test_channel_bridge" name="test_missing_contract_preserves_durable_work_until_recovery[status]" time="1.552"><failure message="AssertionError: assert 'rejected' == 'accepted'&#10;  &#10;  - accepted&#10;  + rejected">integration_tests/test_channel_bridge.py:573: in test_missing_contract_preserves_durable_work_until_recovery
+    assert current["status"] == {
+E   AssertionError: assert 'rejected' == 'accepted'
+E     
+E     - accepted
+E     + rejected</failure></testcase><testcase classname="integration_tests.test_channel_bridge" name="test_missing_contract_preserves_durable_work_until_recovery[cancel]" time="1.418"><failure message="assert (0 == 1)">integration_tests/test_channel_bridge.py:580: in test_missing_contract_preserves_durable_work_until_recovery
+    assert row["attempts"] == 1 and row["due"] &gt; s.clock()
+E   assert (0 == 1)</failure></testcase><testcase classname="integration_tests.test_channel_bridge" name="test_deep_json_http_body_is_rejected_without_server_error[create]" time="1.427" /><testcase classname="integration_tests.test_channel_bridge" name="test_deep_json_http_body_is_rejected_without_server_error[introspection]" time="1.308" /><testcase classname="integration_tests.test_channel_bridge" name="test_deep_json_http_body_is_rejected_without_server_error[callback]" time="1.321" /></testsuite></testsuites>

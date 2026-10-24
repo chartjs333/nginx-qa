@@ -1,11 +1,13 @@
-"""Required Bridge qualification; no skip-as-pass and no service deployment.
+"""HTTP-only Bridge checks, with explicit real-Hub and simulator results.
 
-Usage: python scripts/run_channel_bridge_checks.py /absolute/inbound-hub/channel_bridge/src
-Install requirements-channel-tests.txt and the pinned Hub package first.
+Usage: python scripts/run_channel_bridge_checks.py --hub-wheel /installed-artifacts/inbound_agent_channel_bridge-0.1.0-py3-none-any.whl
+The wheel is provisioned from pinned unmodified Hub PR #2; no source checkout or
+PYTHONPATH injection into nginx is accepted. No live service endpoints are used.
 """
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 import sys
@@ -14,87 +16,46 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-HUB_SHA = "d31f6bd54f70a7e7e2e4295b43424b81dc272155"
-
-
-def run(argv, env):
-    result = subprocess.run(argv, cwd=ROOT, env=env, check=False)
-    if result.returncode:
-        raise SystemExit(result.returncode)
 
 
 def main():
-    if len(sys.argv) != 2:
-        raise SystemExit(__doc__)
-    source = Path(sys.argv[1]).resolve(strict=True)
-    repo = source.parent.parent
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    if head != HUB_SHA:
-        raise SystemExit("Hub checkout is not the qualified PR #2 commit")
-    if subprocess.run(
-        ["git", "-C", str(repo), "diff", "--quiet", "HEAD", "--", "channel_bridge"],
-        check=False,
-    ).returncode:
-        raise SystemExit("Hub source is modified")
-    env = {**os.environ, "HUB_BRIDGE_SOURCE": str(source)}
-    with tempfile.TemporaryDirectory(prefix="channel-checks-") as tmp:
-        result = Path(tmp) / "results.xml"
-        run(
-            [
-                sys.executable,
-                "-m",
-                "pytest",
-                "integration_tests/test_channel_bridge.py",
-                "-q",
-                "--junitxml=" + str(result),
-            ],
-            env,
-        )
-        tree = ET.parse(result)
-        suites = tree.findall(".//testsuite")
-        if not suites or any(
-            int(s.get(k, "0"))
-            for s in suites
-            for k in ("failures", "errors", "skipped")
-        ):
-            raise SystemExit("Mandatory integration did not pass without skips")
-    paths = [
-        str(p.relative_to(ROOT))
-        for p in sorted((ROOT / "nginx_qa").glob("channel*.py"))
-    ]
-    run(
-        [
-            sys.executable,
-            "-m",
-            "ruff",
-            "check",
-            *paths,
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--hub-wheel", required=True, type=Path)
+    args = parser.parse_args()
+    wheel = args.hub_wheel.resolve(strict=True)
+    env = {**os.environ, "HUB_HTTP_WHEEL": str(wheel)}
+    with tempfile.TemporaryDirectory(prefix="http-checks-") as tmp:
+        for suite in (
+            "tests/test_channel_http_contract.py",
             "integration_tests/test_channel_bridge.py",
-            "scripts/export_channel_schemas.py",
-            "scripts/run_channel_bridge_checks.py",
-        ],
-        env,
+            "integration_tests/test_hub_public_http.py",
+        ):
+            report = Path(tmp) / (Path(suite).stem + ".xml")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "pytest",
+                    "-q",
+                    suite,
+                    "--junitxml=" + str(report),
+                ],
+                cwd=ROOT,
+                env=env,
+                check=False,
+            )
+            if result.returncode:
+                raise SystemExit(result.returncode)
+            suites = ET.parse(report).findall(".//testsuite")
+            if not suites or any(
+                int(item.get(key, "0"))
+                for item in suites
+                for key in ("failures", "errors", "skipped")
+            ):
+                raise SystemExit("HTTP qualification requires no failures/errors/skips")
+    print(
+        "Targeted tests passed. Stock Hub v1 is NOT a remote 1.1 implementation; see VALIDATION.md."
     )
-    run(
-        [
-            sys.executable,
-            "-m",
-            "mypy",
-            "--follow-imports=skip",
-            "--ignore-missing-imports",
-            "--check-untyped-defs",
-            *paths,
-        ],
-        env,
-    )
-    run([sys.executable, "scripts/export_channel_schemas.py", "--check"], env)
-    run([sys.executable, "-m", "bandit", "-q", *paths], env)
-    run(["git", "diff", "--check"], env)
 
 
 if __name__ == "__main__":

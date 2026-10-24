@@ -4,4 +4,9 @@ ruff>=0.9,<1
 mypy>=1,<3
 bandit>=1.8,<2
 pip-audit>=2.7,<3
-# Install the pinned inbound-hub/channel_bridge package separately; see integration docs.
+# The Hub wheel runs only in its own test process, never in the nginx interpreter.
+httpx>=0.28,<1
+cryptography>=46,<51
+# Actual Hub tests also need its declared runtime dependencies:
+Pillow>=13,<14
+filelock>=3.18,<5
