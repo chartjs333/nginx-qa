@@ -14,3 +14,7 @@ Done: tested two-way communication in disposable sprint, no production changes.
 - [ ] NQ-11 Define step-up challenge/grant protocol with short-lived authorization, revocation and audit; no plaintext reusable PIN in agent messages.
 - [ ] NQ-12 Verify grant on every privileged channel invocation and test unauthorized/expired/revoked scenarios.
 - [ ] NQ-13 Contract-test plugin discovery, OS compatibility and authenticated mobile activation with Hub.
+
+
+- [ ] NQ-14 Include configurable required assurance level on each protected agent/plugin operation; compare with authenticated session assurance and freshness.
+- [ ] NQ-15 Test smart-card session start, shared workstation switching, expiry, revocation, and action-specific step-up without continuous card presence.
