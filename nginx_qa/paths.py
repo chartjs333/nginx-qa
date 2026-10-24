@@ -44,6 +44,8 @@ def resolve_native_path(
             or getattr(metadata, "st_file_attributes", 0) & 0x400
         ):
             raise ValueError("path contains a symlink, junction or reparse point")
+        if component != path and not stat.S_ISDIR(metadata.st_mode):
+            raise NotADirectoryError(str(component))
     resolved = path.resolve(strict=must_exist)
     if absolute_path_key(str(resolved)) != key:
         raise ValueError("path contains a filesystem alias")

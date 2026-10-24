@@ -32,3 +32,8 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements-dev.txt 'pytest>=8.2,<10' httpx
       - run: python -m pytest -q @tests/path-portability.txt --junitxml=path-results.xml
+        env:
+          # Windows TEMP may be an 8.3 alias (RUNNER~1); keep the alias guard on.
+          TMPDIR: ${{ runner.temp }}
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}

@@ -171,3 +171,36 @@ git show "627b478:$FILE" | "$V/ruff" check --select F,E9 \
 
 Comparing sorted `(code, message)` pairs (line numbers move) yields identical
 lists for all eight files: six existing diagnostics and zero introduced ones.
+
+## Hosted Linux/Windows path-only checks
+
+Run 1: https://github.com/chartjs333/nginx-qa/actions/runs/40102290600
+at commit `8dea9263eee55533d80bcf1e3ce279e35aba6e62`, exact command:
+
+```sh
+python -m pytest -q @tests/path-portability.txt --junitxml=path-results.xml
+```
+
+* Ubuntu: **93 passed, 14 skipped, 30 subtests passed**, exit 0 (7.48s).
+  The descriptor-path migration test passes on a regular Linux host, confirming
+  the local sandbox limitation. Windows-only skips remain explicitly skips.
+* Windows initial run: **35 failed, 74 passed, 1 skipped, 11 subtests passed**,
+  exit 1 (45.27s). Most fixtures received `C:/Users/RUNNER~1/...` from the
+  runner TEMP configuration, correctly rejected by the existing 8.3 alias rule.
+  CI now configures `TMPDIR`, `TEMP`, `TMP` to canonical `${{ runner.temp }}`.
+  No validator exception was added for this runner.
+* One Windows failure exposed an actual difference in `pathlib`: `lstat` of a
+  child beneath a regular file can report a missing child, while POSIX reports
+  ENOTDIR. The shared resolver now explicitly requires every existing ancestor
+  (excluding the target, which may be a file) to be a directory. The existing
+  missing-tail/non-directory test reproduces and covers this correction.
+
+After this correction, the focused local command is:
+
+```sh
+mkdir -p "$T" && TMPDIR="$T" "$V/python" -m pytest -q \
+  tests/test_path_portability.py::test_native_resolution_missing_tail_and_non_directory \
+  tests/test_path_portability.py::test_reparse_ancestor_rejected_even_if_resolution_unchanged
+```
+
+Result: **2 passed**, exit 0 (0.19s). Resolver lint and strict type check pass.
