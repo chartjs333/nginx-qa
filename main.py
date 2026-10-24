@@ -36,6 +36,8 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.security import HTTPBearer
 
+from nginx_qa import channel_api
+
 from nginx_qa.git_provider import RepositorySpec, canonical_remote_from_address
 from nginx_qa.inbound_proposals import (
     ACTION_SCHEMA as INBOUND_PROPOSAL_ACTION_SCHEMA,
@@ -1488,10 +1490,12 @@ async def app_lifespan(_: FastAPI):
             # start_background() wakes the monitor immediately, while each
             # assignment remains independently fail-closed in durable state.
             managed_process_supervisor.start_background()
+        await channel_api.start(app, managed_continuity_runtime)
         notifications = app.state.configure_decision_notifications()
         await notifications.start()
         yield
     finally:
+        await channel_api.stop(app)
         if notifications is not None:
             await notifications.stop()
         supervisor_quiescent = True
@@ -1535,6 +1539,7 @@ async def app_lifespan(_: FastAPI):
 
 
 app = FastAPI(lifespan=app_lifespan)
+app.include_router(channel_api.router)
 inbound_proposal_bearer = HTTPBearer(
     auto_error=False,
     scheme_name="InboundProposalBearer",

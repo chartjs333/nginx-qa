@@ -1,0 +1,199 @@
+{
+  "$defs": {
+    "Provenance": {
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Agent Id",
+          "type": "string"
+        },
+        "assignment_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Assignment Id",
+          "type": "string"
+        },
+        "checkpoint_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Checkpoint Id"
+        },
+        "experiment_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Experiment Id"
+        },
+        "instrument": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Instrument"
+        },
+        "operator": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Operator",
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Project Id",
+          "type": "string"
+        },
+        "sample_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Id"
+        },
+        "sprint_id": {
+          "maxLength": 256,
+          "minLength": 1,
+          "title": "Sprint Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "project_id",
+        "sprint_id",
+        "assignment_id",
+        "agent_id",
+        "operator"
+      ],
+      "title": "Provenance",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/chartjs333/nginx-qa/agent-channel-bridge/event-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "channel_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "content_ref": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Content Ref"
+    },
+    "correlation_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "event_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Event Id",
+      "type": "string"
+    },
+    "event_type": {
+      "enum": [
+        "accepted",
+        "rejected",
+        "queued",
+        "delivered",
+        "human_unavailable",
+        "response_received",
+        "failed",
+        "expired",
+        "cancelled"
+      ],
+      "title": "Event Type",
+      "type": "string"
+    },
+    "occurred_at": {
+      "title": "Occurred At",
+      "type": "number"
+    },
+    "received_at": {
+      "title": "Received At",
+      "type": "number"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sha256": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Sha256"
+    },
+    "source_metadata": {
+      "$ref": "#/$defs/Provenance"
+    }
+  },
+  "required": [
+    "event_id",
+    "request_id",
+    "correlation_id",
+    "channel_id",
+    "event_type",
+    "occurred_at",
+    "received_at",
+    "source_metadata"
+  ],
+  "title": "Event",
+  "type": "object"
+}

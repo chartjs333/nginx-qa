@@ -1397,6 +1397,12 @@ class ManagedContinuityRuntime:
 
         assignment = binding.record
         assignment_id = str(assignment["assignment_id"])
+        from .channel_bridge import pending_external_inputs
+
+        if pending_external_inputs(
+            self.store.database_path, binding.project_id, binding.sprint_id, assignment_id
+        ):
+            raise ManagedContinuityError("WAITING_FOR_EXTERNAL_INPUT", 409, correlation_id)
         if (
             assignment.get("status") != "active"
             or payload.get("from_commit") != assignment.get("initial_head_commit")
@@ -2975,6 +2981,12 @@ class ManagedContinuityRuntime:
         payload: Mapping[str, Any],
         correlation_id: str,
     ) -> ManagedContinuityResult:
+        from .channel_bridge import pending_external_inputs
+
+        if pending_external_inputs(
+            self.store.database_path, project_id, sprint_id, str(context["context_id"]),
+        ):
+            raise ManagedContinuityError("WAITING_FOR_EXTERNAL_INPUT", 409, correlation_id)
         if _is_rework_limit_context(context):
             raise ManagedContinuityError(
                 RECOVERY_CONFLICT, 409, correlation_id
@@ -4492,6 +4504,13 @@ class ManagedContinuityRuntime:
         payload: Mapping[str, Any],
         correlation_id: str,
     ) -> ManagedContinuityResult:
+        from .channel_bridge import pending_external_inputs
+
+        if pending_external_inputs(
+            self.store.database_path, binding.project_id, binding.sprint_id,
+            str(binding.record["assignment_id"]),
+        ):
+            raise ManagedContinuityError("WAITING_FOR_EXTERNAL_INPUT", 409, correlation_id)
         self._validate_schema(payload, _REVIEW_SCHEMA, correlation_id)
         source_assignment_id = str(binding.record["source_assignment_id"])
         if binding.record.get("status") != "decided":

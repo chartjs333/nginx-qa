@@ -1,0 +1,152 @@
+{
+  "$defs": {
+    "AgentPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "channels": {
+          "additionalProperties": {
+            "items": {
+              "enum": [
+                "send_message",
+                "request_data",
+                "request_observation",
+                "request_live_session"
+              ],
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "title": "Channels",
+          "type": "object"
+        },
+        "expires_at": {
+          "title": "Expires At",
+          "type": "number"
+        },
+        "profile": {
+          "anyOf": [
+            {
+              "enum": [
+                "neurogeneticist",
+                "clinician",
+                "bioinformatician"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Profile"
+        },
+        "revoked": {
+          "default": false,
+          "title": "Revoked",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "expires_at",
+        "channels"
+      ],
+      "title": "AgentPolicy",
+      "type": "object"
+    },
+    "ProjectPolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "agents": {
+          "additionalProperties": {
+            "$ref": "#/$defs/AgentPolicy"
+          },
+          "title": "Agents",
+          "type": "object"
+        },
+        "max_auth_age_seconds": {
+          "default": 300,
+          "maximum": 300,
+          "minimum": 1,
+          "title": "Max Auth Age Seconds",
+          "type": "integer"
+        },
+        "operations": {
+          "items": {
+            "enum": [
+              "send_message",
+              "request_data",
+              "request_observation",
+              "request_live_session"
+            ],
+            "type": "string"
+          },
+          "title": "Operations",
+          "type": "array"
+        },
+        "required_assurance_levels": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "propertyNames": {
+            "enum": [
+              "send_message",
+              "request_data",
+              "request_observation",
+              "request_live_session"
+            ]
+          },
+          "title": "Required Assurance Levels",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operations",
+        "agents"
+      ],
+      "title": "ProjectPolicy",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/chartjs333/nginx-qa/agent-channel-bridge/config-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "hub_url": {
+      "title": "Hub Url",
+      "type": "string"
+    },
+    "introspection_projects": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Introspection Projects",
+      "type": "array"
+    },
+    "introspection_token_sha256": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Introspection Token Sha256",
+      "type": "string"
+    },
+    "projects": {
+      "additionalProperties": {
+        "$ref": "#/$defs/ProjectPolicy"
+      },
+      "title": "Projects",
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "hub_url",
+    "introspection_token_sha256",
+    "introspection_projects",
+    "projects"
+  ],
+  "title": "BridgePolicy",
+  "type": "object"
+}
