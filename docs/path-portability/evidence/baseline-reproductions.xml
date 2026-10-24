@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="4" skipped="0" tests="4" time="3.996" timestamp="2026-10-24T17:09:18.561744+03:00" hostname="3e707f400d8b"><testcase classname="tests.test_path_portability" name="test_native_directory_configuration" time="0.005"><failure message="ValueError: managed path must be a canonical absolute DOS path">tmp_path = PosixPath('/workspace/scratch/6b32e2b88e04/nginx-paths/pytest-of-root/pytest-0/test_native_directory_configur0')
+
+    def test_native_directory_configuration(tmp_path):
+        config = native_config(tmp_path)
+&gt;       assert normalize_managed_runtime_config(environment_for(config)) == config
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+tests/test_path_portability.py:35: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+nginx_qa/managed_import.py:483: in normalize_managed_runtime_config
+    service_root = _normalized_path(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = '/workspace/scratch/6b32e2b88e04/nginx-paths/pytest-of-root/pytest-0/test_native_directory_configur0/universal-managed-sprint-engine'
+
+    def _normalized_path(value: str) -&gt; str:
+        if windows_absolute_path_key(value) is None:
+&gt;           raise ValueError("managed path must be a canonical absolute DOS path")
+E           ValueError: managed path must be a canonical absolute DOS path
+
+nginx_qa/managed_import.py:465: ValueError</failure></testcase><testcase classname="tests.test_path_portability" name="test_native_runtime_path_invariants" time="0.002"><failure message="AssertionError: assert ('RUNTIME_CON...ATH_INVALID',) == ()&#10;  &#10;  Left contains one more item: 'RUNTIME_CONFIG_PATH_INVALID'&#10;  Use -v to get more diff">tmp_path = PosixPath('/workspace/scratch/6b32e2b88e04/nginx-paths/pytest-of-root/pytest-0/test_native_runtime_path_invar0')
+
+    def test_native_runtime_path_invariants(tmp_path):
+&gt;       assert managed_runtime_config_invariant_issues(native_config(tmp_path)) == ()
+E       AssertionError: assert ('RUNTIME_CON...ATH_INVALID',) == ()
+E         
+E         Left contains one more item: 'RUNTIME_CONFIG_PATH_INVALID'
+E         Use -v to get more diff
+
+tests/test_path_portability.py:39: AssertionError</failure></testcase><testcase classname="tests.test_path_portability" name="test_git_provider_rejects_symlink_ancestor" time="0.002"><failure message="Failed: DID NOT RAISE ValueError">tmp_path = PosixPath('/workspace/scratch/6b32e2b88e04/nginx-paths/pytest-of-root/pytest-0/test_git_provider_rejects_syml0')
+
+    def test_git_provider_rejects_symlink_ancestor(tmp_path):
+        target = tmp_path / 'target'
+        target.mkdir()
+        alias = tmp_path / 'alias'
+        try:
+            alias.symlink_to(target, target_is_directory=True)
+        except OSError:
+            pytest.skip('symlink creation unavailable')
+&gt;       with pytest.raises(ValueError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE ValueError
+
+tests/test_path_portability.py:50: Failed</failure></testcase><testcase classname="tests.test_path_portability" name="test_default_prompt_template_is_native" time="2.117"><failure message="AssertionError: assert False&#10; +  where False = is_absolute()&#10; +    where is_absolute = PosixPath('D:\\Prompt\\{repository}').is_absolute&#10; +      where PosixPath('D:\\Prompt\\{repository}') = Path('D:\\Prompt\\{repository}')&#10; +        where 'D:\\Prompt\\{repository}' = &lt;module 'main' from '/workspace/scratch/6b32e2b88e04/nginx-paths/main.py'&gt;.DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE">@pytest.mark.skipif(os.name == 'nt', reason='POSIX default on Linux')
+    def test_default_prompt_template_is_native():
+        import main
+&gt;       assert Path(main.DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE).is_absolute()
+E       AssertionError: assert False
+E        +  where False = is_absolute()
+E        +    where is_absolute = PosixPath('D:\\Prompt\\{repository}').is_absolute
+E        +      where PosixPath('D:\\Prompt\\{repository}') = Path('D:\\Prompt\\{repository}')
+E        +        where 'D:\\Prompt\\{repository}' = &lt;module 'main' from '/workspace/scratch/6b32e2b88e04/nginx-paths/main.py'&gt;.DEFAULT_SEQUENTIAL_PROMPT_DIRECTORY_TEMPLATE
+
+tests/test_path_portability.py:58: AssertionError</failure></testcase></testsuite></testsuites>

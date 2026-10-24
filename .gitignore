@@ -49,3 +49,6 @@ server_*.err.log
 Thumbs.db
 .idea/
 .vscode/
+
+# Portable directory configuration example (contains no credentials).
+!.env.paths.example
