@@ -1,0 +1,39 @@
+{
+  "$id": "https://github.com/chartjs333/nginx-qa/agent-channel-bridge/binding-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "assignment_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Assignment Id",
+      "type": "string"
+    },
+    "project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "sprint_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sprint Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "sprint_id",
+    "assignment_id",
+    "agent_id"
+  ],
+  "title": "Binding",
+  "type": "object"
+}

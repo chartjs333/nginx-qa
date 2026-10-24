@@ -1,0 +1,171 @@
+{
+  "$defs": {
+    "Payload": {
+      "additionalProperties": false,
+      "properties": {
+        "grant_id": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Grant Id"
+        },
+        "sample_id": {
+          "anyOf": [
+            {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sample Id"
+        },
+        "text": {
+          "default": "",
+          "maxLength": 10000,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "title": "Payload",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/chartjs333/nginx-qa/agent-channel-bridge/create-request-v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+    "agent_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Agent Id",
+      "type": "string"
+    },
+    "assignment_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Assignment Id",
+      "type": "string"
+    },
+    "blocking": {
+      "default": false,
+      "title": "Blocking",
+      "type": "boolean"
+    },
+    "channel_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Channel Id",
+      "type": "string"
+    },
+    "checkpoint_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Checkpoint Id"
+    },
+    "correlation_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Correlation Id",
+      "type": "string"
+    },
+    "created_at": {
+      "title": "Created At",
+      "type": "number"
+    },
+    "deadline": {
+      "title": "Deadline",
+      "type": "number"
+    },
+    "experiment_id": {
+      "anyOf": [
+        {
+          "maxLength": 256,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Experiment Id"
+    },
+    "idempotency_key": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Idempotency Key",
+      "type": "string"
+    },
+    "operation": {
+      "enum": [
+        "send_message",
+        "request_data",
+        "request_observation",
+        "request_live_session"
+      ],
+      "title": "Operation",
+      "type": "string"
+    },
+    "payload": {
+      "$ref": "#/$defs/Payload"
+    },
+    "project_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Project Id",
+      "type": "string"
+    },
+    "request_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "title": "Request Id",
+      "type": "string"
+    },
+    "schema_version": {
+      "const": 1,
+      "default": 1,
+      "title": "Schema Version",
+      "type": "integer"
+    },
+    "sprint_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "title": "Sprint Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "project_id",
+    "sprint_id",
+    "assignment_id",
+    "agent_id",
+    "request_id",
+    "idempotency_key",
+    "correlation_id",
+    "channel_id",
+    "operation",
+    "created_at",
+    "deadline"
+  ],
+  "title": "CreateRequest",
+  "type": "object"
+}

@@ -1,0 +1,21 @@
+{
+  "bridge": [
+    {
+      "tests": 51,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  ],
+  "targeted_regression": [
+    {
+      "tests": 396,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2
+    }
+  ],
+  "hub_commit": "d31f6bd54f70a7e7e2e4295b43424b81dc272155",
+  "base_commit": "3ac994996e5ffd5fc2e79229622dd6a8f0b15267",
+  "scope": "isolated server-code integration; no hardware, browser or native Windows qualification"
+}
