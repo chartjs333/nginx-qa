@@ -360,7 +360,10 @@ def register_scope_api(host):
                     _, _, entry, _ = host.project_for_group_api(config, project_id)
                     candidate = entry.get(host.PROJECT_AGENT_ASSIGNMENT_KEY) or {}
                     return deepcopy(candidate) if candidate.get("mode") == "parallel" else None
-            found = await asyncio.to_thread(legacy_parallel)
+            # Join the host's transaction gate before dispatching a worker.
+            # Otherwise a local writer holding the file lock can make this
+            # read-only routing probe hit the OS-lock timeout (HTTP 500).
+            found = await host.run_group_write_transaction(legacy_parallel)
             if found is None:
                 return None
             runtime = None
@@ -449,7 +452,11 @@ def register_scope_api(host):
             return {"project_id": project_id, "sprint_id": sprint_id, "execution": state}, state
         _, _, history = await host.project_sprint_history_snapshot(project_id)
         if history and history.get("current_sprint_id") == sprint_id:
-            snapshot = await host.project_state_json(project_id, include_patch_content=False)
+            # Execution views use recent_activity and the immutable audit,
+            # not the separate Git-patch export. Avoid resolving those patches
+            # (and repeatedly parsing the registry) for every refresh.
+            snapshot = await host.project_state_json(
+                project_id, include_patch_content=False, include_patch_history=False)
             snapshot["sprint_id"] = sprint_id
             return snapshot, snapshot["execution"]
         record = next((r for r in (history or {}).get("sprints", []) if r.get("id") == sprint_id), None)

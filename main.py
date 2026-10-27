@@ -33692,6 +33692,7 @@ async def project_state_json(
     *,
     history_limit: int = 200,
     include_patch_content: bool = True,
+    include_patch_history: bool = True,
 ) -> dict[str, Any]:
     snapshot = await run_group_write_transaction(
         sequential_runtime_project_snapshot_transaction,
@@ -33702,12 +33703,14 @@ async def project_state_json(
         date_from="1970-01-01",
         git_context=snapshot["context_key"],
     )
-    history_with_patches = await asyncio.to_thread(
-        history_with_patches_context,
-        recent_activity,
-        str(snapshot["project"].get("git_address") or ""),
-        include_patch_content=include_patch_content,
-    )
+    history_with_patches = None
+    if include_patch_history:
+        history_with_patches = await asyncio.to_thread(
+            history_with_patches_context,
+            recent_activity,
+            str(snapshot["project"].get("git_address") or ""),
+            include_patch_content=include_patch_content,
+        )
     pending_work: dict[str, list[dict[str, Any]]] = {}
     acquired: list[asyncio.Lock] = []
     try:
@@ -33768,7 +33771,7 @@ async def project_state_json(
             f"/api/v1/projects/{snapshot['project_phone']}/assignments/"
             f"{current_binding.get('assignment_id')}/effective-scope/ack"
         )
-    return {
+    result = {
         "schema_version": 1,
         "generated_at": utc_now(),
         "project_id": snapshot["project_id"],
@@ -33779,19 +33782,25 @@ async def project_state_json(
         "agents": snapshot["agents"],
         "pending_work": pending_work,
         "recent_activity": recent_activity,
-        "history_with_patches": history_with_patches,
-        "activity_with_patches": history_with_patches["timeline"],
-        "code_patches": history_with_patches["patches"],
-        "code_patch_summary": {
-            "activity_count": history_with_patches["record_count"],
-            "unique_commit_transition_count": (
-                history_with_patches["patch_count"]
-                + history_with_patches["patch_error_count"]
-            ),
-            "available_patch_count": history_with_patches["patch_count"],
-            "unavailable_patch_count": history_with_patches["patch_error_count"],
-        },
     }
+    if history_with_patches is not None:
+        # Observability consumes raw activity, not derived Git patch history.
+        # Omit skipped fields rather than reporting unmeasured counts as zero.
+        result.update({
+            "history_with_patches": history_with_patches,
+            "activity_with_patches": history_with_patches["timeline"],
+            "code_patches": history_with_patches["patches"],
+            "code_patch_summary": {
+                "activity_count": history_with_patches["record_count"],
+                "unique_commit_transition_count": (
+                    history_with_patches["patch_count"]
+                    + history_with_patches["patch_error_count"]
+                ),
+                "available_patch_count": history_with_patches["patch_count"],
+                "unavailable_patch_count": history_with_patches["patch_error_count"],
+            },
+        })
+    return result
 
 
 def sequential_runtime_target_agent(
