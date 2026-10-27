@@ -1,0 +1,82 @@
+{
+  "atlas_id": "madoev_historical_projections_v0.1_RESEARCH_ONLY",
+  "status": "source_anchored_unmapped",
+  "clinical_validated": false,
+  "design": "Historical claims preserved; 10–20 / 10–10 electrode assignments are deliberately unfilled until an original electrode montage is obtained.",
+  "source_ids": [
+    "madoev_1972",
+    "madoev_1981"
+  ],
+  "figures": [
+    {
+      "source_id": "madoev_1981",
+      "pdf_page_1_based": 2,
+      "printed_page": 43,
+      "caption_ru": "Карта активирующих точек желудка и желчного пузыря и их проекций",
+      "figure_placement": "head inset plus visceral drawing",
+      "status": "figure visually verified",
+      "digitization": "pending calibrated tracing of original source; printed axes do not establish modern MNI or 10–20 coordinates"
+    }
+  ],
+  "organ_regions": [
+    {
+      "region_id": "stomach",
+      "organ_ru": "желудок",
+      "historical_association": "reported as studied organ",
+      "brain_projection_assertion": "reported by historical authors; not independently validated",
+      "brain_eeg_electrode_ids_original": null,
+      "montage_10_20_channels": null,
+      "scalp_xy_normalized": null,
+      "skin_point_coordinates": null,
+      "status": "not_mapped",
+      "note": "1981 source figure represents organs, active points and projections, but does not provide a validated translation to standard EEG electrodes."
+    },
+    {
+      "region_id": "gallbladder",
+      "organ_ru": "желчный пузырь",
+      "historical_association": "reported as studied organ",
+      "brain_projection_assertion": "reported by historical authors; not independently validated",
+      "brain_eeg_electrode_ids_original": null,
+      "montage_10_20_channels": null,
+      "scalp_xy_normalized": null,
+      "skin_point_coordinates": null,
+      "status": "not_mapped",
+      "note": "Historical symmetry statements must not be converted into exact lateralization or electrode sites without source montage."
+    }
+  ],
+  "historic_channel_number_mentions": {
+    "text_section": "1981, printed p.45 / PDF page 4, lower paragraphs",
+    "raw_candidates": [
+      "21",
+      "1",
+      "31",
+      "11",
+      "30",
+      "10"
+    ],
+    "claimed_pairs_provisional": [
+      [
+        "21",
+        "1"
+      ],
+      [
+        "31",
+        "11"
+      ],
+      [
+        "30",
+        "10"
+      ]
+    ],
+    "verified_pair_transcription": false,
+    "mapped_to_organs": false,
+    "mapped_to_montage": false,
+    "review_required": "Two-person visual transcription and comparison to full 1972/1981 electrode-layout documentation."
+  },
+  "usage_policy": {
+    "allow_roi_analysis": false,
+    "allow_inference_organs_from_eeg": false,
+    "activation_condition": "mapping_status=verified_against_original_and_montage AND pre-registered ROI signatures",
+    "forbidden": "Do not use these records for clinical diagnosis or treatment guidance."
+  }
+}
