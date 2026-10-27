@@ -1,0 +1,106 @@
+{
+  "kind": "managed_sprint_research_backlog_addendum",
+  "runnable_as_nginx_qa_manifest": false,
+  "reason": "Stand-alone task addendum only; the original managed-workspace manifest was not available in this runtime for safe merging or schema validation.",
+  "scope": "Madoev EEG atlas + longitudinal AR-p analysis (historical reconstruction)",
+  "nodes": [
+    {
+      "id": "SOURCE-01",
+      "role": "historian",
+      "task": "Acquire both original articles and publication-quality figure scans; capture bibliographic evidence, locate electrode montage diagram and reference",
+      "acceptance": [
+        "source artifacts documented",
+        "figure/page locations cited",
+        "reproducible audit trail"
+      ]
+    },
+    {
+      "id": "ATLAS-02",
+      "role": "neurophysiologist",
+      "depends_on": [
+        "SOURCE-01"
+      ],
+      "task": "Two independent transcriptions of historical labels and organ skin points; reconcile disagreement",
+      "acceptance": [
+        "double-checked transcription",
+        "all ambiguous labels remain null"
+      ]
+    },
+    {
+      "id": "ATLAS-03",
+      "role": "EEG engineer",
+      "depends_on": [
+        "ATLAS-02"
+      ],
+      "task": "Derive historical channel to 10-20 mapping only with valid montage, preserve original numbering",
+      "acceptance": [
+        "no inferred scalp coordinates",
+        "each mapping includes cited diagram evidence"
+      ]
+    },
+    {
+      "id": "AR-04",
+      "role": "signal scientist",
+      "task": "Implement AR order estimation and artifact QC on synthetic EEG, test BIC repeatability",
+      "acceptance": [
+        "unit tests for known AR processes",
+        "same candidate response count",
+        "QC log present"
+      ]
+    },
+    {
+      "id": "AR-05",
+      "role": "biostatistician",
+      "depends_on": [
+        "AR-04"
+      ],
+      "task": "Pre-register within-person contrasts B1/B2 versus P1/D1/D2 and multi-comparison policy",
+      "acceptance": [
+        "null hypotheses written",
+        "missingness and confounders addressed"
+      ]
+    },
+    {
+      "id": "DATA-06",
+      "role": "clinical data manager",
+      "task": "Design pseudonymous EEG and clinical outcomes data dictionary",
+      "acceptance": [
+        "no identifiable data in Git",
+        "separate organ-specific clinical endpoints"
+      ]
+    },
+    {
+      "id": "INTEG-07",
+      "role": "backend engineer",
+      "depends_on": [
+        "ATLAS-03",
+        "AR-04",
+        "AR-05",
+        "DATA-06"
+      ],
+      "task": "Connect approved ROI registry and AR analysis to study workflow, always fail closed on unmapped channels",
+      "acceptance": [
+        "atlas guard prevents organ-level claims",
+        "provenance in outputs"
+      ]
+    },
+    {
+      "id": "REVIEW-08",
+      "role": "independent reviewers",
+      "depends_on": [
+        "INTEG-07"
+      ],
+      "task": "Check documentation, source fidelity, reproducibility and safety gates",
+      "acceptance": [
+        "two independent review decisions",
+        "no clinical claims without authorization"
+      ]
+    }
+  ],
+  "gates": [
+    "historical-montage-verified",
+    "analysis-unit-tests-pass",
+    "ethics-approval-before-human-study",
+    "clinical-endpoints-predefined"
+  ]
+}
