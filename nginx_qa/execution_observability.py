@@ -58,9 +58,10 @@ def checkpoint_payload(snapshot: Mapping[str, Any], scope_requests: Sequence[Map
     Queue/history records belong to the same locked mutation transaction when
     available; absence is explicitly represented as unknown, not an empty queue.
     """
-    state = deepcopy(_state(snapshot))
-    state.pop("execution_audit", None)
-    state.pop("observability", None)
+    # Exclude historical snapshots before copying: copying the entire ledger
+    # merely to discard it can exhaust memory on long-running executions.
+    state = deepcopy({key: value for key, value in _state(snapshot).items()
+                      if key not in {"execution_audit", "observability"}})
     return {
         "project_id": snapshot.get("project_id"),
         "sprint_id": snapshot.get("sprint_id", state.get("sprint_id")),

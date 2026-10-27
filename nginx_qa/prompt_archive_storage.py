@@ -2348,17 +2348,16 @@ class PromptArchiveStorage:
                         break
             if cancellation is not None:
                 cancellation.check()
-            tail = inflater.flush(output_cap - output_size + 1)
+            # Every inflate call allows one byte beyond the remaining budget,
+            # so a valid bounded member reaches EOF without an output-limited
+            # remainder. Do not call flush(remaining): its argument is an
+            # initial allocation size, not an output limit, even at EOF.
+            if not inflater.eof or inflater.unused_data or inflater.unconsumed_tail:
+                raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         except PromptArchiveStorageError:
             raise
         except zlib.error as exc:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT") from None
-        output_size += len(tail)
-        if output_size > output_cap:
-            raise _error("PROMPT_ARCHIVE_LIMIT_EXCEEDED")
-        output_parts.append(tail)
-        if not inflater.eof or inflater.unused_data or inflater.unconsumed_tail:
-            raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")
         output = b"".join(output_parts)
         if len(output) & 0xFFFFFFFF != expected_size:
             raise _error("PROMPT_ARCHIVE_BLOB_CORRUPT")

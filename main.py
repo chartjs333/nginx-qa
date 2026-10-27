@@ -31815,7 +31815,10 @@ def legacy_scope_binding_snapshot_transaction(
                 config,
                 project_id,
             )
-            state = deepcopy(project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {})
+            # read_git_config_file returns a request-owned parsed document.
+            # Validate its COMPLETE scope history before projecting the small
+            # read-only snapshot; do not clone unrelated execution checkpoints.
+            state = project_entry.get(PROJECT_AGENT_ASSIGNMENT_KEY) or {}
             if str(state.get("current_assignment_id") or "") != assignment_id:
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
@@ -31864,15 +31867,24 @@ def legacy_scope_binding_snapshot_transaction(
                 if isinstance(scope_control, dict)
                 else None
             )
+            # Only delivery verification and exact active-task projection use
+            # this state after the lock. Keep detached copies of those inputs,
+            # without retaining the full registry/audit behind every GET.
+            delivery_state = {
+                "strategy": state.get("strategy"),
+                "current_assignment_id": state.get("current_assignment_id"),
+                "assignments": [deepcopy(assignment)],
+                "active_task": deepcopy(state.get("active_task")),
+            }
             return {
                 "project_id": normalize_project_phone(project_entry.get("project_phone")),
                 "project": public_project_context(context),
-                "state": state,
+                "state": delivery_state,
                 "assignment": deepcopy(assignment),
                 "binding": binding,
                 "issued_agent": deepcopy(issued_agent),
                 "effective_agent": effective_agent,
-                "acknowledgement": acknowledgement,
+                "acknowledgement": deepcopy(acknowledgement),
             }
 
 
