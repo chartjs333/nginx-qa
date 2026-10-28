@@ -13,6 +13,8 @@ from hashlib import sha256
 import json
 from typing import Any, Mapping, Sequence
 
+from .execution_read_cache import HistoricalProjectionCache
+
 
 def _dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, Mapping) else {}
@@ -28,6 +30,18 @@ def _records(value: Any) -> list[dict[str, Any]]:
 
 def _hash(value: Any) -> str:
     return sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+
+def _checkpoint_digest(value: Any) -> str:
+    # Same canonical bytes, without allocating a second complete snapshot-sized
+    # Unicode string plus UTF-8 buffer. Python iteration also lets a worker yield
+    # the GIL between tokens; a single huge scalar still costs one encode token.
+    digest = sha256()
+    encoder = json.JSONEncoder(sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    for chunk in encoder.iterencode(value):
+        for start in range(0, len(chunk), 65536):
+            digest.update(chunk[start:start + 65536].encode())
+    return digest.hexdigest()
 
 
 def _revision(state: Mapping[str, Any]) -> Any:
@@ -311,15 +325,18 @@ def _review_gates(state: Mapping[str, Any], assignments: list[dict[str, Any]]) -
     return gates
 
 
-def project_execution(snapshot: Mapping[str, Any], *, scope_requests: Sequence[Mapping[str, Any]] | None = None, checkpoints: Sequence[Mapping[str, Any]] = (), cursor: str | None = None, at_revision: Any = None, at_checkpoint: str | None = None) -> dict[str, Any]:
+def project_execution(snapshot: Mapping[str, Any], *, scope_requests: Sequence[Mapping[str, Any]] | None = None, checkpoints: Sequence[Mapping[str, Any]] = (), cursor: str | None = None, at_revision: Any = None, at_checkpoint: str | None = None, history_cache: HistoricalProjectionCache | None = None) -> dict[str, Any]:
     """Build a full idempotent refresh response; no callbacks, I/O or mutations.
 
     Cursor is the content hash, not a lossy event window: reconnect always gets
     the complete saved event set. Historical selection stays at one checkpoint.
     """
+    validated = []
     for checkpoint in checkpoints:
-        if _hash(checkpoint.get("snapshot")) != checkpoint.get("snapshot_sha256"):
+        actual_digest = _checkpoint_digest(checkpoint.get("snapshot"))
+        if actual_digest != checkpoint.get("snapshot_sha256"):
             raise ValueError("Recorded execution checkpoint digest does not match")
+        validated.append(actual_digest)
     chosen = None
     if at_checkpoint is not None or at_revision is not None:
         chosen = (next((record for record in reversed(checkpoints) if record.get("checkpoint_id") == at_checkpoint), None)
@@ -344,15 +361,32 @@ def project_execution(snapshot: Mapping[str, Any], *, scope_requests: Sequence[M
     # Retain old transition/claim records after the runtime's current pointer
     # moves on. Earlier checkpoint metadata wins; never recolor old events from
     # the current assignment. Reconnect returns this complete de-duplicated set.
-    saved_events: dict[str, dict[str, Any]] = {}
-    for checkpoint in checkpoints:
+    selected = []
+    identities = []
+    for checkpoint, actual_digest in zip(checkpoints, validated):
         if chosen and checkpoint.get("sequence", 0) > chosen.get("sequence", 0):
             break
-        old_snapshot = _dict(checkpoint.get("snapshot"))
-        for event in _timeline(old_snapshot, _assignments(_state(old_snapshot)), _records(old_snapshot.get("scope_requests"))):
-            if event.get("execution_revision") is None:
-                event["observed_at_execution_revision"] = checkpoint.get("execution_revision")
-            saved_events.setdefault(event["event_id"], event)
+        selected.append(checkpoint)
+        # Include decorations/cutoff metadata not covered by snapshot_sha256.
+        identities.append([actual_digest, checkpoint.get("checkpoint_id"),
+                           checkpoint.get("sequence"), checkpoint.get("execution_revision")])
+
+    def historical_events():
+        events = {}
+        for checkpoint in selected:
+            old_snapshot = _dict(checkpoint.get("snapshot"))
+            for event in _timeline(old_snapshot, _assignments(_state(old_snapshot)), _records(old_snapshot.get("scope_requests"))):
+                if event.get("execution_revision") is None:
+                    event["observed_at_execution_revision"] = checkpoint.get("execution_revision")
+                events.setdefault(event["event_id"], event)
+        return events
+
+    if history_cache is not None and selected:
+        key = _hash(["historical-projection-v1", snapshot.get("project_id"),
+                     snapshot.get("sprint_id", state.get("sprint_id")), identities])
+        saved_events = history_cache.get_or_build(key, historical_events)
+    else:
+        saved_events = historical_events()
     for event in _timeline(snapshot, assignments, requests):
         saved_events.setdefault(event["event_id"], event)
     timeline = sorted(saved_events.values(), key=_event_order)
