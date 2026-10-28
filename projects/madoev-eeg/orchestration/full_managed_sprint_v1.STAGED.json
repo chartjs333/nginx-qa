@@ -62,7 +62,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-source-01-20261028",
+          "assigned_branch": "agent/madoev-full-source-01-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -89,7 +89,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-atlas-02-20261028",
+          "assigned_branch": "agent/madoev-full-atlas-02-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -116,7 +116,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-atlas-03-20261028",
+          "assigned_branch": "agent/madoev-full-atlas-03-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -143,7 +143,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-ar-04-20261028",
+          "assigned_branch": "agent/madoev-full-ar-04-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -170,7 +170,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-ar-05-20261028",
+          "assigned_branch": "agent/madoev-full-ar-05-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -197,7 +197,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-data-06-20261028",
+          "assigned_branch": "agent/madoev-full-data-06-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -224,7 +224,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-integ-07-20261028",
+          "assigned_branch": "agent/madoev-full-integ-07-20261028",
           "existing_branch_policy": "create"
         }
       },
@@ -252,7 +252,7 @@
       "workspace": {
         "access": "write",
         "git": {
-          "assigned_branch": "agent/madoev-review-08-20261028",
+          "assigned_branch": "agent/madoev-full-review-08-20261028",
           "existing_branch_policy": "create"
         }
       },
