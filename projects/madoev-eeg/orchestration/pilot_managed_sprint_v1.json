@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "program": {
+    "name": "Madoev EEG",
+    "release": "pilot-1",
+    "launch_scope": "single_AR_validation_task",
+    "full_parallel_launch_authorized": false,
+    "clinical_use": false
+  },
+  "git": {
+    "source_ref": "refs/heads/project/madoev-eeg-lab",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/madoev-pilot-main-20261028",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "AR-04",
+    "required_approvals": 2,
+    "max_rework_cycles": 1,
+    "reviewers": [
+      {
+        "id": "pilot-science-reviewer",
+        "name": "Independent Scientific Reviewer",
+        "phone": "4391",
+        "git_branch": "review/madoev-pilot-science-20261028",
+        "profile": "Independently verify source fidelity, preregistered metrics, reproducibility and absence of clinical claims."
+      },
+      {
+        "id": "pilot-quality-reviewer",
+        "name": "Independent Quality Reviewer",
+        "phone": "4392",
+        "git_branch": "review/madoev-pilot-quality-20261028",
+        "profile": "Independently verify tests, artifact provenance, privacy and safety gates."
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "AR-04",
+      "agent": {
+        "id": "madoev-ar-04",
+        "name": "EEG AR Validation Engineer",
+        "phone": "4371",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "AR-04",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. PILOT: Inspect projects/madoev-eeg/analysis/analyze_eeg_ar.py and test_analysis.py, run the existing synthetic AR and artifact-QC tests in an isolated workspace, add or improve tests if needed, and write projects/madoev-eeg/docs/PILOT_AR04_EVIDENCE.md containing exact commands, Python/dependency versions, expected vs observed AR orders, pass/fail, data safety checks, and commit hash. If dependencies or execution are unavailable, report BLOCKED_EXTERNAL, never claim tests passed without output."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-ar-04-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "completed",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "coord",
+      "agent": {
+        "id": "madoev-coordinator",
+        "name": "Research Sprint Coordinator",
+        "phone": "4380",
+        "profile": "Resolve only research blockers. Never authorize clinical interventions or change Delta."
+      },
+      "tasks": [
+        {
+          "task_id": "COORD-01",
+          "queue": "consultant-all",
+          "message": "Inspect evidence for STOP/NEED_DECISION. Do not bypass safety, data or source-validation gates. Return RESUME or BLOCKED_EXTERNAL with rationale."
+        }
+      ],
+      "workspace": {
+        "access": "read"
+      },
+      "activation_policy": "any_parent",
+      "transitions": {
+        "RESUME": "AR-04",
+        "BLOCKED_EXTERNAL": "blocked"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Required evidence reviewed by two independent reviewers."
+    },
+    {
+      "id": "blocked",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Waiting for human/source/ethics decision. No human interventions authorized."
+    }
+  ],
+  "coordinator": {
+    "node_id": "coord",
+    "routes": {
+      "STOP": "coord",
+      "NEED_DECISION": "coord"
+    }
+  },
+  "files": [
+    {
+      "path": "projects/madoev-eeg/analysis/analyze_eeg_ar.py",
+      "sha256": "a0423e08ebdf110273a6d18fa91b4bacef6c17134a898c74f0c41863d354ffc9"
+    }
+  ],
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  }
+}
