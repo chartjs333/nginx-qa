@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "program": {
+    "name": "Madoev EEG",
+    "release": "full-8",
+    "status": "STAGED_NOT_AUTHORIZED",
+    "requires_pilot_evidence": "PILOT_AR04_EVIDENCE.md with two independent approvals",
+    "overnight_auto_start": false,
+    "clinical_use": false,
+    "attention": "These metadata fields are administrative only; external operator must enforce the launch gate."
+  },
+  "git": {
+    "source_ref": "refs/heads/project/madoev-eeg-lab",
+    "expected_source_commit": null,
+    "assigned_branch": "agent/madoev-full-main-20261028",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "parallel",
+    "start_nodes": [
+      "SOURCE-01",
+      "AR-04",
+      "DATA-06"
+    ],
+    "required_approvals": 2,
+    "max_rework_cycles": 2,
+    "reviewers": [
+      {
+        "id": "full-science-reviewer",
+        "name": "Independent Scientific Reviewer",
+        "phone": "4491",
+        "git_branch": "review/madoev-full-science-20261028",
+        "profile": "Independently verify source fidelity, preregistered metrics, reproducibility and absence of clinical claims."
+      },
+      {
+        "id": "full-quality-reviewer",
+        "name": "Independent Quality Reviewer",
+        "phone": "4492",
+        "git_branch": "review/madoev-full-quality-20261028",
+        "profile": "Independently verify tests, artifact provenance, privacy and safety gates."
+      }
+    ]
+  },
+  "nodes": [
+    {
+      "id": "SOURCE-01",
+      "agent": {
+        "id": "madoev-source-01",
+        "name": "Historical Sources Researcher",
+        "phone": "4401",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "SOURCE-01",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Obtain original 1972 and 1981 articles and verify figures, montage provenance, title, page and bibliography. Deliver a cited source register; do not invent coordinates."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-source-01-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "ATLAS-02",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "ATLAS-02",
+      "agent": {
+        "id": "madoev-atlas-02",
+        "name": "Independent Neurophysiology Transcriber",
+        "phone": "4402",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "ATLAS-02",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Double-transcribe historical skin-point and EEG labels from original scans, record agreement/uncertainty and unresolved labels (null), trace to source pages."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-atlas-02-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "ATLAS-03",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "ATLAS-03",
+      "agent": {
+        "id": "madoev-atlas-03",
+        "name": "EEG Montage Engineer",
+        "phone": "4403",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "ATLAS-03",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Map historical channel labels to a modern montage ONLY if a verifiable original montage is found; otherwise leave atlas fields null and report documented mapping blocker. No organ-specific analysis unless approved."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-atlas-03-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "INTEG-07",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "AR-04",
+      "agent": {
+        "id": "madoev-ar-04",
+        "name": "Signal Processing Engineer",
+        "phone": "4404",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "AR-04",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Extend reproducible synthetic EEG AR(p)/BIC checks, windowing/artifact QC, deterministic seeds, versions, sensitivity analyses; commit tests and evidence."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-ar-04-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "AR-05",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "AR-05",
+      "agent": {
+        "id": "madoev-ar-05",
+        "name": "Biostatistician",
+        "phone": "4405",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "AR-05",
+          "queue": "consultant-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Define two baseline records B1/B2, P1, D1, D2, reproducible within-person effect summary, control comparisons, missingness and uncertainty policy. Pre-register statistical comparison; do not equate AR order with recovery."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-ar-05-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "INTEG-07",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "DATA-06",
+      "agent": {
+        "id": "madoev-data-06",
+        "name": "Clinical Data Schema Engineer",
+        "phone": "4406",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "DATA-06",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Define a de-identified data dictionary and examples using only fictional/synthetic values; implement schema validation and safeguards preventing PII/PHI uploads. Human research requires independent ethics approval."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-data-06-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "INTEG-07",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "INTEG-07",
+      "agent": {
+        "id": "madoev-integ-07",
+        "name": "Backend Integration Engineer",
+        "phone": "4407",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "INTEG-07",
+          "queue": "worker-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Integrate AR analyzer, baseline comparison and mapping guard without unlocking unknown organ-to-scalp maps. Test error paths; include source refs and immutable provenance. Do not deploy interventions."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-integ-07-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "REVIEW-08",
+        "BLOCKED_EXTERNAL": "coord"
+      },
+      "activation_policy": "all_parents"
+    },
+    {
+      "id": "REVIEW-08",
+      "agent": {
+        "id": "madoev-review-08",
+        "name": "Independent QA Coordinator",
+        "phone": "4408",
+        "profile": "Work only within projects/madoev-eeg; do not touch Delta or nginx-qa main. Provide reproducible evidence and report blockers."
+      },
+      "tasks": [
+        {
+          "task_id": "REVIEW-08",
+          "queue": "tester-all",
+          "message": "Research-only. Preserve original historical findings as hypotheses. No use of patient data, no patient interventions, no treatment claims. Work only in the isolated Madoev workspace. Do not change Delta or nginx-qa main. Every deliverable must include reproducible commands and changed Git commit. Verify all task acceptance evidence, two reviewer decisions, synthetic-only outputs, unresolved mapping warnings, reproducible tests; produce non-clinical readiness report."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/madoev-review-08-20261028",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "PASS": "completed",
+        "FAIL": "coord",
+        "BLOCKED_EXTERNAL": "coord"
+      }
+    },
+    {
+      "id": "coord",
+      "agent": {
+        "id": "madoev-coordinator",
+        "name": "Research Sprint Coordinator",
+        "phone": "4480",
+        "profile": "Resolve only research blockers. Never authorize clinical interventions or change Delta."
+      },
+      "tasks": [
+        {
+          "task_id": "COORD-01",
+          "queue": "consultant-all",
+          "message": "Inspect evidence for STOP/NEED_DECISION. Do not bypass safety, data or source-validation gates. Return RESUME or BLOCKED_EXTERNAL with rationale."
+        }
+      ],
+      "workspace": {
+        "access": "read"
+      },
+      "activation_policy": "any_parent",
+      "transitions": {
+        "RESUME": "AR-04",
+        "BLOCKED_EXTERNAL": "blocked"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Required evidence reviewed by two independent reviewers."
+    },
+    {
+      "id": "blocked",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Waiting for human/source/ethics decision. No human interventions authorized."
+    }
+  ],
+  "coordinator": {
+    "node_id": "coord",
+    "routes": {
+      "STOP": "coord",
+      "NEED_DECISION": "coord"
+    }
+  },
+  "files": [
+    {
+      "path": "projects/madoev-eeg/analysis/analyze_eeg_ar.py",
+      "sha256": "a0423e08ebdf110273a6d18fa91b4bacef6c17134a898c74f0c41863d354ffc9"
+    },
+    {
+      "path": "projects/madoev-eeg/orchestration/nginx_qa_backlog_addendum.json",
+      "sha256": "b3633847a03dd9566031412de33fcb8fa1624ed428634e2f7bb727f3890d3d93"
+    }
+  ],
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  }
+}
