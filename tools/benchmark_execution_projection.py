@@ -66,6 +66,48 @@ async def responsiveness(call):
     return {"heartbeat_max_gap_seconds": max(gaps), "heartbeat_samples": len(gaps)}
 
 
+async def http_responsiveness(snapshot, points, reference_commit):
+    """Real ASGI route + synthetic managed host, no socket/main/lifespan/state."""
+    from tests import test_execution_read_scheduling as harness
+    from nginx_qa import scope_api
+    if reference_commit:
+        code = subprocess.check_output(["git", "show", reference_commit + ":nginx_qa/scope_api.py"],
+                                       cwd=Path(__file__).resolve().parents[1])
+        scope_api = types.ModuleType("nginx_qa._benchmark_scope_baseline")
+        scope_api.__package__ = "nginx_qa"
+        scope_api.__file__ = str(Path(__file__).resolve().parents[1] / "nginx_qa" / "scope_api.py")
+        exec(compile(code, reference_commit + ":scope_api.py", "exec"), scope_api.__dict__)
+        scope_api.project_execution = execution.project_execution
+    state = deepcopy(snapshot["execution"])
+    state["sprint_id"] = harness.SPRINT
+    state["execution_audit"] = {"checkpoints": deepcopy(points)}
+    with mock.patch.object(harness, "scope_api", scope_api):
+        host = harness.SyntheticHost(state)
+    reports = []
+    for phase in ("cold", "warm"):
+        done = False
+        gaps = []
+        async def heartbeat():
+            previous = time.perf_counter()
+            while not done:
+                await asyncio.sleep(.002)
+                now = time.perf_counter()
+                gaps.append(now - previous)
+                previous = now
+        watcher = asyncio.create_task(heartbeat())
+        await asyncio.sleep(.004)
+        start = time.perf_counter()
+        status, view, _ = await harness.request(host.app)
+        elapsed = time.perf_counter() - start
+        done = True
+        await watcher
+        reports.append({"phase": phase, "http_status": status, "wall_seconds": elapsed,
+                        "heartbeat_max_gap_seconds": max(gaps), "heartbeat_samples": len(gaps),
+                        "output_sha256": hashlib.sha256(json.dumps(view, sort_keys=True,
+                             ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()})
+    return reports
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--revisions", type=int, default=12)
@@ -74,6 +116,7 @@ def main():
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--reference-commit", help="Load only the pure projector from a local Git commit")
+    parser.add_argument("--http-responsiveness", action="store_true", help="Also exercise real ASGI routes with synthetic host; no sockets")
     args = parser.parse_args()
     global execution
     runtime_files = ("nginx_qa/execution_observability.py", "nginx_qa/execution_read_cache.py", "nginx_qa/scope_api.py")
@@ -128,6 +171,9 @@ def main():
               "off_thread_responsiveness": asyncio.run(responsiveness(project))}
     if cache:
         report["cache"] = cache.info()
+    if args.http_responsiveness:
+        report["synthetic_asgi_responsiveness"] = asyncio.run(http_responsiveness(
+            snapshot, points, source["commit"] if args.reference_commit else None))
     text = json.dumps(report, indent=2)
     if args.output:
         with args.output.open("x", encoding="utf-8") as handle:
