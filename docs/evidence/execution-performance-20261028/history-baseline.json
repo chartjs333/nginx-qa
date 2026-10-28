@@ -1,0 +1,80 @@
+{
+  "synthetic_only": true,
+  "live_access": false,
+  "source": {
+    "commit": "80369d14d5bccb18dbc4980c6871de399982adab",
+    "projector_sha256": "53470c62a46633a698b06c30bd8a0f8975edb08f5ed227eaffbb1e6b5e3c6e98",
+    "mode": "pure-projector-from-git"
+  },
+  "workload": {
+    "revisions": 40,
+    "assignments": 120,
+    "payload_bytes": 2048,
+    "repeats": 5
+  },
+  "synthetic_json_bytes": 11066461,
+  "history_cache_enabled": false,
+  "output_sha256": "53fcb64ddf2ccca02f77e0d7f7a461699c2733fde0119691a9a7575826d877c2",
+  "cold": {
+    "wall_seconds": 0.812875300005544,
+    "cpu_seconds": 0.34375
+  },
+  "warm": [
+    {
+      "wall_seconds": 0.48409100002027117,
+      "cpu_seconds": 0.328125
+    },
+    {
+      "wall_seconds": 0.42677150000235997,
+      "cpu_seconds": 0.359375
+    },
+    {
+      "wall_seconds": 0.48035180001170374,
+      "cpu_seconds": 0.3125
+    },
+    {
+      "wall_seconds": 0.4193527000024915,
+      "cpu_seconds": 0.328125
+    },
+    {
+      "wall_seconds": 0.42105659999651834,
+      "cpu_seconds": 0.34375
+    }
+  ],
+  "instrumented_recompute_counts": {
+    "warm_timeline_calls_including_current": 41,
+    "checkpoint_count": 40
+  },
+  "warm_wall_median_seconds": 0.42677150000235997,
+  "stages": {
+    "synthetic_json_parse": {
+      "wall_seconds": 0.22576479997951537,
+      "cpu_seconds": 0.0
+    },
+    "snapshot_copy": {
+      "wall_seconds": 0.0007972000166773796,
+      "cpu_seconds": 0.0
+    },
+    "checkpoint_validation_hashes": {
+      "wall_seconds": 0.2979773999832105,
+      "cpu_seconds": 0.234375
+    },
+    "uncached_historical_timeline": {
+      "wall_seconds": 0.22476749998168088,
+      "cpu_seconds": 0.1875
+    },
+    "output_cursor_hash": {
+      "wall_seconds": 0.03771710000000894,
+      "cpu_seconds": 0.015625
+    },
+    "output_json": {
+      "wall_seconds": 0.029860899987397715,
+      "cpu_seconds": 0.015625
+    }
+  },
+  "warm_tracemalloc_peak_bytes": 1607880,
+  "off_thread_responsiveness": {
+    "heartbeat_max_gap_seconds": 0.046912699996028095,
+    "heartbeat_samples": 45
+  }
+}

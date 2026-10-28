@@ -1,0 +1,72 @@
+{
+  "synthetic_only": true,
+  "live_access": false,
+  "source": {
+    "commit": "80369d14d5bccb18dbc4980c6871de399982adab",
+    "projector_sha256": "53470c62a46633a698b06c30bd8a0f8975edb08f5ed227eaffbb1e6b5e3c6e98",
+    "mode": "pure-projector-from-git"
+  },
+  "workload": {
+    "revisions": 6,
+    "assignments": 3,
+    "payload_bytes": 1048576,
+    "repeats": 3
+  },
+  "synthetic_json_bytes": 22028225,
+  "history_cache_enabled": false,
+  "output_sha256": "cc755d4b2032b7d7840b27d20afc956876839dcc74c422ca6b1e70e772e74530",
+  "cold": {
+    "wall_seconds": 0.985128700005589,
+    "cpu_seconds": 0.4375
+  },
+  "warm": [
+    {
+      "wall_seconds": 1.0554855999944266,
+      "cpu_seconds": 0.265625
+    },
+    {
+      "wall_seconds": 1.011635100003332,
+      "cpu_seconds": 0.3125
+    },
+    {
+      "wall_seconds": 0.99972429999616,
+      "cpu_seconds": 0.1875
+    }
+  ],
+  "instrumented_recompute_counts": {
+    "warm_timeline_calls_including_current": 7,
+    "checkpoint_count": 6
+  },
+  "warm_wall_median_seconds": 1.011635100003332,
+  "stages": {
+    "synthetic_json_parse": {
+      "wall_seconds": 0.3196360000001732,
+      "cpu_seconds": 0.015625
+    },
+    "snapshot_copy": {
+      "wall_seconds": 5.7199998991563916e-05,
+      "cpu_seconds": 0.0
+    },
+    "checkpoint_validation_hashes": {
+      "wall_seconds": 0.7561334999918472,
+      "cpu_seconds": 0.28125
+    },
+    "uncached_historical_timeline": {
+      "wall_seconds": 0.0017282000044360757,
+      "cpu_seconds": 0.0
+    },
+    "output_cursor_hash": {
+      "wall_seconds": 0.20642460000817664,
+      "cpu_seconds": 0.015625
+    },
+    "output_json": {
+      "wall_seconds": 0.1671018000051845,
+      "cpu_seconds": 0.015625
+    }
+  },
+  "warm_tracemalloc_peak_bytes": 12608468,
+  "off_thread_responsiveness": {
+    "heartbeat_max_gap_seconds": 0.18728049998753704,
+    "heartbeat_samples": 16
+  }
+}

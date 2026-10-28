@@ -1,0 +1,72 @@
+{
+  "synthetic_only": true,
+  "live_access": false,
+  "workload": {
+    "revisions": 12,
+    "assignments": 30,
+    "payload_bytes": 8192,
+    "repeats": 3
+  },
+  "synthetic_json_bytes": 3278833,
+  "history_cache_enabled": true,
+  "output_sha256": "086337d4137216918cb6638dee59555335dd1a62d6b8134a8467d406824ddd60",
+  "cold": {
+    "wall_seconds": 0.07774829998379573,
+    "cpu_seconds": 0.078125
+  },
+  "warm": [
+    {
+      "wall_seconds": 0.05751439998857677,
+      "cpu_seconds": 0.0625
+    },
+    {
+      "wall_seconds": 0.06506730002001859,
+      "cpu_seconds": 0.0625
+    },
+    {
+      "wall_seconds": 0.05861949999234639,
+      "cpu_seconds": 0.046875
+    }
+  ],
+  "warm_wall_median_seconds": 0.05861949999234639,
+  "stages": {
+    "synthetic_json_parse": {
+      "wall_seconds": 0.03979989999788813,
+      "cpu_seconds": 0.015625
+    },
+    "snapshot_copy": {
+      "wall_seconds": 0.00026500000967644155,
+      "cpu_seconds": 0.0
+    },
+    "checkpoint_validation_hashes": {
+      "wall_seconds": 0.04481719998875633,
+      "cpu_seconds": 0.046875
+    },
+    "uncached_historical_timeline": {
+      "wall_seconds": 0.020422100002178922,
+      "cpu_seconds": 0.015625
+    },
+    "output_cursor_hash": {
+      "wall_seconds": 0.013883400009945035,
+      "cpu_seconds": 0.015625
+    },
+    "output_json": {
+      "wall_seconds": 0.013027099979808554,
+      "cpu_seconds": 0.0
+    }
+  },
+  "warm_tracemalloc_peak_bytes": 120692,
+  "off_thread_responsiveness": {
+    "heartbeat_max_gap_seconds": 0.007824600004823878,
+    "heartbeat_samples": 22
+  },
+  "cache": {
+    "entries": 1,
+    "retained_payload_bytes": 289361,
+    "hits": 5,
+    "misses": 1,
+    "max_bytes": 8388608,
+    "max_entry_bytes": 2097152,
+    "max_entries": 8
+  }
+}
