@@ -12,7 +12,7 @@ This directory is the staging location for integrating the Madoev EEG research s
 
 ## Current state
 
-Integration branch created; **this README is a placeholder, not a running sprint**. No clinical/patient data are stored here. The research package is prepared separately and requires a privacy and technical review before publication.
+**Two Managed Sprint manifests are now staged:** an isolated AR-04 single-task pilot and a separate eight-task full research graph. The pilot has NOT been started in NGINX QA. A loopback-only pilot launcher and a release-gated runbook are available. No clinical/patient data are stored here. See [MANAGED_SPRINT_RUNBOOK_RU.md](docs/MANAGED_SPRINT_RUNBOOK_RU.md), [pilot JSON](orchestration/pilot_managed_sprint_v1.json), [staged full JSON](orchestration/full_managed_sprint_v1.STAGED.json), and [dry-run-first launcher](orchestration/launch_pilot.py).
 
 ## Migration to a separate repository
 
