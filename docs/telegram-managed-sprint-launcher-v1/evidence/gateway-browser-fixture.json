@@ -1,0 +1,488 @@
+{
+  "kind": "independent_synthetic_local_https_browser_fixture",
+  "status": "PASS",
+  "source_workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\gateway-auth\\assignment-20a476868122d1134f713ff9",
+  "source_base_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "actual_telegram_mobile_or_web": "NOT_RUN",
+  "formal_review_submission": false,
+  "checks": [
+    {
+      "name": "local_https_server_started",
+      "pass": true,
+      "detail": {
+        "bind": "127.0.0.1",
+        "port": 59107
+      }
+    },
+    {
+      "name": "cross_site_public_shell_loaded",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "real_frontend_embedded_login",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "partitioned_session_attributes",
+      "pass": true,
+      "detail": [
+        {
+          "name": "__Host-nqa-session-c91248c38238e1029f93",
+          "domain": "launcher.example.test",
+          "path": "/",
+          "expires": 1793736864.458345,
+          "httpOnly": true,
+          "secure": true,
+          "sameSite": "None",
+          "partitionKey": "https://telegram.org",
+          "_crHasCrossSiteAncestor": true
+        }
+      ]
+    },
+    {
+      "name": "launch_cookie_deleted_after_exchange",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "unpartitioned_third_party_cookie_blocked",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "http_only_cookie_unavailable_to_javascript",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "missing_csrf_rejected_in_real_browser",
+      "pass": true,
+      "detail": {
+        "status": 403,
+        "body": {
+          "detail": {
+            "error": "ACCESS_DENIED",
+            "message": "The session does not authorize this request.",
+            "correlation_id": "launcher-2c7ae5ef4c5e44d1ce238387",
+            "retryable": false
+          }
+        }
+      }
+    },
+    {
+      "name": "embedded_reload_reuses_cookie_without_initdata_replay",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "telegram_partition_not_available_to_top_level_gateway",
+      "pass": true,
+      "detail": 401
+    },
+    {
+      "name": "same_partition_session_survives_top_level_switch",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "logout_deletes_partitioned_session_cookie",
+      "pass": true,
+      "detail": null
+    },
+    {
+      "name": "logout_revokes_browser_access",
+      "pass": true,
+      "detail": 401
+    },
+    {
+      "name": "browser_read_login_logout_never_activated_engine",
+      "pass": true,
+      "detail": null
+    }
+  ],
+  "requests": [
+    {
+      "host": "web.telegram.org",
+      "path": "/",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "none",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.css",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "telegram.org",
+      "path": "/js/telegram-web-app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [],
+      "status": 401,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/auth/challenge",
+      "method": "POST",
+      "origin": "https://launcher.example.test",
+      "fetch_site": "same-origin",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": [
+        " HttpOnly; Max-Age=120; Path=/; SameSite=none; Secure; Partitioned"
+      ]
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/auth/telegram",
+      "method": "POST",
+      "origin": "https://launcher.example.test",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-launch-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": [
+        " HttpOnly; Max-Age=60; Path=/; SameSite=none; Secure; Partitioned"
+      ]
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/auth/exchange",
+      "method": "POST",
+      "origin": "https://launcher.example.test",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-launch-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": [
+        " HttpOnly; Max-Age=1800; Path=/; SameSite=none; Secure; Partitioned",
+        " expires=Tue, 03 Nov 2026 19:44:24 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=none; Secure; Partitioned"
+      ]
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/logout",
+      "method": "POST",
+      "origin": "https://launcher.example.test",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 403,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "web.telegram.org",
+      "path": "/",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "none",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "telegram.org",
+      "path": "/js/telegram-web-app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.css",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "none",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.css",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "telegram.org",
+      "path": "/js/telegram-web-app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 401,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 401,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "web.telegram.org",
+      "path": "/",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "none",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "telegram.org",
+      "path": "/js/telegram-web-app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "cross-site",
+      "cookie_names": [],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.css",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93",
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93",
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93",
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": []
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/logout",
+      "method": "POST",
+      "origin": "https://launcher.example.test",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-nqa-session-c91248c38238e1029f93",
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 200,
+      "set_cookie_flags": [
+        " expires=Tue, 03 Nov 2026 19:44:28 GMT; HttpOnly; Max-Age=0; Path=/; SameSite=none; Secure; Partitioned"
+      ]
+    },
+    {
+      "host": "launcher.example.test",
+      "path": "/launcher/instances/tml:9002:W5MUu6Y-voQR3Knx-zmcPAut/status",
+      "method": "GET",
+      "origin": "",
+      "fetch_site": "same-origin",
+      "cookie_names": [
+        "__Host-fixture-unpartitioned"
+      ],
+      "status": 401,
+      "set_cookie_flags": []
+    }
+  ],
+  "blocked_external_requests": [],
+  "browser_version": "156.0.4314.50",
+  "third_party_cookie_restriction": "CDP enabled; metadata and heuristics disabled",
+  "cookies_after_login": [
+    {
+      "name": "__Host-nqa-session-c91248c38238e1029f93",
+      "domain": "launcher.example.test",
+      "path": "/",
+      "expires": 1793736864.458345,
+      "httpOnly": true,
+      "secure": true,
+      "sameSite": "None",
+      "partitionKey": "https://telegram.org",
+      "_crHasCrossSiteAncestor": true
+    }
+  ],
+  "source_files_sha256": {
+    "nginx_qa/launcher_gateway.py": "db36efdacb6eb1c930fedde000cea62c124e268d03f5375e75fff16004f3912f",
+    "nginx_qa/launcher_auth.py": "061ea69876b5c717152d76ed9b926204ee9e205d501e8bba503df7e398aba361",
+    "static/launcher/app.js": "37f9ba6209e23b14e7cacde6f9251ef185c9887f6563649e64db117b91a9746d",
+    "static/launcher/index.html": "f8cfd52a7280b10da5ccc3e0d9b9391b63326a8d5768ef99c5f0d668722911fe"
+  }
+}

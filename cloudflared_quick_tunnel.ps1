@@ -3,10 +3,35 @@ param(
     [string]$Action = "Start",
     [string]$Origin = "http://127.0.0.1:8025",
     [int]$StartupTimeoutSeconds = 45,
-    [int]$DnsTimeoutSeconds = 120
+    [int]$DnsTimeoutSeconds = 120,
+    [switch]$LauncherGateway,
+    [switch]$RegisterWebhook,
+    [string]$LauncherPython = "C:/nqt36/v/Scripts/python.exe",
+    [string]$CloudflaredExecutable
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($LauncherGateway) {
+    # Separate opt-in path: no legacy state, PID discovery, install or Stop.
+    # The Python ownership gate validates the exact clean checkout/environment.
+    $launcherArguments = @("-E", "-s", "-B", "-m", "nginx_qa.launcher_tunnel", $Action.ToLowerInvariant())
+    if ($Action -eq "Start") {
+        if (-not $CloudflaredExecutable) {
+            $installed = Get-Command "cloudflared.exe" -ErrorAction SilentlyContinue
+            if ($installed) { $CloudflaredExecutable = $installed.Source }
+        }
+        if (-not $CloudflaredExecutable) { throw "Provide the installed cloudflared.exe path; launcher mode never installs software." }
+        $launcherArguments += @("--executable", $CloudflaredExecutable)
+        if ($RegisterWebhook) { $launcherArguments += "--register-webhook" }
+    }
+    Push-Location $PSScriptRoot
+    try {
+        & $LauncherPython @launcherArguments
+        exit $LASTEXITCODE
+    }
+    finally { Pop-Location }
+}
 
 $runtimeDirectory = Join-Path $PSScriptRoot "runtime_state"
 $statePath = Join-Path $runtimeDirectory "cloudflared-quick-tunnel.json"

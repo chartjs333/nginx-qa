@@ -123,7 +123,8 @@ def executor_for(host):
         return factory()
     url = os.getenv("NGINX_QA_LAUNCHER_EXECUTOR_URL", "")
     reference = os.getenv("NGINX_QA_LAUNCHER_EXECUTOR_SECRET_REF", "")
-    resolver = getattr(host, "managed_process_secret_resolver", None)
+    from nginx_qa.control_secrets import trusted_control_resolver
+    resolver = trusted_control_resolver
     if not url or not reference or not callable(resolver):
         raise ExecutorUnavailable("No existing managed client adapter is configured")
     return ExistingClientHTTPAdapter(url, reference, resolver)

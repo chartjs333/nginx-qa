@@ -1,6 +1,8 @@
 """Owner-scoped Telegram controls and delivery, using existing engine services."""
 from __future__ import annotations
 
+from nginx_qa.control_secrets import control_secret
+
 import asyncio
 import ipaddress
 import json
@@ -24,7 +26,13 @@ def gateway_origin():
     """Operator-owned HTTPS origin, never supplied by a task/callback."""
     value = os.getenv('NGINX_QA_LAUNCHER_PUBLIC_ORIGIN', '')
     if not value:
-        return None
+        try:
+            from nginx_qa.launcher_origin import owned_origin
+            value=owned_origin()
+        except (OSError,ValueError,KeyError,TypeError):
+            fail('GATEWAY_CONFIG_INVALID', 'Inspect the owned public gateway receipt.', 503)
+        if not value:
+            return None
     try:
         parsed = urlsplit(value)
         if (parsed.scheme != 'https' or not parsed.hostname or parsed.port not in (None,443)
@@ -189,7 +197,7 @@ async def handle_callback(update,host):
     match=HANDLE.fullmatch(query['data'])
     if match is None or len(query['data'].encode('utf-8'))>64:
         fail('CALLBACK_INVALID','Use the latest private-chat controls.')
-    token=os.getenv('TELEGRAM_BOT_TOKEN','')
+    token=control_secret("bot")
     # Answer before database/Git/executor work. This acknowledges receipt only.
     try:
         await asyncio.to_thread(host.telegram_api_json,token,'answerCallbackQuery',
@@ -253,7 +261,7 @@ async def handle_status_command(message,host):
     if record.get('instance_id'):
         data['reply_markup']=json.dumps(await asyncio.to_thread(keyboard,LauncherTransport(operations),record),ensure_ascii=False)
     current_principal(principal,'read',project_policy)
-    await asyncio.to_thread(host.telegram_api_json,os.getenv('TELEGRAM_BOT_TOKEN',''),'sendMessage',data)
+    await asyncio.to_thread(host.telegram_api_json,control_secret("bot"),'sendMessage',data)
     return {'ok':True,'command':'sprint_status','instance_id':record['instance_id'],'status':status['status']}
 
 
@@ -278,7 +286,7 @@ def deliver_one(operations,project_id,project_policy,host,*,now=None):
         if record.get('instance_id'):
             data['reply_markup']=json.dumps(keyboard(transport,record),ensure_ascii=False)
         current_principal(principal,'read',project_policy)
-        response=host.telegram_api_json(os.getenv('TELEGRAM_BOT_TOKEN',''),'sendMessage',data)
+        response=host.telegram_api_json(control_secret("bot"),'sendMessage',data)
         result=response.get('result') if isinstance(response,dict) and response.get('ok') is True else None
         if not isinstance(result,dict) or type(result.get('message_id')) is not int or result['message_id']<=0 or result.get('chat',{}).get('id')!=int(principal.chat_id):
             raise ValueError
@@ -293,7 +301,7 @@ def deliver_one(operations,project_id,project_policy,host,*,now=None):
 
 
 async def reconcile_notifications(host,*,stop_event=None):
-    if os.getenv('NGINX_QA_TELEGRAM_LAUNCHER_ENABLED','').lower() not in {'1','true'} or not os.getenv('TELEGRAM_BOT_TOKEN',''):
+    if os.getenv('NGINX_QA_TELEGRAM_LAUNCHER_ENABLED','').lower() not in {'1','true'} or not control_secret("bot"):
         return
     policy=load_policy()
     config=await host.read_git_config()

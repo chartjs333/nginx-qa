@@ -1,0 +1,35 @@
+{
+  "stage": "gateway-auth",
+  "status": "AUTOMATED_CHECKS_COMPLETE_WITH_BASELINE_LIMITATIONS",
+  "parent_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "assignment_id": "assignment-20a476868122d1134f713ff9",
+  "checks": [
+    {"suite": "Gateway, auth races, secret boundaries, controls, delivery lifecycle, transport migration", "result": "PASS", "tests": 31, "log": "C:/nqt35/client/stage7-gateway-final-regression.txt"},
+    {"suite": "tests.test_launcher_host tests.test_launcher_tunnel", "result": "PASS", "tests": 22, "note": "Includes repeated inherited guard checks; do not sum as unique tests.", "log": "C:/nqt35/client/stage7-host-tunnel-final-tests.txt"},
+    {"suite": "tests.test_staging_isolation excluding two baseline filesystem-alias cases", "result": "PASS", "tests": 17, "log": "C:/nqt35/client/stage7-staging-filtered-tests.txt"},
+    {"suite": "Existing supervisor crash recovery, least-privilege inherited Job handle, gated-child resume", "result": "PASS", "tests": 3, "log": "C:/nqt35/client/stage7-supervisor-final-tests.txt"},
+    {"suite": "Existing supervisor process-limit stderr assertion", "result": "FAIL_BASELINE_REPRODUCED", "tests": 1, "note": "Windows venv shim denied process creation before Python prints the expected Traceback. Reproduced with exact parent process_supervisor.py through isolated module overlay.", "log": "C:/nqt35/client/stage7-supervisor-baseline-repro.txt"},
+    {"suite": "Independent real Edge synthetic HTTPS embedded Mini App", "result": "PASS", "checks": 14, "evidence": "gateway-browser-fixture.json"},
+    {"suite": "Independent native Job atomic crash and unchanged default recovery", "result": "PASS", "scenarios": 2, "evidence": "gateway-tunnel-atomic-crash.json"},
+    {"suite": "Python AST and PowerShell parser", "result": "PASS"}
+  ],
+  "baseline_limitations": [
+    "Legacy .env.staging.example names D:/Prompt, a filesystem alias on this machine. test_environment_example_normalizes_to_the_frozen_staging_config and test_mutable_roots_are_dedicated_state_base_children are not counted as passing. New profile uses C:/Prompt and passes its guards.",
+    "Process-limit test assumes Python Traceback; Windows venv launcher can be denied earlier and print Unable to create process. QA must qualify this assertion without weakening Job limit checks."
+  ],
+  "external_acceptance": {
+    "actual_telegram_phone_or_tablet": "NOT_RUN",
+    "actual_public_cloudflare": "NOT_RUN",
+    "actual_bot_webhook_registration": "NOT_RUN",
+    "external_model_generated_json": "NOT_RUN",
+    "approved_release_host_start": "NOT_RUN",
+    "formal_review": "PENDING_ENGINE_ASSIGNMENTS"
+  },
+  "manifest_provenance": {
+    "source": "D:/nq-tmsl/orchestration/sprints/telegram-managed-sprint-launcher-v1/sequential-sprint.json",
+    "source_sha256": "7712ee5ce24a2862345e039d10e80228168017a50ab9b80fd3b5e30b548824ec",
+    "source_bytes": 78282,
+    "restored_copy_json_equal": true,
+    "note": "Restored bootstrap manifest and historical NOT_RUN reports are provenance. Windows checkout CRLF changes bytes, not JSON values. Live control manifest was not edited."
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "results": [
+    {
+      "inherit_recovery_job_handle": false,
+      "child_dead_after_monitor_exit": true,
+      "job_absent_after_exit": true
+    },
+    {
+      "inherit_recovery_job_handle": true,
+      "default_recovery_child_survives": true,
+      "default_recovery_resume_works": true,
+      "recovered_exact_job_cleaned": true
+    }
+  ],
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\gateway-auth\\assignment-20a476868122d1134f713ff9",
+  "no_native_listener_ports": true
+}

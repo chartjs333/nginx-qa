@@ -682,6 +682,8 @@ class ManagedImportStore:
                 )
                 from nginx_qa.launcher_transport_store import initialize as initialize_launcher_transport
                 initialize_launcher_transport(connection)
+                from nginx_qa.launcher_auth import SCHEMA as launcher_auth_schema
+                connection.executescript(launcher_auth_schema)
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     duplicate_active = connection.execute(

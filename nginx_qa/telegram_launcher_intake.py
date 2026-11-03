@@ -1,6 +1,8 @@
 """Authenticated JSON intake and immutable Git provisioning, without activation."""
 from __future__ import annotations
 
+from nginx_qa.control_secrets import control_secret
+
 import asyncio
 import hashlib
 import json
@@ -343,7 +345,7 @@ async def maybe_handle_upload(update, message, host):
                     raise
         if not allowed:
             fail("ACCESS_DENIED", "No project preparation permission for this Telegram user.", 403)
-        raw = await asyncio.to_thread(download_document, host, os.getenv("TELEGRAM_BOT_TOKEN", ""), document)
+        raw = await asyncio.to_thread(download_document, host, control_secret("bot"), document)
         reauthorize(message, download_principal, policy)
         candidate = bounded_object(raw)
     if candidate is None or not isinstance(candidate.get("kind"), str) or not candidate["kind"].startswith("telegram_managed_sprint_"):
@@ -356,7 +358,7 @@ async def maybe_handle_upload(update, message, host):
     if (type(update.get("update_id")) is not int or update["update_id"] < 0
             or type(message.get("message_id")) is not int or message["message_id"] < 1):
         fail("DELIVERY_IDENTITY_INVALID", "Telegram update and message identities are required.")
-    bot_id = os.getenv("TELEGRAM_BOT_TOKEN", "").partition(":")[0]
+    bot_id = control_secret("bot").partition(":")[0]
     if not re.fullmatch(r"[1-9][0-9]{0,19}", bot_id):
         fail("TELEGRAM_UNAVAILABLE", "Configure a valid Telegram bot identity.", 503)
     reauthorize(message, principal, policy)

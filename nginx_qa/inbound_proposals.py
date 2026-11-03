@@ -6,6 +6,7 @@ This module deliberately contains no source adapters and no activation calls.
 
 from __future__ import annotations
 
+from nginx_qa.control_secrets import protected_environment_name, sanitized_child_environment
 import base64
 import binascii
 import hashlib
@@ -168,7 +169,7 @@ def action_request_fingerprint(
 def configured_secret_values() -> tuple[str, ...]:
     values: set[str] = set()
     for name, raw_value in os.environ.items():
-        if not _CREDENTIAL_ENV_NAME.search(name) or not raw_value:
+        if not (_CREDENTIAL_ENV_NAME.search(name) or protected_environment_name(name)) or not raw_value:
             continue
         if len(raw_value) >= 4:
             values.add(raw_value)
@@ -405,6 +406,7 @@ while ($null -ne $cursor) {
             text=True,
             timeout=10,
             creationflags=creation_flags,
+            env=sanitized_child_environment(),
         )
         acl = json.loads(completed.stdout)
     except (

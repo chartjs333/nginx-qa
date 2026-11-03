@@ -4,6 +4,8 @@ This module has no import-time writes, graph scheduler, agent loop or model API.
 """
 from __future__ import annotations
 
+from nginx_qa.control_secrets import control_secret
+
 import asyncio
 import hashlib
 import hmac
@@ -266,7 +268,7 @@ def send_prompt_document(token: str, chat_id: str, prompt: str) -> None:
 async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | None:
     if os.getenv(ENABLED_ENV, "").lower() not in {"1", "true"}:
         return None
-    expected = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    expected = control_secret("webhook")
     supplied = request.headers.get("x-telegram-bot-api-secret-token", "")
     if not expected:
         fail("AUTH_REQUIRED", "Configure the Telegram webhook secret before enabling launcher.", 503)
@@ -299,7 +301,7 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
     project_id, mode, task = command
     policy = load_policy()
     principal = authorize_message(message, project_id, "prompt", policy)
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    token = control_secret("bot")
     if not token:
         fail("TELEGRAM_UNAVAILABLE", "Telegram bot is not configured.", 503)
     config = await host.read_git_config()

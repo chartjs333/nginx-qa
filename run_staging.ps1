@@ -7,7 +7,9 @@ param(
         "umse-007",
         "premerge-inbound-hub-e2e-v1",
         "premerge-inbound-hub-e2e-v1-short",
-        "premerge-inbound-hub-e2e-v1-short-r2"
+        "premerge-inbound-hub-e2e-v1-short-r2",
+        "telegram-managed-sprint-launcher-v1",
+        "telegram-managed-sprint-launcher-v1-gateway"
     )]
     [string]$Profile = "umse-007",
 
@@ -620,24 +622,28 @@ function Assert-PortPool {
         [Parameter(Mandatory = $true)][int]$HttpPort,
         [Parameter(Mandatory = $true)][int]$ChildStart,
         [Parameter(Mandatory = $true)][int]$ChildEnd,
-        [hashtable]$AllowedChildOwners = @{}
+        [hashtable]$AllowedChildOwners = @{},
+        [int]$GatewayPort = 0
     )
 
     if ($ChildStart -gt $ChildEnd -or ($HttpPort -ge $ChildStart -and $HttpPort -le $ChildEnd)) {
         throw "Invalid staging HTTP/child port relationship."
     }
+    if ($GatewayPort -ne 0 -and ($GatewayPort -lt 1024 -or $GatewayPort -gt 65535 -or $GatewayPort -eq $HttpPort -or ($GatewayPort -ge $ChildStart -and $GatewayPort -le $ChildEnd))) {
+        throw "Invalid gateway HTTP/child port relationship."
+    }
     if (-not (Get-Command Get-NetTCPConnection -ErrorAction SilentlyContinue)) {
         throw "Get-NetTCPConnection is required for staging port validation."
     }
     $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object {
-        $_.LocalPort -eq $HttpPort -or
+        $_.LocalPort -eq $HttpPort -or ($GatewayPort -ne 0 -and $_.LocalPort -eq $GatewayPort) -or
         ($_.LocalPort -ge $ChildStart -and $_.LocalPort -le $ChildEnd)
     })
     $conflicts = @()
     foreach ($listener in $listeners) {
         $port = [int]$listener.LocalPort
         $pidValue = [int]$listener.OwningProcess
-        if ($port -eq $HttpPort) {
+        if ($port -eq $HttpPort -or $port -eq $GatewayPort) {
             $conflicts += "HTTP $port/PID $pidValue"
             continue
         }
@@ -657,10 +663,57 @@ function Get-ExpectedStagingEnvironment {
             "umse-007",
             "premerge-inbound-hub-e2e-v1",
             "premerge-inbound-hub-e2e-v1-short",
-            "premerge-inbound-hub-e2e-v1-short-r2"
+            "premerge-inbound-hub-e2e-v1-short-r2",
+            "telegram-managed-sprint-launcher-v1",
+        "telegram-managed-sprint-launcher-v1-gateway"
         )]
         [string]$Profile = "umse-007"
     )
+
+    if ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18036"
+            NGINX_QA_GATEWAY_HOST = "127.0.0.1"
+            NGINX_QA_GATEWAY_PORT = "18037"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-tmsl-launcher"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging","D:/nq-tmsl","C:/Prompt","C:/nqt35","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state","C:/nginx-qa-staging-secrets"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt36"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt36/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt36/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt36/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt36/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18700-18749"
+            NGINX_QA_INSTANCE_ID = "telegram-managed-sprint-launcher-v1-gateway-18036"
+            NGINX_QA_DISABLE_TELEGRAM = "0"
+            NGINX_QA_DISABLE_TUNNEL = "0"
+            NGINX_QA_TELEGRAM_LAUNCHER_ENABLED = "true"
+            NGINX_QA_LAUNCHER_GATEWAY_ENABLED = "true"
+            NGINX_QA_LAUNCHER_ORIGIN_STATE = "C:/nqt36/legacy/runtime_state/launcher-origin.json"
+        }
+    }
+
+    if ($Profile -eq "telegram-managed-sprint-launcher-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18035"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-tmsl"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging","D:/nq-e2e-18031","C:/Prompt","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state","C:/nginx-qa-staging-secrets","C:/nq31","C:/nq32","C:/nq33","C:/nq34","C:/nq-e2e-18031","C:/nq-e2e-18031-secrets"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt35"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt35/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt35/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt35/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt35/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18600-18649"
+            NGINX_QA_INSTANCE_ID = "telegram-managed-sprint-launcher-v1-18035"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
 
     if ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
         return [ordered]@{
@@ -790,6 +843,14 @@ elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
 elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short-r2") {
     $expectedServiceRoot = "D:\nq-e2e-18031"
     $expectedBranch = "agent/ie2e-05-play-boundary"
+}
+elseif ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") {
+    $expectedServiceRoot = "D:\nq-tmsl-launcher"
+    $expectedBranch = "agent/tmsl-v1-release-documentation"
+}
+elseif ($Profile -eq "telegram-managed-sprint-launcher-v1") {
+    $expectedServiceRoot = "D:\nq-tmsl"
+    $expectedBranch = "codex/tmsl-v1-bootstrap"
 }
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
@@ -1000,6 +1061,7 @@ finally {
     Pop-Location
 }
 
+$gatewayPort = if ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") { [int](Get-RequiredEnvironmentValue "NGINX_QA_GATEWAY_PORT") } else { 0 }
 $ownershipMarkerPath = Join-Path $stateBase ".nginx-qa-staging-owner.json"
 $ownershipRecord = [ordered]@{
     instance_id = Get-RequiredEnvironmentValue "NGINX_QA_INSTANCE_ID"
@@ -1021,6 +1083,11 @@ $ownershipRecord = [ordered]@{
     http_port = [int](Get-RequiredEnvironmentValue "NGINX_QA_HTTP_PORT")
     child_port_range = Get-RequiredEnvironmentValue "NGINX_QA_CHILD_PORT_RANGE"
     protected_roots = @($normalizedProtectedRoots)
+}
+if ($gatewayPort -ne 0) {
+    $ownershipRecord["gateway_host"] = Get-RequiredEnvironmentValue "NGINX_QA_GATEWAY_HOST"
+    $ownershipRecord["gateway_port"] = $gatewayPort
+    $ownershipRecord["gateway_origin_state"] = Resolve-NormalizedPath (Get-RequiredEnvironmentValue "NGINX_QA_LAUNCHER_ORIGIN_STATE")
 }
 $ownershipState = Get-OwnershipState `
     -StateBase $stateBase `
@@ -1185,6 +1252,7 @@ print(json.dumps(owned, sort_keys=True))
 if ($ownershipState.Mode -eq "FirstUse") {
     Assert-PortPool `
         -HttpPort $httpPort `
+        -GatewayPort $gatewayPort `
         -ChildStart $childStart `
         -ChildEnd $childEnd
     if ($Action -eq "Check") {
@@ -1234,6 +1302,7 @@ $null = Assert-StagingVirtualEnvironment `
 $allowedOwners = Get-OwnedChildListenerMap -AuditPython $pythonPath
 Assert-PortPool `
     -HttpPort $httpPort `
+        -GatewayPort $gatewayPort `
     -ChildStart $childStart `
     -ChildEnd $childEnd `
     -AllowedChildOwners $allowedOwners
@@ -1315,6 +1384,10 @@ foreach ($name in @(
 
 Push-Location $serviceRoot
 try {
+    if ($gatewayPort -ne 0) {
+        & $pythonPath -E -s -B -m nginx_qa.launcher_host
+        exit $LASTEXITCODE
+    }
     & $pythonPath -E -s -B -m uvicorn staging_host_app:app `
         --host (Get-RequiredEnvironmentValue "NGINX_QA_HTTP_HOST") `
         --port (Get-RequiredEnvironmentValue "NGINX_QA_HTTP_PORT")

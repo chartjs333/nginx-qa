@@ -260,6 +260,9 @@ def _minimal_environment(overrides: Mapping[str, str] | None = None) -> dict[str
         }
     )
     if overrides:
+        from nginx_qa.control_secrets import protected_environment_name
+        if any(protected_environment_name(key) for key in overrides):
+            raise ValueError("control credentials cannot be exported to Git")
         environment.update(overrides)
     return environment
 
@@ -1048,9 +1051,11 @@ class ManagedGitProvider:
                 "credential resolver returned an invalid environment",
             )
         for key, value in environment.items():
+            from nginx_qa.control_secrets import protected_environment_name
             upper_key = key.upper()
             if (
                 upper_key in _RESERVED_GIT_ENVIRONMENT
+                or protected_environment_name(key)
                 or upper_key.startswith("GIT_CONFIG_")
                 or "\x00" in key
                 or "=" in key

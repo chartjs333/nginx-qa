@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from nginx_qa.control_secrets import protected_environment_name, sanitized_child_environment
 import asyncio
 import base64
 import binascii
@@ -1188,7 +1189,8 @@ def prompt_archive_source_metadata_screen_snapshot(
         name
         for name in source
         if type(name) is str
-        and _PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+        and (_PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+             or protected_environment_name(name))
     )
     for reference_name in reference_names:
         if type(reference_name) is not str or not reference_name:
@@ -3879,6 +3881,7 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
             errors="replace",
             timeout=15,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"git_error": str(exc)}
@@ -4018,6 +4021,7 @@ def git_patch_from_local_repo(
             errors="replace",
             timeout=30,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(
@@ -9572,6 +9576,7 @@ def local_repo_remote_urls(repo_path: Path) -> list[str]:
             errors="replace",
             timeout=10,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -30856,6 +30861,7 @@ def legacy_scope_git_command(repo_path: Path, *arguments: str) -> bytes:
             capture_output=True,
             timeout=30,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise LegacyScopeControlError(
@@ -36602,7 +36608,7 @@ def managed_process_secret_resolver(reference: str) -> str:
     # Environment names are case-insensitive on Windows.  Reject the entire
     # control namespace before lookup, even when a child requests an innocuous
     # destination alias.  Role requests use the dedicated credential wrapper.
-    if locator.casefold().startswith("nginx_qa_scope_control_"):
+    if protected_environment_name(locator):
         raise LookupError("managed process secret reference is protected")
     value = os.environ.get(locator)
     if value is None:
@@ -36671,6 +36677,8 @@ def managed_git_credential_resolver(reference: str) -> dict[str, str]:
     provider, separator, locator = reference.partition(":")
     if separator != ":" or provider != "env" or not locator:
         raise LookupError("managed credential provider is not configured")
+    if protected_environment_name(locator):
+        raise LookupError("managed credential reference is protected")
     encoded = os.environ.get(locator)
     if not encoded:
         raise LookupError("managed credential reference is unavailable")

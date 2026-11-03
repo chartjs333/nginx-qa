@@ -1,0 +1,794 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/main",
+    "expected_source_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+    "assigned_branch": "agent/tmsl-v1-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "architecture-contract",
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "tmsl-runtime-reviewer",
+        "name": "Reviewer 1 — Architecture and Runtime",
+        "phone": "6681",
+        "git_branch": "review/tmsl-v1-runtime",
+        "profile": "Независимо проверяй каждый exact result commit: повторное использование Managed Engine, source/manifest provenance, singleton guard во всех API, prepare vs activate, queue/state/workspace isolation, continuity/recovery, legacy/performance regressions и тесты. Не изменяй код автора и не принимай мнение второго reviewer вместо проверки. Два APPROVE относятся к одному exact commit. При дефекте REJECT с воспроизводимым тестом; rework проверяется заново. Не ослабляй gates."
+      },
+      {
+        "id": "tmsl-security-reviewer",
+        "name": "Reviewer 2 — Security and Evidence",
+        "phone": "6682",
+        "git_branch": "review/tmsl-v1-security",
+        "profile": "Независимо проверяй каждый exact result commit: Telegram identity/ACL, producer/start separation, explicit autonomous capabilities, signed initData/freshness/replay, одноразовые bound tokens, CSRF/SSRF/scope/WS/SSE, отсутствие secrets/live mutation/main writes, реальные versus mock evidence, внешние release gates. Не доверяй APPROVE первого reviewer или самоотчёту автора. REJECT при обходе singleton/auth/Git или недоказанном результате. Новый commit требует обоих approvals. Не публикуй/сливай PR."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "architecture-contract",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-architecture-contract-agent",
+        "name": "Architect",
+        "phone": "6601",
+        "profile": "Architect. Этап A. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-001",
+          "queue": "consultant-all",
+          "message": "Исследуй фактические main.py, nginx_qa/sprint_types.py, managed_import.py, managed_continuity.py, workspace_manager.py, process_supervisor.py, branch_leases.py, port_leases.py, git_provider.py, scope_api.py, inbound_proposals.py, schemas и docs/universal-managed-sprint-contract.md. Составь карту текущих Telegram import/pending/start, prompt generation, identity, queues, reviews, Git/worktree, UI и cloudflared. Укажи реальные точки расширения с путями и reusable функции, без второго engine.\nЗафиксируй контракт: /sprint_prompt выдаёт инструкцию внешней AI; пользователь присылает JSON; autonomous_mode=true запускает в пределах явно выданных прав, false создаёт Prepared/Waiting без assignments, отсутствие в старом формате сохраняет прежнее поведение. Предлагаемый НОВЫЙ транспорт: kind=telegram_managed_sprint_v1, schema_version=1, project_id, autonomous_mode:boolean, manifest:managed_workspace_v1. Подготовь отдельную schema/dispatch/tests; не выдавай новый envelope за поддерживаемый старым сервером. Для явно нового envelope отсутствие autonomous_mode — ошибка, старые документы не переинтерпретировать. Определи ошибки unknown version/field и лимиты.\nСохрани managed_single_active_sprint/active_sprint_id и общий project lock, включая конкуренцию новых и старых API. Одна launcher pending/prepared/running операция резервирует проект; другой запрос получает PROJECT_BUSY без замены состояния. Повтор той же операции возвращает её статус. Последовательные запуски имеют разные instance_id/ветки/workspaces и сохраняют историю. Не создавать aliases проектов ради параллельности.\nManaged Instance — контекст существующего engine, без обязательной копии/отдельного сервера. Created/Prepared/Waiting/Running/Completed/Failed/Stopped — API/UI projection durable state с явной таблицей соответствия, не вторая машина исполнения. Опиши recovery, quotas, cancellation, cleanup собственных ресурсов с сохранением evidence.\nGit-блокер: нынешний direct JSON-import отклоняет managed manifest через MANAGED_GIT_START_REQUIRED; старт читает manifest из Git. Спроектируй trusted provision step: валидированный upload фиксируется в выделенной manifest-ветке через существующий Git provider с отдельной capability публикации, затем start-from-git получает immutable provenance. Различай manifest commit и workspace source commit; files проверяются во втором. Не обходить через legacy, фиктивные commits или ослабление checks. Producer token не даёт start permission. Без registry/credential/config — понятный blocked result.\nРезультаты: docs/telegram-managed-sprint-launcher-v1/architecture.md, versioned schema, threat model, API/errors/lifecycle/permissions matrix и acceptance matrix. Приоритет имеет уточнение пользователя: один активный спринт на проект; прежний сценарий трёх параллельных спринтов одного проекта отменён. Gate: контрактные tests и карта реализации всех требований.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-architecture-contract",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "prompt-export",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "prompt-export",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-prompt-export-agent",
+        "name": "Telegram Developer / Prompt",
+        "phone": "6602",
+        "profile": "Telegram Developer / Prompt. Этап B1. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-002",
+          "queue": "worker-all",
+          "message": "Реализуй /sprint_prompt через существующий Telegram dispatch и prompt-building функции. Прочитай архитектурный отчёт, prompts/architect_sequential_team_json.md и tests/test_sequential_prompt_ui.py. Ответ строится из схем/контрактов УСТАНОВЛЕННОЙ версии, не из удалённого main или устаревшего шаблона. Включи schema/version/contract digest, managed type, roles и двух Reviewer, sequential/parallel graph задач внутри ОДНОГО спринта, Git/workspace isolation, safety и testing requirements. Parallel nodes внутри спринта не разрешают второй спринт проекта.\nВключи repository и текст задачи как отдельные ограниченные данные; project/repository разрешаются через registry и ACL, не через произвольный filesystem path или URL. Объясни новый envelope и boolean autonomous_mode, различие false и отсутствующего флага. source_ref/commit и files checksums берутся из проверенного repository context: не требуй от внешней AI угадывать SHA. Дай модели актуальные проверенные file entries или разрешённый проверяемый способ их получения. Не включай секреты, private runtime paths и credentials.\nВыдавай текст с безопасным разбиением по Telegram limits либо UTF-8 файл. Внешнюю AI вызывает пользователь; собственный LLM gateway, API key setup или новый agent loop вне scope.\nGate: tests command permissions, repository/task selection, text/file, Unicode/escape/oversize, изменение installed schema меняет prompt/digest, образец JSON по prompt проходит envelope и актуальную managed schema. Реальный ответ внешней модели и детерминированная fixture различаются в evidence. Prompt не меняет runtime.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-prompt-export",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "telegram-intake",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "telegram-intake",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-telegram-intake-agent",
+        "name": "Telegram Developer / Import",
+        "phone": "6603",
+        "profile": "Telegram Developer / Import. Этап B2. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-003",
+          "queue": "worker-all",
+          "message": "Расширь текущий приём JSON текстом и .json документом через новый launcher envelope и existing pending/proposal компоненты. Только разрешённый user/chat/project; повторно проверяй права после async загрузки. Server registry определяет canonical repository; JSON не может подменять registry/config, задавать произвольные filesystem roots или давать полномочия. Валидируй byte/depth/count limits, UTF-8, strict JSON с reject duplicate keys/NaN/Infinity, autonomous_mode именно boolean, версии, manifest schema, semantic graph, уникальные roles/phones/branches, source_ref/pinned SHA/files и secret/path policies. Ошибки — безопасный code/field без traceback/секретов.\nДо workspace/process/queue effects обязательны auth и validation. Невалидный JSON не создаёт instance. Раздели read-only Git mirror validation и runtime activation. Дедупликация по Telegram update/message/document identity и persisted operation: тот же запрос возвращает тот же результат; тот же idempotency key с иным payload — conflict. Bind к user/project/digest; чужой пользователь не читает operation. После проверки атомарно reserve singleton project slot; новый запрос при занятости — PROJECT_BUSY, без замены pending/running state. Старые import APIs остаются совместимыми.\nРеализуй trusted Git-provision bridge по архитектуре: безопасное имя manifest-ветки, immutable blob, точные commit/path/digest через существующий provider. Публикация только с явной operator capability, не main и без автоматического PR. Без provenance не активируй; при недоступной publication/registry — resumable blocked operation без фиктивного success. Все Git remote writes тестируются только на локальных disposable remotes.\nGate: valid/invalid/unauthorized/duplicate/conflicting uploads, гонка project slot, crash reserve/provision/ACK, прежний отказ direct managed legacy import. Ни реального Telegram, ни live server API.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-telegram-intake",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "instance-preparation",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "instance-preparation",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-instance-preparation-agent",
+        "name": "Backend Developer / Instance",
+        "phone": "6604",
+        "profile": "Backend Developer / Instance. Этап D. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-004",
+          "queue": "worker-all",
+          "message": "Реализуй подготовку логического Managed Instance через текущие engine, workspace/Git/branch/port managers и durable state. На разрешённый запуск — новый instance_id, отдельные worktree/ветки/state namespaces/queues/logs/results/history. canonical project -> current instance живёт в общем control plane. Сохрани один активный Managed Sprint на проект, включая конкуренцию со старым start API. Новая launcher reservation не должна скрывать активный спринт в другой DB. Повтор операции возвращает тот же instance_id. Synthetic project IDs для обхода запрещены.\nautonomous_mode=false означает MANUAL: подготовь instance/workspace и UI metadata, сохрани Waiting, но не активируй task/review assignments и agent processes. Не вызывай activate ради подготовки с последующим откатом очередей. Если текущий pipeline совмещает prepare/activate, выдели prepare boundary внутри него с backward-compatible wrapper и recovery tests, без второго engine. Auto использует ту же preparation, затем отдельный авторизованный start.\nПути принадлежат выделенному runtime root с canonical/reparse/traversal checks; root repo/Madoev EEG запрещены. files читаются из pinned workspace source commit. Уважай global branch/port leases, loopback host, не используй занятые фиксированные порты. Обеспечь quotas pending/prepared, wall time/process count/memory где поддерживается; задокументируй platform limitations. Stale preparation/restart не повторяет spawn и не теряет evidence. Cleanup освобождает лишь доказанно свои leases; автоматически не удаляет Git/history/logs.\nLifecycle Created/Prepared/Waiting/Running/Completed/Failed/Stopped выводится из durable фактов. Сохраняй results/reviews/tests/PR URL. Gate: один победитель concurrent requests, отдельная история sequential runs, независимость двух существующих тестовых проектов, ошибка/остановка одного не меняет другого. Snapshot доказывает отсутствие assignments до manual Start и core recovery/lease invariants.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-instance-preparation",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "launch-modes",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "launch-modes",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-launch-modes-agent",
+        "name": "Backend Developer / Activation",
+        "phone": "6605",
+        "profile": "Backend Developer / Activation. Этап C. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-005",
+          "queue": "worker-all",
+          "message": "Реализуй autonomous_mode=true/false поверх общего prepared instance и действующего start/assignment executor lifecycle. True после schema/graph/Git/security/preparation checks автоматически выполняет разрешённый оператором start. False остаётся Waiting до Telegram либо защищённого Web UI Start. Старый JSON без флага сохраняет точный старый dispatch, включая запрет direct managed legacy import. Не полагайся на игнорируемое старым engine поле autonomous_mode: новый envelope обрабатывается явно.\nProducer create/import != start permission. Минимальная scoped operator policy/capability на user+project+action, deny by default; проверяй при каждом старте и после async boundaries. Localhost и непроверенный from.id не дают прав. Отзыв permission между import/start блокирует activation. Bot/cloudflare/operator secrets не передавать агентам. Autonomous не разрешает автоматически deploy/push/PR/merge.\nЕдиные durable idempotency/atomic project reservation и старый single-active guard работают для Telegram/Web UI/legacy/API. Повтор Start Running/Completed возвращает статус; два Start не удваивают queues/processes. Другой instance при занятом проекте получает PROJECT_BUSY. Recovery lost ACK/restart не повторяет activation; cancel/stop освобождает только свои leases, сохраняет evidence и не меняет чужие проекты.\nПодключение исполнителей идёт через существующий agent loop/current identity/assignment APIs, не просто флаг Running. Найди executor hook; если он недоступен — recoverable blocked failure. Не добавляй второй scheduler/LLM client. Тесты используют deterministic fake executors и две reviewer identities по реальным API, без реальных агентов.\nGate: auto success, manual waiting/start, deny/revoke permissions, double click/races/restart/cancel, отсутствующие executor credentials, legacy invariants. Три новых конкурентных запроса одного проекта дают один запуск и два PROJECT_BUSY, включая race с прежним API.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-launch-modes",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "telegram-controls",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "telegram-controls",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-telegram-controls-agent",
+        "name": "Telegram Developer / Controls",
+        "phone": "6606",
+        "profile": "Telegram Developer / Controls. Этап E1. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-006",
+          "queue": "worker-all",
+          "message": "После подготовки отправляй через существующий Telegram outbox ровно три основные inline-кнопки: «Запустить спринт», «Открыть Web UI», «Статус спринта». Повтор уведомления не создаёт instance. True/Running Start возвращает текущий статус; false/Waiting вызывает единый scoped start. Каждое действие проверяет текущие user/chat/project/instance права, callback_data не является авторизацией. Opaque callback handles <=64 UTF-8 bytes, без секретов/paths; проверяй ownership, stale instance и своевременно answer callback.\nWeb UI ведёт к instance через защищённый общий gateway. Согласуй с Integration private-chat Telegram Mini App: URL содержит только не-секретный instance handle, сервер проверяет signed initData и затем выдаёт короткий одноразовый обменный токен. Никогда не давай прямой незащищённый backend URL. Group/business/unsupported clients получают инструкцию открыть private chat без insecure fallback.\nStatus показывает только разрешённый instance: lifecycle, исполнители/задачи, reviews и exact commit, проверки, ошибки, артефакты, PR URL если создан. Не раскрывай чужие очереди, secrets/raw prompts/private absolute paths. Scope проверяется сервером. Уведомления Created/Waiting/Running/Completed/Failed/Stopped bounded/retryable/deduplicated/redacted; смена tunnel URL не порождает постоянные capability links.\nGate: mocked Bot API tests трёх кнопок, auto/manual status, double click, unauthorized/revoked/wrong instance, expired handle, UTF-8 callback limit, stale buttons, lost ACK/API error, auth выдаёт только instance-scoped доступ.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-telegram-controls",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "gateway-auth",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "gateway-auth",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-gateway-auth-agent",
+        "name": "Integration Developer",
+        "phone": "6607",
+        "profile": "Integration Developer. Этап E2. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-007",
+          "queue": "worker-all",
+          "message": "Используй текущие cloudflared_quick_tunnel.ps1, staging_host_app.py, run_staging.ps1 и routing: один защищённый gateway, не новый публичный туннель на каждый спринт. Реальный tunnel требует отдельного разрешения. Не оставляй root/admin/health/SSE/WebSocket/file/API endpoints доступными через обход gateway. Upstream берётся из server-owned instance registry/leases, host loopback; deny arbitrary host/port/URL/SSRF, проверяй ownership и удаляй spoofed identity/proxy headers. Не копируй сервер целиком.\nВ private Telegram Mini App валидируй raw initData сервером по официальной HMAC/signature схеме, constant-time comparison, правильный bot, user, auth_date/freshness/replay. Не доверяй initDataUnsafe или query user_id. После текущих user/project/instance ACL выпусти криптографически случайный single-use exchange token: только hash в storage, default TTL 60s, безопасный configurable максимум 300s, identity+instance+launch-session binding. POST exchange с atomic consume; reject expired/repeat/wrong-user/wrong-instance. Replay initData/launch session не может выпускать бесконечные новые capabilities; определи безопасный reload/reopen. GET/link preview не запускает задачи и не расходует token. Никаких постоянных секретов/access tokens в Telegram URL, истории, Referer, логах.\nПосле exchange — Secure/HttpOnly/SameSite session с TTL и instance scope, проверка ACL на всех HTTP/SSE/WS действиях, CSRF/origin checks mutations, logout/revoke, safe path encoding, запрет open redirect. Cookie Path не заменяет scope ACL. Сам tunnel URL не авторизует. Bot token только в existing secret store доверенного auth gateway, недоступен агентам. No-store/referrer-policy/redaction/rate limits, ошибки без credentials. Completed history также защищена текущими ACL.\nGate: isolated gateway/fake cloudflared tests valid login, tampered signature/stale/replay initData, revoke, два exchange — один успех, stolen token wrong user, cross-instance read/write/WS/SSE, CSRF/header injection/SSRF, произвольные routes, GET scanner, tunnel failure/reconnect без остановки engine. Реальный телефон/планшет через разрешённый tunnel — отдельное external evidence; mocks его не заменяют.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-gateway-auth",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "qa-qualification",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "qa-qualification",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-qa-qualification-agent",
+        "name": "QA Agent",
+        "phone": "6608",
+        "profile": "QA Agent. Этап F1. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-008",
+          "queue": "tester-all",
+          "message": "Квалифицируй итоговый exact Git head в изолированном временном окружении, без live Telegram/cloudflared/LLM/агентов/Madoev EEG. Создай и выполни unit/contract/integration/recovery tests. Fake executor должен проходить существующие identity/assignment/result/review APIs, не просто менять status. Сохрани команды/exit codes/версии/fixture identity/head/durations и redacted machine-readable evidence в docs/telegram-managed-sprint-launcher-v1/evidence/. Проверь regression для Managed Engine, Telegram import, prompt UI, inbound permissions, leases, scope и execution cache/refresh из PR16.\nОбязательные сценарии:\n01 актуальный /sprint_prompt text/file и schema drift;\n02 JSON по prompt проходит actual validators, fixture и реальный external AI ответ явно различены;\n03 text/document upload, project resolution, Git provenance;\n04 bad JSON/schema/graph/Git/permissions без instance effects;\n05 isolated preparation и lifecycle;\n06 auto=true с правами и deny/revoke;\n07 false без assignments до Start и безфлаговый legacy;\n08 три одновременных новых запроса того же проекта: ровно один запуск, два PROJECT_BUSY; гонка старого API с новым. Прежний тест трёх параллельных спринтов одного проекта отменён;\n09 worktree/branch/path/reparse isolation;\n10 queue/state isolation разных существующих тестовых проектов и последовательных запусков;\n11 update dedup/lost ACK/payload conflict;\n12 duplicate Start/racing callbacks/3 buttons;\n13 crash recovery на reserve/provision/prepare/activate/outbox/token boundaries;\n14 gateway ingress/outage/reconnect с fake cloudflared и отдельный real tunnel evidence;\n15 single-use identity-bound login/signature/freshness/replay/CSRF/scope/WS/SSE/redaction;\n16 legacy/producer/core/PR16 regression.\nДополнительно quotas/cancel/release-own-leases, evidence retention, две distinct review identities approving exact commit, reject/rework/reapproval/max cycles. Snapshots доказывают отсутствие manual assignments и чужих изменений. Не регистрируй aliases production project ради изоляционных тестов. Git writes только local disposable remotes.\nAcceptance matrix: PASS/FAIL/NOT_RUN/BLOCKED и evidence links. Fixture не доказывает внешнюю AI, mocked tunnel — вход с реального телефона. Для внешних сценариев дай operator runbook и явно missing evidence. PASS этого узла означает automated isolated suite passed, даже если external gates pending; FAIL — coordinator, NEED_DECISION — безопасное продолжение невозможно. Не объявляй продукт DONE до final release gate.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-qa-qualification",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "PASS": "release-documentation",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "FAIL": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "release-documentation",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-release-documentation-agent",
+        "name": "Architect / Release",
+        "phone": "6609",
+        "profile": "Architect / Release. Этап F2. Работай через существующий engine; exact-commit evidence и два независимых reviews обязательны."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-009",
+          "queue": "consultant-all",
+          "message": "Подготовь delivery пакет: архитектура/threat model, envelope schema/JSON example, /sprint_prompt text/file, setup и rollback без удаления истории, operator/user permissions, one-active-project policy, 3 кнопки/private-chat Mini App, lifecycle/recovery/quotas, Git publication capability, errors/secret references/testing guide. autonomous_mode не выдаёт push/deploy/merge rights; no-flag сохраняет старый import. При корректном Telegram входе повторный password/login не нужен. До rollout feature disabled by default либо allowlisted operator/test project; старые endpoints совместимы.\nСверь cumulative exact-head diff с baseline main (PR16), QA evidence, отсутствие live mutation, оба независимых review reports. Подготовь PR title/body: проблема, поведение, проверки, ограничения/demo. Публикация только после отдельного разрешения; base main, topic branch. Automatic merge запрещён; PR URL только реально подтверждённый.\nПолный DONE требует: внешняя AI получила prompt и вернула валидный импортируемый JSON; false preparation/manual start и true auto в разрешённой disposable среде; 3 кнопки и single-use login с телефона/планшета через разрешённый Cloudflare; запрет второго спринта проекта и изоляция; tests и оба reviews exact final commit; явно разрешённый PR. Mocks не заменяют реальные external demo evidence. Если нет прав/инфраструктуры/external AI/PR — сохрани код/evidence/unblock steps и верни NO_GO в coordinator как BLOCKED_EXTERNAL. Не выполнять внешних действий самовольно и не маркировать продукт DONE. Изменённая документация требует обеих проверок нового exact head. STOP/NEED_DECISION — coordinator.\n\nОбщие обязательные условия:\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-release-documentation",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "completed",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "NO_GO": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "tmsl-continuity-agent",
+        "name": "Continuity Coordinator",
+        "phone": "6600",
+        "profile": "Только штатный continuity repair/resume. Сохраняй frozen completed evidence и exact Git provenance; не подменяй state вручную и не обходи review."
+      },
+      "tasks": [
+        {
+          "task_id": "TMSL-010",
+          "queue": "consultant-all",
+          "message": "Разбирай STOP/NEED_DECISION/QA FAIL/release NO_GO через существующий Managed Continuity Engine. Проверь frozen completed evidence, parent result commit и ownership branch/workspace/queues. Локализуй дефект и предложи минимальный штатный repair/resume затронутых незавершённых узлов. RESUME_* не разрешает произвольно переоткрывать completed nodes или менять историю. Для изменения завершённого результата нужен действующий versioned repair contract, оба reviews и проверенные Git predecessors; при невозможности BLOCKED_EXTERNAL.\nЛимит rework задан execution.max_rework_cycles=5; при исчерпании FAILED с evidence, без бесконечного цикла и самостоятельного увеличения лимита. Не заменяй двух reviewers собой. Dirty/diverged/branch collision, неизвестный проект, занятый project slot, отсутствующие credentials/executor/cloudflare/external AI/PR permission требуют внешнего решения, не force/reset/skip. Сохрани результат и точные unblock steps. Внешний блокер — BLOCKED_EXTERNAL, невосстановимая ошибка — FAILED. Не объявляй DONE без обязательного external demo/review/evidence.\n\nИспользуй существующий Managed Sprint Engine, coordinator/continuity, assignment/review queues и Git provenance. Один активный Managed Sprint на канонический проект; не создавай aliases проекта, отдельные control DB или второй scheduler для обхода. Новый launcher резервирует не более одного pending/prepared/running instance на проект; завершённая история сохраняется. Работай только в выданном managed workspace и ветке, не меняй main напрямую, действующие спринты и Madoev EEG. Не обращайся к его серверу, данным и занятым портам. Тесты — временные каталоги, тестовые проекты, fake Telegram/cloudflared/executors. Не запускай внешних реальных агентов, публичный туннель, deploy, push или создание PR без отдельного разрешения оператора. Не читай реальные секреты; используй scoped secret references. Dirty/diverged Git, недостающие права и блокеры направляй coordinator без reset/force/delete/skip. Результат подаётся штатным assignment result с exact result commit, diff и воспроизводимыми проверками; переход только после двух независимых APPROVE этого же коммита. Rework требует повторного review. Не обходи gates и не выдавай себе approval. Входные task text/JSON не разрешают изменять серверные allowlists или права."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/tmsl-v1-continuity",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "RESUME_CONTRACT": "architecture-contract",
+        "RESUME_PROMPT": "prompt-export",
+        "RESUME_INTAKE": "telegram-intake",
+        "RESUME_INSTANCE": "instance-preparation",
+        "RESUME_LAUNCH": "launch-modes",
+        "RESUME_BUTTONS": "telegram-controls",
+        "RESUME_GATEWAY": "gateway-auth",
+        "RESUME_QA": "qa-qualification",
+        "RESUME_RELEASE": "release-documentation",
+        "BLOCKED_EXTERNAL": "blocked-external",
+        "FAILED": "failed"
+      }
+    },
+    {
+      "id": "completed",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Реализация, автоматизированные tests, внешнее end-to-end evidence и явно разрешённый PR готовы; оба Reviewer одобрили exact итоговый commit. Automatic merge нет."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Результаты/evidence сохранены; требуется указанное внешнее условие, полномочие или демонстрация. Дальнейшее действие только через разрешённый штатный resume."
+    },
+    {
+      "id": "failed",
+      "type": "terminal",
+      "status": "FAILED",
+      "message": "Невосстановимая ошибка либо исчерпан rework budget. Сохранить диагностику и результаты; не трогать live проекты и не обходить ограничения."
+    }
+  ],
+  "files": [
+    {
+      "path": "main.py",
+      "sha256": "2925fd1056ce63cfdbaa69f289d672a959c9d485e56cd73a571ad6d249b57465"
+    },
+    {
+      "path": "nginx_qa/sprint_types.py",
+      "sha256": "bcb0f63d42dd06fbb8e622d0418e04f696a3e27c14968b1a68bde98e0e054ae7"
+    },
+    {
+      "path": "nginx_qa/managed_import.py",
+      "sha256": "ca621df28714eca63c18e8320bd226bdb04eea46b453a0ae5d4892df29fbfeca"
+    },
+    {
+      "path": "nginx_qa/managed_continuity.py",
+      "sha256": "fcc92b52ff763a5a2b7f46b986b13d9afc9911f15646fbdf3d4c6c13baf070bc"
+    },
+    {
+      "path": "nginx_qa/workspace_manager.py",
+      "sha256": "24bb525cdf226d7868be88e6afb1385903bc512ed169ccf7b1650b13cc8db847"
+    },
+    {
+      "path": "nginx_qa/process_supervisor.py",
+      "sha256": "d6850cdd85d6cdc4cff3a7421b2f44c8239cebe842e0a1ac825b79e002c384c4"
+    },
+    {
+      "path": "nginx_qa/branch_leases.py",
+      "sha256": "820671e83c116534c371f1a7dcee80d14dab5c609531c0c2c96aa5082eda1f17"
+    },
+    {
+      "path": "nginx_qa/port_leases.py",
+      "sha256": "fc6e02f9f41356d98c5d7be981de2f0dd046a78e491cb2295ec31f4e1da499ff"
+    },
+    {
+      "path": "nginx_qa/git_provider.py",
+      "sha256": "8c1c3f4133ed2915e68586b4e0760a251112f7aaab30a1b8c90324a354e527be"
+    },
+    {
+      "path": "nginx_qa/scope_api.py",
+      "sha256": "5e6d4027f8081a820559381d5328990ab6814501d3c942bfb1a67007f40a6e57"
+    },
+    {
+      "path": "nginx_qa/inbound_proposals.py",
+      "sha256": "d8189f8615c373a9ae89dac2debd406bde0a6e6cae18798ccf9371a980408f22"
+    },
+    {
+      "path": "staging_host_app.py",
+      "sha256": "31ae87fe9ee4cdcccbcd734229afe00804dfe6bb3007b283679cba734765d0b9"
+    },
+    {
+      "path": "cloudflared_quick_tunnel.ps1",
+      "sha256": "abdcdd2289f386526bd0549c9a50bbf6a97d58a09ad94e556555e1bda401303f"
+    },
+    {
+      "path": "run_staging.ps1",
+      "sha256": "94fd19cafa0eb90cba23eb715420e764142fcf1a2ba59199d617749a765add78"
+    },
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    },
+    {
+      "path": "schemas/start-sprint-from-git-v1.schema.json",
+      "sha256": "f51c0254f4dccd30c9a7391853fe5320d2de02df44fb3606d63b7faaa53149ba"
+    },
+    {
+      "path": "schemas/managed-runtime-config-v1.schema.json",
+      "sha256": "2ad78110c388afe8d698dca912051b51b1dc8b2bd2f0583c6d4b8122fbdbcd3a"
+    },
+    {
+      "path": "schemas/managed-project-control-v1.schema.json",
+      "sha256": "7864025cc2afe6096103c3d4727c70a82f8903313e5c80e98d43acae6d0a6ceb"
+    },
+    {
+      "path": "schemas/managed-runtime-state-v2.schema.json",
+      "sha256": "f54da010ae4832d9620bc5bd7471900925b23f761090f6508bf8459b23d108d8"
+    },
+    {
+      "path": "schemas/managed-review-decision-v1.schema.json",
+      "sha256": "0438f384a2853ef65c151f258096dc9dc2c4db0c642fa98bb69fe45c5fb7dc55"
+    },
+    {
+      "path": "docs/universal-managed-sprint-contract.md",
+      "sha256": "d7b4c6c12e3aadc03018b3a8cbc1f989f278784fad151d9dfe24e7366123a146"
+    },
+    {
+      "path": "prompts/architect_sequential_team_json.md",
+      "sha256": "25e4b22c6e0f4cf998b7cb02d19d002dbaadb16a7f7e1daeb3eb2c28d75523a9"
+    },
+    {
+      "path": "examples/project_sequential_graph_import.json",
+      "sha256": "87f5211843774624717fefb80ecc0d523c16a1dcc5cb526f1a1c0b24ac43e629"
+    },
+    {
+      "path": "orchestration/sprints/prompt-storage-compaction-v1/sequential-sprint.json",
+      "sha256": "75b36a5dc9ae4c673d60747adfd8becd81aa36a650b3dbb02e938a769a6158a5"
+    },
+    {
+      "path": "orchestration/sprints/universal-managed-sprint-engine/branch-map.md",
+      "sha256": "c82b132924b9dd1176a996f9592bbca703461d0562105ca58b3042b574970437"
+    },
+    {
+      "path": "tests/test_project_actor_import.py",
+      "sha256": "a348f136679a6d786464baeb5a8db843ff2932d75640060e722c7f2704eae428"
+    },
+    {
+      "path": "tests/test_managed_import.py",
+      "sha256": "f180aade5204e18e4da8efcb8f09c5d178ae3f1853708165e7b2a09c8cc98899"
+    },
+    {
+      "path": "tests/test_managed_continuity.py",
+      "sha256": "24ccac391297e2220118f11b41759eed6061e871480e806ab2238a69f74cb031"
+    },
+    {
+      "path": "tests/test_managed_workspaces.py",
+      "sha256": "396253f48399f744e653621706a3243d601e0a714da30464256a1a187d09c2cd"
+    },
+    {
+      "path": "tests/test_managed_scope_secret_boundary.py",
+      "sha256": "1a0c2bb3b5f39c8fe91961dd911fa7ea6d5c593953aa7cf8a0130a2d05268990"
+    },
+    {
+      "path": "tests/test_inbound_proposal_api.py",
+      "sha256": "9ed5efcddfc2086d1f51a8b623eb472c2ac91dc457deb350622a394b06ad2d3d"
+    },
+    {
+      "path": "tests/test_sequential_prompt_ui.py",
+      "sha256": "b7b5f049fa17be43eee9cb5991f160ccb2b21714325adcb303ca513529f74f48"
+    },
+    {
+      "path": "tests/test_execution_refresh.py",
+      "sha256": "6f8ef77f61b46e2bc26aa92f9fdffdf83d7ac451dc6cd4d0a6bdbd6efe98b1e8"
+    },
+    {
+      "path": "tests/test_execution_read_scheduling.py",
+      "sha256": "cf03d35e27e139358cdf08c9057d961443dec122bef556eb8ef0b0d2c36fc308"
+    },
+    {
+      "path": "tests/test_execution_projection_cache.py",
+      "sha256": "ef345a31bdfceeba0304c5f284c81c888a5d17ae5dc5e50543cf8d5429b9323c"
+    },
+    {
+      "path": "tests/test_execution_observability.py",
+      "sha256": "4105eeb3fc1a8184a418ae0a5b054bf3d6b3a8b228bd74779bed4959f106a168"
+    }
+  ],
+  "planning": {
+    "title": "Telegram Managed Sprint Launcher v1 — один активный Managed Sprint на проект",
+    "purpose": "План реализации функции. Этот manifest не является новым Telegram envelope.",
+    "annotation_semantics": "planning — справочная metadata, разрешённая схемой. Runtime эти поля не исполняет. Обязательные требования включены в task.message/profile и действующие execution/workspace/process policies.",
+    "source_spec": {
+      "filename": "Pasted text.txt",
+      "title": "Telegram Managed Sprint Launcher v1",
+      "user_amendment": "Оставить один managed sprint на проект.",
+      "superseded_sections": [
+        "1: параллельные спринты одного проекта",
+        "6: три одновременных экземпляра одного проекта",
+        "10.8: три экземпляра одного репозитория как один проект",
+        "13.8, 14, 15.D и конечная цель: same-project parallel execution"
+      ],
+      "replacement_acceptance": "Один активный managed sprint на канонический проект. Новый launcher резервирует только одну pending/prepared/running операцию. Три конкурентных новых запроса одного проекта: один разрешённый запуск, два PROJECT_BUSY. Последовательные запуски сохраняют раздельную историю. Независимость разных существующих проектов сохраняется; aliases ради обхода запрещены.",
+      "sha256": "aee844f539835e1735fa4319efaa409db8185381c0faa9d2391ef7dcef99d398"
+    },
+    "baseline": {
+      "repository": "chartjs333/nginx-qa",
+      "source_ref": "refs/heads/main",
+      "source_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+      "merge_pr": 16,
+      "merge_subject": "Merge pull request #16 from chartjs333/codex/execution-performance-cache",
+      "performance_ancestor": "467eb6692e84c8439ad2ef4a66b8eb20406c2d72"
+    },
+    "scope_decisions": {
+      "single_active_managed_sprint_per_project": true,
+      "same_project_parallel_sprints": false,
+      "one_launcher_reservation_per_project": true,
+      "instance_model": "Изолированный контекст существующего Managed Engine на разрешённый запуск; отдельный полный сервер не требуется.",
+      "autonomous_mode": "Будущее boolean поле нового launcher envelope, не top-level флаг этого manifest; отсутствие в legacy сохраняет прежний dispatch.",
+      "external_ai": "Пользователь передаёт prompt внешней модели сам; встроенный LLM generator не входит в v1.",
+      "private_chat_web_ui": "Telegram Mini App signed initData + короткий одноразовый обменный токен + scoped session. Для unsupported chat modes — переход в private chat без небезопасного URL fallback.",
+      "review_policy": "Оба execution.reviewers независимо проверяют каждый exact result commit через действующие review queues.",
+      "manual_waiting": "Preparation не активирует assignments/reviewers/agent processes.",
+      "git_upload_bridge": "Нужен разрешённый Git publication bridge к существующему start-from-git; старый engine не запускает managed JSON напрямую из Telegram.",
+      "rollout": "Feature disabled by default либо explicit allowlisted operator/project. autonomous_mode не выдаёт права publication/deploy/merge."
+    },
+    "prelaunch_requirements": [
+      "Файл локальный и неопубликованный. Start-from-git должен прочитать его из реального immutable Git commit после отдельного разрешения на commit/publication. Здесь нет выдуманного manifest_commit или start request.",
+      "Source workspace pinned к main@2482beb33ea55d8e5f8565cda9bd546df9c6bc32. Если main сдвинется, повторно изучить изменения и пересчитать hashes либо выбрать реально существующий разрешённый frozen ref. Не удалять expected_source_commit ради обхода.",
+      "Определить repository_id/project_id в разрешённом registry; не брать Madoev EEG. Проверить project slot, branch/port leases, роли/phones, runtime roots, quotas и executor availability.",
+      "Полный managed runtime preflight нужен перед будущим разрешённым запуском. Offline schema/graph/hash validation не проверяет живые leases, credentials и permissions.",
+      "Telegram bot/Mini App HTTPS URL, Cloudflare, secret references и capability grants задаёт оператор позже. Секретов в manifest быть не должно.",
+      "Повторный запуск development manifest требует новых безопасных branches либо разрешённого exact-head resume; create не разрешает захват существующей ветки."
+    ],
+    "preparation_only": {
+      "sprint_started": false,
+      "live_pending_created": false,
+      "agents_started": false,
+      "main_code_edited": false,
+      "existing_sprints_edited": false,
+      "madoev_eeg_accessed": false,
+      "github_changes_pushed": false,
+      "note": "Ограничения текущей подготовки, не исполняемые флаги engine. Разрешено обновление origin/main и fast-forward локального main без новых коммитов."
+    },
+    "external_references": [
+      {
+        "url": "https://core.telegram.org/bots/api#inlinekeyboardbutton",
+        "purpose": "callback_data limits и private-chat Mini App"
+      },
+      {
+        "url": "https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app",
+        "purpose": "Серверная проверка raw initData и freshness"
+      },
+      {
+        "url": "https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/local-management/configuration-file/",
+        "purpose": "Один tunnel/gateway и ingress routing"
+      }
+    ],
+    "prepared_at": "2026-11-03 15:10:02 UTC",
+    "stages": [
+      {
+        "order": 1,
+        "node": "architecture-contract",
+        "spec_phase": "A",
+        "role": "Architect"
+      },
+      {
+        "order": 2,
+        "node": "prompt-export",
+        "spec_phase": "B1",
+        "role": "Telegram Developer / Prompt"
+      },
+      {
+        "order": 3,
+        "node": "telegram-intake",
+        "spec_phase": "B2",
+        "role": "Telegram Developer / Import"
+      },
+      {
+        "order": 4,
+        "node": "instance-preparation",
+        "spec_phase": "D",
+        "role": "Backend Developer / Instance"
+      },
+      {
+        "order": 5,
+        "node": "launch-modes",
+        "spec_phase": "C",
+        "role": "Backend Developer / Activation"
+      },
+      {
+        "order": 6,
+        "node": "telegram-controls",
+        "spec_phase": "E1",
+        "role": "Telegram Developer / Controls"
+      },
+      {
+        "order": 7,
+        "node": "gateway-auth",
+        "spec_phase": "E2",
+        "role": "Integration Developer"
+      },
+      {
+        "order": 8,
+        "node": "qa-qualification",
+        "spec_phase": "F1",
+        "role": "QA Agent"
+      },
+      {
+        "order": 9,
+        "node": "release-documentation",
+        "spec_phase": "F2",
+        "role": "Architect / Release"
+      }
+    ],
+    "acceptance_matrix": [
+      {
+        "id": "TMSL-AT-01",
+        "requirement": "Актуальный prompt text/file, schema drift",
+        "implementation_owner": "prompt-export",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-02",
+        "requirement": "JSON по prompt; external AI отдельно от fixture",
+        "implementation_owner": "prompt-export",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": true
+      },
+      {
+        "id": "TMSL-AT-03",
+        "requirement": "Text/document import, project/Git provenance",
+        "implementation_owner": "telegram-intake",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-04",
+        "requirement": "Невалидный/неразрешённый JSON без instance effects",
+        "implementation_owner": "telegram-intake",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-05",
+        "requirement": "Изолированная preparation и lifecycle",
+        "implementation_owner": "instance-preparation",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-06",
+        "requirement": "Auto start с явными operator rights",
+        "implementation_owner": "launch-modes",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-07",
+        "requirement": "Manual Waiting без assignments, Start, no-flag legacy",
+        "implementation_owner": "launch-modes",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-08",
+        "requirement": "Три новых запроса проекта: один запуск, два PROJECT_BUSY",
+        "implementation_owner": "launch-modes",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-09",
+        "requirement": "Worktree/branch/path isolation и sequential history",
+        "implementation_owner": "instance-preparation",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-10",
+        "requirement": "Queue/state isolation разных тестовых проектов",
+        "implementation_owner": "instance-preparation",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-11",
+        "requirement": "Telegram dedup, payload conflict, lost ACK",
+        "implementation_owner": "telegram-intake",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-12",
+        "requirement": "Повтор Start, гонки callback, три кнопки",
+        "implementation_owner": "telegram-controls",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-13",
+        "requirement": "Restart/crash recovery, quotas/cancel",
+        "implementation_owner": "launch-modes",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      },
+      {
+        "id": "TMSL-AT-14",
+        "requirement": "Gateway routing/tunnel recovery и отдельный real demo",
+        "implementation_owner": "gateway-auth",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": true
+      },
+      {
+        "id": "TMSL-AT-15",
+        "requirement": "Telegram single-use identity-bound login/security",
+        "implementation_owner": "gateway-auth",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": true
+      },
+      {
+        "id": "TMSL-AT-16",
+        "requirement": "Legacy/core/inbound/PR16 regression, два reviews exact commit",
+        "implementation_owner": "qa-qualification",
+        "qualification_owner": "qa-qualification",
+        "execution_status": "NOT_RUN",
+        "external_evidence_required": false
+      }
+    ],
+    "delivery_artifacts": [
+      "Архитектура/threat model",
+      "Versioned launcher envelope schema",
+      "Код расширения существующего движка",
+      "Автоматизированные tests/exact-head evidence",
+      "Два независимых review reports",
+      "Setup/rollback/permissions/Telegram guide",
+      "Разрешённая внешняя end-to-end демонстрация",
+      "PR после отдельного разрешения, без auto-merge"
+    ]
+  }
+}
