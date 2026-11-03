@@ -3520,6 +3520,10 @@ class ManagedContinuityRuntime:
                 409,
                 correlation_id,
             ) from exc
+        except ManagedImportError as exc:
+            if exc.code != "PROJECT_BUSY":
+                raise
+            raise ManagedContinuityError("PROJECT_BUSY", 409, correlation_id) from exc
         child_attempt_id = child.get("attempt_id")
         if not isinstance(child_attempt_id, str) or not child_attempt_id:
             raise RuntimeError("managed retry import child identity is corrupt")

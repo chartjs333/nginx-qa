@@ -209,6 +209,8 @@ There is only ONE active Managed Sprint per canonical project; parallel nodes
 within that sprint do not permit another concurrent sprint or alias project.
 Reuse the nginx-qa engine. Do not create a second scheduler, bypass Git provenance,
 write main, include secrets, change live runtime roots or automatically merge PRs.
+Launcher topic branches use agent/ or review/ prefixes; write nodes use distinct
+branches. Only the configured source ref is permitted at upload time.
 Do not request workspace.process launches without a separately approved operator
 template. Include isolated automated tests, exact-commit evidence, both reviewer
 gates, legacy compatibility and truthful external-demo acceptance requirements.
@@ -271,10 +273,13 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
     update = await bounded_update(request)
     message = update.get("message")
     if not isinstance(message, dict):
+        if any(key in update for key in ("edited_message", "channel_post", "edited_channel_post")):
+            fail("UNSUPPORTED_UPDATE", "Launcher mutations require an original private message.")
         return None
     command = prompt_command(message)
     if command is None:
-        return None
+        from nginx_qa.telegram_launcher_intake import maybe_handle_upload
+        return await maybe_handle_upload(update, message, host)
     if type(update.get("update_id")) is not int or update["update_id"] < 0:
         fail("PROMPT_REQUEST_INVALID", "A Telegram update identity is required.")
     project_id, mode, task = command

@@ -668,6 +668,16 @@ class ManagedImportStore:
                     receipt_id TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS telegram_launcher_operations (
+                    operation_id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL,
+                    dedupe_key TEXT NOT NULL UNIQUE,
+                    message_key TEXT NOT NULL UNIQUE,
+                    holds_slot INTEGER NOT NULL CHECK (holds_slot IN (0, 1)),
+                    record_json TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS telegram_launcher_project_slot
+                    ON telegram_launcher_operations(project_id) WHERE holds_slot = 1;
                 """
                 )
                 connection.execute("BEGIN IMMEDIATE")
@@ -2694,6 +2704,19 @@ class ManagedImportStore:
             )
         return True
 
+    @staticmethod
+    def assert_launcher_slot_available(
+        connection: sqlite3.Connection, project_id: str,
+        *, operation_id: str | None = None,
+    ) -> None:
+        """The Telegram adapter shares the engine's SQLite writer boundary."""
+        row = connection.execute(
+            "SELECT operation_id FROM telegram_launcher_operations "
+            "WHERE project_id = ? AND holds_slot = 1", (project_id,),
+        ).fetchone()
+        if row is not None and row["operation_id"] != operation_id:
+            raise ManagedImportError("PROJECT_BUSY", 409, "launcher-reservation", phase="VALIDATE")
+
     def register_or_resume(
         self,
         project_id: str,
@@ -2712,6 +2735,7 @@ class ManagedImportStore:
         now_text = now.isoformat()
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
+            self.assert_launcher_slot_available(connection, project_id)
             reconciled = self._reconcile_superseded_attempts(
                 control,
                 updated_at=now_text,
@@ -3807,6 +3831,7 @@ class ManagedImportStore:
 
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
+            self.assert_launcher_slot_available(connection, project_id)
             self._validate_control_snapshot(connection, project_id, control)
             row = connection.execute(
                 """
