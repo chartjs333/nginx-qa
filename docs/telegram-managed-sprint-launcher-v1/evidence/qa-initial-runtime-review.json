@@ -1,0 +1,55 @@
+{
+  "reviewer": "6681 / tmsl-runtime-reviewer",
+  "verdict": "REJECT",
+  "recorded_at": "2026-11-03T21:02:43.937448+00:00",
+  "result_commit": "59db1780ef5b66650e47b15afa142e50af2f5e42",
+  "baseline_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+  "result_key": "result-22a714da6578581f35aac9910dcb24cb029b0de311914a1147b955c363e68fa5",
+  "assignment_id": "review-f142208e9634668896cc43e6",
+  "source_assignment_id": "assignment-b77d0de626410a2c59dd3d57",
+  "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\qa-qualification\\assignment-b77d0de626410a2c59dd3d57",
+  "identity_verified_before_review": true,
+  "submission_status": "NOT_SUBMITTED_PER_PARENT_GATE_COORDINATION",
+  "api_receipt": null,
+  "submission_note": "Parent explicitly designated the other independent reviewer to submit its REJECT and requested no stale API decision. This review remains bound only to the exact assignment/result above.",
+  "blocking_findings": [
+    {
+      "id": "R1-QA-001",
+      "severity": "P1",
+      "location": "tests/test_telegram_launcher_contract.py:101 and docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+      "finding": "Final result fails existing acceptance matrix contract: test still requires all16 NOT_RUN while packaging changed13 to PASS and3 to BLOCKED. Broad890PASS ran before that input change, so it does not qualify the final package.",
+      "reproduction": "python -X utf8 -B -m unittest tests.test_telegram_launcher_contract:8 tests,7PASS/1FAIL; independently reproduced singleton first.",
+      "fix": "Use lifecycle-aware assertions preserving16 IDs and single-project rule, validate PASS mappings against actual evidence, keep external acceptance fail-closed. Include actual contract/prompt/root fixture inputs in source tracking and run affected contracts/evidence consistency after final packaging. Preserve historical890 evidence honestly; use explicit incremental verification for rework."
+    }
+  ],
+  "verification": [
+    {
+      "name": "new qualification integrations + changed native process-limit + two alias fixtures",
+      "result": "PASS",
+      "tests": 6,
+      "seconds": 97.019,
+      "log": "runtime-qualification-formal-tests.txt"
+    },
+    {
+      "name": "launcher contract module",
+      "result": "FAIL",
+      "tests": 8,
+      "passed": 7,
+      "failed": 1,
+      "seconds": 1.213,
+      "log": "runtime-qualification-contract-failure.txt"
+    },
+    {
+      "name": "historical broad provenance and per-case mapping",
+      "result": "PASS_WITH_SCOPE_LIMITATION",
+      "evidence": "runtime-qualification-provenance.json",
+      "details": "890 unique result IDs match discovered plan, all PASS at5899a69;242 recorded source hashes match final;122 acceptance mappings resolve; final packaging onlydocs; matrix itself omitted from that hash inventory."
+    },
+    {
+      "name": "clean exact result and delta diff check",
+      "result": "PASS"
+    }
+  ],
+  "external_acceptance": "NOT_RUN/BLOCKED; automated QA is not full product DONE"
+}

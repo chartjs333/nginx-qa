@@ -1,5 +1,32 @@
 # Automated qualification
 
+## Final matrix rework
+
+The initial packaging commit `59db178` changed the acceptance matrix after the
+historical 890-test run. Both independent reviewers reproduced an existing test
+that still required every case to be NOT_RUN. Security submitted an actual
+REJECT; the engine issued QA rework cycle 1. That failure is retained in
+`evidence/qa-initial-security-review.json`, its engine receipt, and the independent
+`qa-initial-runtime-review.json`. The 890-test result was never relabelled as a
+run against the changed matrix.
+
+The contract now validates all sixteen IDs, the single-project rule, allowed
+lifecycle values, actual unique passing test IDs and source commit in recorded
+evidence, and separate required external proof before an external case can PASS.
+The runner now tracks the matrix, prompt contract documents and root/example
+fixtures in addition to source. No production behavior changed in this rework.
+
+[Affected checks](evidence/qa-matrix-rework.json): 69 launcher contract, prompt
+and sprint-type tests PASS, zero failures/errors/skips. The source commit and
+hashes are in that report; [full post-run provenance](evidence/qa-matrix-rework-provenance.json)
+was captured before adding the rework evidence. The unchanged broad run below
+remains historical production regression coverage, rather than a second full run.
+The final packaging commit also requires a post-packaging contract run, whose
+receipt is retained outside that frozen commit under
+`C:/nqt35/client/stage8-final-package-check.json` and checked by both reviewers.
+
+## Broad isolated run
+
 The isolated qualification ran 890 unique tests at source commit
 `5899a69b44724a78b8829d64bfb5e51f37073744`: **PASS**, 0 failures,
 0 errors, 0 skips in 3387.657 seconds.
