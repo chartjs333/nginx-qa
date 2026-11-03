@@ -273,6 +273,10 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
     if not supplied or not hmac.compare_digest(expected.encode("utf-8"), supplied.encode("utf-8")):
         fail("ACCESS_DENIED", "Invalid Telegram webhook authentication.", 403)
     update = await bounded_update(request)
+    from nginx_qa.telegram_launcher_controls import handle_callback
+    callback = await handle_callback(update, host)
+    if callback is not None:
+        return callback
     message = update.get("message")
     if not isinstance(message, dict):
         from nginx_qa.telegram_launcher_intake import launcher_message_selected
@@ -284,6 +288,10 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
         return None
     command = prompt_command(message)
     if command is None:
+        from nginx_qa.telegram_launcher_controls import handle_status_command
+        status = await handle_status_command(message, host)
+        if status is not None:
+            return status
         from nginx_qa.telegram_launcher_intake import maybe_handle_upload
         return await maybe_handle_upload(update, message, host)
     if type(update.get("update_id")) is not int or update["update_id"] < 0:

@@ -680,6 +680,8 @@ class ManagedImportStore:
                     ON telegram_launcher_operations(project_id) WHERE holds_slot = 1;
                 """
                 )
+                from nginx_qa.launcher_transport_store import initialize as initialize_launcher_transport
+                initialize_launcher_transport(connection)
                 connection.execute("BEGIN IMMEDIATE")
                 try:
                     duplicate_active = connection.execute(

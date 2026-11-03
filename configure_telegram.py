@@ -203,7 +203,7 @@ def configure() -> None:
         {
             "url": webhook_url,
             "secret_token": secret,
-            "allowed_updates": json.dumps(["message", "channel_post"]),
+            "allowed_updates": json.dumps(["message", "channel_post", "callback_query"]),
             "drop_pending_updates": "true" if drop_pending else "false",
         },
         retry_seconds=webhook_retry_seconds(),
