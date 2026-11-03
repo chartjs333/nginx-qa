@@ -98,7 +98,40 @@ class TelegramLauncherEnvelopeContractTests(unittest.TestCase):
                          [case["id"] for case in matrix["cases"]])
         case = matrix["cases"][7]
         self.assertIn("two PROJECT_BUSY", case["positive"])
-        self.assertTrue(all(c["status"] == "NOT_RUN" for c in matrix["cases"]))
+        allowed = {"PASS", "FAIL", "NOT_RUN", "BLOCKED"}
+        docs = ROOT / "docs/telegram-managed-sprint-launcher-v1"
+        for case in matrix["cases"]:
+            with self.subTest(case=case["id"]):
+                self.assertIn(case["status"], allowed)
+                if case["status"] == "PASS":
+                    self.assertEqual("PASS", case.get("automated_status"))
+                if case["external_evidence_required"]:
+                    external = case.get("external_status", "NOT_RUN")
+                    self.assertIn(external, allowed)
+                    if case["status"] == "PASS":
+                        self.assertEqual("PASS", external)
+                        external_path = (docs / case["external_evidence"]).resolve()
+                        self.assertTrue(external_path.is_relative_to(docs.resolve()))
+                        self.assertTrue(external_path.is_file())
+                if case.get("automated_status") == "PASS":
+                    evidence_path = (docs / case["automated_evidence"]).resolve()
+                    self.assertTrue(evidence_path.is_relative_to(docs.resolve()))
+                    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+                    self.assertEqual("PASS", evidence["status"])
+                    self.assertEqual(0, evidence["failures"])
+                    self.assertEqual(0, evidence["errors"])
+                    self.assertEqual(matrix["automated_source_commit"], evidence["source_commit"])
+                    records = {entry["test"]: entry for entry in evidence["results"]}
+                    self.assertEqual(len(records), len(evidence["results"]))
+                    self.assertEqual(matrix["automated_total_unique_tests"], evidence["tests_run"])
+                    self.assertTrue(case["test_ids"])
+                    self.assertEqual(len(case["test_ids"]), len(set(case["test_ids"])))
+                    for test_id in case["test_ids"]:
+                        self.assertEqual("PASS", records[test_id]["status"])
+        # Matrix packaging changes are test-input changes, even without Python edits.
+        from scripts.qualify_telegram_launcher import source_inventory
+        self.assertIn("docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+                      source_inventory())
 
 
 if __name__ == "__main__":

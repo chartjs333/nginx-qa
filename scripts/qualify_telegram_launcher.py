@@ -51,11 +51,16 @@ def git(*arguments):
 def source_inventory():
     paths=set(git('ls-files','-co','--exclude-standard','-z').split('\0'))
     prefixes=('nginx_qa/','tests/','scripts/','static/','schemas/','prompts/')
-    top={'main.py','configure_telegram.py','run_staging.ps1','staging_host_app.py','cloudflared_quick_tunnel.ps1','requirements.txt'}
+    top={'main.py','configure_telegram.py','run_staging.ps1','staging_host_app.py','cloudflared_quick_tunnel.ps1','requirements.txt',
+         'group_templates.json','.env.example','.env.staging.example',
+         'docs/universal-managed-sprint-contract.md'}
     result={}
     for relative in sorted(paths):
         path=ROOT/relative
-        if path.is_file() and (relative in top or relative.startswith(prefixes)):
+        launcher_document=(relative.startswith('docs/telegram-managed-sprint-launcher-v1/')
+                           and '/evidence/' not in relative)
+        if path.is_file() and (relative in top or relative.startswith(prefixes)
+                              or launcher_document or relative.endswith('.env.example')):
             raw=path.read_bytes()
             if path.suffix.lower() in {'.py','.ps1','.js','.css','.html','.json','.md','.txt','.bat'}:
                 raw=raw.replace(b'\r\n',b'\n')
