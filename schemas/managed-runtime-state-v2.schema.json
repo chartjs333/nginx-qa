@@ -51,8 +51,79 @@
     "requested_ref": {"type": "string", "minLength": 1},
     "repository": {"$ref": "#/$defs/repository"},
     "runtime_config": {"$ref": "managed-runtime-config-v1.schema.json"},
-    "status": {"enum": ["preparing", "active", "completed", "failed", "blocked"]},
+    "status": {"enum": ["preparing", "active", "completed", "failed", "blocked", "stopped"]},
     "graph_revision": {"type": "integer", "minimum": 1},
+  "operator_stop_requested": {
+    "type": "object",
+    "required": [
+      "operation_id",
+      "requested_at"
+    ],
+    "properties": {
+      "operation_id": {
+        "type": "string",
+        "pattern": "^launch-[0-9a-f]{32}$"
+      },
+      "requested_at": {
+        "$ref": "#/$defs/timestamp"
+      }
+    },
+    "additionalProperties": false
+  },
+  "operator_cancellation": {
+    "type": "object",
+    "required": [
+      "operation_id",
+      "stopped_at",
+      "before_sha256",
+      "active_assignment_ids",
+      "allowed_outcomes_by_assignment",
+      "released_branch_lease_ids"
+    ],
+    "properties": {
+      "operation_id": {
+        "type": "string",
+        "pattern": "^launch-[0-9a-f]{32}$"
+      },
+      "stopped_at": {
+        "$ref": "#/$defs/timestamp"
+      },
+      "before_sha256": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      },
+      "active_assignment_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "uniqueItems": true
+      },
+      "allowed_outcomes_by_assignment": {
+        "type": "object"
+      },
+      "released_branch_lease_ids": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "uniqueItems": true
+      }
+    },
+    "additionalProperties": false
+  },
+    "preparation_cancellation": {
+      "type": "object",
+      "required": ["operation_id", "attempt_id", "stopped_at", "never_activated"],
+      "properties": {
+        "operation_id": {"type": "string", "pattern": "^launch-[0-9a-f]{32}$"},
+        "attempt_id": {"type": "string", "minLength": 1},
+        "stopped_at": {"$ref": "#/$defs/timestamp"},
+        "never_activated": {"const": true},
+        "preserved_error_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": false
+    },
     "execution_revision": {"type": "integer", "minimum": 0, "description": "Execution/audit cursor; independent of immutable graph-definition revision."},
     "scope_control": {"type": "object", "description": "Versioned scope aggregate, validated for immutable binding and ACK lineage on every store read and write."},
     "graph_revisions": {
@@ -209,7 +280,8 @@
     {
       "if": {
         "properties": {"status": {"enum": ["failed", "blocked"]}},
-        "required": ["status"]
+        "required": ["status"],
+        "not": {"required": ["preparation_cancellation"]}
       },
       "then": {
         "properties": {"coordinator_contexts": {"minItems": 1}}

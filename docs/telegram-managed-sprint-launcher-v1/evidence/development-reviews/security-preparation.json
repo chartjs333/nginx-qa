@@ -1,0 +1,143 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at": "2026-11-03T18:16:44.698239+00:00",
+  "stage": "instance-preparation",
+  "verdict": "APPROVE",
+  "baseline_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+  "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
+  "source_assignment_id": "assignment-62cb07d1ae10eac662a20949",
+  "review_assignment_id": "review-a2119bd3d26139bfdf3700e5",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\instance-preparation\\assignment-62cb07d1ae10eac662a20949",
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T18:12:19.708246+00:00",
+        "assignment_id": "review-a2119bd3d26139bfdf3700e5",
+        "created_at": "2026-11-03T18:12:19.708246+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
+        "result_key": "result-a5b10a99c41028fd7472b021b061ba0d033c65dbe09b9045fd00b304ede14a43",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-security-reviewer",
+        "reviewer_index": 2,
+        "reviewer_phone": "6682",
+        "source_assignment_id": "assignment-62cb07d1ae10eac662a20949",
+        "status": "active"
+      }
+    }
+  },
+  "effective_scope_or_ack_required": false,
+  "findings": [],
+  "source_review": [
+    "Inspected all ten changed files and actual surrounding ownership, import recovery, schema and runtime invariant code.",
+    "Launcher prepare requires the authenticated prepare permission and operation owner; shared control-store slot must exist and match the owner. Supplied owner identifiers cannot fall through to legacy activation.",
+    "Canonical operation digest, project, published intent, request identity, repository binding, manifest commit/hash and source commit are checked and recorded. Changed published ref fails before import registration.",
+    "Preparation parks the attempt and returns before runtime resource planning, activation or initial assignments. Manual is Waiting and auto is Prepared. Parked attempts are excluded from autonomous startup recovery; legacy start cannot consume their held reservation.",
+    "Cancellation requires stop permission and ownership and proves the runtime never activated, with no workflow or assignments and no actual process/port/branch ownership. It preserves history and files and releases only the stopped operation reservation.",
+    "Cancellation evidence is cross-bound to the failed owned import and exact stop timestamp. Runtime v1/v2 and invariant checks reject absent or forged proof; ordinary terminal failure evidence remains required.",
+    "Quota and TTL are server-side bounds frozen at reservation. Expired or failed preparation retains reservation and history and cannot activate. Exact preparation replay is supported; broader failed-import continuation remains fail-closed and deferred."
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_sprint_type_contract -q",
+      "count": 46,
+      "result": "PASS",
+      "seconds": 5.613
+    },
+    {
+      "suite": "tests.test_telegram_launcher_preparation.LauncherPreparationTests",
+      "selected_tests": [
+        "test_manual_preparation_has_real_workspaces_but_no_work_and_releases_short_lease",
+        "test_legacy_start_and_startup_cannot_activate_manual_import",
+        "test_unpublished_or_changed_request_cannot_use_reservation",
+        "test_auto_preparation_still_does_not_activate_without_explicit_launch_step",
+        "test_changed_published_ref_is_rejected_before_import_registration",
+        "test_cancelled_manual_run_preserves_history_then_next_run_gets_new_namespace",
+        "test_expired_preparation_retains_history_and_does_not_activate",
+        "test_quota_and_invalid_operator_limits_cannot_be_overridden_by_upload",
+        "test_prepare_without_reservation_cannot_fall_through_to_legacy_activation"
+      ],
+      "count": 9,
+      "result": "PASS",
+      "seconds": 100.366
+    },
+    {
+      "suite": "independent stdin unittest using disposable local Git fixture",
+      "test": "test_actual_cancellation_proof_validates_v1_v2_and_forgery_fails",
+      "count": 1,
+      "result": "PASS",
+      "seconds": 16.228,
+      "assertions": [
+        "Real prepared then stopped state passes both runtime v1 and v2 schemas and activation invariants.",
+        "Removing cancellation proof causes schema rejection and TERMINAL_FAILURE_EVIDENCE_MISSING.",
+        "Setting never_activated false causes schema rejection and PREPARATION_CANCELLATION_INVALID."
+      ]
+    }
+  ],
+  "independent_test_count": 56,
+  "author_evidence": {
+    "reported_count": 112,
+    "separate_from_independent_count": true,
+    "files": [
+      "C:/nqt35/client/stage4-summary.txt",
+      "C:/nqt35/client/stage4-launcher-tests.txt",
+      "C:/nqt35/client/stage4-core-tests.txt"
+    ]
+  },
+  "limitations": [
+    "No live Telegram Bot or model calls were made. Publication uses disposable local Git.",
+    "Authorized Start, executor acknowledgement, active stop and owner-bound failed-import retry continuation belong to launch-modes and are not approved as implemented by this stage.",
+    "New PREPARED records require upgraded schema-aware readers; older binaries are documented as unsupported once these records exist."
+  ],
+  "provenance": {
+    "baseline_is_ancestor": true,
+    "head_matches_result": true,
+    "diff_check": "PASS",
+    "worktree_clean_before_decision": true,
+    "changed_file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/instance-preparation.md": "733c3a1d269ebda2478f66c1a7600ee5668e2a11a9875886b1f084c92b09e42c",
+      "nginx_qa/managed_import.py": "3cb26e6460905c4650fb2aa80bdd5a6f550b6eb8899d45b6da9993dac2792f0d",
+      "nginx_qa/sprint_types.py": "dcf5372419346726ed94b09f7a89595e59266dfc8c1604f628c43893427b0c53",
+      "nginx_qa/telegram_launcher_intake.py": "195ae9bab58c401fee9062fcd5031f19795c1421170bed354404f00dfa3112e2",
+      "nginx_qa/telegram_launcher_store.py": "e7d1af85015b93efb441bc0e40e153ad91835595ebf2c68c520b1862ff7a5411",
+      "schemas/managed-project-control-v1.schema.json": "01300e675f8fdbda21ceb250f9b3fe331fae6a2b027937912a85c76521e2c282",
+      "schemas/managed-runtime-state-v1.schema.json": "eb79547ccfdb69f43337f81ea7160674679f6e9adea5f563d6885c6555ad0734",
+      "schemas/managed-runtime-state-v2.schema.json": "5237079010f6afa8dc77e0cdafc448944721e6de3ffdb6e5e66ac136988db665",
+      "tests/test_telegram_launcher_intake.py": "11e2fee5701788f40dc253267d48daccfd5b91f2dd9c58ef922c80b7a6aa792d",
+      "tests/test_telegram_launcher_preparation.py": "bdaee470cde1766198c2a6427b228502128711d849299008defa0d639ed70466"
+    },
+    "worktree_clean_after_decision": true
+  },
+  "decision_request": {
+    "assignment_id": "review-a2119bd3d26139bfdf3700e5",
+    "status": "APPROVE",
+    "feedback": "APPROVE for instance-preparation result 75549ce4e7390cad53b7980bab9696a88d304120 only. Independent read-only review found no blocking security/evidence issue in this stage. 56 independent checks passed: 46 sprint contracts, 9 focused preparation tests, and 1 actual cancellation proof/forgery probe covering runtime schemas v1 and v2. Verified owner-held reservation and immutable published manifest/source binding, legacy/startup activation denial, preparation receipts with no assignments or activation, stop-authorized never-activated cancellation, preserved history/new namespace, expiry and quota failure closure. Authorized Start, executor ACK/active stop, and owner-bound failed-import retry remain next-stage gates; failed retry currently retains its reservation and cannot activate. No live Bot/model/external service validation is claimed."
+  },
+  "decision_request_schema": "PASS",
+  "decision_submitted": true,
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-a2119bd3d26139bfdf3700e5",
+      "source_assignment_id": "assignment-62cb07d1ae10eac662a20949",
+      "result_key": "result-a5b10a99c41028fd7472b021b061ba0d033c65dbe09b9045fd00b304ede14a43",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "response_schema_errors": [],
+  "response_binding_valid": true
+}

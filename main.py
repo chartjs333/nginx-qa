@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from nginx_qa.control_secrets import protected_environment_name, sanitized_child_environment
 import asyncio
 import base64
 import binascii
@@ -15,6 +16,7 @@ import secrets
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 import time as time_module
 import urllib.error
@@ -1187,7 +1189,8 @@ def prompt_archive_source_metadata_screen_snapshot(
         name
         for name in source
         if type(name) is str
-        and _PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+        and (_PROMPT_ARCHIVE_ROLE_TOKEN_ENV_NAME.fullmatch(name) is not None
+             or protected_environment_name(name))
     )
     for reference_name in reference_names:
         if type(reference_name) is not str or not reference_name:
@@ -1413,16 +1416,43 @@ def _reconcile_managed_continuity_background(
     runtime: ManagedContinuityRuntime,
     stop_event: threading.Event,
     interval_seconds: float,
+    event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    while not stop_event.is_set():
-        try:
-            runtime.reconcile_all()
-        except Exception:
-            # HTTP readiness and legacy traffic must not depend on a transient
-            # Git/workspace failure in one managed sprint.  The recurring loop
-            # and every request/replay retry the durable reconciliation path.
-            pass
-        stop_event.wait(interval_seconds)
+    futures = {}
+    try:
+        while not stop_event.is_set():
+            try:
+                runtime.reconcile_all()
+            except Exception:
+                pass
+            if event_loop is not None and not stop_event.is_set():
+                from nginx_qa.telegram_launcher_intake import reconcile_operations
+                from nginx_qa.telegram_launcher_controls import reconcile_notifications
+                # Independent single-flight transports: slow executors cannot
+                # starve lifecycle notices, and neither delays engine ticks.
+                for name, operation in (("launcher", reconcile_operations), ("telegram", reconcile_notifications)):
+                    future = futures.get(name)
+                    if future is not None and future.done():
+                        try:
+                            future.result()
+                        except Exception:
+                            pass
+                        futures.pop(name, None)
+                    if name not in futures:
+                        try:
+                            futures[name] = asyncio.run_coroutine_threadsafe(
+                                operation(sys.modules[__name__], stop_event=stop_event), event_loop)
+                        except Exception:
+                            pass
+            stop_event.wait(interval_seconds)
+    finally:
+        # Never cancel thread-backed mutation/delivery and pretend it stopped.
+        # Lifespan retains resource holders until every transport really drains.
+        for future in futures.values():
+            try:
+                future.result()
+            except Exception:
+                pass
 
 
 @asynccontextmanager
@@ -1479,6 +1509,7 @@ async def app_lifespan(_: FastAPI):
                         managed_continuity_runtime,
                         managed_continuity_stop_event,
                         _MANAGED_CONTINUITY_RECONCILE_SECONDS,
+                        asyncio.get_running_loop(),
                     ),
                     name="managed-continuity-reconcile",
                     daemon=True,
@@ -3850,6 +3881,7 @@ def resolve_git_reference(git_address: str) -> dict[str, Any]:
             errors="replace",
             timeout=15,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {"git_error": str(exc)}
@@ -3989,6 +4021,7 @@ def git_patch_from_local_repo(
             errors="replace",
             timeout=30,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise HTTPException(
@@ -5629,6 +5662,12 @@ def legacy_sprint_import_dispatch(
 
     if not isinstance(payload, dict):
         return None
+    if isinstance(payload.get("kind"), str) and payload["kind"].startswith("telegram_managed_sprint_"):
+        raise HTTPException(status_code=400, detail={
+            "error": "LAUNCHER_TRANSPORT_REQUIRED",
+            "message": "Use the launcher Telegram text envelope, managed-sprint.json, or /sprint_import caption.",
+            "correlation_id": correlation_id or str(uuid4()),
+        })
     try:
         selection = resolve_sprint_type(payload)
     except SprintTypeUnsupported as exc:
@@ -9537,6 +9576,7 @@ def local_repo_remote_urls(repo_path: Path) -> list[str]:
             errors="replace",
             timeout=10,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return []
@@ -30821,6 +30861,7 @@ def legacy_scope_git_command(repo_path: Path, *arguments: str) -> bytes:
             capture_output=True,
             timeout=30,
             check=False,
+            env=sanitized_child_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise LegacyScopeControlError(
@@ -36567,7 +36608,7 @@ def managed_process_secret_resolver(reference: str) -> str:
     # Environment names are case-insensitive on Windows.  Reject the entire
     # control namespace before lookup, even when a child requests an innocuous
     # destination alias.  Role requests use the dedicated credential wrapper.
-    if locator.casefold().startswith("nginx_qa_scope_control_"):
+    if protected_environment_name(locator):
         raise LookupError("managed process secret reference is protected")
     value = os.environ.get(locator)
     if value is None:
@@ -36636,6 +36677,8 @@ def managed_git_credential_resolver(reference: str) -> dict[str, str]:
     provider, separator, locator = reference.partition(":")
     if separator != ":" or provider != "env" or not locator:
         raise LookupError("managed credential provider is not configured")
+    if protected_environment_name(locator):
+        raise LookupError("managed credential reference is protected")
     encoded = os.environ.get(locator)
     if not encoded:
         raise LookupError("managed credential reference is unavailable")
@@ -38203,6 +38246,11 @@ async def telegram_actor_import_for_mode(
     request: Request,
     assignment_mode: str,
 ) -> dict[str, Any]:
+    from nginx_qa.telegram_launcher import maybe_handle_prompt
+
+    launcher_response = await maybe_handle_prompt(request, sys.modules[__name__])
+    if launcher_response is not None:
+        return launcher_response
     try:
         return await _telegram_actor_import_for_mode(request, assignment_mode)
     except HTTPException as exc:

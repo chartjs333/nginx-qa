@@ -1,0 +1,117 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "reviewed_at": "2026-11-03T18:18:28.1803634Z",
+  "stage": "instance-preparation",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T19:12:19.708246+01:00",
+      "assignment_id": "review-00d6ae253aabfdde72d78493",
+      "created_at": "2026-11-03T19:12:19.708246+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
+      "result_key": "result-a5b10a99c41028fd7472b021b061ba0d033c65dbe09b9045fd00b304ede14a43",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-62cb07d1ae10eac662a20949",
+      "status": "active"
+    }
+  },
+  "baseline_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+  "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
+  "files_reviewed": [
+    "docs/telegram-managed-sprint-launcher-v1/instance-preparation.md",
+    "nginx_qa/managed_import.py",
+    "nginx_qa/sprint_types.py",
+    "nginx_qa/telegram_launcher_intake.py",
+    "nginx_qa/telegram_launcher_store.py",
+    "schemas/managed-project-control-v1.schema.json",
+    "schemas/managed-runtime-state-v1.schema.json",
+    "schemas/managed-runtime-state-v2.schema.json",
+    "tests/test_telegram_launcher_intake.py",
+    "tests/test_telegram_launcher_preparation.py"
+  ],
+  "findings": [],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_preparation tests.test_telegram_launcher_intake -q",
+      "total": 35,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 301.273
+    },
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_sprint_type_contract tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract [four listed TransactionalSprintImporterTests] -q",
+      "core_tests": [
+        "test_first_activation_and_success_replay_are_complete",
+        "test_crash_before_activate_resumes_same_complete_activation",
+        "test_valid_terminal_predecessor_with_exact_fence_can_be_replaced",
+        "test_retry_import_is_fenced_and_preserves_failed_history"
+      ],
+      "total": 73,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 71.376
+    },
+    {
+      "command": "git diff --check 866e36ce03b4f5329d90564a55de5c709067fc74 75549ce4e7390cad53b7980bab9696a88d304120",
+      "exit_code": 0
+    }
+  ],
+  "independent_probe": {
+    "probe": "new unrelated resource after park is freshly observed on activation",
+    "activated": true,
+    "fresh_snapshot_preserved": true,
+    "fresh_fence": true,
+    "same_sprint": true,
+    "fixture": "temporary local Git/runtime only; unrelated port is injected observer evidence, no service contacted or socket bound"
+  },
+  "assessment": [
+    "Existing importer and shared SQLite store are reused; no secondary scheduler/control database.",
+    "Park occurs after verified workspace creation, before runtime resource planning and activation. Atomic control/evidence update releases short fencing lease but keeps canonical project reservation.",
+    "PREPARED records have explicit schema and invariant constraints; ordinary old records require no backfill. New binary compatibility restriction is documented.",
+    "Startup retry enumeration skips parked attempts. Old start/recovery cannot activate a guessed parked launcher request. Exact interrupted prepare replays safely.",
+    "Activation reacquires a new fence and reconstructs plans against a current resource snapshot, while preserving workspace/source ownership.",
+    "Cancellation validates no-work state and resource indexes, terminalizes with a bound cancellation proof, frees only own reservation, and preserves history/workspaces.",
+    "Quota and TTL settings are operator controlled; expired waiting history remains retained.",
+    "New source/manifest binding protects against changed publication refs and source drift."
+  ],
+  "deferred_stage_obligations": [
+    "Owner-bound FAILED-import RETRY_IMPORT continuation must preserve launcher ownership and desired activation mode, with manual recovery returning to prepare-only.",
+    "Executor acknowledgement and authorized Start transport are launch-mode scope.",
+    "Active stop and complete lifecycle projection/release remain launch-mode obligations.",
+    "Real external integrations and complete launcher qualification are not approved by this stage result."
+  ],
+  "decision": "APPROVE",
+  "request": {
+    "assignment_id": "review-00d6ae253aabfdde72d78493",
+    "status": "APPROVE",
+    "feedback": "APPROVE bounded instance-preparation stage at 75549ce4e7390cad53b7980bab9696a88d304120. Actual importer prepares owned workspaces and atomically parks PREPARED with no workflow/assignments/outbox/process/port activation; short lease is released while project reservation remains held. Exact replay/crash replay, startup exclusion, owner-bound activation, new fencing, original source pin, dirty workspace rejection, quota/TTL, two-project isolation and no-work cancellation/history are covered. Independent preparation+intake run: 35 passed in 301.273s. Independent schema/prompt/core-importer run: 73 passed in 71.376s, including legacy replay/crash/terminal replacement/RETRY_IMPORT history. Additional disposable-fixture probe proved an unrelated resource appearing after parking is included in a fresh activation snapshot, with a new fence and same sprint. No blocking finding for this stage. The documented FAILED-import owner-bound RETRY_IMPORT continuation, executor acknowledgement/authorized Start and active stop are explicit launch-mode obligations; this approval does not qualify those unfinished paths or the final launcher release. Failure currently remains truthful and retains ownership/history rather than activating or silently spawning a replacement."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-00d6ae253aabfdde72d78493",
+      "source_assignment_id": "assignment-62cb07d1ae10eac662a20949",
+      "result_key": "result-a5b10a99c41028fd7472b021b061ba0d033c65dbe09b9045fd00b304ede14a43",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "clean_worktree": true,
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

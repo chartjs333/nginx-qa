@@ -1,0 +1,84 @@
+{
+  "reviewer": "6681 / tmsl-runtime-reviewer",
+  "verdict": "APPROVE",
+  "recorded_at": "2026-11-03T21:07:59.620694+00:00",
+  "result_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+  "rework_baseline": "59db1780ef5b66650e47b15afa142e50af2f5e42",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T21:05:33.282316+00:00",
+      "assignment_id": "review-b37121ae0d78e1456c9adf0f",
+      "created_at": "2026-11-03T21:05:33.282316+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+      "result_key": "result-a70d523fcaf3c9c0e3c4223447aef427f48e547d82c7b976ec22d64ebec84492",
+      "result_outcome": "PASS",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-e8d9332455bdda95ed05521c",
+      "status": "active"
+    }
+  },
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\qa-qualification\\assignment-e8d9332455bdda95ed05521c",
+  "blocking_findings": [],
+  "resolved_finding": "R1-QA-001 final matrix contract/provenance regression",
+  "checks": [
+    {
+      "name": "independent exact-final affected suites",
+      "result": "PASS",
+      "tests": 69,
+      "seconds": 11.64,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "evidence": "runtime-qualification-rework1-tests.json",
+      "log": "runtime-qualification-rework1-tests.txt"
+    },
+    {
+      "name": "negative matrix claim probes",
+      "result": "PASS",
+      "cases": 6,
+      "evidence": "runtime-qualification-rework1-negative-probes.json"
+    },
+    {
+      "name": "historical/incremental/final provenance",
+      "result": "PASS",
+      "tracked_final_inputs": 260,
+      "evidence": "runtime-qualification-rework1-provenance.json"
+    },
+    {
+      "name": "prior six integration/native fixture sources unchanged",
+      "result": "PASS",
+      "prior_report": "runtime-qualification.json"
+    },
+    {
+      "name": "clean exact head, delta diff check and no production behavior changes",
+      "result": "PASS"
+    }
+  ],
+  "feedback": "APPROVE exact d72fa097b6d5f0591fec1998c855eee7b38ac747 for automated QA rework. Independent final-commit run: 69 affected launcher contract/prompt/sprint-type tests PASS with zero errors/failures/skips and all260 tracked input hashes unchanged. Six in-memory negative matrix probes reject duplicate IDs/mappings, missing external proof, wrong evidence source, nonexistent passing tests and evidence path escape. Verified historical890 at5899a69 is retained, incremental69 atd4b600 has only documented packaging changes, and final8 receipt binds exactd72 with matching260 hashes. Prior6 integration/native-limit/alias checks are unchanged; no production behavior changed. The final-matrix regression is resolved and external cases02/14/15 remain BLOCKED/NOT_RUN. This approves automated QA only, not full product DONE.",
+  "external_acceptance": "02/14/15 remain BLOCKED/NOT_RUN; no full product DONE claim",
+  "submission_status": "SUBMITTED",
+  "decision_payload": {
+    "assignment_id": "review-b37121ae0d78e1456c9adf0f",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact d72fa097b6d5f0591fec1998c855eee7b38ac747 for automated QA rework. Independent final-commit run: 69 affected launcher contract/prompt/sprint-type tests PASS with zero errors/failures/skips and all260 tracked input hashes unchanged. Six in-memory negative matrix probes reject duplicate IDs/mappings, missing external proof, wrong evidence source, nonexistent passing tests and evidence path escape. Verified historical890 at5899a69 is retained, incremental69 atd4b600 has only documented packaging changes, and final8 receipt binds exactd72 with matching260 hashes. Prior6 integration/native-limit/alias checks are unchanged; no production behavior changed. The final-matrix regression is resolved and external cases02/14/15 remain BLOCKED/NOT_RUN. This approves automated QA only, not full product DONE."
+  },
+  "http_status": 200,
+  "api_receipt": {
+    "assignment_id": "review-b37121ae0d78e1456c9adf0f",
+    "source_assignment_id": "assignment-e8d9332455bdda95ed05521c",
+    "result_key": "result-a70d523fcaf3c9c0e3c4223447aef427f48e547d82c7b976ec22d64ebec84492",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}

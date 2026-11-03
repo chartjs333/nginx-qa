@@ -1408,6 +1408,10 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     if state.get("sprint_type") != SprintType.MANAGED_WORKSPACE_V1.value:
         return ()
 
+    if state.get("status") == "stopped" or "operator_cancellation" in state:
+        from .managed_cancellation import cancellation_issues
+        return cancellation_issues(state, managed_activation_invariant_issues)
+
     issues: list[str] = []
     schema_version = state.get("schema_version")
     legacy_runtime_v1 = type(schema_version) is int and schema_version == 1
@@ -5987,6 +5991,25 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         ):
             add("IMPORT_ATTEMPT_BINDING_INVALID")
 
+    valid_preparation_cancellation = False
+    if "preparation_cancellation" in state:
+        cancellation = state["preparation_cancellation"]
+        cancelled_attempt = (import_attempt_by_id.get(cancellation.get("attempt_id"))
+                             if isinstance(cancellation, Mapping) else None)
+        if (not isinstance(cancellation, Mapping) or cancellation.get("never_activated") is not True
+            or status != "failed" or workflow is not None
+            or not isinstance(cancelled_attempt, Mapping) or cancelled_attempt.get("status") != "failed"
+            or (not cancellation.get("preserved_error_sha256") and cancelled_attempt.get("updated_at") != cancellation.get("stopped_at"))
+            or active_id_set or outcomes or assignment_by_id or receipt_by_key or review_assignment_by_id
+            or review_by_assignment_id or rework_by_id or integration_by_id or integration_workspace_by_id
+            or branch_lease_by_id or workspace_by_id or port_lease_by_id or process_by_id
+            or journal_by_result or successful_activation_attempts
+            or any(event.get("event_type") != "COORDINATOR_ENQUEUE" for event in outbox_by_id.values())
+            or any(item.get("status") == "pending" for item in recovery_by_id.values())):
+            add("PREPARATION_CANCELLATION_INVALID")
+        else:
+            valid_preparation_cancellation = True
+
     if status == "preparing" and (
         isinstance(workflow, Mapping)
         or active_id_set
@@ -6142,7 +6165,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 and token_id not in stranded_rework_limit_token_ids
                 for token_id, token in token_by_id.items()
             )
-            or any(event.get("status") == "pending" for event in outbox_by_id.values())
+            or (not valid_preparation_cancellation and any(event.get("status") == "pending" for event in outbox_by_id.values()))
         ):
             add("TERMINAL_STATE_HAS_LIVE_WORK")
         if status == "completed":
@@ -6168,7 +6191,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 or not completed_occurrence_ids.issubset(emitted_by_occurrence)
             ):
                 add("COMPLETED_STATE_TERMINAL_PROOF_MISSING")
-        elif not terminal_evidence_context_ids:
+        elif not terminal_evidence_context_ids and not valid_preparation_cancellation:
             add("TERMINAL_FAILURE_EVIDENCE_MISSING")
 
     activated_state = isinstance(workflow, Mapping) or bool(assignment_by_id)
@@ -6257,7 +6280,7 @@ def managed_project_control_invariant_issues(
         pinned = record.get("pinned_identity")
         sprint_id = record.get("sprint_id")
         status = record.get("status")
-        if status in {"PREPARING", "ACTIVATING", "SUCCEEDED"} and token is None:
+        if status in {"PREPARING", "PREPARED", "ACTIVATING", "SUCCEEDED"} and token is None:
             issues.append("START_FENCING_TOKEN_INVALID")
         if isinstance(pinned, Mapping):
             try:
@@ -6276,6 +6299,7 @@ def managed_project_control_invariant_issues(
                 issues.append("START_PINNED_IDENTITY_MISMATCH")
         elif isinstance(status, str) and status in {
             "PREPARING",
+            "PREPARED",
             "ACTIVATING",
             "SUCCEEDED",
         }:
@@ -6283,6 +6307,7 @@ def managed_project_control_invariant_issues(
 
         if isinstance(status, str) and status in {
             "PREPARING",
+            "PREPARED",
             "ACTIVATING",
             "SUCCEEDED",
         } and not isinstance(
@@ -6290,6 +6315,22 @@ def managed_project_control_invariant_issues(
         ):
             issues.append("START_WORKSPACE_COMMIT_MISSING")
 
+        if status == "PREPARED":
+            raw_evidence = record.get("evidence")
+            evidence = raw_evidence if isinstance(raw_evidence, Mapping) else {}
+            launcher = evidence.get("launcher") or {}
+            receipt = evidence.get("prepared_receipt") or {}
+            if (not isinstance(launcher, Mapping) or not isinstance(receipt, Mapping)
+                or not isinstance(launcher.get("operation_id"), str)
+                or not re.fullmatch(r"launch-[0-9a-f]{32}", launcher.get("operation_id", ""))
+                or type(launcher.get("desired_activation")) is not bool
+                or receipt.get("sprint_id") != sprint_id
+                or receipt.get("attempt_id") != attempt_id
+                or receipt.get("instance_id") != launcher.get("operation_id")
+                or receipt.get("activated") is not False
+                or receipt.get("initial_assignment_ids") != []
+                or not isinstance(evidence.get("prepared_workspaces"), list)):
+                issues.append("START_PREPARED_EVIDENCE_INVALID")
         if status == "SUCCEEDED":
             response = record.get("response")
             if (
@@ -6331,6 +6372,7 @@ def managed_project_control_invariant_issues(
             or record.get("workspace_source_commit")
             != parent.get("workspace_source_commit")
             or record.get("sprint_id") != parent.get("sprint_id")
+            or record.get("evidence", {}).get("launcher") != parent.get("evidence", {}).get("launcher")
         ):
             issues.append("START_RECOVERY_LINEAGE_INVALID")
 
@@ -6342,7 +6384,7 @@ def managed_project_control_invariant_issues(
             lease.get("fencing_token") != counter
             or not isinstance(owner, Mapping)
             or owner.get("fencing_token") != counter
-            or owner.get("status") not in {"VALIDATING", "PREPARING", "ACTIVATING"}
+            or owner.get("status") not in {"VALIDATING", "PREPARING", "PREPARED", "ACTIVATING"}
         ):
             issues.append("ACTIVATION_LEASE_OWNER_MISMATCH")
 
@@ -6357,6 +6399,7 @@ def managed_project_control_invariant_issues(
             if not isinstance(record, Mapping) or record.get("status") not in {
                 "VALIDATING",
                 "PREPARING",
+                "PREPARED",
                 "ACTIVATING",
             }:
                 continue

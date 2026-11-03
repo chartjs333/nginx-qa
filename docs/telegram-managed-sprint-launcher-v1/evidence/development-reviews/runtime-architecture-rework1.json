@@ -1,0 +1,89 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "reviewed_at": "2026-11-03T17:13:53.7893477Z",
+  "stage": "architecture-contract",
+  "rework_cycle": 1,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T18:12:58.787008+01:00",
+      "assignment_id": "review-c512818765b84b2483c5111f",
+      "created_at": "2026-11-03T18:12:58.787008+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+      "result_key": "result-d31d3eff932bea877ba97b28e93fb68f4fd69f97e51ee48fc7f84dab907b3910",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-f75ba6feddd99beb56d8d1e8",
+      "status": "active"
+    }
+  },
+  "baseline_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+  "previous_result_commit": "ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
+  "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+  "original_review_evidence": "C:\\nqt35\\client\\reviews\\runtime-architecture.json",
+  "rework_diff": "tests/test_sprint_type_contract.py only: eight added lines register the new schema and add a valid envelope fixture.",
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "R1-001",
+      "status": "resolved",
+      "evidence": "Both explicit exact schema and fixture-set gates are unchanged and pass; registered schema is meta-validated and its nested managed reference resolves offline."
+    }
+  ],
+  "full_result_assessment": [
+    "Architecture, acceptance matrix, envelope schema and eight launcher tests are byte-unchanged from the prior independent review. The only new change is contract registry/fixture coverage.",
+    "Design reuses the managed engine and common transactional store; does not implement a competing scheduler.",
+    "Single-active invariant is designed for canonical projects across old/new paths and pending/prepared/running reservations.",
+    "Parked preparation/recovery requires explicit versioned state, fresh fencing and resource revalidation before activation; existing behavior was checked in source and six isolated importer tests in the original review.",
+    "Provenance, source-commit checksum semantics, installed schema references and separate reviewer roles match the existing source contracts.",
+    "Permission/threat/API design explicitly distinguishes grants, publication and execution and limits gateway exposure. All external acceptance scenarios remain NOT_RUN; runtime implementation is outside this stage."
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_contract tests.test_sprint_type_contract -q",
+      "total": 54,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 5.67,
+      "executed_on_result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba"
+    },
+    {
+      "command": "git diff --check 2482beb33ea55d8e5f8565cda9bd546df9c6bc32 e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+      "exit_code": 0
+    }
+  ],
+  "retained_prior_test_evidence": "Six targeted TransactionalSprintImporterTests passed in 63.603s at ab97f351b8833e2ed88ec994870d2bd9f94e3c45; no production source changed in rework, so they were not repeated.",
+  "decision": "APPROVE",
+  "request": {
+    "assignment_id": "review-c512818765b84b2483c5111f",
+    "status": "APPROVE",
+    "feedback": "APPROVE architecture-contract rework at e6efa11aef5b4fa29b957f45d768e2ce05b65fba. R1-001 is resolved: the launcher schema is registered in EXPECTED_SCHEMA_FILES and a valid nested managed envelope is added to fixture coverage; both exact-set gates, meta-schema validation and offline reference resolution remain intact. Independent execution of tests.test_telegram_launcher_contract plus tests.test_sprint_type_contract passed all 54 tests. The eight-line rework changes only the existing contract test; previously reviewed architecture/schema/matrix and engine source remain unchanged. The prior six isolated importer tests remain applicable. No blocking architecture/runtime-design finding within this stage. This approves the design and transport contract only; parked preparation, common project reservation, runtime adapters/auth and real external acceptance evidence are explicitly future-stage work."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-c512818765b84b2483c5111f",
+      "source_assignment_id": "assignment-f75ba6feddd99beb56d8d1e8",
+      "result_key": "result-d31d3eff932bea877ba97b28e93fb68f4fd69f97e51ee48fc7f84dab907b3910",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "clean_worktree": true,
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

@@ -1,0 +1,174 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "index": 2,
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at_utc": "2026-11-03T17:14:29.822058+00:00",
+  "scope": "architecture-contract rework 1 only; no implementation, branch or source edits",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\architecture-contract\\assignment-f75ba6feddd99beb56d8d1e8",
+  "baseline_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+  "previous_result_commit": "ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
+  "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+  "source_assignment_id": "assignment-f75ba6feddd99beb56d8d1e8",
+  "review_assignment_id": "review-b93d94a2e649cf402d4e6bbe",
+  "identity_http_status": 200,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T17:12:58.787008+00:00",
+      "assignment_id": "review-b93d94a2e649cf402d4e6bbe",
+      "created_at": "2026-11-03T17:12:58.787008+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+      "result_key": "result-d31d3eff932bea877ba97b28e93fb68f4fd69f97e51ee48fc7f84dab907b3910",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-f75ba6feddd99beb56d8d1e8",
+      "status": "active"
+    }
+  },
+  "scope_ack_required": false,
+  "previous_review": {
+    "path": "C:\\nqt35\\client\\reviews\\security-architecture.json",
+    "sha256": "591f81a5e79676680d9692f9f87f022ef772bf84fcfb379c260bc44bc5447b5e",
+    "decision": "REJECT"
+  },
+  "provenance": {
+    "head_matches_result": true,
+    "baseline_is_ancestor": true,
+    "previous_result_is_ancestor": true,
+    "clean_worktree": true,
+    "changed_files_from_baseline": [
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md",
+      "schemas/telegram-managed-sprint-launcher-v1.schema.json",
+      "tests/test_sprint_type_contract.py",
+      "tests/test_telegram_launcher_contract.py"
+    ],
+    "rework_changed_files": [
+      "tests/test_sprint_type_contract.py"
+    ],
+    "file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json": "6d6fccb6fa5ea821032cb9e103de9c4996cf67d15d79747cf67749cd8e819099",
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md": "55ae64ff235f26a757ddc804c1d59f9bdebe138649f19a20791f88d9447ce6f4",
+      "schemas/telegram-managed-sprint-launcher-v1.schema.json": "74911b0a432d8353083e34dd37426c9da36bc43fc35b7a3c3f2b146f82699356",
+      "tests/test_sprint_type_contract.py": "fe7a46997227ec4f0608d482d8913a0609db9518764d875e64c262d30db68e8a",
+      "tests/test_telegram_launcher_contract.py": "efdc476483d17b5d76ae01f0e1243f20c0ac788732ef823444f68e1e0c5f3b83"
+    },
+    "unchanged_contract_git_blobs": {
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json": {
+        "git_blob_id": "79b1766fc2d8322e72389e11236a8576bcdda251",
+        "git_blob_sha256": "6d6fccb6fa5ea821032cb9e103de9c4996cf67d15d79747cf67749cd8e819099",
+        "prior_worktree_sha256": "9d6a47e6208866d536a9ea53be93e9fd4bb6340c3c7161732dea7ecfc824cf77",
+        "prior_hash_matches_crlf_blob": true
+      },
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md": {
+        "git_blob_id": "641c6e4c70ea358bd4766d38456e08da8afc021c",
+        "git_blob_sha256": "55ae64ff235f26a757ddc804c1d59f9bdebe138649f19a20791f88d9447ce6f4",
+        "prior_worktree_sha256": "a4911ff245a4bcf05ac6856805d452a9c1710503e5cd4663cdb430a50979b109",
+        "prior_hash_matches_crlf_blob": true
+      },
+      "schemas/telegram-managed-sprint-launcher-v1.schema.json": {
+        "git_blob_id": "b25f0b8ac744506cb959ac1b853e41254dcbf8f8",
+        "git_blob_sha256": "74911b0a432d8353083e34dd37426c9da36bc43fc35b7a3c3f2b146f82699356",
+        "prior_worktree_sha256": "a58830e4ca9dec3d5636a4ce6e48d70d48e0bf1b1e4f2934437ec4fcc0eac9e3",
+        "prior_hash_matches_crlf_blob": true
+      },
+      "tests/test_telegram_launcher_contract.py": {
+        "git_blob_id": "735737892c9e815208d1ab3f1430db838689f121",
+        "git_blob_sha256": "efdc476483d17b5d76ae01f0e1243f20c0ac788732ef823444f68e1e0c5f3b83",
+        "prior_worktree_sha256": "36fa9106417c76c0e9743a8248ae182fb60aef70d65fd02e4f9f04992ca1b778",
+        "prior_hash_matches_crlf_blob": true
+      }
+    }
+  },
+  "decision": "APPROVE",
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "id": "SEC-ARCH-001",
+      "fix": "Explicit schema inventory entry and valid positive envelope fixture added; strict gates preserved.",
+      "independently_verified": true
+    }
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_contract tests.test_sprint_type_contract -q",
+      "exit_code": 0,
+      "tests_run": 54,
+      "result": "PASS",
+      "observed_output": "Ran 54 tests in 5.644s; OK"
+    },
+    {
+      "command": "git diff --check 2482beb33ea55d8e5f8565cda9bd546df9c6bc32 e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "source_checks": [
+    "main.py:30487 and 38095 confirm legacy optional allowlists/webhook secret and document parsing before sender check; design explicitly requires a new authenticated early dispatch.",
+    "nginx_qa/managed_import.py:690 confirms active-project unique index; design expands reservation to pending/prepared and all old/new starts in the same control store.",
+    "nginx_qa/managed_import.py:7948-8051 confirms prepare proceeds to activation today; contract truthfully specifies a new parked boundary before assignment/process activation.",
+    "main.py:36664 confirms managed start resolves canonical project and registered repository before importer.start.",
+    "nginx_qa/managed_import.py:210 and 261 confirm actual strict parser and installed schema/ref validation used by new tests.",
+    "main.py:37797 confirms review submission is the phone-specific whoami route, with server-owned result binding."
+  ],
+  "security_assessment": {
+    "default_deny_and_identity": "Explicit feature flag, nonempty authenticated user/chat/project grants; no trusted user_id from JSON or localhost promotion.",
+    "authorization": "Producer create/read/preview separated from start; manifest publication separate capability; no main writes, automatic merge, client registry/root override or alias bypass.",
+    "git": "Source blob hashes and immutable manifest/source provenance separated; ambiguous publish reconciliation and external capability blockers explicit.",
+    "miniapp": "Raw initData HMAC, freshness, constant-time signature comparison, duplicate rejection, one-use exchange, hash storage, user-instance-challenge binding, current ACL and replay rejection specified.",
+    "gateway": "Scoped secure sessions, CSRF/origin on mutation/WS, no GET consumption, server-owned loopback upstream and allowlisted routes, no legacy public fallthrough.",
+    "later_implementation_focus": "Prove initData replay prevention across new challenges/sessions, atomic exchange races and current ACL revocation with implementation tests; architecture text states these invariants but runtime is not delivered in this stage.",
+    "evidence": "All 16 acceptance scenarios remain NOT_RUN; real external model/mobile/tunnel/PR gates explicitly not claimed. No live credentials used or external instance contacted."
+  },
+  "primary_sources": [
+    {
+      "url": "https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app",
+      "supports": "Raw initData HMAC and auth_date verification; do not trust initDataUnsafe."
+    },
+    {
+      "url": "https://core.telegram.org/bots/api#inlinekeyboardbutton",
+      "supports": "Callback data 1-64 bytes; Mini App inline button private user-bot chat restriction and business-account limitation."
+    },
+    {
+      "url": "https://core.telegram.org/bots/api#setwebhook",
+      "supports": "X-Telegram-Bot-Api-Secret-Token webhook authentication mechanism."
+    }
+  ],
+  "limitations": [
+    "Approval covers architecture-contract stage only.",
+    "No runtime security/lifecycle/gateway acceptance proof claimed.",
+    "All 16 acceptance scenarios remain NOT_RUN.",
+    "Real external-AI output, actual authorized tunnel/mobile login and authorized PR are outstanding release gates."
+  ],
+  "submission": {
+    "endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6682/whoami",
+    "request": {
+      "assignment_id": "review-b93d94a2e649cf402d4e6bbe",
+      "status": "APPROVE",
+      "feedback": "APPROVE for architecture-contract stage. Independently verified reviewer 2 assignment and result e6efa11aef5b4fa29b957f45d768e2ce05b65fba. Rework resolves SEC-ARCH-001 by adding the installed launcher schema to EXPECTED_SCHEMA_FILES and a valid nested-manifest positive fixture, preserving exact-set/offline-ref/meta-validation gates. Independent python -X utf8 -B -m unittest tests.test_telegram_launcher_contract tests.test_sprint_type_contract -q: 54 tests PASS. All four previously reviewed contract files retain identical Git blobs; prior worktree CRLF versus new LF explains local byte hash differences. Security design preserves deny-by-default authenticated Telegram identity, separate producer/prepare/start/publication authority, canonical single-project reservation, immutable Git provenance, no main writes or alias bypass, one-use scoped Mini App exchange and replay/CSRF/SSRF boundaries. Approval covers architecture only: runtime controls and 16 acceptance cases remain NOT_RUN; real external-model, authorized tunnel/mobile and PR evidence remain later gates. No live credentials or other instances accessed; no source edits; clean worktree."
+    },
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-b93d94a2e649cf402d4e6bbe",
+      "source_assignment_id": "assignment-f75ba6feddd99beb56d8d1e8",
+      "result_key": "result-d31d3eff932bea877ba97b28e93fb68f4fd69f97e51ee48fc7f84dab907b3910",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    },
+    "response_schema_errors": []
+  },
+  "post_submission_worktree_clean": true
+}

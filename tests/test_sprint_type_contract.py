@@ -152,6 +152,7 @@ EXPECTED_SCHEMA_FILES = {
     "sprint-preflight-report-v1.schema.json",
     "start-sprint-from-git-response-v1.schema.json",
     "start-sprint-from-git-v1.schema.json",
+    "telegram-managed-sprint-launcher-v1.schema.json",
 }
 
 
@@ -3254,6 +3255,13 @@ class SprintSchemaContractTests(unittest.TestCase):
             "start-sprint-from-git-response-v1.schema.json": start_response_fixture(),
         }
         cases.update(prompt_archive_migration_schema_fixtures())
+        cases["telegram-managed-sprint-launcher-v1.schema.json"] = {
+            "kind": "telegram_managed_sprint_v1",
+            "schema_version": 1,
+            "project_id": "9000",
+            "autonomous_mode": False,
+            "manifest": managed_manifest_fixture(),
+        }
         cases["legacy-scope-amendment-v2.schema.json"] = {
             **copy.deepcopy(cases["legacy-scope-amendment-v1.schema.json"]),
             "schema_version": 2,

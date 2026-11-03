@@ -17,6 +17,12 @@ from nginx_qa.git_provider import (
 
 
 class GitCommandRunnerTests(unittest.TestCase):
+    def test_stdin_is_literal_utf8_lf_on_every_platform(self) -> None:
+        runner = GitCommandRunner(executable=sys.executable, timeout=5)
+        value = "tree\tПривет\nnext\n"
+        result = runner.run(("-c", "import sys; print(sys.stdin.buffer.read().hex())"), stdin_text=value)
+        self.assertEqual(value.encode("utf-8").hex(), result.stdout.strip())
+
     def test_output_is_captured_bounded_and_redacted(self) -> None:
         secret = "credential-value-that-must-not-survive"
         runner = GitCommandRunner(executable=sys.executable, timeout=5)

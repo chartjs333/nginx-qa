@@ -1,0 +1,332 @@
+{
+  "contract": "Telegram Managed Sprint Launcher v1",
+  "scope_amendment": "One active Managed Sprint per canonical project; no same-project parallel runs.",
+  "cases": [
+    {
+      "id": "TMSL-AT-01",
+      "owner": "prompt-export",
+      "positive": "Installed schema/version/digest changes are reflected in text and file prompts; permissions and repository/task context are verified.",
+      "negative": "No source/runtime mutation or secret disclosure; oversized/unauthorized prompt rejected.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_prompt.PromptDispatchTests.test_file_and_text_delivery_are_pure_authoring",
+        "tests.test_telegram_launcher_prompt.PromptDispatchTests.test_revoked_grant_or_changed_source_cannot_send_after_git_fetch",
+        "tests.test_telegram_launcher_prompt.PromptDispatchTests.test_unsafe_roots_fail_before_any_mirror_store_or_delivery",
+        "tests.test_telegram_launcher_prompt.PromptUnitTests.test_command_limits_bot_selection_and_secrets",
+        "tests.test_telegram_launcher_prompt.PromptUnitTests.test_installed_schema_changes_digest_and_context_remains_data",
+        "tests.test_telegram_launcher_prompt.PromptUnitTests.test_sender_must_match_private_project_grant"
+      ]
+    },
+    {
+      "id": "TMSL-AT-02",
+      "owner": "prompt-export",
+      "positive": "A JSON fixture based on the exported prompt passes envelope + actual managed validators.",
+      "negative": "External-model round trip remains NOT_RUN until a real model output and validation evidence are captured.",
+      "status": "PASS",
+      "external_evidence_required": true,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_manual_and_autonomous_use_actual_nested_managed_schema",
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_nested_reviewer_schema_and_semantic_graph_are_both_required",
+        "tests.test_telegram_launcher_prompt.PromptUnitTests.test_deterministic_envelope_example_validates_both_installed_schemas"
+      ],
+      "external_status": "PASS",
+      "external_note": "Actual Codex model authored first response from complete production-builder export; real production schema/graph/local Git provenance validation PASS. This is not Telegram delivery, remote publication, actual intake/activation or mobile login.",
+      "external_evidence": "evidence/ai-authoring/offline-validation.json"
+    },
+    {
+      "id": "TMSL-AT-03",
+      "owner": "telegram-intake",
+      "positive": "Text/document imports bind canonical project, actor, immutable Git manifest and source checksums.",
+      "negative": "Untrusted registry/root/transport overrides and ambiguous input rejected before workspace creation.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_no_transport_or_authority_fields_can_be_injected",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_document_authority_is_checked_before_download_and_after_await",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_document_success_and_actual_byte_bound",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_explicit_document_caption_binds_project_before_and_after_download",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_replay_cannot_publish_after_source_policy_is_revoked",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_text_upload_publishes_exact_manifest_replays_and_preserves_main"
+      ]
+    },
+    {
+      "id": "TMSL-AT-04",
+      "owner": "telegram-intake",
+      "positive": "Strict JSON, shape, roles, graph, Git and permission failures have actionable stable errors.",
+      "negative": "Zero instance/workspace/task/process effects on invalid/unauthorized input; no duplicate keys/nonfinite values.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_existing_strict_parser_rejects_ambiguous_json",
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_explicit_envelope_never_defaults_the_mode",
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_nested_reviewer_schema_and_semantic_graph_are_both_required",
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_version_project_and_kind_are_explicit",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_malformed_unauthorized_and_invalid_graph_create_nothing",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_marked_unsupported_updates_and_namespace_cannot_use_legacy",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_strict_limits_and_legacy_fallthrough",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_terminal_workspace_extension_types_do_not_raise_typeerror"
+      ]
+    },
+    {
+      "id": "TMSL-AT-05",
+      "owner": "instance-preparation",
+      "positive": "A new permitted run obtains distinct instance, branch/workspace and durable ownership.",
+      "negative": "Prepared/Waiting never enqueues task/review assignments or starts agent processes.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_auto_preparation_still_does_not_activate_without_explicit_launch_step",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_cancelled_manual_run_preserves_history_then_next_run_gets_new_namespace",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_concurrent_prepare_calls_share_one_instance",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_manual_preparation_has_real_workspaces_but_no_work_and_releases_short_lease"
+      ]
+    },
+    {
+      "id": "TMSL-AT-06",
+      "owner": "launch-modes",
+      "positive": "true activates using explicit current start/executor capabilities and the existing agent cycle.",
+      "negative": "Missing/revoked capability or executor yields a truthful blocked receipt, not fake Running.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_launch_modes.ExistingClientAdapterContractTests.test_loopback_http_uses_scoped_header_and_rejects_redirects",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_auto_uses_real_identity_result_and_two_review_apis_to_completion",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_auto_without_start_permission_prepares_but_does_not_activate",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_lost_executor_ack_retries_existing_activation_and_same_client_job",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_missing_executor_keeps_manual_waiting_without_activation",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_revocation_during_executor_ready_denies_before_activation"
+      ]
+    },
+    {
+      "id": "TMSL-AT-07",
+      "owner": "launch-modes",
+      "positive": "false prepares and waits, then authorized Telegram/UI Start activates; legacy no-flag behavior remains.",
+      "negative": "Manual waiting snapshots contain no issued assignments; duplicate Start cannot spawn twice.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_scanner_deny_default_login_reload_csrf_real_start_stop_logout",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_three_buttons_status_and_double_start_use_actual_engine_once",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_unselected_legacy_documents_channels_and_text_keep_dispatch",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_manual_waits_and_duplicate_concurrent_start_activates_once",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_restart_resumes_authorized_auto_but_never_starts_manual_waiting",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_legacy_start_and_startup_cannot_activate_manual_import"
+      ]
+    },
+    {
+      "id": "TMSL-AT-08",
+      "owner": "launch-modes",
+      "positive": "Three simultaneous different requests for the same canonical project: one accepted, two PROJECT_BUSY, including old/new API races.",
+      "negative": "Existing active/pending/prepared state is unchanged by losers; no alias projects or separate DBs bypass the slot.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_no_transport_or_authority_fields_can_be_injected",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_existing_import_and_new_reservation_exclude_each_other",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_old_inflight_import_prevents_reservation_even_after_lease_expiry",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_old_registration_racing_reservation_has_one_winner",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_real_active_engine_sprint_is_preserved",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_three_concurrent_reservations_have_one_winner",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_old_start_api_and_new_auto_import_share_one_project_guard",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_three_new_auto_uploads_have_one_winner"
+      ]
+    },
+    {
+      "id": "TMSL-AT-09",
+      "owner": "instance-preparation",
+      "positive": "Separate run worktrees/branches/results; file checksums resolve from source commit.",
+      "negative": "Traversal/reparse/dirty/diverged/lease conflict rejection; completed history retained.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_dirty_workspace_is_preserved_byte_for_byte",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_publication_intent_from_another_assignment_fails_closed",
+        "tests.test_managed_workspaces.ManagedRepositoryAndWorkspaceTests.test_resume_preserves_an_unrelated_branch_and_reports_divergence",
+        "tests.test_process_supervisor.ManagedProcessSupervisorTests.test_workspace_junction_drift_is_rejected_before_spawn",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_cancelled_manual_run_preserves_history_then_next_run_gets_new_namespace",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_changed_published_ref_is_rejected_before_import_registration",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_mutated_workspace_is_not_activated",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_source_branch_advancing_after_publication_keeps_original_source"
+      ]
+    },
+    {
+      "id": "TMSL-AT-10",
+      "owner": "instance-preparation",
+      "positive": "Two existing test projects and successive runs have independent queues/state/logs.",
+      "negative": "Failure/cancel in one cannot mutate or stop another; no live project data fixtures.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_process_supervisor.ManagedProcessSupervisorTests.test_four_simultaneous_children_are_fully_isolated",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_pending_telegram_sprints_are_isolated_by_project",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_sequential_projects_dequeue_their_own_tasks_concurrently",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_active_stop_preserves_history_and_retires_only_owned_resources",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_cancelled_manual_run_preserves_history_then_next_run_gets_new_namespace",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_two_projects_use_distinct_instances_and_failure_stays_scoped",
+        "tests.test_telegram_launcher_qualification.LauncherQualificationTests.test_two_active_projects_stop_one_preserves_other_queues_history_workspace_and_result"
+      ],
+      "scope_note": "Real aggregate/queue/workspace/result isolation in one store with fake external clients; native supervisor resource isolation is tested separately."
+    },
+    {
+      "id": "TMSL-AT-11",
+      "owner": "telegram-intake",
+      "positive": "Repeated update/message delivery and ambiguous ACK return the same persisted operation.",
+      "negative": "Changed payload with same key conflicts; another user cannot replay/read the saved result.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_conflicting_identity_and_foreign_user_do_not_replay",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_provision_restarts_reuse_commit_and_lost_ack_is_reconciled",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_text_upload_publishes_exact_manifest_replays_and_preserves_main",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_lost_executor_ack_retries_existing_activation_and_same_client_job"
+      ]
+    },
+    {
+      "id": "TMSL-AT-12",
+      "owner": "telegram-controls",
+      "positive": "Three exact buttons, proper callback ownership and safe length; concurrent Start is idempotent.",
+      "negative": "Stale/cross-user/cross-instance callback denied, delivery retries do not repeat activation.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_notification_delivery_failure_is_bounded_and_never_launches",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_outbox_atomic_dedup_leases_lost_ack_retry_and_retirement",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_owner_current_acl_private_chat_expiry_and_wrong_action",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_revoked_read_suppresses_notice_and_status_cannot_activate",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_stale_generation_and_callback_rate_limit_fail_closed",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_three_buttons_status_and_double_start_use_actual_engine_once"
+      ]
+    },
+    {
+      "id": "TMSL-AT-13",
+      "owner": "launch-modes",
+      "positive": "Crash injection at reserve/provision/prepare/activate/outbox boundaries preserves durable intent.",
+      "negative": "Manual parked attempts stay parked on restart; quotas/cancel free only proved owned resources.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_managed_continuity.ManagedContinuityTests.test_queue_insert_crash_is_resumed_by_exact_result_replay",
+        "tests.test_managed_import.TransactionalSprintImporterTests.test_crash_after_database_commit_recovers_branch_publication",
+        "tests.test_managed_import.TransactionalSprintImporterTests.test_crash_during_atomic_publication_leaves_no_visible_lease",
+        "tests.test_telegram_launcher_controls.LauncherControlsTests.test_outbox_atomic_dedup_leases_lost_ack_retry_and_retirement",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_provision_restarts_reuse_commit_and_lost_ack_is_reconciled",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_active_stop_waits_for_native_process_death_and_port_release",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_lost_executor_ack_retries_existing_activation_and_same_client_job",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_restart_resumes_authorized_auto_but_never_starts_manual_waiting",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_stop_pending_reviews_keeps_actual_result_and_no_invented_decisions",
+        "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests.test_stop_without_client_ack_keeps_fence_and_project_reservation",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_crash_before_and_after_park_replays_without_start",
+        "tests.test_telegram_launcher_preparation.LauncherPreparationTests.test_quota_and_invalid_operator_limits_cannot_be_overridden_by_upload"
+      ]
+    },
+    {
+      "id": "TMSL-AT-14",
+      "owner": "gateway-auth",
+      "positive": "Allowlisted gateway routes, fake tunnel outage/reconnect, independent engine execution.",
+      "negative": "Real authorized tunnel/mobile demonstration is separately gated; mocks never count as external evidence.",
+      "status": "BLOCKED",
+      "external_evidence_required": true,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_scanner_deny_default_login_reload_csrf_real_start_stop_logout",
+        "tests.test_launcher_host.LauncherHostLifecycle.test_cancellation_during_drain_waits_actual_worker_and_one_lifespan",
+        "tests.test_launcher_host.LauncherHostLifecycle.test_one_lifespan_and_real_work_drained_before_teardown",
+        "tests.test_launcher_host.LauncherHostLifecycle.test_partial_startup_closes_both_listeners_and_one_lifespan",
+        "tests.test_launcher_host.LauncherHostLifecycle.test_private_failure_is_reported_after_cleanup",
+        "tests.test_launcher_host.LauncherHostLifecycle.test_public_failure_does_not_stop_engine",
+        "tests.test_launcher_tunnel.OwnedOriginTests.test_no_foreign_upstream_or_receipt_path",
+        "tests.test_launcher_tunnel.OwnedOriginTests.test_origin_is_owned_fresh_and_reconnect_changes_binding",
+        "tests.test_launcher_tunnel.TunnelProtocolTests.test_failed_restart_preserves_acknowledged_and_attempted_webhook_origins",
+        "tests.test_launcher_tunnel.TunnelProtocolTests.test_unknown_or_reused_pid_is_never_signalled",
+        "tests.test_launcher_tunnel.TunnelProtocolTests.test_webhook_updates_only_its_previous_origin_never_drops_messages",
+        "tests.test_telegram_launcher_qualification.ActualDualListenerTests.test_real_uvicorn_two_loopback_sockets_one_lifespan_and_no_private_route_on_public"
+      ],
+      "external_status": "NOT_RUN",
+      "external_note": "Real external-model output, Cloudflare and Telegram mobile evidence are separate release checks; local fixtures do not satisfy them."
+    },
+    {
+      "id": "TMSL-AT-15",
+      "owner": "gateway-auth",
+      "positive": "Valid private Mini App identity leads to one-use exchange and scoped session.",
+      "negative": "Tamper/stale/replay/racing exchange/wrong user/instance/revoke/CSRF/SSRF/WS/SSE and URL/log secret leakage denied.",
+      "status": "BLOCKED",
+      "external_evidence_required": true,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_launcher_auth_races.AuthClockAndQuotaTests.test_failed_browser_attempts_consume_durable_per_user_quota",
+        "tests.test_launcher_auth_races.AuthClockAndQuotaTests.test_session_and_exchange_cannot_outlive_expiry_while_waiting_for_database",
+        "tests.test_launcher_auth_races.AuthClockAndQuotaTests.test_signed_identity_freshness_is_rechecked_after_database_wait",
+        "tests.test_launcher_auth_races.GatewayBoundaryAndDrainTests.test_websocket_routes_are_denied_without_legacy_or_identity_fallthrough",
+        "tests.test_launcher_control_secrets.LauncherSecretBoundaryTests.test_git_source_aliases_fail_before_lookup_and_destinations_are_protected",
+        "tests.test_launcher_control_secrets.LauncherSecretBoundaryTests.test_legacy_child_environment_really_omits_control_values",
+        "tests.test_launcher_control_secrets.LauncherSecretBoundaryTests.test_public_auth_never_falls_back_to_legacy_raw_bot_token",
+        "tests.test_launcher_control_secrets.LauncherSecretBoundaryTests.test_trusted_executor_uses_protected_reference_but_child_cannot",
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_acl_revocation_expiry_scope_and_replay_encoding",
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_exchange_expiry_origin_rotation_and_ttl_limit",
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_exchange_is_hash_only_single_use_and_browser_user_instance_bound",
+        "tests.test_launcher_gateway.LauncherGatewayTests.test_scanner_deny_default_login_reload_csrf_real_start_stop_logout",
+        "tests.test_launcher_gateway.TelegramHMACUnitTests.test_rejects_duplicate_tampered_expired_future_wrong_bot_or_unsupported_context",
+        "tests.test_launcher_gateway.TelegramHMACUnitTests.test_signature_field_is_authenticated_and_encoding_order_cannot_change_replay_key"
+      ],
+      "external_status": "NOT_RUN",
+      "external_note": "Real external-model output, Cloudflare and Telegram mobile evidence are separate release checks; local fixtures do not satisfy them."
+    },
+    {
+      "id": "TMSL-AT-16",
+      "owner": "qa-qualification",
+      "positive": "Legacy/core/inbound/PR16 regressions, two distinct exact-commit reviews, reject/rework/reapproval.",
+      "negative": "No self approval or fake reports; release cannot be DONE without required actual external evidence and authorized PR.",
+      "status": "PASS",
+      "external_evidence_required": false,
+      "automated_status": "PASS",
+      "automated_evidence": "evidence/qa-qualification.json",
+      "test_ids": [
+        "tests.test_inbound_proposal_api.InboundProposalApiTests.test_create_replay_and_read_are_durable_without_activation",
+        "tests.test_inbound_proposal_api.InboundProposalApiTests.test_legacy_pending_read_is_additive_and_registry_absence_isolated",
+        "tests.test_inbound_proposal_api.InboundProposalApiTests.test_managed_start_is_fenced_once_and_preserves_concurrent_comment",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_changed_result_and_review_replays_conflict",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_result_two_approvals_and_terminal_replay_are_idempotent",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_rework_preparation_failure_is_durably_routed",
+        "tests.test_managed_continuity.ManagedContinuityTests.test_route_rework_freezes_exact_rework_assignment_and_enqueue_ids",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_conditional_graph_requires_two_reviews_for_every_transition",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_pending_sprint_cannot_be_started_twice",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_sequential_telegram_url_stages_then_starts_first_graph_node",
+        "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_acceptance_matrix_preserves_16_cases_and_single_project_rule",
+        "tests.test_telegram_launcher_qualification.LauncherQualificationTests.test_launcher_reject_rework_and_two_new_reviews_complete_exact_new_result"
+      ]
+    }
+  ],
+  "automated_source_commit": "5899a69b44724a78b8829d64bfb5e51f37073744",
+  "automated_total_unique_tests": 890,
+  "automated_status": "PASS",
+  "release_gate": "EXTERNAL_ACCEPTANCE_PENDING"
+}

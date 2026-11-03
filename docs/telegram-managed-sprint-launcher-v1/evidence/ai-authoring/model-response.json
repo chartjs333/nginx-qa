@@ -1,0 +1,149 @@
+{
+  "kind": "telegram_managed_sprint_v1",
+  "schema_version": 1,
+  "project_id": "9000",
+  "autonomous_mode": false,
+  "manifest": {
+    "schema_version": 1,
+    "sprint_type": "managed_workspace_v1",
+    "git_address": "https://github.com/chartjs333/nginx-qa.git",
+    "git": {
+      "source_ref": "refs/heads/agent/tmsl-v1-qa-qualification",
+      "expected_source_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+      "assigned_branch": "agent/readme-project-slot-20261103-ai01",
+      "existing_branch_policy": "reject_if_exists"
+    },
+    "execution": {
+      "mode": "sequential",
+      "start_node": "docs-source-check",
+      "required_approvals": 2,
+      "max_rework_cycles": 2,
+      "reviewers": [
+        {
+          "id": "docs-independent-reviewer-1",
+          "name": "README behavior reviewer",
+          "phone": "7391",
+          "git_branch": "review/readme-project-slot-20261103-ai01-a",
+          "profile": "Review each server-bound result independently at its exact result commit. For the read-only source check, assess the README inventory and proposed section against the acceptance facts in the task. For the documentation edit, verify one active Managed Sprint per canonical project, reservation coverage, independent existing projects, and the distinction between parallel nodes and concurrent sprints. Check the PROJECT_BUSY recovery steps and manual versus authorized automatic activation. Inspect the actual README diff and check evidence; never approve from a branch name or an implementer's assertion alone. Request bounded rework with concrete feedback for factual errors. Submit only your own review through the existing review contract; do not impersonate another role or modify source."
+        },
+        {
+          "id": "docs-independent-reviewer-2",
+          "name": "README authority and evidence reviewer",
+          "phone": "7392",
+          "git_branch": "review/readme-project-slot-20261103-ai01-b",
+          "profile": "Independently review the exact server-bound result commit and evidence. Confirm the change is confined to README.md, fresh branch policy is preserved, and no instructions bypass project reservations, create aliases, delete history, steal leases, force Git, expose secrets, or treat autonomous_mode as permission. Check isolated automated documentation checks and explicit legacy compatibility statements. Missing external Telegram delivery, mobile login, tunnel, executor, or PR evidence must remain NOT_RUN or BLOCKED; a documentation result is not release acceptance. Reject unsupported success claims with actionable feedback. Submit only this reviewer's own decision using the existing review assignment; do not author code, act as Coordinator, or supply both approval slots."
+        }
+      ]
+    },
+    "nodes": [
+      {
+        "id": "docs-source-check",
+        "type": "task",
+        "agent": {
+          "id": "docs-source-auditor",
+          "name": "Documentation source checker",
+          "phone": "7311",
+          "profile": "Read-only documentation analyst. Use only the assignment's verified repository and current-assignment identity. Preserve the source commit and working tree. No application startup, live API calls, project registration, publication, or runtime mutation."
+        },
+        "tasks": [
+          {
+            "task_id": "README-SOURCE-CHECK-001",
+            "queue": "tester-all",
+            "message": "After a separately authorized Start, inspect README.md at the assignment's pinned source and identify the best existing heading for a short Managed Sprint operation section. Return a read-only inventory of what is already documented and the missing explanation, without creating report files. Check these acceptance facts: one active Managed Sprint per canonical project; a launcher operation reserves the same project while pending, provisioning, prepared, Waiting, or running; parallel task nodes stay inside that one sprint; different already registered canonical projects remain independent. PROJECT_BUSY means inspect the owning operation and its truthful status, resume or stop only with the appropriate current grant, and wait for the existing engine's terminal and owned-resource cleanup proof before the slot is reused. Never suggest project aliases, deleting history, editing control storage, or manually removing leases. Manual autonomous_mode=false parks verified preparation as Waiting before task activation and needs an explicit authorized Start; true merely requests automatic activation and still requires current policy, start authority, and an available existing executor. Missing authority or infrastructure is a blocker, not success. The explicit envelope requires a boolean; absent legacy fields retain legacy dispatch. Record README's actual initial checksum and current source commit using read-only Git or standard-library checks. Missing prose is the expected input to the next edit, not a reason to fabricate a pass. Return DONE only for this completed analysis; use STOP or NEED_DECISION for a real provenance or authority blocker. For the read-only result, report no branch and the unchanged pinned source commit."
+          }
+        ],
+        "workspace": {
+          "access": "read"
+        },
+        "transitions": {
+          "DONE": "docs-readme-update",
+          "STOP": "docs-authority",
+          "NEED_DECISION": "docs-authority"
+        }
+      },
+      {
+        "id": "docs-readme-update",
+        "type": "task",
+        "agent": {
+          "id": "docs-readme-author",
+          "name": "README documentation author",
+          "phone": "7312",
+          "profile": "Documentation-only implementer. Edit README.md in the verified assignment workspace on the assigned fresh topic branch. Preserve the existing engine, multi-agent roles, configuration, and application behavior. Complete the final documentation checks before submitting this assignment's result."
+        },
+        "tasks": [
+          {
+            "task_id": "README-EDIT-AND-CHECK-001",
+            "queue": "worker-all",
+            "message": "Use the accepted source-check findings to add one concise README section in the document's existing language and style. Explain: (1) one active Managed Sprint per canonical project, with the launcher reservation also covering pending/provisioning/prepared/manual Waiting operations; parallel nodes do not permit a second sprint or an alias, while different registered projects remain independent; (2) practical PROJECT_BUSY recovery: inspect the existing owner's status, use the same saved operation for an authorized retry/Start, or request an authorized stop, preserve results/logs/history, and wait for durable terminal plus owned process/lease cleanup proof before retrying a genuinely new launch; a stop request alone is not proof of Stopped; (3) autonomous_mode=false means prepared Waiting without execution until explicit Start with current authority; autonomous_mode=true is only a request and must pass current operator policy, start permission, and availability of the existing agent client. Treat PUBLICATION_REQUIRED, EXECUTOR_UNAVAILABLE, and missing grants as explicit recoverable blockers, not permission to bypass checks. State that the explicit launcher envelope requires a boolean and old legacy JSON with absent new fields keeps its original dispatch. Include a small manual-versus-automatic comparison and an ordered PROJECT_BUSY recovery checklist. Do not invent undocumented command syntax, URLs, administrator grants, source-update permission, or successful external demonstrations. Keep all changes in README.md; do not change engine code, schemas, tests, secrets, configuration, or introduce a model client or scheduler. Run isolated automated documentation checks in this same write assignment: git diff --check; assert the changed tracked path set is exactly README.md; use a temporary standard-library-only check to confirm the new section covers PROJECT_BUSY, autonomous_mode=false and true, canonical-project exclusivity, preservation of history, and authorized Start. Record each actual command, exit status, concise output, and the exact final result commit. These are documentation checks, not proof of runtime, Telegram, mobile, tunnel, or PR acceptance. Keep unavailable external evidence explicitly NOT_RUN/BLOCKED; completing this documentation work does not complete release acceptance. Commit only the README change on the assigned branch and submit the exact clean result through the existing engine; do not publish, merge, import another sprint, activate an application, or touch runtime state. Both independent reviewer gates must inspect that exact result. Perform the final check here, before this result goes directly to the terminal, because the manifest pins the original README checksum and a later successor cannot silently treat the edited checksum as equivalent. If a future assignment or rework is blocked by checksum/provenance drift, preserve evidence and route to the Coordinator for explicit existing recovery; never invent a replacement checksum or bypass preflight."
+          }
+        ],
+        "workspace": {
+          "access": "write",
+          "git": {
+            "assigned_branch": "agent/readme-project-slot-20261103-ai01",
+            "existing_branch_policy": "reject_if_exists"
+          }
+        },
+        "transitions": {
+          "DONE": "docs-completed",
+          "STOP": "docs-authority",
+          "NEED_DECISION": "docs-authority"
+        }
+      },
+      {
+        "id": "docs-authority",
+        "type": "task",
+        "agent": {
+          "id": "docs-coordinator",
+          "name": "Documentation authority coordinator",
+          "phone": "7313",
+          "profile": "Separate read-only Coordinator identity, never an implementer or reviewer. Preserve provenance, assignments, results, and logs. Use only the existing engine's context-bound recovery contract and current operator authority."
+        },
+        "tasks": [
+          {
+            "task_id": "README-AUTHORITY-001",
+            "queue": "consultant-all",
+            "message": "Inspect the server-owned STOP/NEED_DECISION or failure context for this documentation sprint. Describe the exact missing authority, source/ref/checksum mismatch, branch/role collision, project reservation, or infrastructure dependency and the smallest operator action needed. Do not create aliases, switch the canonical project, reuse another owner's role or branch, fabricate a result/review, delete history, release foreign resources, or grant authority from this JSON. If recovery requires changed source/checksum metadata, use only the existing explicit future-revision repair procedure with actual verified commit/hash evidence and appropriate authority; do not rewrite accepted history or silently change this manifest. Otherwise leave the work truthfully blocked through the existing context-bound BLOCK_EXTERNAL recovery with the context's actual reason code and operator action. Do not announce completion or free the project slot before the engine proves terminal settlement and cleanup. This graph's BLOCKED_EXTERNAL route represents a real documented external block, never a successful README edit. Review rejection is handled by the existing bounded rework mechanism; you cannot satisfy or bypass either reviewer gate."
+          }
+        ],
+        "workspace": {
+          "access": "read"
+        },
+        "activation_policy": "any_parent",
+        "transitions": {
+          "BLOCKED_EXTERNAL": "docs-blocked"
+        }
+      },
+      {
+        "id": "docs-completed",
+        "type": "terminal",
+        "status": "DONE",
+        "message": "README documentation and its isolated checks are complete at the accepted result commit after both independent reviews. This terminal does not assert Telegram delivery, mobile login, live execution, publication, or release acceptance."
+      },
+      {
+        "id": "docs-blocked",
+        "type": "terminal",
+        "status": "BLOCKED_EXTERNAL",
+        "message": "Documentation work requires the recorded operator action. Preserve results, history, and owned-resource evidence; release the project reservation only when the existing engine proves terminal settlement and cleanup."
+      }
+    ],
+    "coordinator": {
+      "node_id": "docs-authority",
+      "routes": {
+        "STOP": "docs-authority",
+        "NEED_DECISION": "docs-authority"
+      }
+    },
+    "files": [
+      {
+        "path": "README.md",
+        "sha256": "f4dc374993ad1f45493fd700ed946fdfe962f90c88b8ed89ccff84ada036b525"
+      }
+    ],
+    "workspace_policy": {
+      "reject_parent_repository": true,
+      "dirty_policy": "coordinator",
+      "diverged_branch_policy": "coordinator"
+    }
+  }
+}

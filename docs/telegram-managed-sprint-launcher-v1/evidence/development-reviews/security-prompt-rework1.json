@@ -1,0 +1,160 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "index": 2,
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at_utc": "2026-11-03T17:27:05.851740+00:00",
+  "scope": "prompt-export rework 1 only",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\prompt-export\\assignment-a22f96123f01754c8da1bbeb",
+  "baseline_commit": "c71336af45f7a2fc74f0738f35210f7856f01317",
+  "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
+  "source_assignment_id": "assignment-a22f96123f01754c8da1bbeb",
+  "review_assignment_id": "review-d42b83c2bba2b0098ee92ddc",
+  "identity_http_status": 200,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T17:24:41.441809+00:00",
+      "assignment_id": "review-d42b83c2bba2b0098ee92ddc",
+      "created_at": "2026-11-03T17:24:41.441809+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
+      "result_key": "result-dcb646f199c6590bb54befb5eb9ae2ccd99cd150547519134d39c030b5b749ed",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-a22f96123f01754c8da1bbeb",
+      "status": "active"
+    }
+  },
+  "scope_ack_required": false,
+  "decision": "APPROVE",
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "id": "SEC-PROMPT-001",
+      "fix": "Full existing mutation-root guard executes read-only before any mirror mutation.",
+      "independently_verified": true
+    }
+  ],
+  "prior_evidence": {
+    "path": "C:\\nqt35\\client\\reviews\\security-prompt.json",
+    "sha256": "1ce9953d7dcba726c2b137202a4647afdd12a77646d2ac81b8ebe7da04f5c9cc",
+    "prior_decision": "REJECT",
+    "prior_api_status": 409
+  },
+  "provenance": {
+    "head_matches_result": true,
+    "baseline_is_ancestor": true,
+    "worktree_clean": true,
+    "changed_files": [
+      "nginx_qa/managed_import.py",
+      "nginx_qa/telegram_launcher.py",
+      "tests/test_telegram_launcher_prompt.py"
+    ],
+    "file_sha256": {
+      "nginx_qa/managed_import.py": "6cb4dfbcc50766503c1ec724996a234d4efc381c0d16f85838f81e0a9e368b8f",
+      "nginx_qa/telegram_launcher.py": "fd46b255580a96215279aa7e612eb32105c2c97815a32a24ec44458c6f12c84a",
+      "tests/test_telegram_launcher_prompt.py": "94bba32488ea31afea1e3d3462597701523416b791d0d0b0323f7170ed1085a3"
+    }
+  },
+  "validation": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract tests.test_sprint_type_contract tests.test_configure_telegram plus four targeted tests.test_project_actor_import.ProjectActorImportTests methods -q",
+      "targeted_methods": [
+        "test_telegram_webhook_enforces_secret_and_chat_allowlist",
+        "test_telegram_dispatch_acks_unknown_and_managed_without_staging",
+        "test_explicit_legacy_telegram_pending_round_trip_and_activation",
+        "test_telegram_unknown_git_repository_does_not_mutate_agents"
+      ],
+      "tests_run": 81,
+      "exit_code": 0,
+      "result": "PASS",
+      "observed_output": "Ran 81 tests in 8.593s; OK"
+    },
+    {
+      "check": "Independent supplementary root probes using actual importer and temporary roots",
+      "result": "PASS",
+      "negative_cases": [
+        {
+          "case": "protected_child",
+          "error": "RUNTIME_ROOT_NOT_ISOLATED",
+          "zero_writes_fetch_delivery": true
+        },
+        {
+          "case": "protected_ancestor",
+          "error": "RUNTIME_ROOT_NOT_ISOLATED",
+          "zero_writes_fetch_delivery": true
+        },
+        {
+          "case": "git_repository_child",
+          "error": "RUNTIME_ROOT_NOT_ISOLATED",
+          "zero_writes_fetch_delivery": true
+        }
+      ],
+      "positive_case": {
+        "case": "valid_real_local_git",
+        "export_succeeded": true,
+        "mirror_created": true,
+        "store_runtime_workspace_absent": true
+      },
+      "test_adaptation": "Only local Git transport allowed; real importer/provider/root validation code, mocked Telegram delivery, fake secrets."
+    },
+    {
+      "command": "git diff --check c71336af45f7a2fc74f0738f35210f7856f01317 3e715c13193222a96a7ac8f39ac181974b13a4bb",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "source_checks": [
+    "nginx_qa/telegram_launcher.py:292-296 invokes factory then validate_mutation_roots before source_context.",
+    "nginx_qa/managed_import.py:5171 public wrapper delegates complete existing _assert_mutation_roots_safe without weakening it.",
+    "Importer constructor, ManagedImportStore constructor, BranchLeaseStore constructor and ManagedWorkspaceManager constructor inspected; store/lease initialization remains deferred.",
+    "Existing guard checks runtime/lease path relations, protected and service/Python roots, prompt/managed separation, canonical paths, reparse/alias and parent Git repository.",
+    "Existing authoring logic and permission/revocation/secret checks unchanged by rework."
+  ],
+  "other_assessment": {
+    "authorization": "Webhook secret constant-time check plus explicit private user/chat/project grant before Git and revocation checks before send.",
+    "provenance": "Registered remote and actual raw Git blob checksums; full installed contract digest.",
+    "output": "Bounded Unicode text/file export and task JSON quoting; no source blob bodies exported.",
+    "authority": "No importer.start/pending sprint/assignment/workspace/queue/model API invoked.",
+    "evidence": "Deterministic fixtures not falsely called external output; real Bot delivery and AI remain NOT_RUN."
+  },
+  "limitations": [
+    "Prompt-export approval only; no actual Telegram delivery or external AI request.",
+    "No later intake, preparation, activation or gateway security accepted by this review.",
+    "Existing nonblocking EOF whitespace outside rework delta remains noted in prior review."
+  ],
+  "execution_notes": [
+    "Initial supplemental fixture over-cleared USERPROFILE and failed closed before source access; corrected fixture retained nonsecret system/home environment and all probes passed.",
+    "No source edits, live root writes or live credential use."
+  ],
+  "submission": {
+    "endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6682/whoami",
+    "request": {
+      "assignment_id": "review-d42b83c2bba2b0098ee92ddc",
+      "status": "APPROVE",
+      "feedback": "APPROVE for prompt-export rework result 3e715c13193222a96a7ac8f39ac181974b13a4bb. Independently verified new reviewer 2 assignment and inspected complete rework. SEC-PROMPT-001 is resolved: adapter uses the existing engine read-only mutation-root guard before source_context/ensure_mirror, and inspected importer/store/branch-lease/workspace constructors do not initialize filesystem state. Independent combined test selection: 81 PASS. Additional temporary-fixture probes confirm protected-child, protected-ancestor and parent-Git-repository roots fail RUNTIME_ROOT_NOT_ISOLATED with zero writes/fetch/delivery. Valid real local Git export succeeds, creates only its mirror cache, and leaves runtime/store/workspace absent. Existing authorization, source-blob provenance, installed contracts and output bounds remain intact. No blocking findings remain. Approval is limited to prompt-export; actual Telegram delivery/external-AI round trip and later runtime/UI gates remain NOT_RUN. No source edits/live credentials; clean worktree."
+    },
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-d42b83c2bba2b0098ee92ddc",
+      "source_assignment_id": "assignment-a22f96123f01754c8da1bbeb",
+      "result_key": "result-dcb646f199c6590bb54befb5eb9ae2ccd99cd150547519134d39c030b5b749ed",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    },
+    "response_schema_errors": []
+  },
+  "post_submission_worktree_clean": true
+}

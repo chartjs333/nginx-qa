@@ -1,0 +1,106 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "reviewed_at": "2026-11-03T17:23:19.5797362Z",
+  "stage": "prompt-export",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T18:21:11.979652+01:00",
+      "assignment_id": "review-9bf5861ede1ea7628bf370ac",
+      "created_at": "2026-11-03T18:21:11.979652+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "c71336af45f7a2fc74f0738f35210f7856f01317",
+      "result_key": "result-0377ec47acdd3191b39b287a2e1c701ab0563506732e9cafb20c8e5be8bd7cd3",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-9a3bb10dbc6dc9841b5807db",
+      "status": "active"
+    }
+  },
+  "baseline_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+  "result_commit": "c71336af45f7a2fc74f0738f35210f7856f01317",
+  "files_reviewed": [
+    "main.py",
+    "nginx_qa/telegram_launcher.py",
+    "tests/test_telegram_launcher_prompt.py",
+    "docs/telegram-managed-sprint-launcher-v1/prompt-export.md",
+    "docs/telegram-managed-sprint-launcher-v1/architecture.md"
+  ],
+  "findings": [
+    {
+      "id": "R1-PROMPT-001",
+      "severity": "blocking",
+      "file": "nginx_qa/telegram_launcher.py",
+      "line": 287,
+      "title": "Prompt mirror writes bypass runtime root isolation",
+      "evidence": "Temporary local fixture accepted managed_root inside protected_roots and created repositories/; existing root validator rejected same path with WORKSPACE_ROOT_FORBIDDEN.",
+      "requested_change": "Run read-only root isolation validation before provider creation/fetch; cover protected, service, Python/venv, runtime/prompt overlap, repository and reparse cases; assert no Git/filesystem/delivery effects on rejection."
+    }
+  ],
+  "source_cross_checks": [
+    "nginx_qa/managed_import.py:477 normalizes configuration without enforcing invariants",
+    "nginx_qa/managed_import.py:5118 performs existing isolation checks for canonical importer",
+    "nginx_qa/git_provider.py:875 resolves managed_root but has no protected_roots argument",
+    "nginx_qa/git_provider.py:1594 ensure_mirror creates repositories and lock directories",
+    "nginx_qa/workspace_manager.py:198 implements read-only root validation"
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract tests.test_sprint_type_contract tests.test_sequential_prompt_ui -q",
+      "total": 82,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 14.465
+    },
+    {
+      "command": "git diff --check e6efa11aef5b4fa29b957f45d768e2ce05b65fba c71336af45f7a2fc74f0738f35210f7856f01317",
+      "exit_code": 1,
+      "finding": "nginx_qa/telegram_launcher.py:319 new blank line at EOF"
+    }
+  ],
+  "independent_probe": {
+    "probe": "protected-root write boundary",
+    "fixture": "Temporary local repository only; provider local transport enabled solely for this fixture; Telegram delivery mocked",
+    "launcher_returned_ok": true,
+    "mock_delivery_calls": 1,
+    "repositories_created_under_protected_root": true,
+    "existing_isolation_guard_result": "WORKSPACE_ROOT_FORBIDDEN"
+  },
+  "other_assessment": [
+    "Prompt includes installed schema/contract digest, pinned raw-blob checksum context and task encoded as data.",
+    "Uses existing engine/Git and Telegram helpers without a scheduler/model client or activation path.",
+    "Feature gate, private user/project grants, secret check and post-fetch grant recheck are present.",
+    "External model and actual Bot delivery remain NOT_RUN and are not counted as fixture evidence."
+  ],
+  "decision": "REJECT",
+  "request": {
+    "assignment_id": "review-9bf5861ede1ea7628bf370ac",
+    "status": "REJECT",
+    "feedback": "REJECT R1-PROMPT-001: nginx_qa/telegram_launcher.py:287-291 constructs ManagedGitProvider directly and source_context writes/refetches its mirror before any protected-root/isolation validation. main.load_managed_runtime_config only normalizes environment; the importer normally enforces isolation in _assert_mutation_roots_safe, but this new path bypasses it. Reproduced with a temporary local Git fixture (local transport enabled only for fixture; delivery mocked): managed_root nested under protected_roots was accepted, repositories/ was created there, prompt export returned ok and delivery ran. The existing ManagedWorkspaceManager.validate_isolated_root rejects the identical path with WORKSPACE_ROOT_FORBIDDEN. Validate the original configured managed root read-only before constructing the provider or any mkdir/fetch, preserving reparse/parent-repository checks and excluding protected, service, Python/venv, runtime and prompt roots; return a safe stable launcher error. Add negative tests for protected/service/repository/reparse roots asserting zero Git, filesystem and delivery side effects. Do not create a managed import/control attempt merely to validate. All 82 existing prompt/envelope/schema/sequential UI tests pass independently; they currently omit this boundary. Also git diff --check reports a low-impact extra blank line at telegram_launcher.py:319. Runtime intake/activation remain outside this stage."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-9bf5861ede1ea7628bf370ac",
+      "source_assignment_id": "assignment-9a3bb10dbc6dc9841b5807db",
+      "result_key": "result-0377ec47acdd3191b39b287a2e1c701ab0563506732e9cafb20c8e5be8bd7cd3",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    }
+  },
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

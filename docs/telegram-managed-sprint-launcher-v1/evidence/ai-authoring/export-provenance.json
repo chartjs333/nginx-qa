@@ -1,0 +1,26 @@
+{
+  "kind": "production_prompt_builder_offline_export",
+  "utc": "2026-11-03T21:10:39.667738+00:00",
+  "code_commit": "b92f9769956b386da3b14f948b4680b8fa46370a",
+  "project_id": "9000",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "source_root": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\qa-qualification\\assignment-e8d9332455bdda95ed05521c",
+  "source_context": {
+    "repository": "github.com/chartjs333/nginx-qa",
+    "source_ref": "refs/heads/agent/tmsl-v1-qa-qualification",
+    "source_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+    "files": [
+      {
+        "path": "README.md",
+        "sha256": "f4dc374993ad1f45493fd700ed946fdfe962f90c88b8ed89ccff84ada036b525"
+      }
+    ]
+  },
+  "contract_sha256": "2fe0e6467aab3feab04d347bcb4cddd86465d85454701e0c947d3293f0ab5289",
+  "prompt_sha256": "5378b94085aab9f124a960e2b472d8d68fa47014b30125a6d6175d2462f1d412",
+  "prompt_bytes": 129051,
+  "telegram_delivery": "NOT_RUN",
+  "operator_acl_checked": false,
+  "project_created": false,
+  "sprint_imported": false
+}

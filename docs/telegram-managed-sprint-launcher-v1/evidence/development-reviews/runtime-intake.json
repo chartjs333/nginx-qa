@@ -1,0 +1,128 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "reviewed_at": "2026-11-03T17:42:03.8907374Z",
+  "stage": "telegram-intake",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T18:38:31.912887+01:00",
+      "assignment_id": "review-0c1b6e5a917f2f579ded9189",
+      "created_at": "2026-11-03T18:38:31.912887+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "7586467472a25b97cf53c91dd4ea598cbebe3e45",
+      "result_key": "result-6518b0e8be5cdefbdef79c8419af817965bffcf535ebe3d7cb39dce60818bda6",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-9060836654dc58683fd64e69",
+      "status": "active"
+    }
+  },
+  "baseline_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
+  "result_commit": "7586467472a25b97cf53c91dd4ea598cbebe3e45",
+  "files_reviewed": [
+    "docs/telegram-managed-sprint-launcher-v1/intake.md",
+    "nginx_qa/git_provider.py",
+    "nginx_qa/managed_continuity.py",
+    "nginx_qa/managed_import.py",
+    "nginx_qa/telegram_launcher.py",
+    "nginx_qa/telegram_launcher_intake.py",
+    "nginx_qa/telegram_launcher_store.py",
+    "tests/test_git_provider.py",
+    "tests/test_telegram_launcher_intake.py"
+  ],
+  "findings": [
+    {
+      "id": "R1-INTAKE-001",
+      "severity": "blocking",
+      "title": "Launcher-only policy captures legacy document and channel-post routes",
+      "file": "nginx_qa/telegram_launcher.py",
+      "line": 276,
+      "related_file": "nginx_qa/telegram_launcher_intake.py:176",
+      "evidence": "Legacy channel_post returns UNSUPPORTED_UPDATE; legacy document from a user without launcher prepare returns ACCESS_DENIED before namespace dispatch. Prior stage returned None to legacy path.",
+      "requested_change": "Scope restrictions to explicit launcher intake while preserving legacy behavior. Keep authenticated authorization before launcher download. Add enabled legacy-route integration and unauthorized-launcher no-download regressions."
+    }
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_intake tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract tests.test_sprint_type_contract tests.test_sequential_prompt_ui tests.test_git_provider -q",
+      "total": 108,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 77.425
+    },
+    {
+      "command": "git diff --check 3e715c13193222a96a7ac8f39ac181974b13a4bb 7586467472a25b97cf53c91dd4ea598cbebe3e45",
+      "exit_code": 0
+    }
+  ],
+  "probes": [
+    {
+      "probe": "two concurrent identical full-intake requests",
+      "one_operation": true,
+      "same_operation_id": true,
+      "published": true,
+      "response_states": [
+        "PREPARATION_REQUIRED",
+        "PREPARATION_REQUIRED"
+      ],
+      "no_activation": true,
+      "fixtures": "disposable local Git remote, fake Telegram update, no external network"
+    },
+    {
+      "probe": "enabled legacy-format routing without launcher namespace",
+      "outcomes": [
+        {
+          "case": "legacy_channel_post",
+          "status": 400,
+          "error": "UNSUPPORTED_UPDATE"
+        },
+        {
+          "case": "legacy_document_prompt_only_user",
+          "status": 403,
+          "error": "ACCESS_DENIED"
+        }
+      ],
+      "expected_compatibility": "non-launcher documents/channel posts should retain original legacy dispatch; prior stage returned None before legacy handler",
+      "no_external_network": true
+    }
+  ],
+  "assessment": [
+    "New reservation and old managed register/retry share existing SQLite transaction and slot guard.",
+    "New active and inflight legacy managed imports block reservation; source is pinned before asynchronous publication.",
+    "Git publication uses server-named ref/path, deterministic commit intent, source parent and digest validation, immutable pin and create-only force-with-lease. Lost push ACK reconciles exact remote head.",
+    "Literal UTF-8/LF stdin correction is covered by an independent runner test.",
+    "Exact concurrent duplicated full intake converges to one operation and publication.",
+    "Stage reports Created/PREPARATION_REQUIRED without execution workspace, assignment, queue or process. Real Telegram/model/publication remains external evidence, not claimed here."
+  ],
+  "decision": "REJECT",
+  "request": {
+    "assignment_id": "review-0c1b6e5a917f2f579ded9189",
+    "status": "REJECT",
+    "feedback": "REJECT R1-INTAKE-001: launcher restrictions now intercept unrelated legacy Telegram formats before explicit namespace selection. telegram_launcher.py:276 unconditionally rejects every channel_post when enabled; telegram_launcher_intake.py:176-193 requires launcher prepare permission (and rejects captions) for every document before checking its kind. This breaks the approved architecture requirement that pre-existing JSON formats retain original dispatch and the no-flag legacy behavior. Reproduced locally: a non-launcher legacy channel_post returns 400 UNSUPPORTED_UPDATE; a legacy .json upload by a prompt-only but otherwise legacy-allowed user returns 403 ACCESS_DENIED before the legacy handler. Stage2 returned None for both. Restrict these rules to explicitly selected launcher intake, preserving old text/document/channel routes; use an unambiguous launcher document selector/route if needed to maintain authorization before download. Do not solve by weakening launcher authorization or allowing unauthenticated new-envelope downloads. Add enabled-mode integration tests for legacy text, document (including old caption semantics), and channel posts plus unauthorized launcher no-download tests, and align intake documentation. Independent combined suites passed 108 tests; full concurrent duplicate-intake probe produced one operation and one published intent without activation. Shared reservation, immutable publication, source pinning and PREPARATION_REQUIRED boundary otherwise match stage scope."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-0c1b6e5a917f2f579ded9189",
+      "source_assignment_id": "assignment-9060836654dc58683fd64e69",
+      "result_key": "result-6518b0e8be5cdefbdef79c8419af817965bffcf535ebe3d7cb39dce60818bda6",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    }
+  },
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

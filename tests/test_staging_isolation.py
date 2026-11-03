@@ -180,9 +180,63 @@ def assert_powershell_success(
 
 
 class StagingIsolationTests(unittest.TestCase):
+    def normalized_example(self, environment):
+        # The old template is a static example; a host may already have a
+        # junction at a protected path (D:/Prompt on this workstation). Assert
+        # its rejection first, then inspect the same config with canonical
+        # protected roots. Never relax the production non-alias guard.
+        if os.name == "nt":
+            protected = json.loads(environment["NGINX_QA_PROTECTED_ROOTS"])
+            canonical = [str(Path(value).resolve()) for value in protected]
+            if any(os.path.normcase(os.path.abspath(value)) != os.path.normcase(resolved)
+                   for value, resolved in zip(protected, canonical)):
+                with self.assertRaisesRegex(ValueError, "filesystem alias"):
+                    normalize_managed_runtime_config(environment)
+                environment = {**environment, "NGINX_QA_PROTECTED_ROOTS": json.dumps(canonical)}
+        return normalize_managed_runtime_config(environment)
+
+    @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
+    def test_telegram_launcher_profile_is_isolated_and_refuses_root_override(self) -> None:
+        completed = run_powershell(
+            r'''
+            $values = Get-ExpectedStagingEnvironment -Profile "telegram-managed-sprint-launcher-v1"
+            foreach ($entry in $values.GetEnumerator()) {
+                [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, "Process")
+            }
+            Assert-ExactStagingEnvironment -ExpectedValues $values
+            [Environment]::SetEnvironmentVariable("NGINX_QA_MANAGED_ROOT", "C:/nq31/managed", "Process")
+            $rejected = $false
+            try { Assert-ExactStagingEnvironment -ExpectedValues $values }
+            catch { $rejected = $true }
+            if (-not $rejected) { throw "A live-root override was accepted" }
+            $values | ConvertTo-Json -Compress
+            '''
+        )
+        assert_powershell_success(self, completed)
+        environment = json.loads(completed.stdout.strip().splitlines()[-1])
+        template = REPOSITORY_ROOT / "orchestration/sprints/telegram-managed-sprint-launcher-v1/staging-18035.env.example"
+        self.assertEqual(parse_environment_file(template), environment)
+        config = normalize_managed_runtime_config(environment)
+        self.assertEqual((), managed_runtime_config_invariant_issues(config))
+        self.assertEqual((18035, 18600, 18649), (
+            config["http_port"], config["child_port_start"], config["child_port_end"]
+        ))
+        self.assertTrue(config["disable_telegram"])
+        self.assertTrue(config["disable_tunnel"])
+        protected = config["protected_roots"]
+        self.assertIn("D:/nginx-qa-release", environment["NGINX_QA_PROTECTED_ROOTS"])
+        self.assertIn("C:/nq31", environment["NGINX_QA_PROTECTED_ROOTS"])
+        roots = [environment[name] for name in (
+            "NGINX_QA_SERVICE_ROOT", "NGINX_QA_STAGING_VENV_ROOT",
+            "NGINX_QA_RUNTIME_ROOT", "NGINX_QA_PROMPT_ROOT", "NGINX_QA_MANAGED_ROOT"
+        )]
+        for index, root in enumerate(roots):
+            for other in roots[index + 1:] + protected:
+                self.assertFalse(windows_paths_overlap(root, other), (root, other))
+
     def test_environment_example_normalizes_to_the_frozen_staging_config(self) -> None:
         environment = parse_environment_example()
-        config = normalize_managed_runtime_config(environment)
+        config = self.normalized_example(environment)
 
         self.assertEqual((), managed_runtime_config_invariant_issues(config))
         self.assertEqual("127.0.0.1", config["http_host"])
@@ -379,7 +433,7 @@ class StagingIsolationTests(unittest.TestCase):
 
     def test_mutable_roots_are_dedicated_state_base_children(self) -> None:
         environment = parse_environment_example()
-        config = normalize_managed_runtime_config(environment)
+        config = self.normalized_example(environment)
         state_base = Path(environment["NGINX_QA_STAGING_STATE_BASE"])
         mutable_roots = [
             Path(environment["NGINX_QA_STAGING_VENV_ROOT"]),

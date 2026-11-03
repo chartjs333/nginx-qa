@@ -1,0 +1,110 @@
+{
+  "reviewer": "6682",
+  "role": "independent security/evidence",
+  "timestamp": "2026-11-03T21:02:37.680807+00:00",
+  "result_commit": "59db1780ef5b66650e47b15afa142e50af2f5e42",
+  "baseline_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+  "tested_historical_commit": "5899a69b44724a78b8829d64bfb5e51f37073744",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T20:59:46.399918+00:00",
+      "assignment_id": "review-78efd250be864beaea813c41",
+      "created_at": "2026-11-03T20:59:46.399918+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "59db1780ef5b66650e47b15afa142e50af2f5e42",
+      "result_key": "result-22a714da6578581f35aac9910dcb24cb029b0de311914a1147b955c363e68fa5",
+      "result_outcome": "PASS",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-b77d0de626410a2c59dd3d57",
+      "status": "active"
+    }
+  },
+  "verdict": "REJECT",
+  "findings": [
+    {
+      "id": "SEC-QA-001",
+      "severity": "blocking",
+      "location": "tests/test_telegram_launcher_contract.py:101; docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+      "problem": "Final matrix packaging changes a consumed contract input and causes the current exact-result test to fail. Matrix is excluded from runner source inventory.",
+      "reproduction": "python -X utf8 -B -m unittest tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_acceptance_matrix_preserves_16_cases_and_single_project_rule -q",
+      "actual": "AssertionError: False is not true; all case statuses were required to be NOT_RUN",
+      "required_fix": "Lifecycle-aware assertions with concrete mapping and external gates, explicit final-matrix provenance, affected tests rerun against final content."
+    }
+  ],
+  "own_test_results": {
+    "pass": 2,
+    "fail": 1,
+    "seconds": 0.041,
+    "passed": [
+      "tests.test_staging_isolation.StagingIsolationTests.test_environment_example_normalizes_to_the_frozen_staging_config",
+      "tests.test_staging_isolation.StagingIsolationTests.test_mutable_roots_are_dedicated_state_base_children"
+    ],
+    "failed": [
+      "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_acceptance_matrix_preserves_16_cases_and_single_project_rule"
+    ]
+  },
+  "provenance_validation": {
+    "recorded_tests": 890,
+    "result_records": 890,
+    "unique_ids": 890,
+    "statuses": {
+      "PASS": 890
+    },
+    "loaded_unique_ids": 890,
+    "recorded_vs_discovered_exact_match": true,
+    "source_inventory_current_match": true,
+    "source_hashes_count": 242,
+    "source_commit_blob_mismatches": [],
+    "dependency_version_changes": {},
+    "post_run": {
+      "captured_utc": "2026-11-03T20:58:48.390307+00:00",
+      "head_after": "5899a69b44724a78b8829d64bfb5e51f37073744",
+      "full_status_after": "",
+      "captured_before_evidence_writes": true
+    },
+    "matrix_counts": {
+      "PASS": 13,
+      "BLOCKED": 3
+    },
+    "matrix_missing_test_ids": [],
+    "matrix_nonpass_ids": [],
+    "packaging_changed_files": [
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/gateway-runtime-review.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/gateway-security-receipt.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/gateway-security-review.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/qa-post-run-provenance.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/qa-qualification.json",
+      "docs/telegram-managed-sprint-launcher-v1/evidence/qualified-dependencies.txt",
+      "docs/telegram-managed-sprint-launcher-v1/qualification.md"
+    ],
+    "matrix_was_in_run_inventory": false
+  },
+  "external_acceptance": "Real Telegram/mobile, Cloudflare and external-model checks remain NOT_RUN; no full release DONE claimed.",
+  "decision_request": {
+    "assignment_id": "review-78efd250be864beaea813c41",
+    "status": "REJECT",
+    "feedback": "REJECT SEC-QA-001: exact result59db1780 fails tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_acceptance_matrix_preserves_16_cases_and_single_project_rule at tests/test_telegram_launcher_contract.py:101, which asserts every matrix status is NOT_RUN. Packaging changed acceptance-matrix.json to13PASS/3BLOCKED after the890-test run at5899a69; that historical run is internally consistent, but it does not qualify this changed test input. The source inventory omits the docs matrix, explaining why242 matching source hashes missed the regression. Fix the contract to validate legitimate matrix lifecycle states, actual evidence/test-ID mapping, and preservation of external BLOCKED/NOT_RUN gates; include the matrix as a provenance input or provide an explicit final-matrix hash/check receipt. Run the affected contract and evidence-consistency checks against the final matrix and report their exact tested source. Preserve historical890 evidence as historical; do not relabel it as a final-result rerun. Independent validation:2 changed alias tests PASS,1 matrix contract FAIL;890 unique loaded/recorded test IDs match,242 LF source hashes match tested Git blobs/current files, dependency versions match, all matrix IDs resolve to recordedPASS,13PASS/3externalBLOCKED remain truthful. No source edits or live external calls."
+  },
+  "api_receipt": {
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-78efd250be864beaea813c41",
+      "source_assignment_id": "assignment-b77d0de626410a2c59dd3d57",
+      "result_key": "result-22a714da6578581f35aac9910dcb24cb029b0de311914a1147b955c363e68fa5",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    },
+    "schema_errors": []
+  }
+}

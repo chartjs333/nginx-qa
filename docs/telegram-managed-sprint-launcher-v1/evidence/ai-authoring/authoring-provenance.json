@@ -1,0 +1,135 @@
+{
+  "kind": "external_model_authoring_from_production_prompt_export",
+  "actual_channel": "Codex research sub-agent conversation",
+  "task_name": "/root/text_to_sprint_research",
+  "utc": "2026-11-03T21:15:35.660614+00:00",
+  "attempt": 1,
+  "authoring": "The current conversation model read the complete installed-contract prompt and authored a new documentation-only managed sprint JSON. The response was written directly from model reasoning, not produced by deterministic substitution into a fixture. No application validator or repair was run by this author.",
+  "provider_model_version_or_message_ids": null,
+  "prompt": {
+    "path": "C:\\nqt35\\client\\ai-roundtrip\\exported-prompt.txt",
+    "bytes": 129051,
+    "sha256": "5378b94085aab9f124a960e2b472d8d68fa47014b30125a6d6175d2462f1d412",
+    "contract_sha256": "2fe0e6467aab3feab04d347bcb4cddd86465d85454701e0c947d3293f0ab5289",
+    "code_commit": "b92f9769956b386da3b14f948b4680b8fa46370a",
+    "source_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+    "delivery": "Local production builder offline export, then file reads in the Codex conversation. This is not Telegram /sprint_prompt delivery.",
+    "context_request_sha256": "85731e56dcdb6cee0e77952929595ce3d54254847ed0d5127bd988e3637e2f77",
+    "export_provenance_sha256": "89b29a511b663b62ee5a9d79832cd5787a3972303fbae41341a2567ac08c2e13"
+  },
+  "reading_coverage": {
+    "unit": "zero-based byte offsets; start inclusive, end exclusive",
+    "method": "Read exact byte slices and decode UTF-8 into nontruncated tool outputs received by the conversation model.",
+    "complete": true,
+    "bytes_covered": 129051,
+    "successful_nonoverlapping_ranges": [
+      {
+        "start_inclusive": 0,
+        "end_exclusive": 8000
+      },
+      {
+        "start_inclusive": 8000,
+        "end_exclusive": 16000
+      },
+      {
+        "start_inclusive": 16000,
+        "end_exclusive": 24000
+      },
+      {
+        "start_inclusive": 24000,
+        "end_exclusive": 32000
+      },
+      {
+        "start_inclusive": 32000,
+        "end_exclusive": 40000
+      },
+      {
+        "start_inclusive": 40000,
+        "end_exclusive": 48000
+      },
+      {
+        "start_inclusive": 48000,
+        "end_exclusive": 56000
+      },
+      {
+        "start_inclusive": 56000,
+        "end_exclusive": 64000
+      },
+      {
+        "start_inclusive": 64000,
+        "end_exclusive": 72000
+      },
+      {
+        "start_inclusive": 72000,
+        "end_exclusive": 80000
+      },
+      {
+        "start_inclusive": 80000,
+        "end_exclusive": 88000
+      },
+      {
+        "start_inclusive": 88000,
+        "end_exclusive": 96000
+      },
+      {
+        "start_inclusive": 96000,
+        "end_exclusive": 104000
+      },
+      {
+        "start_inclusive": 104000,
+        "end_exclusive": 112000
+      },
+      {
+        "start_inclusive": 112000,
+        "end_exclusive": 120000
+      },
+      {
+        "start_inclusive": 120000,
+        "end_exclusive": 128000
+      },
+      {
+        "start_inclusive": 128000,
+        "end_exclusive": 129051
+      }
+    ],
+    "additional_utf8_reread": [
+      {
+        "start_inclusive": 16000,
+        "end_exclusive": 24000,
+        "reason": "Explicit UTF-8 stdout restored the em dash in a title after the initial console encoding replaced that character."
+      }
+    ],
+    "discarded_truncated_attempts": [
+      {
+        "start_inclusive": 0,
+        "end_exclusive": 20000,
+        "counted_as_coverage": false,
+        "reason": "Tool output exceeded the model context; replaced by the complete smaller reads."
+      }
+    ]
+  },
+  "response": {
+    "first_response_path": "C:\\nqt35\\client\\ai-roundtrip\\model-response-001.json",
+    "selected_response_path": "C:\\nqt35\\client\\ai-roundtrip\\model-response.json",
+    "bytes": 12769,
+    "first_response_sha256": "b8b79180d1bc2e8efde62bad138d2d9b527ef7736d59922f8f16137b71faff68",
+    "selected_response_sha256": "b8b79180d1bc2e8efde62bad138d2d9b527ef7736d59922f8f16137b71faff68",
+    "byte_identical": true,
+    "first_attempt_preserved": true,
+    "application_validation": "NOT_RUN_BY_AUTHOR",
+    "silent_repair_performed": false
+  },
+  "scope": {
+    "actual_model_authoring": true,
+    "provider_api_call": false,
+    "network_call": false,
+    "telegram_delivery": "NOT_RUN",
+    "mobile_login": "NOT_RUN",
+    "application_import_or_activation": false,
+    "project_registration_or_alias": false,
+    "source_edit": false,
+    "role_result_or_reviewer_approval_submission": false,
+    "writes_confined_to": "C:\\nqt35\\client\\ai-roundtrip",
+    "release_acceptance_claimed": false
+  }
+}

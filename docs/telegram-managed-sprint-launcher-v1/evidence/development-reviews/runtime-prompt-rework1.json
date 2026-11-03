@@ -1,0 +1,96 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "stage": "prompt-export",
+  "rework_cycle": 1,
+  "reviewed_at": "2026-11-03T17:25:53.9764489Z",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T18:24:41.441809+01:00",
+      "assignment_id": "review-4b23d440e43b5a2e590ce52b",
+      "created_at": "2026-11-03T18:24:41.441809+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
+      "result_key": "result-dcb646f199c6590bb54befb5eb9ae2ccd99cd150547519134d39c030b5b749ed",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-a22f96123f01754c8da1bbeb",
+      "status": "active"
+    }
+  },
+  "baseline_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
+  "previous_result_commit": "c71336af45f7a2fc74f0738f35210f7856f01317",
+  "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
+  "previous_review_evidence": "C:\\nqt35\\client\\reviews\\runtime-prompt.json",
+  "previous_probe": "C:\\nqt35\\client\\reviews\\runtime-prompt-root-probe.json",
+  "files_reviewed": [
+    "nginx_qa/managed_import.py",
+    "nginx_qa/telegram_launcher.py",
+    "tests/test_telegram_launcher_prompt.py"
+  ],
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "R1-PROMPT-001",
+      "status": "resolved",
+      "evidence": "Read-only validate_mutation_roots wrapper invokes original engine guard before source_context. Four invalid root classes reject without filesystem/store/fetch/delivery effects; valid guard creates no files."
+    }
+  ],
+  "source_cross_checks": [
+    "TransactionalSprintImporter constructor does not initialize ManagedImportStore or BranchLeaseStore.",
+    "ManagedImportStore and BranchLeaseStore constructors only retain configuration/locks; schema initialization is separate.",
+    "Original _assert_mutation_roots_safe checks protected/service/Python/runtime/prompt roots and uses original configured root.",
+    "ManagedWorkspaceManager.validate_isolated_root preserves reparse/parent-repository checks.",
+    "No future intake, preparation or activation implementation changed."
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract tests.test_sprint_type_contract tests.test_sequential_prompt_ui -q",
+      "total": 84,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 15.464
+    },
+    {
+      "command": "git diff --check c71336af45f7a2fc74f0738f35210f7856f01317 3e715c13193222a96a7ac8f39ac181974b13a4bb",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check e6efa11aef5b4fa29b957f45d768e2ce05b65fba 3e715c13193222a96a7ac8f39ac181974b13a4bb",
+      "exit_code": 1,
+      "advisory": "Nonblocking pre-existing extra blank line at telegram_launcher.py:324"
+    }
+  ],
+  "decision": "APPROVE",
+  "request": {
+    "assignment_id": "review-4b23d440e43b5a2e590ce52b",
+    "status": "APPROVE",
+    "feedback": "APPROVE prompt-export rework at 3e715c13193222a96a7ac8f39ac181974b13a4bb. R1-PROMPT-001 is resolved: prompt export reuses the existing importer read-only root guard before source_context can mkdir/fetch; constructors leave store and branch schema uninitialized, and the original configured root is still checked for protected/service/Python/runtime/prompt overlap, reparse aliases and parent repositories. Unsafe roots map to safe RUNTIME_ROOT_NOT_ISOLATED. New tests prove protected/service/runtime/prompt rejection with no mirror call, database, tree changes or delivery, plus the valid guard leaves the tree empty. Independently ran prompt, envelope, schema and sequential prompt UI suites: 84 tests passed. No blocking finding within stage2. Existing authoring, source checksum and permission behavior remains as reviewed; external model/Bot demonstrations remain NOT_RUN. Nonblocking formatting advisory: full stage diff --check still flags the trailing blank line in telegram_launcher.py."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-4b23d440e43b5a2e590ce52b",
+      "source_assignment_id": "assignment-a22f96123f01754c8da1bbeb",
+      "result_key": "result-dcb646f199c6590bb54befb5eb9ae2ccd99cd150547519134d39c030b5b749ed",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "clean_worktree": true,
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

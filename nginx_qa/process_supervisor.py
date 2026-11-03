@@ -928,6 +928,7 @@ class _SupervisorRepository:
         *,
         owner: str,
         ttl_seconds: float,
+        for_stop: bool = False,
     ) -> _ProcessContext | None:
         now = _utc_now(self.clock)
         expires = (now + timedelta(seconds=max(ttl_seconds, 1.0))).isoformat()
@@ -960,6 +961,8 @@ class _SupervisorRepository:
                     sprint_row,
                     process_id=process_id,
                 )
+                if state.get("operator_stop_requested") and not for_stop:
+                    return None
                 context = self._context_from_state(
                     project_id,
                     sprint_id,
@@ -1302,6 +1305,8 @@ class _SupervisorRepository:
                         PROCESS_STATE_CONFLICT, "managed runtime disappeared"
                     )
                 state = json.loads(sprint_row["state_json"])
+                if state.get("operator_stop_requested"):
+                    return None
                 parent = self._find_record(
                     state,
                     "processes",
@@ -2294,6 +2299,7 @@ def _spawn_suspended_in_windows_job(
     environment: Mapping[str, str],
     stdout_stream: Any,
     stderr_stream: Any,
+    inherit_recovery_job_handle: bool = True,
 ) -> _WindowsChildProcess:
     """Create a suspended process already associated with ``job``.
 
@@ -2451,14 +2457,15 @@ def _spawn_suspended_in_windows_job(
                         duplicate(msvcrt.get_osfhandle(null_stream.fileno())),
                         duplicate(msvcrt.get_osfhandle(stdout_stream.fileno())),
                         duplicate(msvcrt.get_osfhandle(stderr_stream.fileno())),
+                    ]
+                    if inherit_recovery_job_handle:
                         # Keep the named Job reachable if the launcher dies.
                         # KILL_ON_JOB_CLOSE then also guarantees that a dead
                         # leader cannot strand descendants after the final
                         # inherited/recovery handle closes.  The child only
                         # receives SYNCHRONIZE and cannot mutate its own hard
                         # Job limits through this inherited capability.
-                        duplicate(int(job.handle), desired_access=0x00100000),
-                    ]
+                        inherited.append(duplicate(int(job.handle), desired_access=0x00100000))
                 handle_values = (wintypes.HANDLE * len(inherited))(*inherited)
                 job_values = (wintypes.HANDLE * 1)(job.handle)
                 attribute_size = ctypes.c_size_t()
@@ -4041,7 +4048,8 @@ class ManagedProcessSupervisor:
                     process_id=str(context.process["process_id"]),
                 )
             explicit_names.add(folded_key)
-            if folded_key.startswith("nginx_qa_managed_"):
+            from nginx_qa.control_secrets import protected_environment_name
+            if folded_key.startswith("nginx_qa_managed_") or protected_environment_name(key):
                 raise ManagedProcessSupervisorError(
                     PROCESS_STATE_CONFLICT,
                     "managed process environment contains a reserved key",
@@ -6509,6 +6517,7 @@ class ManagedProcessSupervisor:
                 sprint_id,
                 process_id,
                 owner=self.claim_owner,
+                for_stop=True,
                 ttl_seconds=max(
                     self.health_timeout_seconds
                     + (self.stop_timeout_seconds * 2)

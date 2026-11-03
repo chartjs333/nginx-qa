@@ -1,0 +1,12 @@
+{
+  "http_status": 200,
+  "response": {
+    "assignment_id": "review-78efd250be864beaea813c41",
+    "source_assignment_id": "assignment-b77d0de626410a2c59dd3d57",
+    "result_key": "result-22a714da6578581f35aac9910dcb24cb029b0de311914a1147b955c363e68fa5",
+    "decision": "REJECT",
+    "status": "REWORK_ENQUEUED",
+    "deduplicated": false
+  },
+  "schema_errors": []
+}

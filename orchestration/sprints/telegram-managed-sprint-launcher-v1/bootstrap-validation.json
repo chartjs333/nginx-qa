@@ -1,0 +1,28 @@
+{
+  "scope": "Isolated control-server bootstrap, not Telegram launcher implementation",
+  "baseline_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+  "manifest_sha256": "7712ee5ce24a2862345e039d10e80228168017a50ab9b80fd3b5e30b548824ec",
+  "profile": "telegram-managed-sprint-launcher-v1",
+  "new_profile_isolation_test": "PASS",
+  "managed_manifest_schema_and_graph": "PASS",
+  "diff_whitespace_check": "PASS",
+  "staging_isolation_and_legacy_inventory_suite": {
+    "tests_run": 25,
+    "passed": 23,
+    "errors": 2,
+    "baseline_reproduced": true,
+    "affected_tests": [
+      "test_environment_example_normalizes_to_the_frozen_staging_config",
+      "test_mutable_roots_are_dedicated_state_base_children"
+    ],
+    "error": "ValueError: managed path contains a filesystem alias",
+    "explanation": "Both errors also occur in the unchanged source checkout at the baseline commit. The new profile's normalization, root separation and live-root override rejection pass. No pre-existing paths or guards were changed to bypass these failures."
+  },
+  "commands": [
+    "python -X utf8 -B -m unittest tests.test_staging_isolation tests.test_staging_legacy_inventory -q",
+    "python -X utf8 -B -m unittest tests.test_staging_isolation.StagingIsolationTests.test_telegram_launcher_profile_is_isolated_and_refuses_root_override -q",
+    "git diff --check"
+  ],
+  "startup_gate": "Full run_staging Check/Setup/Start remains mandatory after branch publication.",
+  "sprint_started_at_this_checkpoint": false
+}

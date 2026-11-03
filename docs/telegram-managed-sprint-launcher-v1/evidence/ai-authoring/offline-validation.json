@@ -1,0 +1,16 @@
+{
+  "kind": "model_authored_json_static_validation",
+  "utc": "2026-11-03T21:15:56.359160+00:00",
+  "code_commit": "b92f9769956b386da3b14f948b4680b8fa46370a",
+  "contract_sha256": "2fe0e6467aab3feab04d347bcb4cddd86465d85454701e0c947d3293f0ab5289",
+  "prompt_sha256": "5378b94085aab9f124a960e2b472d8d68fa47014b30125a6d6175d2462f1d412",
+  "response_sha256": "b8b79180d1bc2e8efde62bad138d2d9b527ef7736d59922f8f16137b71faff68",
+  "response_bytes": 12769,
+  "strict_json_envelope_graph_and_local_source_provenance": "PASS",
+  "remote_source_freshness": "NOT_CHECKED",
+  "publication_capability": "NOT_CHECKED",
+  "telegram_delivery": "NOT_RUN",
+  "mobile_login": "NOT_RUN",
+  "sprint_imported": false,
+  "engine_started": false
+}

@@ -17,6 +17,7 @@ import signal
 import stat
 import subprocess
 import threading
+import tempfile
 import time
 from typing import Callable, Mapping, Sequence
 import urllib.parse
@@ -259,6 +260,9 @@ def _minimal_environment(overrides: Mapping[str, str] | None = None) -> dict[str
         }
     )
     if overrides:
+        from nginx_qa.control_secrets import protected_environment_name
+        if any(protected_environment_name(key) for key in overrides):
+            raise ValueError("control credentials cannot be exported to Git")
         environment.update(overrides)
     return environment
 
@@ -605,7 +609,9 @@ class GitCommandRunner:
         if stdin_text is not None:
             assert process.stdin is not None
             try:
-                process.stdin.write(stdin_text)
+                # Git plumbing protocols use literal UTF-8/LF, including on
+                # Windows. TextIOWrapper.write would insert CR into tree names.
+                process.stdin.buffer.write(stdin_text.encode("utf-8"))
             except (BrokenPipeError, OSError):
                 pass
             finally:
@@ -1045,9 +1051,11 @@ class ManagedGitProvider:
                 "credential resolver returned an invalid environment",
             )
         for key, value in environment.items():
+            from nginx_qa.control_secrets import protected_environment_name
             upper_key = key.upper()
             if (
                 upper_key in _RESERVED_GIT_ENVIRONMENT
+                or protected_environment_name(key)
                 or upper_key.startswith("GIT_CONFIG_")
                 or "\x00" in key
                 or "=" in key
@@ -1934,6 +1942,94 @@ class ManagedGitProvider:
             and self.remote_matches(spec, clean_fetch[0])
             and self.remote_matches(spec, clean_push[0])
         )
+
+    def create_launcher_manifest_commit(
+        self, repository: ManagedRepository, *, operation_id: str,
+        source_commit: str, manifest_blob: bytes, created_at: str,
+    ) -> dict[str, str]:
+        """Create an immutable manifest topic object; never modifies a checkout.
+
+        The caller persists this intent before separately publishing it. Stable
+        author/time/tree/parent make a crash before that persistence replayable.
+        """
+        if re.fullmatch(r"launch-[0-9a-f]{32}", operation_id) is None:
+            raise ValueError("invalid launcher operation")
+        if not isinstance(manifest_blob, bytes) or not 0 < len(manifest_blob) <= 1024 * 1024:
+            raise ValueError("invalid manifest size")
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+\+00:00", created_at) is None:
+            raise ValueError("invalid launcher timestamp")
+        self.assert_commit(repository, source_commit)
+        self._assert_internal_path(repository.mirror_path)
+        self._verify_bare_mirror(repository.spec, repository.mirror_path)
+        name = operation_id + ".json"
+        args = ("--git-dir", str(repository.mirror_path))
+        entries = self.runner.run_raw_stdout((*args, "ls-tree", source_commit),
+            max_stdout_bytes=60 * 1024).decode("utf-8")
+        if any(line.rsplit("\t", 1)[-1] == name for line in entries.splitlines()):
+            raise ManagedGitError("MANIFEST_PATH_CONFLICT", "generated manifest path already exists")
+        with tempfile.TemporaryDirectory(prefix="launcher-blob-", dir=repository.mirror_path.parent) as directory:
+            path = Path(directory) / "manifest.json"
+            self._assert_internal_path(path)
+            path.write_bytes(manifest_blob)
+            blob = self.runner.run((*args, "hash-object", "-w", "--no-filters", "--", str(path))).stdout.strip()
+        tree_input = "".join(line + "\n" for line in entries.splitlines())
+        tree_input += f"100644 blob {blob}\t{name}\n"
+        tree = self.runner.run((*args, "mktree"), stdin_text=tree_input).stdout.strip()
+        environment = {
+            "GIT_AUTHOR_NAME": "nginx-qa Telegram Launcher", "GIT_COMMITTER_NAME": "nginx-qa Telegram Launcher",
+            "GIT_AUTHOR_EMAIL": "launcher@nginx-qa.invalid", "GIT_COMMITTER_EMAIL": "launcher@nginx-qa.invalid",
+            "GIT_AUTHOR_DATE": created_at, "GIT_COMMITTER_DATE": created_at,
+        }
+        commit = self.runner.run((*args, "commit-tree", tree, "-p", source_commit),
+            stdin_text=f"Managed sprint manifest {operation_id}\n", environment=environment).stdout.strip()
+        self.assert_commit(repository, commit)
+        self.pin_commit(repository, commit, owner_id=f"launcher:{operation_id}")
+        return {"commit": commit, "ref": "refs/heads/launcher/manifests/" + operation_id,
+                "manifest_path": name, "manifest_sha256": hashlib.sha256(manifest_blob).hexdigest(),
+                "source_commit": source_commit, "repository": repository.canonical_remote}
+
+    def publish_launcher_manifest(self, repository: ManagedRepository, intent: Mapping[str, str]) -> None:
+        """Publish only a pinned generated topic, reconciling a lost push ACK."""
+        self._verify_bare_mirror(repository.spec, repository.mirror_path)
+        ref, commit, path = intent["ref"], intent["commit"], intent["manifest_path"]
+        if re.fullmatch(r"refs/heads/launcher/manifests/launch-[0-9a-f]{32}", ref) is None:
+            raise ValueError("invalid launcher ref")
+        operation_id = ref.rsplit("/", 1)[-1]
+        if path != operation_id + ".json" or intent["repository"] != repository.canonical_remote:
+            raise ManagedGitError("MANIFEST_INTENT_INVALID", "manifest identity changed")
+        raw = self.read_blob(repository, commit, path, max_bytes=1024 * 1024)
+        if hashlib.sha256(raw).hexdigest() != intent["manifest_sha256"]:
+            raise ManagedGitError("MANIFEST_INTENT_INVALID", "manifest digest changed")
+        args = ("--git-dir", str(repository.mirror_path))
+        parent = self.runner.run((*args, "rev-list", "--parents", "-n", "1", commit)).stdout.split()
+        if parent != [commit, intent["source_commit"]]:
+            raise ManagedGitError("MANIFEST_INTENT_INVALID", "manifest parent changed")
+        if self.pinned_commit(repository, owner_id=f"launcher:{operation_id}") != commit:
+            raise ManagedGitError("MANIFEST_INTENT_INVALID", "manifest pin changed")
+        environment = self._credential_environment(repository.spec)
+        def remote_head() -> str | None:
+            output = self.runner.run((*args, "ls-remote", "--refs", "origin", ref), environment=environment).stdout.split()
+            if not output:
+                return None
+            if len(output) != 2 or output[1] != ref:
+                raise ManagedGitError("MANIFEST_INTENT_INVALID", "unexpected remote ref")
+            return output[0]
+        current = remote_head()
+        if current == commit:
+            return
+        if current is not None:
+            raise ManagedGitError("MANIFEST_PUBLICATION_CONFLICT", "manifest topic is owned by another commit")
+        # An empty expected-old value means create-only. It can never overwrite
+        # a branch that appeared between ls-remote and push, even if fast-forward.
+        try:
+            self.runner.run((*args, "push", f"--force-with-lease={ref}:", "origin", f"{commit}:{ref}"),
+                            environment=environment, error_code="MANIFEST_PUBLICATION_FAILED")
+        except ManagedGitError:
+            if remote_head() == commit:
+                return
+            raise
+        if remote_head() != commit:
+            raise ManagedGitError("MANIFEST_PUBLICATION_FAILED", "remote manifest verification failed")
 
     def resolve_commit(self, repository: ManagedRepository, ref: str) -> str:
         if not git_ref_format_valid(ref):

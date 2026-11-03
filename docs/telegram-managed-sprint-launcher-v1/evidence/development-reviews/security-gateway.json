@@ -1,0 +1,98 @@
+{
+  "reviewer": "6682",
+  "role": "independent security/evidence",
+  "timestamp": "2026-11-03T19:55:45.410790+00:00",
+  "baseline_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+  "source_assignment_id": "assignment-20a476868122d1134f713ff9",
+  "review_assignment_id": "review-5f539955c5299a465ddccbbb",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T19:52:23.855193+00:00",
+      "assignment_id": "review-5f539955c5299a465ddccbbb",
+      "created_at": "2026-11-03T19:52:23.855193+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+      "result_key": "result-0a9dbb9a19693e5253047ff308f35049400f360884a3fda20b6ba12e3d7f52e7",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-20a476868122d1134f713ff9",
+      "status": "active"
+    }
+  },
+  "verdict": "APPROVE",
+  "blocking_findings": [],
+  "scope": "gateway-auth implementation stage; no source edits, live credentials, external delivery or native port fixtures",
+  "checks": [
+    {
+      "suite": "auth races, secret boundary, HMAC, host lifecycle/guards, owned origin, profile, webhook history/foreign-origin protection",
+      "tests": 33,
+      "status": "PASS",
+      "seconds": 4.932
+    },
+    {
+      "suite": "LauncherGatewayTests actual gateway/engine endpoint cases",
+      "tests": 4,
+      "status": "PASS",
+      "seconds": 76.935
+    },
+    {
+      "suite": "isolated real Edge local HTTPS iframe with restricted third-party cookies",
+      "checks": 14,
+      "status": "PASS",
+      "source_hash_match": true,
+      "evidence": "security-gateway-browser-early.json"
+    },
+    {
+      "suite": "git parent/HEAD/status/diff --check",
+      "status": "PASS"
+    }
+  ],
+  "reviewed_boundaries": [
+    "Telegram canonical HMAC and authenticated digest replay",
+    "challenge/browser/user/project/instance/generation/origin binding",
+    "single-use exchange and hash-only storage",
+    "current read/start/stop ACL and CSRF",
+    "public route allowlist and static-only cross-site exemptions",
+    "partitioned secure HttpOnly cookie lifecycle",
+    "control secrets excluded from child/Git delegation",
+    "clean source/interpreter/root/port ownership before main import",
+    "single engine lifespan and real-work shutdown drain",
+    "15-second owned origin lease and exact tunnel stop identity",
+    "webhook ownership history and no pending-update discard"
+  ],
+  "limitations": {
+    "actual_telegram_mobile_tablet": "NOT_RUN",
+    "actual_public_cloudflare": "NOT_RUN",
+    "actual_bot_webhook_registration": "NOT_RUN",
+    "external_model_generated_json": "NOT_RUN",
+    "approved_release_host_start": "NOT_RUN",
+    "baseline_failures": "Two D:/Prompt alias cases and one Windows venv-shim stderr expectation are disclosed; parent baseline reproduction reviewed, not independently rerun in this non-native review."
+  },
+  "decision_request": {
+    "assignment_id": "review-5f539955c5299a465ddccbbb",
+    "status": "APPROVE",
+    "feedback": "Independent security/evidence review APPROVE for gateway-auth exact 6b603a16fb84da35e9c8f06b40ced3b3be5e5f11. 37 tests independently PASS: 33 auth-race/secret/host/origin/webhook guards plus 4 actual gateway/engine endpoint cases. 14 real isolated Edge HTTPS fixture checks PASS; all four tested gateway/auth/frontend file hashes match this result. Canonical Telegram HMAC/replay, single-use browser/user/instance exchange, current ACL/CSRF, protected-secret delegation, deny-default public routes, owned host/origin and tunnel boundaries inspected. No blocking security finding. Approval covers this implementation stage, not release qualification: actual Telegram mobile/tablet, public Cloudflare, webhook registration, external model and approved release-host start remain NOT_RUN. Three disclosed baseline assertion/alias failures remain QA qualification work; not represented as passing."
+  },
+  "api_receipt": {
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-5f539955c5299a465ddccbbb",
+      "source_assignment_id": "assignment-20a476868122d1134f713ff9",
+      "result_key": "result-0a9dbb9a19693e5253047ff308f35049400f360884a3fda20b6ba12e3d7f52e7",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    },
+    "schema_errors": []
+  }
+}
