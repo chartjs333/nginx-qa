@@ -7,7 +7,8 @@ param(
         "umse-007",
         "premerge-inbound-hub-e2e-v1",
         "premerge-inbound-hub-e2e-v1-short",
-        "premerge-inbound-hub-e2e-v1-short-r2"
+        "premerge-inbound-hub-e2e-v1-short-r2",
+        "telegram-managed-sprint-launcher-v1"
     )]
     [string]$Profile = "umse-007",
 
@@ -657,10 +658,31 @@ function Get-ExpectedStagingEnvironment {
             "umse-007",
             "premerge-inbound-hub-e2e-v1",
             "premerge-inbound-hub-e2e-v1-short",
-            "premerge-inbound-hub-e2e-v1-short-r2"
+            "premerge-inbound-hub-e2e-v1-short-r2",
+            "telegram-managed-sprint-launcher-v1"
         )]
         [string]$Profile = "umse-007"
     )
+
+    if ($Profile -eq "telegram-managed-sprint-launcher-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18035"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-tmsl"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nginx-qa-umse","D:/nginx-qa-staging","D:/nq-e2e-18031","C:/Prompt","C:/nginx-qa-managed-state","C:/nginx-qa-staging-state","C:/nginx-qa-staging-secrets","C:/nq31","C:/nq32","C:/nq33","C:/nq34","C:/nq-e2e-18031","C:/nq-e2e-18031-secrets"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt35"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt35/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt35/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt35/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt35/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18600-18649"
+            NGINX_QA_INSTANCE_ID = "telegram-managed-sprint-launcher-v1-18035"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
 
     if ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
         return [ordered]@{
@@ -790,6 +812,10 @@ elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short") {
 elseif ($Profile -eq "premerge-inbound-hub-e2e-v1-short-r2") {
     $expectedServiceRoot = "D:\nq-e2e-18031"
     $expectedBranch = "agent/ie2e-05-play-boundary"
+}
+elseif ($Profile -eq "telegram-managed-sprint-launcher-v1") {
+    $expectedServiceRoot = "D:\nq-tmsl"
+    $expectedBranch = "codex/tmsl-v1-bootstrap"
 }
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()

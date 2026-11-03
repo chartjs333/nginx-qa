@@ -1,0 +1,317 @@
+{
+  "report_type": "managed_sprint_manifest_offline_validation",
+  "schema_version": 1,
+  "checked_at": "2026-11-03T15:10:55.882913+00:00",
+  "result": "PASS",
+  "manifest_path": "D:\\nginx-qa-release\\execution-performance-20261028\\orchestration\\sprints\\telegram-managed-sprint-launcher-v1\\sequential-sprint.json",
+  "manifest_sha256": "7712ee5ce24a2862345e039d10e80228168017a50ab9b80fd3b5e30b548824ec",
+  "manifest_bytes": 78282,
+  "validator_schema": "D:\\nginx-qa-release\\execution-performance-20261028\\schemas\\managed-workspace-sprint-v1.schema.json",
+  "validator_source_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+  "checks": [
+    {
+      "name": "strict_json_utf8",
+      "status": "PASS",
+      "details": "UTF-8 JSON; duplicate keys and non-finite numbers rejected."
+    },
+    {
+      "name": "current_managed_manifest_schema",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "name": "sprint_type_dispatch",
+      "status": "PASS",
+      "details": {
+        "type": "managed_workspace_v1",
+        "pipeline": "managed_workspace"
+      }
+    },
+    {
+      "name": "current_engine_graph_semantics",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "name": "git_baseline_and_pr16",
+      "status": "PASS",
+      "details": {
+        "refs": {
+          "HEAD": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+          "main": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+          "origin/main": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32"
+        },
+        "subject": "Merge pull request #16 from chartjs333/codex/execution-performance-cache",
+        "performance_ancestor_in_main": true
+      }
+    },
+    {
+      "name": "git_blob_sha256",
+      "status": "PASS",
+      "details": {
+        "files_checked": 36,
+        "source_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+        "mismatches": [],
+        "method": "SHA-256 over raw git show commit:path bytes; not CRLF working-tree bytes."
+      }
+    },
+    {
+      "name": "validator_matches_pinned_source",
+      "status": "PASS",
+      "details": []
+    },
+    {
+      "name": "roles_and_independent_reviewers",
+      "status": "PASS",
+      "details": {
+        "task_agents": 10,
+        "reviewers": 2,
+        "unique_identities": 12,
+        "phones": [
+          "6601",
+          "6602",
+          "6603",
+          "6604",
+          "6605",
+          "6606",
+          "6607",
+          "6608",
+          "6609",
+          "6600",
+          "6681",
+          "6682"
+        ],
+        "note": "Manifest identities only; live registry availability has not been checked."
+      }
+    },
+    {
+      "name": "git_branch_format_and_collisions",
+      "status": "PASS",
+      "details": {
+        "branches_checked": 13,
+        "invalid": [],
+        "existing_ref_collisions": [],
+        "prefix_collisions": [],
+        "note": "Read-only checks of this checkout and fetched remote refs, not runtime global lease reservation."
+      }
+    },
+    {
+      "name": "safe_paths_and_no_process_launch",
+      "status": "PASS",
+      "details": "No process launch declarations or environment secrets; safe relative pinned artifact paths, loopback policy."
+    },
+    {
+      "name": "explicit_graph_reachability_and_success_chain",
+      "status": "PASS",
+      "details": {
+        "reachable_nodes": 13,
+        "total_nodes": 13,
+        "success_chain": [
+          "architecture-contract",
+          "prompt-export",
+          "telegram-intake",
+          "instance-preparation",
+          "launch-modes",
+          "telegram-controls",
+          "gateway-auth",
+          "qa-qualification",
+          "release-documentation",
+          "completed"
+        ],
+        "terminal_statuses": [
+          "DONE",
+          "BLOCKED_EXTERNAL",
+          "FAILED"
+        ],
+        "bounded_review_rework_cycles": 5
+      }
+    },
+    {
+      "name": "amended_scope_and_acceptance_coverage",
+      "status": "PASS",
+      "details": {
+        "development_stages": 9,
+        "acceptance_scenarios": 16,
+        "same_project_parallel_sprints": false,
+        "autonomous_mode": "Planned launcher envelope field, not a claimed existing engine field.",
+        "acceptance_execution": "NOT_RUN; no product implementation or live tests performed."
+      }
+    },
+    {
+      "name": "negative_contract_probes",
+      "status": "PASS",
+      "details": [
+        {
+          "name": "missing_second_reviewer",
+          "rejected": true,
+          "layer": "schema",
+          "codes": []
+        },
+        {
+          "name": "reviewer_reuses_task_identity",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "REVIEWER_CONFIGURATION_INVALID"
+          ]
+        },
+        {
+          "name": "duplicate_agent_phone",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "DUPLICATE_AGENT_PHONE"
+          ]
+        },
+        {
+          "name": "unknown_transition_target",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "GRAPH_TRANSITION_TARGET_UNKNOWN"
+          ]
+        },
+        {
+          "name": "casefold_branch_collision",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "BRANCH_CASEFOLD_COLLISION"
+          ]
+        },
+        {
+          "name": "unsafe_artifact_path",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "PATH_SEGMENT_UNSAFE"
+          ]
+        },
+        {
+          "name": "missing_coordinator_stop_route",
+          "rejected": true,
+          "layer": "schema",
+          "codes": []
+        },
+        {
+          "name": "invalid_source_ref",
+          "rejected": true,
+          "layer": "semantic",
+          "codes": [
+            "SOURCE_REF_INVALID"
+          ]
+        },
+        {
+          "name": "duplicate_json_key",
+          "rejected": true,
+          "layer": "strict_json",
+          "codes": []
+        },
+        {
+          "name": "nonfinite_json",
+          "rejected": true,
+          "layer": "strict_json",
+          "codes": []
+        }
+      ]
+    },
+    {
+      "name": "preparation_only_git_changes",
+      "status": "PASS",
+      "details": {
+        "tracked_changes": [],
+        "unexpected_changes": [],
+        "branch": "codex/inbound-hub-integration",
+        "main_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32"
+      }
+    }
+  ],
+  "failed_checks": [],
+  "limitations": [
+    "Offline manifest validation only. Full ManagedImport runtime preflight was not called; it requires a real registry, isolated runtime config, live leases, executor and operator capability checks.",
+    "Manifest is local/uncommitted; future start-from-git requires a separately authorized immutable Git publication. No fake start request or manifest commit was generated.",
+    "Current source_ref main is pinned. If origin/main advances, re-audit and re-pin file hashes/ref before starting.",
+    "Telegram, Cloudflare, external AI, agent execution, real device login and implementation tests are NOT_RUN. The manifest plans these tests; it does not claim implementation exists.",
+    "Two Reviewer roles are configured and structurally independent; no Reviewer agents were launched and no approval reports were fabricated.",
+    "Private Telegram chat/Mini App is the chosen v1 Web UI login; bot/domain/tunnel/operator setup is needed later.",
+    "Future product release requires authorized external demo/PR evidence; missing prerequisites route to BLOCKED_EXTERNAL, not false DONE."
+  ],
+  "operations_not_performed": [
+    "start sprint",
+    "create pending on live server",
+    "launch agents",
+    "modify existing sprints",
+    "access Madoev EEG",
+    "push GitHub",
+    "start public tunnel"
+  ],
+  "latest_revalidation": {
+    "checked_at": "2026-11-03T15:16:45.500972+00:00",
+    "result": "PASS",
+    "manifest_sha256": "7712ee5ce24a2862345e039d10e80228168017a50ab9b80fd3b5e30b548824ec",
+    "previous_manifest_hash_matches": true,
+    "checks": [
+      {
+        "name": "strict_utf8_json",
+        "pass": true
+      },
+      {
+        "name": "actual_managed_schema",
+        "pass": true,
+        "errors": []
+      },
+      {
+        "name": "actual_engine_graph_validator",
+        "pass": true,
+        "issues": []
+      },
+      {
+        "name": "managed_dispatch",
+        "pass": true
+      },
+      {
+        "name": "source_ref_matches_pinned_commit",
+        "pass": true,
+        "source_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32"
+      },
+      {
+        "name": "pinned_git_blob_sha256",
+        "pass": true,
+        "files_checked": 36,
+        "mismatches": []
+      },
+      {
+        "name": "current_validators_match_baseline",
+        "pass": true,
+        "mismatches": []
+      },
+      {
+        "name": "branch_names_and_relative_paths",
+        "pass": true,
+        "invalid_branches": []
+      },
+      {
+        "name": "all_nodes_explicitly_reachable",
+        "pass": true,
+        "reachable_nodes": 13
+      },
+      {
+        "name": "two_distinct_reviewers",
+        "pass": true
+      },
+      {
+        "name": "no_process_launch_declarations",
+        "pass": true
+      },
+      {
+        "name": "single_active_project_amendment",
+        "pass": true
+      },
+      {
+        "name": "no_tracked_changes",
+        "pass": true
+      }
+    ],
+    "scope": "Local schema and pure engine graph validator plus Git consistency. No ManagedImport service constructor, runtime preflight, live API, agent execution or sprint activation invoked."
+  }
+}
