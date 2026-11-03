@@ -1,0 +1,85 @@
+{
+  "synthetic_only": true,
+  "live_access": false,
+  "source": {
+    "commit": "05cdbf052e66da49687d35e3bebecbcc7a4b333d",
+    "mode": "working-tree",
+    "runtime_file_sha256": {
+      "nginx_qa/execution_observability.py": "604548aaabc7f49a2a49a58a7eb193ed0d857b8e8e7f8044dc621b772eb7ffaa",
+      "nginx_qa/execution_read_cache.py": "2a78f3dfc2a245e273afebb49f08f304d272766b4aef00cbf727be84a1195af6",
+      "nginx_qa/scope_api.py": "242c5bf8d854de20d619b553bdd93a4f5b0cee464adf38644ea2b190417812da"
+    }
+  },
+  "workload": {
+    "revisions": 6,
+    "assignments": 3,
+    "payload_bytes": 1048576,
+    "repeats": 3
+  },
+  "synthetic_json_bytes": 22028225,
+  "history_cache_enabled": true,
+  "output_sha256": "cc755d4b2032b7d7840b27d20afc956876839dcc74c422ca6b1e70e772e74530",
+  "cold": {
+    "wall_seconds": 0.6273296999861486,
+    "cpu_seconds": 0.234375
+  },
+  "warm": [
+    {
+      "wall_seconds": 0.7730475999996997,
+      "cpu_seconds": 0.265625
+    },
+    {
+      "wall_seconds": 0.790453499997966,
+      "cpu_seconds": 0.234375
+    },
+    {
+      "wall_seconds": 0.6393744999950286,
+      "cpu_seconds": 0.234375
+    }
+  ],
+  "instrumented_recompute_counts": {
+    "warm_timeline_calls_including_current": 7,
+    "checkpoint_count": 6
+  },
+  "warm_wall_median_seconds": 0.7730475999996997,
+  "stages": {
+    "synthetic_json_parse": {
+      "wall_seconds": 0.3236501000064891,
+      "cpu_seconds": 0.0625
+    },
+    "snapshot_copy": {
+      "wall_seconds": 4.8699992476031184e-05,
+      "cpu_seconds": 0.0
+    },
+    "checkpoint_validation_hashes": {
+      "wall_seconds": 0.5612249999830965,
+      "cpu_seconds": 0.0625
+    },
+    "uncached_historical_timeline": {
+      "wall_seconds": 0.0010045000235550106,
+      "cpu_seconds": 0.0
+    },
+    "output_cursor_hash": {
+      "wall_seconds": 0.27312590001383796,
+      "cpu_seconds": 0.140625
+    },
+    "output_json": {
+      "wall_seconds": 0.21198330001789145,
+      "cpu_seconds": 0.03125
+    }
+  },
+  "warm_tracemalloc_peak_bytes": 12623371,
+  "off_thread_responsiveness": {
+    "heartbeat_max_gap_seconds": 0.15916459998697974,
+    "heartbeat_samples": 22
+  },
+  "cache": {
+    "entries": 0,
+    "retained_payload_bytes": 0,
+    "hits": 0,
+    "misses": 7,
+    "max_bytes": 8388608,
+    "max_entry_bytes": 2097152,
+    "max_entries": 8
+  }
+}

@@ -1,7 +1,8 @@
 /* The browser never calls whoami/work/ACK. Reads are idempotent snapshots. */
 (function (global) {
   "use strict";
-  const state = { catalog: [], view: null, csrf: null, authenticated: false, selectedCheckpoint: "", cursor: null, generation: 0, busy: false, validation: null, decision: null, notificationId: null, notificationEntry: null, notificationError: null, retryKeys: new Map() };
+  const AUTO_REFRESH_MS = 120000;
+  const state = { catalog: [], view: null, csrf: null, authenticated: false, selectedCheckpoint: "", cursor: null, generation: 0, busy: false, refreshPending: false, validation: null, decision: null, notificationId: null, notificationEntry: null, notificationError: null, retryKeys: new Map() };
   const unknown = value => value === null || value === undefined || value === "" ? "неизвестно / не сохранено" : typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
   const uniqueEvents = events => Array.from(new Map((events || []).map(event => [event.event_id, event])).values());
   const proposalText = proposal => JSON.stringify(proposal || {});
@@ -194,9 +195,11 @@
     el("sync").className = selected ? "historical" : "";
     el("sync").textContent = (selected ? "Исторический снимок" : "Синхронизировано") + " · revision " + unknown(view.execution.revision) + " · " + new Date().toLocaleTimeString();
   }
-  async function refresh() {
-    if (state.busy || !el("project").value || !el("sprint").value) return;
+  async function refresh(queueIfBusy = true) {
+    if (state.busy) { if (queueIfBusy) state.refreshPending = true; return; }
+    if (!el("project").value || !el("sprint").value) return;
     const generation = state.generation; state.busy = true;
+    el("refresh").disabled = true; el("refresh").textContent = "Обновление…";
     try {
       const previousAuth = state.authenticated, previousNotification = JSON.stringify(state.notificationEntry);
       await refreshSession();
@@ -210,7 +213,14 @@
       if (rerender) render(view);
       else el("sync").textContent = (state.selectedCheckpoint ? "Исторический снимок" : "Синхронизировано") + " · revision " + unknown(view.execution.revision) + " · " + new Date().toLocaleTimeString();
     } catch (err) { if (generation === state.generation) { el("sync").textContent = "Связь потеряна — повторное подключение автоматически"; error(err.message); } }
-    finally { state.busy = false; }
+    finally {
+      state.busy = false;
+      el("refresh").textContent = "Обновить";
+      el("refresh").disabled = !el("project").value || !el("sprint").value;
+      // A selection/action made during a read should not wait two minutes.
+      // Coalesce it once; automatic ticks never enqueue more work.
+      if (state.refreshPending) { state.refreshPending = false; void refresh(); }
+    }
   }
   function scopeRevision(view) { return view.scope_revision !== undefined ? view.scope_revision : Math.max(0, ...view.assignments.map(item => Number((item.scope || {}).effective_revision) || 0)); }
   function invalidateValidation(reason) { state.validation = null; el("confirm").disabled = true; if (reason) el("validation").textContent = reason; }
@@ -269,6 +279,7 @@
     } catch (_) { state.authenticated = false; state.csrf = null; el("auth").textContent = "Операторская сессия недоступна. Чтение остаётся доступным; решения запрещены."; }
   }
   async function start() {
+    el("refresh").addEventListener("click", () => refresh());
     el("project").addEventListener("change", () => { if (!state.notificationId) chooseProject(); });
     el("sprint").addEventListener("change", () => { state.generation++; state.cursor = null; state.selectedCheckpoint = ""; el("sync").textContent = "Загрузка выбранного спринта…"; invalidateValidation(); refresh(); });
     el("checkpoint").addEventListener("change", () => { state.generation++; state.selectedCheckpoint = el("checkpoint").value; state.cursor = null; el("sync").textContent = "Загрузка выбранного момента…"; invalidateValidation(); refresh(); });
@@ -285,7 +296,7 @@
       const notification = state.notificationEntry.notification;
       state.catalog = [{ project_id: String(notification.project_id), name: String(notification.project_id), sprints: [{ sprint_id: notification.sprint_id }] }];
       el("project").replaceChildren(new Option(notification.project_id, notification.project_id));
-      await chooseProject(notification.sprint_id); global.setInterval(refresh, 2500); return;
+      await chooseProject(notification.sprint_id); global.setInterval(() => refresh(false), AUTO_REFRESH_MS); return;
     }
     try { const catalog = await api("/api/v1/execution-catalog"); state.catalog = catalog.projects || []; }
     catch (err) {
@@ -294,7 +305,7 @@
     }
     el("project").replaceChildren(...state.catalog.map(item => new Option(item.name || item.project_id, item.project_id)));
     if (query.get("project_id") && state.catalog.some(item => String(item.project_id) === query.get("project_id"))) el("project").value = query.get("project_id");
-    await chooseProject(query.get("sprint_id")); global.setInterval(refresh, 2500);
+    await chooseProject(query.get("sprint_id")); global.setInterval(() => refresh(false), AUTO_REFRESH_MS);
   }
   // Pure helpers are exported for isolated browser-contract tests (no DOM/API).
   if (typeof module !== "undefined" && module.exports) module.exports = { uniqueEvents, proposalText, lines, editable, decisionChoices, emailDecisionChoices, notificationPath, notificationDate, safeEvidenceUrl, unknown };

@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-28",
+  "timezone": "Europe/Berlin",
+  "task": "Safe execution read performance: validated historical projection reuse and bounded off-loop computation",
+  "workspace": "D:\\nginx-qa-release\\execution-performance-20261028",
+  "branch": "codex/execution-performance-cache",
+  "base_commit": "80369d14d5bccb18dbc4980c6871de399982adab",
+  "runtime_candidate_commit": "05cdbf052e66da49687d35e3bebecbcc7a4b333d",
+  "runtime_candidate_tree": "17dbd839c1e63c534e708d5aff9a7eadc52c95eb",
+  "benchmark_harness_commit": "76f7ec4b2f1e9fd27d8ca3a1e78568b901b4bc85",
+  "harness_delta_from_runtime_commit": "Only tools/benchmark_execution_projection.py; runtime code unchanged. ASGI measurements used this harness content immediately before its commit.",
+  "acceptance": {
+    "method": "baseline plus change-targeted and adjacent integration checks",
+    "full_943_or_956_test_repeat": false,
+    "eight_hour_benchmark": false,
+    "production_qualification": false,
+    "recommendation": "Ready for isolated code review. Live deployment is NOT AUTHORIZED, and complete registry-read latency/memory remediation is NOT claimed."
+  },
+  "changes": [
+    "All checkpoint contents are still hashed and compared with their recorded digest before any cache lookup, including later checkpoints during historical selection.",
+    "Cache only the aggregate deduplicated historical timeline, keyed by validated content hashes, ordered checkpoint metadata, project/sprint and projector version. Current state, scope/ACK, requests, queues, available history and notifications are rebuilt.",
+    "One cache per registered app. Detached values preserve Python types. Retained payload cap 8 MiB, per-entry cap 2 MiB, maximum 8 entries, LRU eviction; oversized results are not retained. No source snapshot or HTTP response cache.",
+    "Checkpoint validation uses canonical streamed hashing with equivalent bytes, avoiding a whole-checkpoint Unicode plus UTF-8 buffer pair. Existing writer and event/cursor hash format remains unchanged.",
+    "Execution reads are admitted before snapshot capture, one active read per app. Projection and response serialization run outside the event loop. Cancellation does not release admission until the underlying operation finishes.",
+    "The read gate can rebind to a new idle event loop. Active cross-loop access is rejected rather than opening a second independent gate.",
+    "No changes to protected scope/auth/ACK routes, existing public observability authentication policy, UI refresh interval, storage format, launcher or live routing. No Nginx installation."
+  ],
+  "tests": {
+    "original_baseline": {
+      "runtime_commit": "80369d14d5bccb18dbc4980c6871de399982adab",
+      "command": "C:\\Python312\\python.exe -m unittest tests.test_execution_observability tests.test_execution_refresh -q",
+      "passed": 27,
+      "duration_seconds": 1.770
+    },
+    "final_targeted": {
+      "runtime_content": "Same six code/test/harness files committed in 05cdbf0; executed immediately before committing, after the gate lifecycle correction.",
+      "command": "C:\\Python312\\python.exe -m unittest tests.test_execution_projection_cache tests.test_execution_read_scheduling tests.test_execution_observability tests.test_execution_refresh tests.test_scope_probe_serialization tests.test_email_decision_ui tests.test_decision_notifications -q",
+      "passed": 96,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "duration_seconds": 13.764,
+      "new_tests": 26,
+      "scope": "Canonical hash parity, tamper after warmup, corrupt future checkpoint, history/current equivalence, scope/ACK/queue changes without revision, append/correction, per-app/project isolation, bounds/eviction/no source retention, thread single-flight, cancellation/error/lifecycle, actual HTTP serialization, notification-only cursor change, protected role check, UI timing and notifications."
+    },
+    "adjacent_integration": {
+      "modules": [
+        "tests.test_scope_workflow",
+        "tests.test_scope_runtime_adapters",
+        "tests.test_scope_revisions",
+        "tests.test_legacy_scope_control",
+        "tests.test_email_notification_lifecycle",
+        "tests.test_email_decision_api"
+      ],
+      "passed": 48,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "duration_seconds": 630.549,
+      "version_caveat": "This process started before the final idle-loop lifecycle correction in execution_read_cache.py. It tested the pre-correction candidate; the correction was separately covered by 15 scheduling tests and the final 96-test run. This is layered baseline+delta evidence, NOT one full run on the final HEAD.",
+      "isolation": "Separate Python process. NGINX_QA_, TELEGRAM_, CLOUDFLARED_ variables removed before importing main. main.base_dir and all Path-valued *_path bindings redirected into a newly created temporary directory; per-test fixtures then used their own synthetic repositories/state/tokens. No live app lifespan, server socket or production registry.",
+      "command": "C:\\Python312\\python.exe -c \"import os,tempfile,unittest; from pathlib import Path; [os.environ.pop(k) for k in list(os.environ) if k.startswith(('NGINX_QA_', 'TELEGRAM_', 'CLOUDFLARED_'))]; import main; tmp=tempfile.TemporaryDirectory(prefix='nq-execution-offline-'); root=Path(tmp.name); main.base_dir=root; [(setattr(main,k,root/v.name)) for k,v in list(vars(main).items()) if k.endswith('_path') and isinstance(v,Path)]; modules=['tests.test_scope_workflow','tests.test_scope_runtime_adapters','tests.test_scope_revisions','tests.test_legacy_scope_control','tests.test_email_notification_lifecycle','tests.test_email_decision_api']; suite=unittest.defaultTestLoader.loadTestsFromNames(modules); print('SELECTED_TESTS',suite.countTestCases(),flush=True); result=unittest.TextTestRunner(verbosity=1).run(suite); tmp.cleanup(); raise SystemExit(not result.wasSuccessful())\""
+    },
+    "negative_controls": "Two new scheduling tests failed against scope_api.py from 80369d14 in an isolated in-memory module and passed against the candidate. Independent review also reproduced the draft gate's cross-loop defect; three added lifecycle regressions pass after its correction.",
+    "other": ["Focused compileall passed", "git diff --check passed"],
+    "not_a_full_qualification_pass": true
+  },
+  "benchmarks": {
+    "command_template": "C:\\Python312\\python.exe -m tools.benchmark_execution_projection [--reference-commit 80369d14d5bccb18dbc4980c6871de399982adab] --revisions <N> --assignments <N> --payload-bytes <N> --repeats <N> [--http-responsiveness] --output <new-evidence-path>",
+    "constraints": "Synthetic in-memory JSON only. Pure projector baseline loaded from exact Git commit. ASGI benchmark uses actual scope route plus synthetic host, no main, sockets, lifespan or disk state. CPU timings are quantized on Windows; host load varies. tracemalloc reports new allocations during a warm call, not total RSS or already-retained cache memory. Off-thread projector heartbeat and real ASGI heartbeat are separate measurements.",
+    "history_workload": {
+      "files": ["history-baseline.json", "history-candidate.json"],
+      "revisions": 40,
+      "assignments": 120,
+      "payload_bytes": 2048,
+      "synthetic_json_bytes": 11066461,
+      "warm_repeats": 5,
+      "warm_wall_median_seconds_before_after": [0.42677150000235997, 0.2603621000016574],
+      "warm_cpu_median_seconds_before_after": [0.328125, 0.234375],
+      "cold_cpu_seconds_before_after": [0.34375, 0.453125],
+      "warm_timeline_calls_before_after": [41, 1],
+      "retained_cache_payload_bytes": 413863,
+      "output_sha256_equal": "53fcb64ddf2ccca02f77e0d7f7a461699c2733fde0119691a9a7575826d877c2"
+    },
+    "oversize_workload": {
+      "files": ["oversize-baseline.json", "oversize-candidate.json"],
+      "revisions": 6,
+      "assignments": 3,
+      "payload_bytes": 1048576,
+      "warm_repeats": 3,
+      "cache_entries": 0,
+      "warm_timeline_calls_before_after": [7, 7],
+      "interpretation": "Entry exceeds the configured cache cap and is deliberately not retained. No historical reuse or universal memory/latency improvement is claimed for this case. Full measurements are retained.",
+      "output_sha256_equal": "cc755d4b2032b7d7840b27d20afc956876839dcc74c422ca6b1e70e772e74530"
+    },
+    "actual_synthetic_asgi": {
+      "files": ["http-baseline.json", "http-candidate.json"],
+      "cold_request_seconds_before_after": [0.533183999999892, 0.6558902000251692],
+      "warm_request_seconds_before_after": [0.5247173000243492, 0.440047100011725],
+      "cold_max_event_loop_gap_seconds_before_after": [0.44925489998422563, 0.021394800016423687],
+      "warm_max_event_loop_gap_seconds_before_after": [0.4483728999912273, 0.03817960000014864],
+      "all_http_statuses": 200,
+      "output_sha256_equal": "76fa03b57ac1e9102e157116f22d19945d09e023e8a89300928abc739da8ded9",
+      "limitation": "One cold and one warm HTTP sample per version, not p95/p99 production qualification. Cold request is slower; responsiveness improved without bypassing validation."
+    },
+    "exploratory_files": "exploratory-*.json preserve earlier experiments, including an intermediate streamed-hash implementation. They are not final-candidate qualification evidence."
+  },
+  "remaining_limits": [
+    "Full registry JSON loading and snapshot copying still occur. The roughly 434 MB live registry was not used as a benchmark fixture; its MemoryError risk is not claimed fixed by this change.",
+    "All checkpoint bytes are still validated on every request. Replacing this with a cheap generation check would need stronger durable immutable-snapshot guarantees and separate design approval.",
+    "Cold requests can cost more CPU and time; cache cap misses preserve correctness but may produce no speedup.",
+    "A very large single JSON scalar and final cursor/response encoding can still hold the GIL; no absolute maximum latency or memory guarantee.",
+    "Per-app admission serializes execution views across projects. Other endpoints are not behind this gate, but shared Python CPU and existing registry gates still impose limits.",
+    "Cache budget limits retained derived payload, not total process memory, source snapshot size, response buffers or queued HTTP connections."
+  ],
+  "live_safety": {
+    "verified_service_head": "80369d14d5bccb18dbc4980c6871de399982adab",
+    "verified_service_root_clean": true,
+    "verified_listen_address": "127.0.0.1:18030",
+    "verified_pid": 58276,
+    "live_restarts_or_config_changes": false,
+    "live_api_calls_by_this_task": false,
+    "live_state_or_sqlite_edits": false,
+    "scope_ack_result_graph_mutations": false,
+    "credential_access_or_provisioning": false,
+    "nginx_installation_or_routing_changes": false,
+    "start_import_new_sprint": false,
+    "push_pr_merge_deploy": false,
+    "other_instances_touched": false,
+    "note": "Other authorized work may advance live sprint state independently. This task makes no claim that the live revision remained frozen."
+  },
+  "safe_next_steps": [
+    "Review the isolated branch and these limitations. Do not run python main.py or an existing Start/Setup launcher as a test.",
+    "For a synthetic UI-only preview, from this workspace run C:\\Python312\\python.exe -m tests.execution_ui_fixture_server. It prints an ephemeral loopback port and uses synthetic in-memory data; this is not a production launch or real auth qualification.",
+    "Before a live rollout, obtain separate operator authorization for the exact candidate SHA and a maintenance window. Re-read current API state; do not reuse an old assignment/revision from chat or saved checkpoint.",
+    "With that separate authorization only: preserve existing roots/registry/identity/child ports, stop only the owned 18030 process normally, verify cold backup and recovery, fast-forward code through the approved launcher pin, and restart with the existing child-only DPAPI provisioning. Do not regenerate credentials or touch old instances.",
+    "Validate read-only current scope and execution endpoints after rollout without ACK/result or graph changes. Measure real behavior; do not infer the synthetic speedup applies quantitatively to the live registry.",
+    "Rollback, if authorized and needed, is a separate code-only return to the recorded prior code version and launcher pin. Never roll back execution state, approvals, archive or SQLite to make the old code fit."
+  ]
+}

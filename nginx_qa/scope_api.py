@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from . import scope_workflow as flow
 from . import scope_runtime_adapters as adapters
 from .execution_observability import project_execution
+from .execution_read_cache import ExecutionReadGate, HistoricalProjectionCache
 from .decision_notifications import EmailConfig, NotificationError, binding_matches, is_expired, known_secret_values
 from .decision_notification_runtime import DecisionNotificationService, notification_snapshot
 from .legacy_scope_control import (
@@ -26,6 +27,8 @@ from .legacy_scope_control import (
 
 def register_scope_api(host):
     app = host.app
+    execution_reads = ExecutionReadGate()
+    historical_projection_cache = HistoricalProjectionCache()
     sessions: dict[str, dict] = {}
     cookie_name = "nginx_qa_operator"
 
@@ -360,7 +363,10 @@ def register_scope_api(host):
                     _, _, entry, _ = host.project_for_group_api(config, project_id)
                     candidate = entry.get(host.PROJECT_AGENT_ASSIGNMENT_KEY) or {}
                     return deepcopy(candidate) if candidate.get("mode") == "parallel" else None
-            found = await asyncio.to_thread(legacy_parallel)
+            # Join the host's transaction gate before dispatching a worker.
+            # Otherwise a local writer holding the file lock can make this
+            # read-only routing probe hit the OS-lock timeout (HTTP 500).
+            found = await host.run_group_write_transaction(legacy_parallel)
             if found is None:
                 return None
             runtime = None
@@ -449,7 +455,11 @@ def register_scope_api(host):
             return {"project_id": project_id, "sprint_id": sprint_id, "execution": state}, state
         _, _, history = await host.project_sprint_history_snapshot(project_id)
         if history and history.get("current_sprint_id") == sprint_id:
-            snapshot = await host.project_state_json(project_id, include_patch_content=False)
+            # Execution views use recent_activity and the immutable audit,
+            # not the separate Git-patch export. Avoid resolving those patches
+            # (and repeatedly parsing the registry) for every refresh.
+            snapshot = await host.project_state_json(
+                project_id, include_patch_content=False, include_patch_history=False)
             snapshot["sprint_id"] = sprint_id
             return snapshot, snapshot["execution"]
         record = next((r for r in (history or {}).get("sprints", []) if r.get("id") == sprint_id), None)
@@ -623,11 +633,20 @@ def register_scope_api(host):
     @app.get(base + "/observability")
     async def observability(project_id: str, sprint_id: str, cursor: str | None = None,
                             at_revision: int | None = None, at_checkpoint: str | None = None):
+        # Bound work before capturing a potentially large detached snapshot.
+        # A cancelled client does not free admission until its worker finishes.
+        return await execution_reads.run(lambda: execution_view(
+            project_id, sprint_id, cursor, at_revision, at_checkpoint))
+
+    async def execution_view(project_id, sprint_id, cursor, at_revision, at_checkpoint):
         snapshot, state = await read_snapshot(project_id, sprint_id)
         try:
-            view = project_execution(snapshot, scope_requests=flow.request_list(state)["requests"],
-                checkpoints=(state.get("execution_audit") or {}).get("checkpoints", []),
-                cursor=cursor, at_revision=at_revision, at_checkpoint=at_checkpoint)
+            def project():
+                return project_execution(snapshot, scope_requests=flow.request_list(state)["requests"],
+                    checkpoints=(state.get("execution_audit") or {}).get("checkpoints", []),
+                    cursor=cursor, at_revision=at_revision, at_checkpoint=at_checkpoint,
+                    history_cache=historical_projection_cache)
+            view = await asyncio.to_thread(project)
             if at_revision is None and at_checkpoint is None:
                 metadata, events = await notification_metadata(project_id, sprint_id, state)
                 for record in [*view["scope_requests"], *view["pending_decisions"]]:
@@ -639,7 +658,9 @@ def register_scope_api(host):
                     # Its own cursor makes delivery-only changes visible to UI.
                     view["cursor"] = canonical_json_sha256({"execution": view["cursor"], "notifications": metadata, "events": events})
                     view["unchanged"] = cursor == view["cursor"]
-            return view
+            # Encoding is CPU work too. A Response prevents FastAPI from
+            # recursively encoding the large dict again on the event loop.
+            return await asyncio.to_thread(JSONResponse, view)
         except ValueError as exc:
             raise HTTPException(409, {"error": "HISTORICAL_SNAPSHOT_UNAVAILABLE"}) from exc
 

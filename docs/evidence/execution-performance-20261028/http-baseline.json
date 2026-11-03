@@ -1,0 +1,90 @@
+{
+  "synthetic_only": true,
+  "live_access": false,
+  "source": {
+    "commit": "80369d14d5bccb18dbc4980c6871de399982adab",
+    "projector_sha256": "53470c62a46633a698b06c30bd8a0f8975edb08f5ed227eaffbb1e6b5e3c6e98",
+    "mode": "pure-projector-from-git"
+  },
+  "workload": {
+    "revisions": 40,
+    "assignments": 120,
+    "payload_bytes": 2048,
+    "repeats": 3
+  },
+  "synthetic_json_bytes": 11066461,
+  "history_cache_enabled": false,
+  "output_sha256": "53fcb64ddf2ccca02f77e0d7f7a461699c2733fde0119691a9a7575826d877c2",
+  "cold": {
+    "wall_seconds": 0.39624209998873994,
+    "cpu_seconds": 0.359375
+  },
+  "warm": [
+    {
+      "wall_seconds": 0.41827609998290427,
+      "cpu_seconds": 0.375
+    },
+    {
+      "wall_seconds": 0.40783769998233765,
+      "cpu_seconds": 0.359375
+    },
+    {
+      "wall_seconds": 0.3915215999877546,
+      "cpu_seconds": 0.390625
+    }
+  ],
+  "instrumented_recompute_counts": {
+    "warm_timeline_calls_including_current": 41,
+    "checkpoint_count": 40
+  },
+  "warm_wall_median_seconds": 0.40783769998233765,
+  "stages": {
+    "synthetic_json_parse": {
+      "wall_seconds": 0.12557839998044074,
+      "cpu_seconds": 0.015625
+    },
+    "snapshot_copy": {
+      "wall_seconds": 0.0008171999943442643,
+      "cpu_seconds": 0.0
+    },
+    "checkpoint_validation_hashes": {
+      "wall_seconds": 0.4000291000120342,
+      "cpu_seconds": 0.171875
+    },
+    "uncached_historical_timeline": {
+      "wall_seconds": 0.26149269999586977,
+      "cpu_seconds": 0.234375
+    },
+    "output_cursor_hash": {
+      "wall_seconds": 0.022608700004639104,
+      "cpu_seconds": 0.015625
+    },
+    "output_json": {
+      "wall_seconds": 0.018589299987070262,
+      "cpu_seconds": 0.03125
+    }
+  },
+  "warm_tracemalloc_peak_bytes": 1607880,
+  "off_thread_responsiveness": {
+    "heartbeat_max_gap_seconds": 0.01639259999501519,
+    "heartbeat_samples": 60
+  },
+  "synthetic_asgi_responsiveness": [
+    {
+      "phase": "cold",
+      "http_status": 200,
+      "wall_seconds": 0.533183999999892,
+      "heartbeat_max_gap_seconds": 0.44925489998422563,
+      "heartbeat_samples": 10,
+      "output_sha256": "76fa03b57ac1e9102e157116f22d19945d09e023e8a89300928abc739da8ded9"
+    },
+    {
+      "phase": "warm",
+      "http_status": 200,
+      "wall_seconds": 0.5247173000243492,
+      "heartbeat_max_gap_seconds": 0.4483728999912273,
+      "heartbeat_samples": 9,
+      "output_sha256": "76fa03b57ac1e9102e157116f22d19945d09e023e8a89300928abc739da8ded9"
+    }
+  ]
+}
