@@ -1,0 +1,116 @@
+{
+  "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "branch": "agent/tmsl-v1-release-documentation",
+  "pr": "https://github.com/chartjs333/nginx-qa/pull/17",
+  "proposed_outcome": "NO_GO",
+  "reason": "Full external acceptance is incomplete; implementation, automated qualification, actual host and TLS/HTTP tunnel boundary, actual model-authored JSON and authorized draft PR are available.",
+  "operator_authorization": "User granted all confirmations and rights for this task. Missing capability/configuration is not missing permission.",
+  "checks": {
+    "historical_broad_automated_suite": {
+      "status": "PASS",
+      "tests": 890,
+      "source": "5899a69b44724a78b8829d64bfb5e51f37073744",
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "qa_matrix_rework_and_final_package": {
+      "status": "PASS",
+      "affected_tests": 69,
+      "final_tests": 8,
+      "result": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
+      "two_independent_engine_approvals": true
+    },
+    "release_doc_and_ai_package": {
+      "status": "PASS",
+      "tests": 69,
+      "source": "291b9b20fc8c5923c4b4e4339a8c9adcaa6c25a0"
+    },
+    "final_candidate_contracts": {
+      "status": "PASS",
+      "tests": 8,
+      "source": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+      "receipt": "stage9-candidate-clean-check.json"
+    },
+    "actual_model_authoring": {
+      "status": "PASS",
+      "receipt": "ai-roundtrip/offline-validation.json",
+      "scope": "Complete production-builder export -> real Codex research-model first response -> actual strict JSON/schema/graph/local Git validators. No Telegram delivery, import or execution."
+    },
+    "actual_isolated_host": {
+      "status": "PASS",
+      "url": "http://127.0.0.1:18036/",
+      "process_id": 82756,
+      "launcher_pid": 81900,
+      "empty_projects": true,
+      "queued_items": 0,
+      "receipt": "release-environment-proof.json",
+      "qualified_package_versions": 36
+    },
+    "actual_cloudflare_http_boundary": {
+      "status": "PASS",
+      "checks": 24,
+      "receipt": "release-gateway-live-probe.json",
+      "scope": "Real TLS/HTTP shell and deny-default routing; no real Telegram identity or mobile session."
+    },
+    "owned_tunnel_stop_independent_of_engine": {
+      "status": "PASS",
+      "receipt": "release-tunnel-stop-proof.json",
+      "tunnel": "STOPPED",
+      "private_http": 200,
+      "gateway_http": 503
+    },
+    "real_private_bot_delivery_and_webhook": {
+      "status": "NOT_RUN",
+      "reason": "No protected bot/webhook values or allowed real Telegram user configured in this isolated host; no foreign webhook borrowed or overwritten."
+    },
+    "real_phone_or_tablet_login": {
+      "status": "NOT_RUN",
+      "reason": "No actual Telegram mobile/tablet session available. Browser fixture is separate evidence."
+    },
+    "real_manual_and_autonomous_existing_client_execution": {
+      "status": "NOT_RUN",
+      "reason": "No existing execution-client endpoint/token configured for this new isolated host. Development work did run through the original managed graph with this operator as worker and independent Reviewer clients."
+    },
+    "authorized_pull_request": {
+      "status": "PASS",
+      "number": 17,
+      "draft": true,
+      "mergeable": true,
+      "merged": false
+    },
+    "final_release_reviews": {
+      "status": "PASS",
+      "scope": "Acceptance of truthful NO_GO delivery, not full product rollout",
+      "reviews": [
+        {
+          "reviewer": "runtime",
+          "assignment_id": "review-e85166bae453f56c38c5e134",
+          "decision": "APPROVE",
+          "http_status": 200,
+          "api_status": "REVIEW_ACCEPTED"
+        },
+        {
+          "reviewer": "security",
+          "assignment_id": "review-e638ee3b4b5751f94b47c94d",
+          "decision": "APPROVE",
+          "http_status": 200,
+          "api_status": "REVIEW_ACCEPTED"
+        }
+      ]
+    }
+  },
+  "unblock_steps": [
+    "Configure the designated bot and webhook protected references, actual permitted private Telegram user/project policy, repository-scoped publication adapter and a real existing managed-client service. Do not substitute fake READY/ACCEPTED responses.",
+    "Use a genuinely permitted disposable project and source ref; do not duplicate the active canonical nginx-qa project in another database or create an alias to evade its slot.",
+    "Start the same pinned owned host/tunnel, register only its assigned bot's webhook, and capture real /sprint_prompt delivery, JSON upload, manual Waiting then Start, all three controls and phone/tablet signed login.",
+    "After proved terminal/Stop resource retirement, use fresh branches and a new delivery for autonomous mode. Retain real result commits and two independent review receipts; verify competing same-project request is PROJECT_BUSY.",
+    "Resume/repair through the existing engine's supported versioned procedure and obtain final independent acceptance. Do not edit durable state, reopen completed nodes by hand or silently rewrite the ownership marker. No automatic PR merge."
+  ],
+  "source_and_evidence_limits": [
+    "The historical 890 test receipt predates matrix packaging; actual rejection and QA rework are retained. Incremental and final-package checks are separately identified.",
+    "Review originals retain their hashes. Git-delivered review JSON differs only by CRLF-to-LF normalization; the index records both hashes.",
+    "The first operator HTTP probe used an incomplete synthetic handle and case-sensitive header lookup. Its failed attempt is retained; the probe alone was corrected, no application source changed.",
+    "Runtime/deployment receipts live outside the immutable pinned application source. The actual running commit remains89f7f09."
+  ]
+}

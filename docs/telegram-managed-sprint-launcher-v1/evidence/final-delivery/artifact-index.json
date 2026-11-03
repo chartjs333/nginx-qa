@@ -1,0 +1,57 @@
+{
+  "runtime-release.json": {
+    "source": "C:/nqt35/client/reviews/runtime-release.json",
+    "original_sha256": "f933d49696cafda1fc95a66e874c3e620d8a232b26c6125f715c571cde1d8f64",
+    "delivered_sha256": "227d7ff7d4b9744cb89cbe2935a06245f2ec32743018e923d7063f7016da03b6"
+  },
+  "security-release.json": {
+    "source": "C:/nqt35/client/reviews/security-release.json",
+    "original_sha256": "c832048561caad2a899aa37e6c6e4d2ab5ecffa299e722c497d07a35f22aac15",
+    "delivered_sha256": "c9ed4f92df777aa8f0af3b9f5a0ae1bc007aac92a245d9cdeb9abe48d0d09de8"
+  },
+  "security-release-receipt.json": {
+    "source": "C:/nqt35/client/reviews/security-release-receipt.json",
+    "original_sha256": "eb0687d503b547787b8873ab841f90465bd94621e3bbb7d008fb15ae1fa5739e",
+    "delivered_sha256": "2f10ee5e08c20ec8d89dbafce3f9ec7f2e5a7c495cb50e8a65d432a38327677f"
+  },
+  "release-gate.json": {
+    "source": "C:/nqt35/client/release-gate.json",
+    "original_sha256": "a4c3219e40d3cd3f235b269e4eedd75d94a373c95f7264b99cc7c7dc3ba166d1",
+    "delivered_sha256": "29f3365cce9f050a569607065c36d292ac3311897aa9a9d4d51eeeb472319fa8"
+  },
+  "final-delivery-audit.json": {
+    "source": "C:/nqt35/client/final-delivery-audit.json",
+    "original_sha256": "773b9c28d7635099b15e474bea3f033bd4a57ca25d4603c516fa07f9d5bac4b9",
+    "delivered_sha256": "6bdae1f41c7fc39b81c67330607ea047efc1fc5aaf82d03c9a2c986462761608"
+  },
+  "release-environment-proof.json": {
+    "source": "C:/nqt35/client/release-environment-proof.json",
+    "original_sha256": "207e4281dcdb86786be11190f10fc6c4e94784506e047c72dbac7c210359cbf0",
+    "delivered_sha256": "f6c568f6f321860839399758194202cf7dfb4a88f457da35ede1a2c12a1da5b5"
+  },
+  "release-gateway-live-probe.json": {
+    "source": "C:/nqt35/client/release-gateway-live-probe.json",
+    "original_sha256": "e4c6d4e7a1448e6cbf40ef235642540123c30fb51deaf1cdd3eb1f78fb69e852",
+    "delivered_sha256": "941ae47a67283ce68d66696cd9eb853199d421328078a02d12934c95ab3a49fa"
+  },
+  "release-tunnel-stop-proof.json": {
+    "source": "C:/nqt35/client/release-tunnel-stop-proof.json",
+    "original_sha256": "c354750777c9c8bc0e4d2300283789812f5e33b03a10fee648c3f340eb6d95ff",
+    "delivered_sha256": "6e07c04097da83e5512011ffa0ad40647371dcd4813cb0df0546227ed77a2a3e"
+  },
+  "release-pr.json": {
+    "source": "C:/nqt35/client/release-pr.json",
+    "original_sha256": "94f1c77ce62dbce850627d479f8c9fd498c951e2cd706e91785b556ea414bf2e",
+    "delivered_sha256": "91d2cc296d014bcc3f8a46c0c7d9ed4dd6e4dce224c9137b246a68b6de5ebaf2"
+  },
+  "stage9-candidate-clean-check.json": {
+    "source": "C:/nqt35/client/stage9-candidate-clean-check.json",
+    "original_sha256": "2a669f9b782e2e7b2c66a2eec7cfd667c70c728904ba106d3d91d64c39b4dc4f",
+    "delivered_sha256": "2a669f9b782e2e7b2c66a2eec7cfd667c70c728904ba106d3d91d64c39b4dc4f"
+  },
+  "identity-6600.json": {
+    "source": "C:/nqt35/client/identity-6600.json",
+    "original_sha256": "f2c9dd82af5a4a767abc9c6d249151d8b47d565aa8176f3e295060721dccae54",
+    "delivered_sha256": "5ece43c0428349ade38464af6b15297107dbfd348f8b50a437f0c150c6915844"
+  }
+}

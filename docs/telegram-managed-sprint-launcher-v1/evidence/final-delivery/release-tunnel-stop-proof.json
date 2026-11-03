@@ -1,0 +1,14 @@
+{
+  "utc": "2026-11-03T21:22:07.5348541Z",
+  "gateway_after_stop": 503,
+  "public_listener_pid": [
+    82756
+  ],
+  "private_status": 200,
+  "tunnel_phase": "STOPPED",
+  "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "server_pid": [
+    82756
+  ],
+  "webhook": "NOT_REQUESTED"
+}

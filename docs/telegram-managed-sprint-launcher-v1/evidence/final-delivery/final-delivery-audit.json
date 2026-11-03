@@ -1,0 +1,63 @@
+{
+  "observed_at": "2026-11-03T21:31:01.696722+00:00",
+  "checkout": "D:/nq-tmsl-launcher",
+  "head": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "branch": "agent/tmsl-v1-release-documentation",
+  "status_porcelain": "",
+  "private_ui": {
+    "status": 200,
+    "bytes": 485249
+  },
+  "public_gateway_stopped": {
+    "status": 503,
+    "bytes": 161
+  },
+  "tunnel": {
+    "child": {
+      "birth_token": "windows-filetime:134382144168513549",
+      "created_at": "2026-11-03T21:20:16.851355+00:00",
+      "cwd": null,
+      "executable_path": "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
+      "pid": 79996,
+      "process_group_id": null
+    },
+    "command": [
+      "C:\\Program Files (x86)\\cloudflared\\cloudflared.exe",
+      "tunnel",
+      "--config",
+      "C:\\nqt36\\legacy\\runtime_state\\launcher-tunnel-10a777e7924540e9af99e5a9cabfc6b6.yaml",
+      "--url",
+      "http://127.0.0.1:18037",
+      "--no-autoupdate",
+      "--metrics",
+      "127.0.0.1:0"
+    ],
+    "generation": "10a777e7924540e9af99e5a9cabfc6b6",
+    "heartbeat": 1793740917.4065232,
+    "initialization_id": "f3718d0a-7729-412b-afe1-ea8ccd358f88",
+    "instance_id": "telegram-managed-sprint-launcher-v1-gateway-18036",
+    "monitor": {
+      "birth_token": "windows-filetime:134382144159614516",
+      "created_at": "2026-11-03T21:20:15.961452+00:00",
+      "cwd": null,
+      "executable_path": "C:\\Python312\\python.exe",
+      "pid": 41428,
+      "process_group_id": null
+    },
+    "phase": "STOPPED",
+    "public_origin": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+    "registered_origin": null,
+    "registration_origins": [],
+    "schema_version": 1,
+    "upstream": "http://127.0.0.1:18037",
+    "webhook": "NOT_REQUESTED"
+  },
+  "memory": {
+    "load": 84,
+    "total_phys": 34109108224,
+    "avail_phys": 5178744832,
+    "total_page_file": 137188323328,
+    "avail_page_file": 2143440896
+  },
+  "source_matches_delivered_commit": true
+}

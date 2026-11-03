@@ -1,0 +1,387 @@
+{
+  "kind": "actual_empty_release_host_and_cloudflare_http_boundary",
+  "utc": "2026-11-03T21:21:37.685598+00:00",
+  "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "branch": "agent/tmsl-v1-release-documentation",
+  "git_status": "",
+  "public_origin": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+  "upstream": "http://127.0.0.1:18037",
+  "initialization_id": "f3718d0a-7729-412b-afe1-ea8ccd358f88",
+  "status": "PASS",
+  "empty_project_contexts": true,
+  "queued_items": 0,
+  "requests": [
+    {
+      "base": "http://127.0.0.1:18036",
+      "path": "/",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 485249,
+      "body_sha256": "0768e4ea83c0babadec25a4f598dd440c6a539ad11926211b8b87ae59877a319",
+      "cache_control": "no-store, max-age=0",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18036",
+      "path": "/git-config",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 178,
+      "body_sha256": "f629cdea1e0574d201a66d02960fe8ac91e13a05081a0010a58bc5027b4ed9f1",
+      "cache_control": null,
+      "referrer_policy": null,
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18036",
+      "path": "/queues",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 227,
+      "body_sha256": "637b589dbbe8d8bf1a01137ec1b249de0e58783f0fa83ebf66f78649b79f06db",
+      "cache_control": null,
+      "referrer_policy": null,
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/launcher/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 1418,
+      "body_sha256": "f8cfd52a7280b10da5ccc3e0d9b9391b63326a8d5768ef99c5f0d668722911fe",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 4909,
+      "body_sha256": "37f9ba6209e23b14e7cacde6f9251ef185c9887f6563649e64db117b91a9746d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/git-config",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/queues",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/openapi.json",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/api/v1/projects/9000/state",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/health",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/launcher/instances/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa/status",
+      "method": "GET",
+      "status": 503,
+      "expected": [
+        401,
+        403,
+        404,
+        503
+      ],
+      "bytes": 172,
+      "body_sha256": "5648de373d6f1f8a3819f292ee745bc6c6cf53fd33ab9e42527faddf1b09f6ef",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/launcher/instances/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa/start",
+      "method": "POST",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "bytes": 155,
+      "body_sha256": "89b02e3a226fd6572e6fed7c78cffb3dedb7b7e407836f765daebee262be988c",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/launcher/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 1418,
+      "body_sha256": "f8cfd52a7280b10da5ccc3e0d9b9391b63326a8d5768ef99c5f0d668722911fe",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/launcher/assets/app.js",
+      "method": "GET",
+      "status": 200,
+      "expected": [
+        200
+      ],
+      "bytes": 4909,
+      "body_sha256": "37f9ba6209e23b14e7cacde6f9251ef185c9887f6563649e64db117b91a9746d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/git-config",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/queues",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/openapi.json",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/api/v1/projects/9000/state",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/health",
+      "method": "GET",
+      "status": 404,
+      "expected": [
+        404
+      ],
+      "bytes": 22,
+      "body_sha256": "37ec4665a8102d115ffd1ac20dae94c98b4dac64b0c1a68228aa2a531caeb35d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/launcher/instances/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa/status",
+      "method": "GET",
+      "status": 503,
+      "expected": [
+        401,
+        403,
+        404,
+        503
+      ],
+      "bytes": 172,
+      "body_sha256": "f107c83e17d396745ad79366aadbfab07660b12c3ab2ca8cdbe14c1d5158161e",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "https://dollar-emphasis-bibliographic-leonard.trycloudflare.com",
+      "path": "/launcher/instances/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa/start",
+      "method": "POST",
+      "status": 403,
+      "expected": [
+        403
+      ],
+      "bytes": 155,
+      "body_sha256": "f6b346265774800b2335eb8da910f6a3de73a37b4353f1cecb29c5ac0990eb49",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    },
+    {
+      "base": "http://127.0.0.1:18037",
+      "path": "/launcher/tml:9000:aaaaaaaaaaaaaaaaaaaaaaaa",
+      "method": "GET",
+      "status": 421,
+      "expected": [
+        421
+      ],
+      "bytes": 159,
+      "body_sha256": "decd7435969b697bb1930560f2bcde0dc7df4f92671afe218835ce99c53d9f5d",
+      "cache_control": "no-store",
+      "referrer_policy": "no-referrer",
+      "set_cookie_present": false,
+      "pass": true
+    }
+  ],
+  "webhook_registration": "NOT_REQUESTED",
+  "real_telegram_mobile": "NOT_RUN",
+  "real_agent_client_execution": "NOT_RUN",
+  "sprint_or_project_created": false,
+  "limits": "TLS and HTTP routing only; no Telegram identity, real device login or manual/autonomous execution evidence.",
+  "prior_probe_attempt": "Attempt001 used an incomplete handle and case-sensitive header lookup. Its receipts are retained; only the operator probe was corrected, no application source changed."
+}
