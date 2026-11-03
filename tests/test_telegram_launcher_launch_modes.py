@@ -526,7 +526,7 @@ class LauncherReconciliationLoopTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         stop_event = threading.Event()
         loops = []
-        async def recover(host):
+        async def recover(host, **kwargs):
             loops.append(asyncio.get_running_loop())
             stop_event.set()
         with patch.object(intake, "reconcile_operations", side_effect=recover):
@@ -539,3 +539,103 @@ class LauncherReconciliationLoopTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual([loop], loops)
             finally:
                 stop_event.set()
+
+
+    async def test_blocked_transport_does_not_block_ticks_and_shutdown_waits_for_it(self):
+        import threading
+        import main
+        from unittest.mock import Mock
+        import nginx_qa.telegram_launcher_intake as intake
+        stop_event = threading.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
+        calls = []
+        async def recover(host, **kwargs):
+            calls.append(1)
+            entered.set()
+            await release.wait()
+        runtime = Mock()
+        with patch.object(intake, "reconcile_operations", side_effect=recover):
+            thread = threading.Thread(target=main._reconcile_managed_continuity_background,
+                args=(runtime, stop_event, 0.005, asyncio.get_running_loop()), daemon=True)
+            thread.start()
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                first = runtime.reconcile_all.call_count
+                await asyncio.sleep(0.08)
+                self.assertGreater(runtime.reconcile_all.call_count, first + 2)
+                self.assertEqual(1, len(calls))
+                stop_event.set()
+                await asyncio.to_thread(thread.join, 0.03)
+                self.assertTrue(thread.is_alive(), "shutdown must retain resources while recovery is in flight")
+                release.set()
+                await asyncio.to_thread(thread.join, 2)
+                self.assertFalse(thread.is_alive())
+            finally:
+                stop_event.set()
+                release.set()
+                await asyncio.to_thread(thread.join, 2)
+
+    async def test_failed_transport_is_observed_and_retried_without_stopping_engine(self):
+        import threading
+        import main
+        from unittest.mock import Mock
+        import nginx_qa.telegram_launcher_intake as intake
+        stop_event = threading.Event()
+        calls = []
+        async def recover(host, **kwargs):
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("isolated transport outage")
+            stop_event.set()
+        runtime = Mock()
+        with patch.object(intake, "reconcile_operations", side_effect=recover):
+            thread = threading.Thread(target=main._reconcile_managed_continuity_background,
+                args=(runtime, stop_event, 0.005, asyncio.get_running_loop()), daemon=True)
+            thread.start()
+            try:
+                await asyncio.to_thread(thread.join, 2)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(2, len(calls))
+                self.assertGreaterEqual(runtime.reconcile_all.call_count, 2)
+            finally:
+                stop_event.set()
+
+    async def test_project_recovery_is_concurrent_bounded_and_stops_queued_work(self):
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        import nginx_qa.telegram_launcher_intake as intake
+        stop_event = threading.Event()
+        entered, release = asyncio.Event(), asyncio.Event()
+        running = set()
+        seen = set()
+        maximum = 0
+        def pending(host, config, project_id, policy):
+            return object(), [{"user_id": "1", "chat_id": "1", "operation_id": project_id}]
+        async def resume(operations, record, principal, policy, host):
+            nonlocal maximum
+            running.add(principal.project_id)
+            seen.add(principal.project_id)
+            maximum = max(maximum, len(running))
+            if len(running) == 4:
+                entered.set()
+            await release.wait()
+            running.remove(principal.project_id)
+        with patch.dict(os.environ, {"NGINX_QA_TELEGRAM_LAUNCHER_ENABLED": "true"}), \
+             patch.object(intake, "load_policy", return_value={"projects": {str(n): {} for n in range(6)}}), \
+             patch.object(intake, "pending_project_operations", side_effect=pending), \
+             patch.object(execution, "current_principal", side_effect=lambda p, *args: p), \
+             patch.object(intake, "continue_operation", side_effect=resume):
+            task = asyncio.create_task(intake.reconcile_operations(SimpleNamespace(read_git_config=AsyncMock(return_value={})), stop_event=stop_event))
+            try:
+                await asyncio.wait_for(entered.wait(), 2)
+                self.assertEqual(4, len(seen))
+                stop_event.set()
+                release.set()
+                await asyncio.wait_for(task, 2)
+                self.assertEqual(4, maximum)
+                self.assertEqual(4, len(seen), "queued projects must not start during shutdown")
+            finally:
+                stop_event.set()
+                release.set()
+                await task

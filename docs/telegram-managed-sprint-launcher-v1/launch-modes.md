@@ -45,6 +45,13 @@ that session have quiesced and it will never resume that session. Timeout is not
 proof of either acceptance or cancellation. This adapter protocol is an optional
 integration boundary, not a bundled autonomous executor.
 
+Transport recovery runs on the owning ASGI loop with at most one batch in flight
+and four project operations per batch. Ordinary continuity ticks keep running
+while a client or Git call waits. Filesystem/SQLite work stays in worker threads.
+Shutdown stops queued recovery work and waits for in-flight mutations before
+closing resource holders; it never treats cancellation of an async wrapper as
+proof that its worker thread stopped.
+
 The existing reconciliation loop resumes publication/preparation and authorized
 launch/stop intents from the same control database. Manual Waiting without a
 Start intent never activates after restart. Permissions and repository policy

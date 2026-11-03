@@ -1416,22 +1416,42 @@ def _reconcile_managed_continuity_background(
     interval_seconds: float,
     event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    while not stop_event.is_set():
-        try:
-            runtime.reconcile_all()
-            if event_loop is not None:
-                from nginx_qa.telegram_launcher_intake import reconcile_operations
-                # Configuration locks belong to the ASGI loop. Never create a
-                # second event loop in this worker thread to acquire them.
-                asyncio.run_coroutine_threadsafe(
-                    reconcile_operations(sys.modules[__name__]), event_loop
-                ).result()
-        except Exception:
-            # HTTP readiness and legacy traffic must not depend on a transient
-            # Git/workspace failure in one managed sprint.  The recurring loop
-            # and every request/replay retry the durable reconciliation path.
-            pass
-        stop_event.wait(interval_seconds)
+    launcher_future = None
+    try:
+        while not stop_event.is_set():
+            try:
+                runtime.reconcile_all()
+            except Exception:
+                # A transient graph failure cannot stop unrelated recovery.
+                pass
+            if event_loop is not None and not stop_event.is_set():
+                if launcher_future is not None and launcher_future.done():
+                    try:
+                        launcher_future.result()
+                    except Exception:
+                        pass
+                    launcher_future = None
+                if launcher_future is None:
+                    try:
+                        from nginx_qa.telegram_launcher_intake import reconcile_operations
+                        # Configuration locks belong to the ASGI loop. At most
+                        # one bounded transport batch is in flight; waiting for
+                        # Git/executors must not delay ordinary engine ticks.
+                        launcher_future = asyncio.run_coroutine_threadsafe(
+                            reconcile_operations(sys.modules[__name__], stop_event=stop_event), event_loop
+                        )
+                    except Exception:
+                        pass
+            stop_event.wait(interval_seconds)
+    finally:
+        if launcher_future is not None:
+            # Do not cancel an asyncio.to_thread mutation and then close its
+            # resource holders underneath it. Lifespan tracks this thread and
+            # refuses resource teardown if its bounded join cannot quiesce.
+            try:
+                launcher_future.result()
+            except Exception:
+                pass
 
 
 @asynccontextmanager

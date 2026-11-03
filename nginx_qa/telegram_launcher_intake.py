@@ -260,38 +260,53 @@ async def continue_operation(operations, record, principal, project_policy, host
     return record
 
 
-async def reconcile_operations(host):
-    """Transport recovery called by the existing managed reconciliation loop."""
+def pending_project_operations(host, config, project_id, project_policy):
+    """Synchronous filesystem/SQLite work, kept off the ASGI event loop."""
+    _, _, project, context = host.project_for_group_api(config, project_id)
+    registry = host.managed_repository_registry_for_project(project, context)
+    importer = host.managed_sprint_importer_factory(host.load_managed_runtime_config(), registry)
+    if not importer.store.database_path.exists():
+        return None, []
+    operations = LauncherOperations(importer)
+    spec = importer.git_provider.resolve_repository(project_policy["repository_id"])
+    if canonical_remote_from_address(str(project.get("git_address") or context.get("git_address") or "")) != spec.canonical_remote:
+        return None, []
+    with importer.store._transaction() as connection:
+        records = [operations._decode(row) for row in connection.execute(
+            "SELECT * FROM telegram_launcher_operations WHERE project_id = ? AND holds_slot = 1", (project_id,))]
+    return operations, records
+
+
+async def reconcile_operations(host, *, stop_event=None):
+    """One bounded, failure-isolated transport batch on the ASGI event loop."""
     from nginx_qa.telegram_launcher import ENABLED_ENV, Principal
     from nginx_qa.telegram_launcher_execution import current_principal
     if os.getenv(ENABLED_ENV, "").lower() not in {"1", "true"}:
         return
     policy = load_policy()
     config = await host.read_git_config()
-    for project_id, project_policy in policy["projects"].items():
-        try:
-            _, _, project, context = host.project_for_group_api(config, project_id)
-            registry = host.managed_repository_registry_for_project(project, context)
-            importer = host.managed_sprint_importer_factory(host.load_managed_runtime_config(), registry)
-            if not importer.store.database_path.exists():
-                continue
-            operations = LauncherOperations(importer)
-            spec = importer.git_provider.resolve_repository(project_policy["repository_id"])
-            if canonical_remote_from_address(str(project.get("git_address") or context.get("git_address") or "")) != spec.canonical_remote:
-                continue
-            with importer.store._transaction() as connection:
-                records = [operations._decode(row) for row in connection.execute(
-                    "SELECT * FROM telegram_launcher_operations WHERE project_id = ? AND holds_slot = 1", (project_id,))]
-            for record in records:
-                try:
-                    principal = Principal(record["user_id"], record["chat_id"], project_id, frozenset())
-                    principal = current_principal(principal, "stop" if record.get("stop_requested") else "prepare", project_policy)
-                    await continue_operation(operations, record, principal, project_policy, host)
-                except (HTTPException, ManagedImportError, ManagedGitError, RuntimeError, ValueError):
-                    # A revoked/blocked operation cannot break other projects.
-                    continue
-        except (HTTPException, ManagedImportError, ManagedGitError, WorkspaceError, KeyError, TypeError, ValueError, RuntimeError):
-            continue
+    slots = asyncio.Semaphore(4)
+    def stopping():
+        return stop_event is not None and stop_event.is_set()
+    async def recover_project(project_id, project_policy):
+        async with slots:
+            if stopping():
+                return
+            try:
+                operations, records = await asyncio.to_thread(pending_project_operations, host, config, project_id, project_policy)
+                for record in records:
+                    if stopping():
+                        return
+                    try:
+                        principal = Principal(record["user_id"], record["chat_id"], project_id, frozenset())
+                        principal = current_principal(principal, "stop" if record.get("stop_requested") else "prepare", project_policy)
+                        await continue_operation(operations, record, principal, project_policy, host)
+                    except (HTTPException, ManagedImportError, ManagedGitError, RuntimeError, ValueError, OSError):
+                        continue
+            except (HTTPException, ManagedImportError, ManagedGitError, WorkspaceError, KeyError, TypeError, ValueError, RuntimeError, OSError):
+                # One blocked/corrupt project cannot starve other projects.
+                return
+    await asyncio.gather(*(recover_project(project_id, project_policy) for project_id, project_policy in policy["projects"].items()))
 
 
 async def maybe_handle_upload(update, message, host):
