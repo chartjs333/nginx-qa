@@ -1,0 +1,10 @@
+{
+  "project_id": "9000",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "source_root": "C:/nqt35/m/projects/9000/sprints/sprint-3677fd7dd2a9cdc235bc0673/nodes/qa-qualification/assignment-e8d9332455bdda95ed05521c",
+  "source_ref": "refs/heads/agent/tmsl-v1-qa-qualification",
+  "checksum_paths": [
+    "README.md"
+  ],
+  "task": "Prepare a small documentation-only managed sprint for nginx-qa: add a clear README section explaining one active Managed Sprint per canonical project, PROJECT_BUSY recovery without aliases or deleting history, and the difference between manual Waiting and an authorized automatic launch. Include a documentation review/check task, two independent reviewers and a coordinator for missing authority. Use fresh topic branches and safe unique role phones. This request is ONLY to author JSON, not to execute the sprint. Default autonomous_mode=false. Do not change the engine or introduce a model client."
+}

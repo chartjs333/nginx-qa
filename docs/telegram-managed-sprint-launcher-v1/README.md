@@ -47,7 +47,7 @@ $env:PIP_CONSTRAINT = (Resolve-Path .\docs\telegram-managed-sprint-launcher-v1\e
 .\run_staging.ps1 -Profile telegram-managed-sprint-launcher-v1-gateway -Action Check -ExpectedCommit $releaseCommit
 .\run_staging.ps1 -Profile telegram-managed-sprint-launcher-v1-gateway -Action Setup -ExpectedCommit $releaseCommit
 & C:\nqt36\v\Scripts\python.exe -I -B -m pip install -r $env:PIP_CONSTRAINT
-# Configure trusted credentials, canonical project policy and existing client below.
+# First empty start allows local project registration; configure full access afterward as below.
 .\run_staging.ps1 -Profile telegram-managed-sprint-launcher-v1-gateway -Action Start -ExpectedCommit $releaseCommit
 ```
 
@@ -56,6 +56,15 @@ ownership marker, source remote and isolated roots are verified before main is
 imported. Both listeners share one engine lifespan. The main UI is available only
 on `http://127.0.0.1:18036/`; the tunnel targets the narrow gateway on 18037.
 Creating this host does not register projects, grant users access or start agents.
+
+For a fresh host, first start it empty with no user grants or client configuration.
+Use a second local shell to register a genuinely new permitted project through the
+private API below. Then gracefully stop the first foreground host with Ctrl+C and
+wait for shutdown. Configure the owned registry and secret references while stopped;
+in the shell that has the returned project phone, set the policy/client environment
+and restart from the same checkout with the same approved commit. Existing permitted
+projects can instead use their known canonical phone and configured policy. No public
+tunnel or bot webhook is needed for this initial local registration.
 
 ## Canonical project, credentials and capabilities
 
@@ -158,9 +167,11 @@ To remove public access, stop the exact owned tunnel using its documented Stop
 command. To stop a foreground host, use Ctrl+C and wait for both listeners and
 the single lifespan to drain. Use a background service manager's graceful stop
 for managed background deployments. Never kill a process merely because it owns
-a familiar port or has the cloudflared name. Preserve state when rolling back;
-restore only an approved compatible source, never rewrite the marker to bypass
-its commit/ownership check.
+a familiar port or has the cloudflared name. Preserve state when rolling back. Ordinary restart requires the marker's exact
+`approved_commit`. A different-version rollback requires a separately planned and
+tested compatible state/ownership migration or a matching approved backup. V1 has
+no in-place version migration command: `git checkout` alone cannot authorize a new
+commit, and the marker must never be rewritten to bypass the check.
 
 Full acceptance requires actual private Telegram delivery, a real phone/tablet
 login through Cloudflare and manual plus autonomous execution with the configured
@@ -174,3 +185,20 @@ See [architecture](architecture.md), [prompt export](prompt-export.md),
 [intake](intake.md), [preparation](instance-preparation.md),
 [controls](telegram-controls.md), [gateway security](gateway.md) and
 [qualification](qualification.md) for contracts and error/recovery details.
+
+## Actual external-model authoring evidence
+
+The production prompt builder exported the complete installed contracts to an
+actual Codex research-model session. Its first independently authored response
+passed the real strict JSON/envelope/graph validators and immutable local Git
+source/hash checks. [Prompt and provenance](evidence/ai-authoring/export-provenance.json),
+[model authoring receipt](evidence/ai-authoring/authoring-provenance.json),
+[unmodified response](evidence/ai-authoring/model-response.json) and
+[validation](evidence/ai-authoring/offline-validation.json) are retained.
+
+This was a local production-builder export, not delivery by a live Telegram bot.
+The response is a historical validation artifact pinned to the accepted QA branch;
+it was never imported or started. Obtain a new prompt for the operator's current
+configured source ref before using a candidate in Telegram. Remote publication,
+ACL, actual intake/activation and mobile login were not exercised by this probe.
+The separately recorded real-device and client-execution gates remain open.

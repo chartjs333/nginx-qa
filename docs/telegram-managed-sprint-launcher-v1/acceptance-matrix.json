@@ -25,7 +25,7 @@
       "owner": "prompt-export",
       "positive": "A JSON fixture based on the exported prompt passes envelope + actual managed validators.",
       "negative": "External-model round trip remains NOT_RUN until a real model output and validation evidence are captured.",
-      "status": "BLOCKED",
+      "status": "PASS",
       "external_evidence_required": true,
       "automated_status": "PASS",
       "automated_evidence": "evidence/qa-qualification.json",
@@ -34,8 +34,9 @@
         "tests.test_telegram_launcher_contract.TelegramLauncherEnvelopeContractTests.test_nested_reviewer_schema_and_semantic_graph_are_both_required",
         "tests.test_telegram_launcher_prompt.PromptUnitTests.test_deterministic_envelope_example_validates_both_installed_schemas"
       ],
-      "external_status": "NOT_RUN",
-      "external_note": "Real external-model output, Cloudflare and Telegram mobile evidence are separate release checks; local fixtures do not satisfy them."
+      "external_status": "PASS",
+      "external_note": "Actual Codex model authored first response from complete production-builder export; real production schema/graph/local Git provenance validation PASS. This is not Telegram delivery, remote publication, actual intake/activation or mobile login.",
+      "external_evidence": "evidence/ai-authoring/offline-validation.json"
     },
     {
       "id": "TMSL-AT-03",
