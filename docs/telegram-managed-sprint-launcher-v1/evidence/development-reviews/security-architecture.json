@@ -1,0 +1,143 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "index": 2,
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at_utc": "2026-11-03T17:11:47.947286+00:00",
+  "scope": "architecture-contract only; no implementation, branch or source edits",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\architecture-contract\\assignment-b2ce995923d844c8da8bebdf",
+  "baseline_commit": "2482beb33ea55d8e5f8565cda9bd546df9c6bc32",
+  "result_commit": "ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
+  "source_assignment_id": "assignment-b2ce995923d844c8da8bebdf",
+  "review_assignment_id": "review-6cc6bd80cd4a16ddcf0a8462",
+  "identity_http_status": 200,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T17:09:02.804126+00:00",
+      "assignment_id": "review-6cc6bd80cd4a16ddcf0a8462",
+      "created_at": "2026-11-03T17:09:02.804126+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
+      "result_key": "result-e1711be2ce4561660e6c8da543a37091702ac439fd54e91241ea276529d1354c",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-b2ce995923d844c8da8bebdf",
+      "status": "active"
+    }
+  },
+  "scope_ack_required": false,
+  "provenance": {
+    "head_matches_result": true,
+    "baseline_is_ancestor": true,
+    "clean_worktree": true,
+    "changed_files": [
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json",
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md",
+      "schemas/telegram-managed-sprint-launcher-v1.schema.json",
+      "tests/test_telegram_launcher_contract.py"
+    ],
+    "file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/acceptance-matrix.json": "9d6a47e6208866d536a9ea53be93e9fd4bb6340c3c7161732dea7ecfc824cf77",
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md": "a4911ff245a4bcf05ac6856805d452a9c1710503e5cd4663cdb430a50979b109",
+      "schemas/telegram-managed-sprint-launcher-v1.schema.json": "a58830e4ca9dec3d5636a4ce6e48d70d48e0bf1b1e4f2934437ec4fcc0eac9e3",
+      "tests/test_telegram_launcher_contract.py": "36fa9106417c76c0e9743a8248ae182fb60aef70d65fd02e4f9f04992ca1b778"
+    }
+  },
+  "decision": "REJECT",
+  "blocking_findings": [
+    {
+      "id": "SEC-ARCH-001",
+      "severity": "medium",
+      "path": "tests/test_sprint_type_contract.py",
+      "line": 2463,
+      "finding": "New installed schema omitted from exact schema inventory, breaking existing suite and skipping its offline ref/meta walk.",
+      "remediation": "Add explicit schema inventory entry and corresponding valid envelope fixture in positive schema cases; rerun both contract modules."
+    }
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_contract -v",
+      "exit_code": 0,
+      "tests_run": 8,
+      "result": "PASS"
+    },
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_sprint_type_contract -q",
+      "exit_code": 1,
+      "tests_run": 46,
+      "failures": 1,
+      "result": "FAIL",
+      "failure": "test_exact_schema_set_meta_validates_and_refs_resolve_offline: extra installed schema telegram-managed-sprint-launcher-v1.schema.json"
+    },
+    {
+      "check": "Draft202012Validator.check_schema(new launcher schema)",
+      "result": "PASS"
+    },
+    {
+      "command": "git diff --check 2482beb33ea55d8e5f8565cda9bd546df9c6bc32 ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "source_checks": [
+    "main.py:30487 and 38095 confirm legacy optional allowlists/webhook secret and document parsing before sender check; design explicitly requires a new authenticated early dispatch.",
+    "nginx_qa/managed_import.py:690 confirms active-project unique index; design expands reservation to pending/prepared and all old/new starts in the same control store.",
+    "nginx_qa/managed_import.py:7948-8051 confirms prepare proceeds to activation today; contract truthfully specifies a new parked boundary before assignment/process activation.",
+    "main.py:36664 confirms managed start resolves canonical project and registered repository before importer.start.",
+    "nginx_qa/managed_import.py:210 and 261 confirm actual strict parser and installed schema/ref validation used by new tests.",
+    "main.py:37797 confirms review submission is the phone-specific whoami route, with server-owned result binding."
+  ],
+  "security_assessment": {
+    "default_deny_and_identity": "Explicit feature flag, nonempty authenticated user/chat/project grants; no trusted user_id from JSON or localhost promotion.",
+    "authorization": "Producer create/read/preview separated from start; manifest publication separate capability; no main writes, automatic merge, client registry/root override or alias bypass.",
+    "git": "Source blob hashes and immutable manifest/source provenance separated; ambiguous publish reconciliation and external capability blockers explicit.",
+    "miniapp": "Raw initData HMAC, freshness, constant-time signature comparison, duplicate rejection, one-use exchange, hash storage, user-instance-challenge binding, current ACL and replay rejection specified.",
+    "gateway": "Scoped secure sessions, CSRF/origin on mutation/WS, no GET consumption, server-owned loopback upstream and allowlisted routes, no legacy public fallthrough.",
+    "later_implementation_focus": "Prove initData replay prevention across new challenges/sessions, atomic exchange races and current ACL revocation with implementation tests; architecture text states these invariants but runtime is not delivered in this stage.",
+    "evidence": "All 16 acceptance scenarios remain NOT_RUN; real external model/mobile/tunnel/PR gates explicitly not claimed. No live credentials used or external instance contacted."
+  },
+  "primary_sources": [
+    {
+      "url": "https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app",
+      "supports": "Raw initData HMAC and auth_date verification; do not trust initDataUnsafe."
+    },
+    {
+      "url": "https://core.telegram.org/bots/api#inlinekeyboardbutton",
+      "supports": "Callback data 1-64 bytes; Mini App inline button private user-bot chat restriction and business-account limitation."
+    },
+    {
+      "url": "https://core.telegram.org/bots/api#setwebhook",
+      "supports": "X-Telegram-Bot-Api-Secret-Token webhook authentication mechanism."
+    }
+  ],
+  "submission": {
+    "endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6682/whoami",
+    "request": {
+      "assignment_id": "review-6cc6bd80cd4a16ddcf0a8462",
+      "status": "REJECT",
+      "feedback": "REJECT: The new launcher schema introduces an existing contract-suite regression. C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_sprint_type_contract -q runs 46 tests with one failure: SprintSchemaContractTests.test_exact_schema_set_meta_validates_and_refs_resolve_offline at tests/test_sprint_type_contract.py:2463; telegram-managed-sprint-launcher-v1.schema.json is absent from EXPECTED_SCHEMA_FILES. Add the schema to that explicit inventory and add a valid envelope fixture to the positive schema cases table (the same inventory is checked at line 3261), preserving offline ref/meta validation. Rerun tests.test_sprint_type_contract and tests.test_telegram_launcher_contract and include accurate results. The eight new launcher contract tests pass. No runtime implementation is requested for this architecture stage. The reviewed design otherwise preserves default deny, authenticated Telegram identity, separate prepare/start/publication grants, canonical single-project reservation, Git provenance, one-use scoped Mini App exchange, CSRF/SSRF protections and truthful NOT_RUN external gates."
+    },
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-6cc6bd80cd4a16ddcf0a8462",
+      "source_assignment_id": "assignment-b2ce995923d844c8da8bebdf",
+      "result_key": "result-e1711be2ce4561660e6c8da543a37091702ac439fd54e91241ea276529d1354c",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    },
+    "response_schema_errors": []
+  },
+  "post_submission_worktree_clean": true
+}

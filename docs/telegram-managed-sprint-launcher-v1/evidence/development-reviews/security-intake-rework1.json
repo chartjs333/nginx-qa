@@ -1,0 +1,172 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "index": 2,
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at_utc": "2026-11-03T17:47:49.009274+00:00",
+  "scope": "telegram-intake rework 1 only",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\telegram-intake\\assignment-7dd4fd95800d6b7933789978",
+  "baseline_commit": "7586467472a25b97cf53c91dd4ea598cbebe3e45",
+  "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+  "source_assignment_id": "assignment-7dd4fd95800d6b7933789978",
+  "review_assignment_id": "review-d801675bedcb5b04f762ff9a",
+  "identity_http_status": 200,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T17:46:00.799448+00:00",
+      "assignment_id": "review-d801675bedcb5b04f762ff9a",
+      "created_at": "2026-11-03T17:46:00.799448+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+      "result_key": "result-fcfa78b0156aab860cfa8fd790a8c0a7d322e95ed65c53adf591e7793397ed9b",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-security-reviewer",
+      "reviewer_index": 2,
+      "reviewer_phone": "6682",
+      "source_assignment_id": "assignment-7dd4fd95800d6b7933789978",
+      "status": "active"
+    }
+  },
+  "scope_ack_required": false,
+  "decision": "APPROVE",
+  "blocking_findings": [],
+  "resolved_findings": [
+    {
+      "id": "SEC-INTAKE-001",
+      "fix": "Type-aware process membership check safely preserves terminal schema extension values; authenticated dispatcher tests cover null/false/1.",
+      "independently_verified": true
+    }
+  ],
+  "prior_evidence": {
+    "path": "C:\\nqt35\\client\\reviews\\security-intake.json",
+    "sha256": "013ff1b36b6a87e3caf3048d0205edf64b77efa6186bfb7f71848bc79659eec2",
+    "decision": "REJECT",
+    "submission_http_status": 409
+  },
+  "provenance": {
+    "head_matches_result": true,
+    "baseline_is_ancestor": true,
+    "worktree_clean": true,
+    "changed_files": [
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md",
+      "docs/telegram-managed-sprint-launcher-v1/intake.md",
+      "main.py",
+      "nginx_qa/telegram_launcher.py",
+      "nginx_qa/telegram_launcher_intake.py",
+      "tests/test_telegram_launcher_intake.py"
+    ],
+    "file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/architecture.md": "27ce4cc902a9808a68255794414989e37605d69537f47b5b0a31cc2e6eeee525",
+      "docs/telegram-managed-sprint-launcher-v1/intake.md": "f421492cb37cc23577da7abdd26f48157026e4ab4464aa1b6b6ddce3df6c929a",
+      "main.py": "6497a8ccd1f179c1a69bcc77b2c9d7a4e2a1d8d3680602e04a81bdd210c88cf8",
+      "nginx_qa/telegram_launcher.py": "58650c355f72b19997c6c824d62f9ae70064034d169c62b3bcb42e7baaaa8024",
+      "nginx_qa/telegram_launcher_intake.py": "37cfb854ad81aa86776de75fbde15821d1d6977dbffbd0fd9e4eeadd8456c385",
+      "tests/test_telegram_launcher_intake.py": "5fb7f97e73407a70ca5dae35d3b733b3c479ea43dea2edd950bf99469c977b6f"
+    },
+    "unchanged_previously_reviewed_git_blobs": {
+      "nginx_qa/git_provider.py": "87d34a0ba3b8512f2a1df777eff7e9a8fdb7297c",
+      "nginx_qa/managed_import.py": "d0b8a76dcd32278db7877cb10b50a8c6e8c35e90",
+      "nginx_qa/managed_continuity.py": "35ae02263ba10c6ba87974ef40a5dd2b6581a820",
+      "nginx_qa/telegram_launcher_store.py": "e60f0816a7cd618fdf15973c7a3fe05ca675880f"
+    }
+  },
+  "validation": [
+    {
+      "runner": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest <explicit methods> -v",
+      "tests_run": 10,
+      "exit_code": 0,
+      "result": "PASS",
+      "observed_output": "Ran 10 tests in 15.120s; OK",
+      "methods": [
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_terminal_workspace_extension_types_do_not_raise_typeerror",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_unselected_legacy_documents_channels_and_text_keep_dispatch",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_marked_unsupported_updates_and_namespace_cannot_use_legacy",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_explicit_document_caption_binds_project_before_and_after_download",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_document_authority_is_checked_before_download_and_after_await",
+        "tests.test_telegram_launcher_intake.LauncherIntakeTests.test_document_success_and_actual_byte_bound",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_webhook_enforces_secret_and_chat_allowlist",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_dispatch_acks_unknown_and_managed_without_staging",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_explicit_legacy_telegram_pending_round_trip_and_activation",
+        "tests.test_project_actor_import.ProjectActorImportTests.test_telegram_unknown_git_repository_does_not_mutate_agents"
+      ]
+    },
+    {
+      "check": "Independent namespace probes",
+      "cases": 5,
+      "result": "PASS",
+      "coverage": [
+        "Duplicate kind with namespace first",
+        "Duplicate kind with namespace last",
+        "Unicode-escaped kind key",
+        "Nested unrelated namespace retains legacy",
+        "Legacy NaN syntax retains legacy"
+      ],
+      "external_calls": false,
+      "mutations": false
+    },
+    {
+      "command": "git diff --check 7586467472a25b97cf53c91dd4ea598cbebe3e45 866e36ce03b4f5329d90564a55de5c709067fc74",
+      "exit_code": 0,
+      "result": "PASS"
+    }
+  ],
+  "rework_security_assessment": {
+    "terminal_types": "No iterable assumption on scalar/null extension; process objects still forbidden.",
+    "document_authority": "Explicit marker before network; private/current project grant before download and rechecked after; caption project must match payload.",
+    "namespace": "Duplicate keys retain namespace selection then fail strict parsing; escaped JSON keys handled; exact reserved prefix refused by legacy parser before mutations regardless feature state.",
+    "compatibility": "Unrelated legacy document/channel/text paths continue without new prepare grant. Existing legacy downloader security characteristics explicitly documented, not mistaken for new ingress.",
+    "durability": "Prior reviewed root/reservation/pinning/create-only publication code unchanged."
+  },
+  "prior_unchanged_source_assessment": {
+    "auth": "Webhook authentication and explicit prepare grant; document authorization before download and after await; current action/policy rechecked before reserve/publication.",
+    "source": "Safe root guard, registered repository match, configured ref, exact expected source commit, bounded raw blob hashes and durable pin.",
+    "reservation": "One existing SQLite writer boundary with project unique partial index; old start registration/recovery consult reservation, old active/inflight import prevents new reservation.",
+    "dedupe": "Bot/update and bot/chat/message pair plus canonical payload digest and transport identity; user/chat/project owner checked before replay.",
+    "publication": "Separate manifest_publish grant; deterministic source-parent tree/commit; exact durable intent before network; pinned commit/path/digest/parent verification; generated topic ref with explicit empty expected-old lease; remote verification handles lost ACK without main overwrite.",
+    "lifecycle": "No preparation/activation claimed at this stage; public receipt remains Created and blocked, instance/sprint null.",
+    "evidence": "No real Bot/model/GitHub demonstration claimed; disposable local remotes only."
+  },
+  "primary_sources": [
+    {
+      "url": "https://git-scm.com/docs/git-push",
+      "supports": "Explicit --force-with-lease=<ref>: empty expected value requires remote ref not already exist."
+    },
+    {
+      "url": "https://git-scm.com/docs/git-mktree",
+      "supports": "mktree accepts non-recursive ls-tree format and normalizes order."
+    }
+  ],
+  "limitations": [
+    "Intake only; no preparation/activation/UI accepted.",
+    "No actual Bot/model/GitHub calls; real external gates remain NOT_RUN.",
+    "Prior broader tests are historical evidence for prior commit; this review reran only focused changed-path checks."
+  ],
+  "submission": {
+    "endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6682/whoami",
+    "request": {
+      "assignment_id": "review-d801675bedcb5b04f762ff9a",
+      "status": "APPROVE",
+      "feedback": "APPROVE for telegram-intake rework 866e36ce03b4f5329d90564a55de5c709067fc74. Independently verified new reviewer/result binding and reviewed entire rework. SEC-INTAKE-001 resolved: type-aware process check safely handles terminal workspace null/false/1, with exact dispatcher regression coverage and no activation. New explicit document routing selects managed-sprint.json or /sprint_import project before download, checks current prepare permission before and after download, and enforces caption/envelope project equality. Unselected legacy text/documents/channels retain dispatch; the reserved launcher namespace cannot mutate through legacy. Independent verification: 10 focused rework/document/auth/legacy tests PASS plus five namespace probes (both duplicate-key orders, Unicode-escaped kind, nested unrelated kind and legacy NaN). Git publication, root guard, reservation and durable-store files remain exact prior reviewed Git blobs; no broader unchanged suite was repeated. No remaining blocking security finding. Approval covers intake only: Created/PREPARATION_REQUIRED remains the honest boundary; actual Bot/model/GitHub evidence and later prepare/activation/UI gates remain outstanding. No source edits/live credentials; worktree clean."
+    },
+    "http_status": 200,
+    "response": {
+      "assignment_id": "review-d801675bedcb5b04f762ff9a",
+      "source_assignment_id": "assignment-7dd4fd95800d6b7933789978",
+      "result_key": "result-fcfa78b0156aab860cfa8fd790a8c0a7d322e95ed65c53adf591e7793397ed9b",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    },
+    "response_schema_errors": []
+  },
+  "post_submission_worktree_clean": true
+}

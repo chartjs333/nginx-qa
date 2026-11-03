@@ -3,7 +3,7 @@
 The launcher uses the existing importer, continuity graph, current-identity,
 result/review APIs and process supervisor. It adds no model client or scheduler.
 Telegram callbacks and the authenticated gateway call the same `launch`/`stop`
-service functions; their transport surfaces are implemented in the next stages.
+service functions; see telegram-controls.md and gateway.md for the implemented transports.
 
 ## Launch evidence
 
@@ -32,8 +32,9 @@ The descriptor contains `protocol: nginx-qa-managed-client-v1`, operation ID,
 canonical project ID, sprint ID and the exact sorted task/reviewer phone set.
 Responses have an exact field set and preserve the original session. Configure
 `NGINX_QA_LAUNCHER_EXECUTOR_URL` (explicit HTTP loopback IP and port, no path or
-redirects) and `NGINX_QA_LAUNCHER_EXECUTOR_SECRET_REF`; the existing process secret
-resolver supplies the bearer credential. No credentials enter agent payloads.
+redirects) and `NGINX_QA_LAUNCHER_EXECUTOR_SECRET_REF`; the trusted control resolver
+supplies the bearer credential from `env:NGINX_QA_LAUNCHER_CONTROL_*`.
+The child-process secret resolver cannot delegate this protected namespace. No credentials enter agent payloads.
 Calls have a ten-second timeout and a 32 KiB strict-JSON response limit.
 
 The existing client service MUST durably deduplicate by operation and session,

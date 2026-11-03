@@ -37,7 +37,7 @@ Invalid requests create no operation, execution workspace, queue or process.
 Launcher write/review topic branches must use `agent/` or `review/`; write nodes
 need distinct branches. Uploaded roots/operator settings/credentials are rejected.
 Uploaded process commands are disabled in v1. Execution uses the existing external
-agent-client integration, whose preparation/activation is a subsequent stage.
+agent-client integration described in launch-modes.md.
 
 The operator policy can grant `manifest_publish` separately from `prepare`.
 Without it the saved operation remains `Created`, blocked by
@@ -63,6 +63,9 @@ managed import registration and import recovery consult this same reservation.
 An existing active sprint or unfinished import prevents reservation. At most 100
 pending operations across projects may hold slots; historical records are kept.
 
-At this stage a published operation reports `Created/PREPARATION_REQUIRED`.
-Instance preparation and Start are implemented by the following graph stages.
-Automated publication tests use disposable local remotes, not GitHub or Telegram.
+A published operation proceeds through the existing importer to parked preparation.
+Manual mode then reports Waiting without assignments; autonomous mode requests the
+same authorized launch path. Missing publication, executor or other capability
+retains the last proved state and a recoverable blocked reason. Start/Stop and
+recovery are described in launch-modes.md. Automated publication tests use
+disposable local remotes; they are separate from real GitHub/Telegram evidence.

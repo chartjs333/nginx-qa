@@ -1,0 +1,107 @@
+{
+  "recorded_at": "2026-11-03T19:21:58.311229+00:00",
+  "verdict": "APPROVE",
+  "baseline_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+  "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\telegram-controls\\assignment-c3126a37d8f79613b14ccaa5",
+  "expected_review_assignment": "review-68ec69a9abeb79714656df12",
+  "source_assignment": "assignment-c3126a37d8f79613b14ccaa5",
+  "tests": {
+    "focused": {
+      "status": "PASS",
+      "count": 22,
+      "seconds": 112.688,
+      "log": "C:\\nqt35\\client\\reviews\\runtime-telegram-controls-tests.txt"
+    },
+    "independent_migration_probe": {
+      "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+      "operations": 5000,
+      "initial_migration_seconds": 0.0284,
+      "later_initialization_seconds": 0.0002,
+      "subsequent_operation_history_reads": 0,
+      "notice_count": 5000,
+      "snapshot_omits_private_fields": true,
+      "operation_index_used": true,
+      "plan": [
+        [
+          2,
+          0,
+          0,
+          "SEARCH launcher_notices USING COVERING INDEX launcher_notice_operation (operation_id=?)"
+        ]
+      ]
+    },
+    "diff_check": "PASS"
+  },
+  "findings": [],
+  "resolved_findings": [
+    "R1-TRANSPORT-INIT-001: indexed one-time backfill with atomic migration marker; repeated initialization performs zero operation-history reads."
+  ],
+  "reviewed_behavior": [
+    "SQLite notice intent rolls back with lifecycle transition and survives terminal slot retirement.",
+    "Fenced finite delivery attempts and honest at-least-once semantics; delivery never activates work.",
+    "Owner/private-chat/action/instance/generation/expiry binding and current read/start permission checks; repeated Start remains engine-idempotent.",
+    "Safe engine status and explicitly labelled optional agent reports; raw summaries and private runtime paths are omitted.",
+    "Independent single-flight recovery/delivery futures preserve engine ticks and drain actual worker threads at shutdown."
+  ],
+  "limitations": [
+    "No real Telegram, external model, mobile or public tunnel proof was run.",
+    "Protected gateway authentication remains the next stage; this approval covers Telegram controls and durable transport.",
+    "No source edits, native fixtures, branch changes or live credentials."
+  ],
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T19:18:11.971319+00:00",
+        "assignment_id": "review-68ec69a9abeb79714656df12",
+        "created_at": "2026-11-03T19:18:11.971319+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+        "result_key": "result-cd1071065a0d1a0e2b07fc9401465369500fd6c950b9b32ac68fa66424f1a4f5",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-runtime-reviewer",
+        "reviewer_index": 1,
+        "reviewer_phone": "6681",
+        "source_assignment_id": "assignment-c3126a37d8f79613b14ccaa5",
+        "status": "active"
+      }
+    }
+  },
+  "decision_payload": {
+    "assignment_id": "review-68ec69a9abeb79714656df12",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact2f59b53c2ba765f12079f8000e0ba60f90c9d469 for stage6 Telegram controls/transport. Independently passed22 focused controls, migration, delivery lifecycle and existing reconciliation/lifespan checks, including owner/ACL/expiry, duplicate Start, bounded retries, terminal notices after slot release and real thread quiescence. Own5000-operation migration probe confirms atomic indexed backfill and zero history reads on subsequent initialization (0.0002s); R1-TRANSPORT-INIT-001 resolved. Reviewed all10 changed files against78b805c and clean exact HEAD. Safe status uses actual engine receipts and labelled agent-reported evidence; no fabricated PASS or raw summary disclosure. At-least-once Telegram delivery is documented; protected gateway and real bot/mobile acceptance are subsequent scope and not claimed by this approval."
+  },
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-68ec69a9abeb79714656df12",
+      "source_assignment_id": "assignment-c3126a37d8f79613b14ccaa5",
+      "result_key": "result-cd1071065a0d1a0e2b07fc9401465369500fd6c950b9b32ac68fa66424f1a4f5",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "changed_file_sha256": {
+    "configure_telegram.py": "61dfd8d143256f842c020d49809c1530e6648e9d6ef6bb2712f0364178ff4c9e",
+    "docs/telegram-managed-sprint-launcher-v1/telegram-controls.md": "3d8210a8ef7a34967f7f0e63921da101445af684fd5cee3e2add9ee65bbebd6e",
+    "main.py": "ff9c5c1d39f9663432260ba258671ec507b68d61de618f60c37aaf30a8b142de",
+    "nginx_qa/launcher_transport_store.py": "c0aa86df3f5d4c4e0ccf28411650c548280347d2bd4b746d75b6f5bc95380b0d",
+    "nginx_qa/managed_import.py": "94a371c28fb03bf52b861bd39b488806cd76c06967c46014dad77f843a995e3e",
+    "nginx_qa/telegram_launcher.py": "1ec8433b751ea7f19ad2ce313dea0ecce06408a06dc528664a650a8d31e7e9d3",
+    "nginx_qa/telegram_launcher_controls.py": "26017b94c0766c2c1ef600fdd4971841bb1e3515e7f187aea3269bbe10ceba65",
+    "tests/test_launcher_transport_migration.py": "d4bb91e3c7b1c37d829940816ca9e8face074cfc6532aba9dbf8d82e7920d1d2",
+    "tests/test_telegram_launcher_controls.py": "49307e8abbce4c1a29cfc2f238c74f219ace23793816ef6874cc467b59970b34",
+    "tests/test_telegram_launcher_delivery_lifecycle.py": "c9799211992905e8da41f89d58356aeb29c5aa36032983931882023255354a1e"
+  },
+  "submitted_at": "2026-11-03T19:22:11.283058+00:00"
+}

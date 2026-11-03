@@ -1,8 +1,11 @@
 # Telegram authoring prompt
 
 Enable `NGINX_QA_TELEGRAM_LAUNCHER_ENABLED=true` on the existing Telegram webhook
-service. Configure `TELEGRAM_BOT_TOKEN`, a required `TELEGRAM_WEBHOOK_SECRET` and
-the server-owned `NGINX_QA_TELEGRAM_LAUNCHER_POLICY_JSON`. Keep actual credentials
+service. For the public gateway configure protected
+`NGINX_QA_LAUNCHER_CONTROL_BOT_TOKEN` and
+`NGINX_QA_LAUNCHER_CONTROL_WEBHOOK_SECRET` through the trusted secret provider,
+plus the server-owned `NGINX_QA_TELEGRAM_LAUNCHER_POLICY_JSON`. The protected
+reference settings and legacy private fallback are described in gateway.md. Keep actual credentials
 outside the repository. With the feature disabled, existing Telegram behavior is
 unchanged. Enabled requests require the webhook secret even for legacy payloads.
 
@@ -45,7 +48,7 @@ is created, no workspace or agent is started, and no model API is called. Copy t
 prompt to your external AI, then inspect its returned JSON. A deterministic test
 fixture passing validation is not evidence of an actual external model round trip.
 
-This stage implements prompt export only. Envelope intake, preparation, controls
-and secure Web UI are separate subsequent implementation stages. The suggested
+The implemented intake, preparation, controls and protected Mini App are described
+in the adjacent guides. Prompt export itself remains a read-only authoring action. The suggested
 new envelope explicitly sets `autonomous_mode=false`; omitting the flag from this
 envelope is invalid. Unwrapped old legacy documents retain their own dispatch.

@@ -41,8 +41,9 @@ Cancellation during cleanup requests shutdown and waits for real quiescence.
 
 ## Credentials and project setup
 
-Configure the existing project registry, launcher policy and scoped executor as
-described in `architecture.md`, `intake.md`, `launch-modes.md` and
+Configure the existing project registry, launcher policy and scoped executor
+using the complete examples in [installation and operation](README.md), with
+contracts in `architecture.md`, `intake.md`, `launch-modes.md` and
 `telegram-controls.md`. Creating a host does not create projects, agent clients or
 grants. An unavailable existing executor blocks automatic activation recoverably.
 

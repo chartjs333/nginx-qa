@@ -1,0 +1,86 @@
+{
+  "reviewer": "6681 / tmsl-runtime-reviewer",
+  "verdict": "APPROVE",
+  "submission_status": "SUBMITTED",
+  "recorded_at": "2026-11-03T19:55:01.271729+00:00",
+  "baseline_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\gateway-auth\\assignment-20a476868122d1134f713ff9",
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T19:52:23.855193+00:00",
+      "assignment_id": "review-87700a62304157d89a664abf",
+      "created_at": "2026-11-03T19:52:23.855193+00:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
+      "result_key": "result-0a9dbb9a19693e5253047ff308f35049400f360884a3fda20b6ba12e3d7f52e7",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-20a476868122d1134f713ff9",
+      "status": "active"
+    }
+  },
+  "blocking_findings": [],
+  "feedback": "APPROVE exact 6b603a16fb84da35e9c8f06b40ced3b3be5e5f11 for gateway-auth runtime/architecture. Independent exact-head verification: 28 host/tunnel/auth-race checks and 1 actual gateway-to-engine login/CSRF/Start/Stop/Logout integration pass; clean worktree and diff check. Lifecycle source hashes exactly match my independent native atomic-crash/default-recovery and failed-restart webhook probes. Verified one existing engine lifespan, owned dual loopback listeners, cancellation-resistant quiescence, fatal private-listener propagation, exact root/provenance gate, atomic Job launch with unchanged default recovery, bounded owned origin/registration history, and current scoped auth. All prior reviewer findings are resolved. Existing process-limit stderr expectation and D:/Prompt alias failures remain documented baseline QA work, not claimed passing. Actual mobile Telegram, public Cloudflare/webhook, external-model JSON and approved release-host start remain NOT_RUN release acceptance gates.",
+  "checks": [
+    {
+      "name": "host+tunnel+auth_races",
+      "result": "PASS",
+      "tests": 28,
+      "seconds": 7.009,
+      "log": "runtime-gateway-formal-tests.txt"
+    },
+    {
+      "name": "actual gateway-engine login CSRF Start Stop Logout",
+      "result": "PASS",
+      "tests": 1,
+      "seconds": 31.826,
+      "log": "runtime-gateway-formal-integration.txt"
+    },
+    {
+      "name": "head/parent/clean tree/diff check",
+      "result": "PASS"
+    }
+  ],
+  "reused_independent_evidence": {
+    "condition": "All four involved production file SHA256 values identical to final exact commit.",
+    "report": "runtime-gateway-tunnel-early.json",
+    "native_crash": "runtime-gateway-tunnel-atomic-crash.json",
+    "reconnect": "runtime-gateway-tunnel-reconnect-fixed.json"
+  },
+  "limitations": [
+    "Actual external Telegram/mobile/Cloudflare/webhook/model/release-host acceptance NOT_RUN.",
+    "Author reports parent-overlay reproduction of existing Windows venv process-limit stderr assertion failure; observed log rejects missing expected Traceback rather than absent resource enforcement. Existing D:/Prompt alias cases are documented baseline failures. Not counted as passing."
+  ],
+  "source_hashes": {
+    "nginx_qa/launcher_auth.py": "061ea69876b5c717152d76ed9b926204ee9e205d501e8bba503df7e398aba361",
+    "nginx_qa/launcher_gateway.py": "db36efdacb6eb1c930fedde000cea62c124e268d03f5375e75fff16004f3912f",
+    "nginx_qa/launcher_host.py": "e24c835233f2a10ed988037cc329281ce92cc2c77d23b1c35254ee7df4cde477",
+    "nginx_qa/launcher_tunnel.py": "a606bde67d34cc6c660960ce00d14bd6e12edf8f72fd304b5c0431527e714766",
+    "nginx_qa/launcher_origin.py": "268b36bea6470ecdf159101e76ed7715542c19bec1c8d6f1a8bcebb2380ec05e",
+    "nginx_qa/process_supervisor.py": "77322d3fcc352eaa11dd42235622bba0264c7ef32f4775b2eb50f7a41cd3f073"
+  },
+  "decision_payload": {
+    "assignment_id": "review-87700a62304157d89a664abf",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact 6b603a16fb84da35e9c8f06b40ced3b3be5e5f11 for gateway-auth runtime/architecture. Independent exact-head verification: 28 host/tunnel/auth-race checks and 1 actual gateway-to-engine login/CSRF/Start/Stop/Logout integration pass; clean worktree and diff check. Lifecycle source hashes exactly match my independent native atomic-crash/default-recovery and failed-restart webhook probes. Verified one existing engine lifespan, owned dual loopback listeners, cancellation-resistant quiescence, fatal private-listener propagation, exact root/provenance gate, atomic Job launch with unchanged default recovery, bounded owned origin/registration history, and current scoped auth. All prior reviewer findings are resolved. Existing process-limit stderr expectation and D:/Prompt alias failures remain documented baseline QA work, not claimed passing. Actual mobile Telegram, public Cloudflare/webhook, external-model JSON and approved release-host start remain NOT_RUN release acceptance gates."
+  },
+  "http_status": 200,
+  "api_receipt": {
+    "assignment_id": "review-87700a62304157d89a664abf",
+    "source_assignment_id": "assignment-20a476868122d1134f713ff9",
+    "result_key": "result-0a9dbb9a19693e5253047ff308f35049400f360884a3fda20b6ba12e3d7f52e7",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}

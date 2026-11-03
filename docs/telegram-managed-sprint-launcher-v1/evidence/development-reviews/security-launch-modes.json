@@ -1,0 +1,184 @@
+{
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at": "2026-11-03T18:56:02.439211+00:00",
+  "stage": "launch-modes",
+  "verdict": "REJECT",
+  "baseline_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
+  "result_commit": "dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce",
+  "source_assignment_id": "assignment-f8c3275b95dd378f9f1015ca",
+  "review_assignment_id": "review-38a8528b65f435d9ee8b5281",
+  "result_key": "result-34731a297a5e1847cc0bfd14ecc039cbbbfc609049b8a4480a74f3f38fe7c499",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\launch-modes\\assignment-f8c3275b95dd378f9f1015ca",
+  "verified_initial_identity": {
+    "http_status": 200,
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment_id": "review-38a8528b65f435d9ee8b5281",
+    "result_commit": "dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce",
+    "source_assignment_id": "assignment-f8c3275b95dd378f9f1015ca",
+    "reviewer_phone": "6682",
+    "status": "active",
+    "effective_scope_or_ack_required": false
+  },
+  "identity_immediately_before_decision": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T18:50:45.697895+00:00",
+        "assignment_id": "review-38a8528b65f435d9ee8b5281",
+        "created_at": "2026-11-03T18:50:45.697895+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce",
+        "result_key": "result-34731a297a5e1847cc0bfd14ecc039cbbbfc609049b8a4480a74f3f38fe7c499",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-security-reviewer",
+        "reviewer_index": 2,
+        "reviewer_phone": "6682",
+        "source_assignment_id": "assignment-f8c3275b95dd378f9f1015ca",
+        "status": "active"
+      }
+    }
+  },
+  "findings": [
+    {
+      "id": "SEC-LAUNCH-001",
+      "blocking": true,
+      "title": "Launcher recovery blocks the shared ordinary continuity cadence",
+      "files": [
+        "main.py:_reconcile_managed_continuity_background",
+        "nginx_qa/telegram_launcher_intake.py:reconcile_operations"
+      ],
+      "evidence": "The worker calls runtime.reconcile_all, then waits for the full launcher pass with Future.result(). That pass iterates policy projects sequentially and awaits publication/preparation/executor I/O. Independent probe held recovery pending and observed exactly one ordinary tick across 24 configured intervals; cleanup released the pending coroutine and worker exited normally.",
+      "impact": "An unavailable launcher operation delays unrelated managed graph recovery, outbox progression and future ordinary ticks. Exception isolation and a responsive ASGI loop do not isolate this shared worker delay.",
+      "requested_change": "Schedule at most one launcher recovery on the owning event loop independently of ordinary continuity ticks; observe completion and errors without waiting in that worker; perform explicit bounded shutdown cleanup. Test that normal ticks continue while recovery is pending and that no overlapping recoveries start."
+    }
+  ],
+  "source_review": [
+    "Read all thirteen changed files and relevant surrounding importer, continuity, process supervisor and transport code.",
+    "Fresh current grants bind authenticated user/chat/project/action. Prepare does not grant Start. Pending Stop uses retained current Stop permission before source/preparation checks.",
+    "READY is required before engine activation; ACCEPTED must match exact initial assignments and original session before Running. Stored READY, ACCEPTED and STOPPED are revalidated on decode/update/recovery/finalization.",
+    "Loopback executor adapter rejects external hosts, paths, userinfo and redirects, disables environment proxies, resolves bearer credentials through the configured secret reference and bounds strict JSON responses.",
+    "Publication, preparation, Start and Stop share the operation lock. Shared project reservation blocks legacy/new import races. Recovery lineage retains exact launcher context and does not activate manual retries.",
+    "Stop fence and cancellation are symmetrically bound to control evidence. Explicit old IDs cannot create new graph/review/recovery/repair/scope effects after stop; exact prior accepted acknowledgements remain historical.",
+    "Cancellation reconstructs and validates prior runtime, preserves outcomes/reviews/history, proves resource retirement, and releases only the owner slot. The stop-specific PREPARED native claim preserves launch/restart fencing."
+  ],
+  "tests": [
+    {
+      "command": "python -X utf8 -B -m unittest tests.test_sprint_type_contract tests.test_telegram_launcher_launch_modes.ExistingClientAdapterContractTests tests.test_telegram_launcher_launch_modes.LauncherReconciliationLoopTests -q",
+      "count": 51,
+      "result": "PASS",
+      "seconds": 7.826
+    },
+    {
+      "suite": "tests.test_telegram_launcher_launch_modes.LauncherLaunchModeTests",
+      "selected_tests": [
+        "test_revocation_during_executor_ready_denies_before_activation",
+        "test_lost_executor_ack_retries_existing_activation_and_same_client_job",
+        "test_restart_resumes_authorized_auto_but_never_starts_manual_waiting",
+        "test_active_stop_preserves_history_and_retires_only_owned_resources",
+        "test_stop_pending_reviews_keeps_actual_result_and_no_invented_decisions",
+        "test_recovered_preparation_can_stop_without_deleting_coordinator_history",
+        "test_cancel_serializes_with_manifest_publication",
+        "test_old_start_api_and_new_auto_import_share_one_project_guard"
+      ],
+      "count": 8,
+      "result": "PASS",
+      "seconds": 181.866
+    },
+    {
+      "suite": "independent stdin unittest using disposable local Git fixture",
+      "test": "test_stop_recovery_policy_revocation_and_corrupt_durable_proofs",
+      "count": 1,
+      "result": "PASS",
+      "seconds": 22.375,
+      "assertions": [
+        "Current Stop grant completes pending cleanup after prepare revocation and source ref policy change.",
+        "Foreign-session STOPPED updates and decoded records are rejected, without persisting the receipt.",
+        "ACCEPTED assignment IDs must match actual activation.",
+        "Removing the runtime stop marker while control retains it is rejected.",
+        "Actual stopped runtime schema/invariants pass; forged before-state hash is rejected."
+      ]
+    },
+    {
+      "suite": "independent exact main-loop isolated asyncio probe",
+      "test": "test_stalled_launcher_recovery_blocks_unrelated_continuity_ticks",
+      "count": 1,
+      "result": "BLOCKING_BEHAVIOR_REPRODUCED",
+      "seconds": 0.198,
+      "observations": {
+        "configured_interval_seconds": 0.005,
+        "recovery_held_seconds": 0.12,
+        "ordinary_continuity_ticks": 1,
+        "pending_recovery_released_during_cleanup": true,
+        "thread_exited_after_release": true
+      }
+    }
+  ],
+  "independent_normal_test_count": 60,
+  "independent_blocker_reproductions": 1,
+  "author_evidence": {
+    "summary": "C:/nqt35/client/stage5-summary.txt",
+    "logs_prefix": "C:/nqt35/client/stage5-",
+    "separate_from_independent_tests": true
+  },
+  "limitations": [
+    "No native child-process tests were run by this reviewer to avoid fixture port collisions; supervisor changes were inspected.",
+    "No live Telegram Bot, external model, production executor, public tunnel or mobile session was tested.",
+    "Telegram callbacks and protected gateway transport are later stages."
+  ],
+  "provenance": {
+    "baseline_is_ancestor": true,
+    "head_matches_result": true,
+    "diff_check": "PASS",
+    "worktree_clean_before_decision": true,
+    "changed_file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/launch-modes.md": "f8f60fe5966b53f549cdc8ea4d5ee247fdd09fc39af0527f751f361cba4f72e4",
+      "main.py": "3d9153e44f781bd49ec60975a790270d3a455cc2202fc9ed9afbb5625e11ed3d",
+      "nginx_qa/managed_cancellation.py": "2771f8b5373f028a0910b9cc68ba0e6f57f93886afc58592e7a3f7fa12b45e8b",
+      "nginx_qa/managed_continuity.py": "38583bc55384b4579ac535f247af873d7401eca72ad4b3f5a0629a6de232a0fa",
+      "nginx_qa/managed_import.py": "278673fac5b8ec55752a94ce04e5e074296f1fd7a98b997f889bcee7665b8638",
+      "nginx_qa/process_supervisor.py": "92bcb9714793ef332c989ffb4eaaa07dc35f367387ad985d0ed38f9516a6405b",
+      "nginx_qa/sprint_types.py": "aa5cec7132a4696ae1829833471bc25a3b673c142d8a3dea554c43007e7acd6a",
+      "nginx_qa/telegram_launcher_execution.py": "488672c0a5d7c1a205784e2dbc118b136b84fbf79676c3f0c804a74af741d2cb",
+      "nginx_qa/telegram_launcher_intake.py": "d1add76ed102d4b9908cb7d945237089280d2ea458a8cfc80e3da714a4e21652",
+      "nginx_qa/telegram_launcher_store.py": "8c57b070a651927dd1955739c33d258d6c93a689f1321ce8067bb77e5c3e5514",
+      "schemas/managed-runtime-state-v1.schema.json": "2d3e8f52b7fea3e8b254dc438741fcbbd0099f68d78797c98dea4c16118f7dc4",
+      "schemas/managed-runtime-state-v2.schema.json": "2a7e907697051783d7b502afe27b0c746ee76b48c933f0cffd1be9f83631cd58",
+      "tests/test_telegram_launcher_launch_modes.py": "ea8f43bddaf2e28fbb7f231d2241efc32ea6890d6bc9d337f552e7d2c2f6b2c4"
+    },
+    "worktree_clean_after_decision": true
+  },
+  "decision_request": {
+    "assignment_id": "review-38a8528b65f435d9ee8b5281",
+    "status": "REJECT",
+    "feedback": "REJECT exact dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce: main.py _reconcile_managed_continuity_background synchronously waits on run_coroutine_threadsafe(reconcile_operations(...)).result() after runtime.reconcile_all. Launcher recovery awaits sequential Git/executor I/O, so one stalled operation prevents the next ordinary continuity tick for every project. Independent exact-code probe held one launcher recovery pending and observed only one healthy-project tick across 24 configured intervals (120 ms with 5 ms cadence). This violates scoped failure isolation even while ASGI remains responsive. Decouple launcher recovery from continuity cadence: maintain at most one owned ASGI-loop future, observe completion/errors without waiting in the continuity worker, and cleanly stop/cancel it during shutdown. Add regression keeping recovery pending while unrelated continuity ticks continue, with no overlapping launcher recoveries. 60 independent non-native/security checks otherwise passed; earlier authorization, session receipt, cancellation proof and stop-recovery findings are fixed. No production Bot/model integration is claimed."
+  },
+  "decision_request_schema": "PASS",
+  "decision_submitted": true,
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-38a8528b65f435d9ee8b5281",
+      "source_assignment_id": "assignment-f8c3275b95dd378f9f1015ca",
+      "result_key": "result-34731a297a5e1847cc0bfd14ecc039cbbbfc609049b8a4480a74f3f38fe7c499",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    }
+  },
+  "response_schema_errors": [],
+  "response_binding_valid": true
+}

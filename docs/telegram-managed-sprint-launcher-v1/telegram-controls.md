@@ -14,9 +14,9 @@ Prepared instances have exactly three primary buttons:
    Running/terminal instances return their state. The callback receipt is answered
    before executor work; the answer does not claim successful activation.
 2. **Открыть Web UI** uses a private-chat Mini App and the operator's HTTPS origin
-   `NGINX_QA_LAUNCHER_PUBLIC_ORIGIN`. Its URL contains only a public opaque handle.
-   The following gateway stage must authenticate signed Telegram initData and
-   scope the resulting session. Until the protected gateway is installed/configured,
+   `NGINX_QA_LAUNCHER_PUBLIC_ORIGIN`, or the owned tunnel origin receipt. Its URL
+   contains only a public opaque handle. The implemented gateway authenticates
+   signed Telegram initData and scopes the resulting session. Until it is configured,
    the button explains the required setup; no private backend URL is exposed.
 3. **Статус спринта** reads the scoped authoritative engine projection without
    provision, activation, graph advancement or executor calls.

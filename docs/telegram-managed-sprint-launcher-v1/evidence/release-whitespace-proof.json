@@ -1,0 +1,7 @@
+{
+  "file": "nginx_qa/telegram_launcher.py",
+  "ast_unchanged": true,
+  "before_sha256": "701b1f9d4e4ac5b761c077e5c865b6a2323ecd16b1d0c740dab0b9ee22c947dc",
+  "after_sha256": "11299129f14cd5ce6521e355b1c48cbd783773b20d22707435d9fa0bcb4ae021",
+  "change": "Remove trailing blank line; parsed Python AST is identical."
+}

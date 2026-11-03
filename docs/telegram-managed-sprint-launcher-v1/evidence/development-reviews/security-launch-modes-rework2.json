@@ -1,0 +1,129 @@
+{
+  "stage": "launch-modes",
+  "cycle": 2,
+  "verdict": "APPROVE",
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at": "2026-11-03T19:08:01.046447+00:00",
+  "baseline_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
+  "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+  "review_assignment_id": "review-44d071e0115342a8120a1466",
+  "source_assignment_id": "assignment-70f7abd530651fabfff35a93",
+  "result_key": "result-425842f63e59fd1fb702cae0502f3a667c70ed750b903fe7b1b0351cf4453ce4",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\launch-modes\\assignment-70f7abd530651fabfff35a93",
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T19:06:22.856241+00:00",
+        "assignment_id": "review-44d071e0115342a8120a1466",
+        "created_at": "2026-11-03T19:06:22.856241+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+        "result_key": "result-425842f63e59fd1fb702cae0502f3a667c70ed750b903fe7b1b0351cf4453ce4",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-security-reviewer",
+        "reviewer_index": 2,
+        "reviewer_phone": "6682",
+        "source_assignment_id": "assignment-70f7abd530651fabfff35a93",
+        "status": "active"
+      }
+    }
+  },
+  "effective_scope_or_ack_required": false,
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "SEC-LAUNCH-001",
+      "resolution": "Normal continuity cadence remains independent of one in-flight launcher batch; source unchanged from the first fix and regression passes."
+    },
+    {
+      "id": "SEC-LAUNCH-002",
+      "resolution": "Batch uses gather(return_exceptions=True), observes failure count only after every child completes; tested actual held worker threads through SQLite failure and stop request. No orphan overlap or false quiescence."
+    }
+  ],
+  "source_review": [
+    "Inspected the entire four-file delta and retained single-future, four-slot, current-principal and shutdown-boundary source.",
+    "Stored ACCEPTED/STOPPED receipt type is checked before field access; decode converts malformed attribute access into OPERATION_CORRUPT. Existing full descriptor/session and assignment checks remain intact.",
+    "No authority grant, canonical owner/source binding, process fence, cancellation proof, engine scheduler or transport activation boundary was weakened."
+  ],
+  "tests": [
+    {
+      "command": "C:/nqt35/v/Scripts/python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_launch_modes.LauncherReconciliationLoopTests tests.test_managed_import.ManagedAppLifespanTests -q",
+      "count": 10,
+      "result": "PASS",
+      "seconds": 0.725
+    },
+    {
+      "suite": "independent stdin unittest",
+      "test": "test_previous_sqlite_failure_case_retains_four_worker_barrier_until_quiescent",
+      "count": 1,
+      "result": "PASS",
+      "seconds": 0.194,
+      "observations": {
+        "injected_error": "sqlite3.OperationalError",
+        "real_thread_backed_workers_held": 4,
+        "maximum_parallel_workers": 4,
+        "batch_pending_after_error": true,
+        "batch_pending_after_stop_requested": true,
+        "queued_work_stopped": true,
+        "workers_live_at_return": 0,
+        "returned_failed_projects": 1
+      }
+    }
+  ],
+  "independent_test_count": 11,
+  "prior_evidence": [
+    "C:/nqt35/client/reviews/security-launch-modes.json",
+    "C:/nqt35/client/reviews/security-launch-modes-rework1.json"
+  ],
+  "author_evidence": "C:/nqt35/client/stage5-rework2-tests.txt, separate from own checks",
+  "limitations": [
+    "Focused rework review only; unchanged broad suites were not rerun.",
+    "No native child process, live Telegram, external model, production executor, tunnel or mobile session tested by this reviewer.",
+    "Callback and protected gateway transport stages remain outside this launch-modes approval."
+  ],
+  "provenance": {
+    "baseline_is_ancestor": true,
+    "head_matches_result": true,
+    "diff_check": "PASS",
+    "worktree_clean_before": true,
+    "changed_file_sha256": {
+      "docs/telegram-managed-sprint-launcher-v1/launch-modes.md": "4574ebd68b8c2a7e1bf27606d1bfc9bdaf67597312d86a81701dd585ba57e0f3",
+      "nginx_qa/telegram_launcher_intake.py": "2688d462b6793c1731f1f822ffbdcda0a7f3993457dc33a8c690eab2d82a4ca6",
+      "nginx_qa/telegram_launcher_store.py": "f961e14c137e3e06e8f03cab8616bc53fb9929481ee5df972145ea5743882156",
+      "tests/test_telegram_launcher_launch_modes.py": "49dc59dbf85bc6923128c70440fc25ebb6920bf6e9daf1b65fc04b0d28518ff5"
+    },
+    "worktree_clean_after": true
+  },
+  "decision_request": {
+    "assignment_id": "review-44d071e0115342a8120a1466",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact 78b805cb976f9aac87f2e8906ef064bc10909a27. Both independently identified launch-mode blockers are resolved. Ordinary continuity ticks remain independent of the one tracked launcher batch. gather(return_exceptions=True) now joins every child before returning observed failures, so a SQLite error cannot orphan sibling mutations or release the shutdown barrier early. My previous SQLite counterexample now passed with four real held worker threads: batch remained pending after the error and after stop request, maximum concurrency stayed four, queued work did not begin, all workers exited before failed_projects=1 returned. Malformed stored ACCEPTED/STOPPED types return OPERATION_CORRUPT 409. Eleven focused independent checks passed (10 reconciliation/lifespan checks plus the independent prior-counterexample probe). Unchanged authorization/receipt/owner/cancellation guards retain the prior reviewed security properties. No native/live Bot/model/production executor validation is claimed."
+  },
+  "decision_request_schema": "PASS",
+  "decision_submitted": true,
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-44d071e0115342a8120a1466",
+      "source_assignment_id": "assignment-70f7abd530651fabfff35a93",
+      "result_key": "result-425842f63e59fd1fb702cae0502f3a667c70ed750b903fe7b1b0351cf4453ce4",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "response_schema_errors": [],
+  "response_binding_valid": true
+}

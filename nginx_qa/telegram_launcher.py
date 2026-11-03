@@ -342,4 +342,3 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
     return {"ok": True, "command": "sprint_prompt", "project_id": project_id,
             "format": mode, "contract_sha256": exported["contract_sha256"],
             "prompt_sha256": exported["prompt_sha256"], "activated": False}
-

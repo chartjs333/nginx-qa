@@ -1,0 +1,124 @@
+{
+  "reviewer_id": "tmsl-runtime-reviewer",
+  "reviewer_phone": "6681",
+  "reviewer_index": 1,
+  "reviewed_at": "2026-11-03T17:48:22.9529559Z",
+  "stage": "telegram-intake",
+  "rework_cycle": 1,
+  "identity": {
+    "managed": true,
+    "project_id": "9000",
+    "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+    "assignment_kind": "review",
+    "assignment": {
+      "activated_at": "2026-11-03T18:46:00.799448+01:00",
+      "assignment_id": "review-aad0837282c568966a21d252",
+      "created_at": "2026-11-03T18:46:00.799448+01:00",
+      "decided_at": null,
+      "decision": null,
+      "request_fingerprint": null,
+      "response": null,
+      "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+      "result_key": "result-fcfa78b0156aab860cfa8fd790a8c0a7d322e95ed65c53adf591e7793397ed9b",
+      "result_outcome": "DONE",
+      "reviewer_id": "tmsl-runtime-reviewer",
+      "reviewer_index": 1,
+      "reviewer_phone": "6681",
+      "source_assignment_id": "assignment-7dd4fd95800d6b7933789978",
+      "status": "active"
+    }
+  },
+  "previous_result_commit": "7586467472a25b97cf53c91dd4ea598cbebe3e45",
+  "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
+  "previous_review": "C:\\nqt35\\client\\reviews\\runtime-intake.json",
+  "files_reviewed": [
+    "docs/telegram-managed-sprint-launcher-v1/architecture.md",
+    "docs/telegram-managed-sprint-launcher-v1/intake.md",
+    "main.py",
+    "nginx_qa/telegram_launcher.py",
+    "nginx_qa/telegram_launcher_intake.py",
+    "tests/test_telegram_launcher_intake.py"
+  ],
+  "findings": [],
+  "resolved_findings": [
+    {
+      "id": "R1-INTAKE-001",
+      "status": "resolved",
+      "evidence": "Original legacy channel/document probes and added ordinary-caption case now fall through without launcher network/state calls. Explicit marker tests preserve pre-download authorization, caption binding and launcher namespace refusal before legacy mutation."
+    }
+  ],
+  "tests": [
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_intake tests.test_telegram_launcher_prompt tests.test_telegram_launcher_contract tests.test_sprint_type_contract tests.test_sequential_prompt_ui -q",
+      "total": 103,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 81.637
+    },
+    {
+      "command": "C:\\nqt35\\v\\Scripts\\python.exe -X utf8 -B -m unittest [four listed ProjectActorImportTests] -q",
+      "tests": [
+        "test_sequential_telegram_url_stages_then_starts_first_graph_node",
+        "test_telegram_webhook_enforces_secret_and_chat_allowlist",
+        "test_telegram_dispatch_acks_unknown_and_managed_without_staging",
+        "test_explicit_legacy_telegram_pending_round_trip_and_activation"
+      ],
+      "total": 4,
+      "failures": 0,
+      "exit_code": 0,
+      "seconds": 1.632
+    },
+    {
+      "command": "git diff --check 7586467472a25b97cf53c91dd4ea598cbebe3e45 866e36ce03b4f5329d90564a55de5c709067fc74",
+      "exit_code": 0
+    }
+  ],
+  "independent_probe": {
+    "probe": "original legacy regression cases plus caption",
+    "outcomes": [
+      {
+        "case": "legacy_channel_post",
+        "fell_through_to_legacy": true
+      },
+      {
+        "case": "legacy_document_prompt_only_user",
+        "fell_through_to_legacy": true
+      },
+      {
+        "case": "legacy_document_with_caption",
+        "fell_through_to_legacy": true
+      }
+    ],
+    "no_launcher_fetch_or_state_access": true
+  },
+  "assessment": [
+    "Deterministic explicit document selectors preserve pre-download launcher authorization and namespace-specific restrictions.",
+    "Legacy parser refuses launcher namespace before mutation, including unsupported launcher versions.",
+    "New text selector preserves duplicate kind information and delegates launcher input to strict parser.",
+    "Terminal workspace scalar/null extensions no longer raise TypeError.",
+    "Shared reservation, provenance pinning and Git publication modules are unchanged by rework; original independent review and full duplicate-ingress race evidence remain applicable.",
+    "Preparation and activation are intentionally subsequent stages; no fabricated external execution evidence."
+  ],
+  "decision": "APPROVE",
+  "request": {
+    "assignment_id": "review-aad0837282c568966a21d252",
+    "status": "APPROVE",
+    "feedback": "APPROVE telegram-intake rework at 866e36ce03b4f5329d90564a55de5c709067fc74. R1-INTAKE-001 is resolved: reserved managed-sprint.json or exact /sprint_import project caption explicitly selects document intake before download; unselected legacy documents, captions, channel posts and legacy text retain fallback. Launcher namespace is refused at the legacy dispatch boundary before mutation. Marked unsupported updates reject, caption project binds before/after download, duplicate launcher kind keys select strict validation, and unauthorized marked uploads still never download. Independent original-regression probe plus legacy-caption probe all return fallback without launcher fetch/state access. Combined suite: 103 passed; four actual Telegram legacy graph/auth/dispatch/roundtrip tests: 4 passed. Terminal workspace extension guard now safely handles scalar/null values. Reservation and immutable publication code is unchanged from the previous runtime review, whose concurrent full-ingress probe and 108-test evidence remain applicable. No blocking findings within stage3; PREPARATION_REQUIRED remains the explicit next-stage boundary and external demonstrations remain unclaimed."
+  },
+  "api_endpoint": "http://127.0.0.1:18035/api/v1/projects/9000/agents/6681/whoami",
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-aad0837282c568966a21d252",
+      "source_assignment_id": "assignment-7dd4fd95800d6b7933789978",
+      "result_key": "result-fcfa78b0156aab860cfa8fd790a8c0a7d322e95ed65c53adf591e7793397ed9b",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "clean_worktree": true,
+  "no_source_edits": true,
+  "no_branch_changes": true,
+  "no_live_credentials_used": true
+}

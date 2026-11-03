@@ -1,6 +1,9 @@
 # Telegram Managed Sprint Launcher v1: architecture contract
 
-Status: design and transport schema, before runtime implementation.
+Status: implemented architecture contract; external release acceptance is tracked separately.
+The extension-point table records the original baseline audit, not the current
+implementation backlog. See README.md, qualification.md and the acceptance matrix
+for the implemented workflow, actual evidence and remaining external gates.
 Baseline: nginx-qa main after PR16, 2482beb33ea55d8e5f8565cda9bd546df9c6bc32.
 
 The user amendment takes precedence over the original specification: one active

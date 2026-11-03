@@ -22,6 +22,16 @@ Runtime files such as queue history, agent state, email routes, screenshots,
 evidence files, logs, and the local virtual environment are intentionally ignored
 by Git.
 
+## Telegram Managed Sprint Launcher v1
+
+The optional launcher exports current authoring prompts, accepts managed JSON and
+prepares manual or authorized autonomous runs through the existing engine. It
+allows one active sprint per canonical project and provides three Telegram controls
+with a protected Mini App gateway. See the [installation and operation guide](docs/telegram-managed-sprint-launcher-v1/README.md)
+and [qualification evidence](docs/telegram-managed-sprint-launcher-v1/qualification.md).
+A configured existing agent client is required for automatic execution; real
+Telegram/mobile acceptance is tracked separately from automated tests.
+
 ## Run
 
 On Windows:

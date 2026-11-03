@@ -1,0 +1,128 @@
+{
+  "recorded_at": "2026-11-03T19:07:48.143571+00:00",
+  "verdict": "APPROVE",
+  "baseline_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
+  "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\launch-modes\\assignment-70f7abd530651fabfff35a93",
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T19:06:22.856241+00:00",
+        "assignment_id": "review-db6c19a9aa785b6c41f3f6d1",
+        "created_at": "2026-11-03T19:06:22.856241+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+        "result_key": "result-425842f63e59fd1fb702cae0502f3a667c70ed750b903fe7b1b0351cf4453ce4",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-runtime-reviewer",
+        "reviewer_index": 1,
+        "reviewer_phone": "6681",
+        "source_assignment_id": "assignment-70f7abd530651fabfff35a93",
+        "status": "active"
+      }
+    }
+  },
+  "decision_payload": {
+    "assignment_id": "review-db6c19a9aa785b6c41f3f6d1",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact 78b805cb976f9aac87f2e8906ef064bc10909a27. R1-LAUNCH-001 and R1-LAUNCH-002 are resolved: engine ticks stay independent, one tracked transport batch remains in flight, and gather waits for every project before retry or shutdown even after unexpected exceptions. Independently passed 14 focused reconciliation/lifespan/adapter tests. Re-ran held-worker probes for malformed stored receipt, SQLite OperationalError and AttributeError: 12-13 additional engine ticks, exactly one worker/batch, shutdown waited for actual thread completion, zero live workers afterward. Malformed receipt returns OPERATION_CORRUPT/409. Reviewed the complete four-file rework diff and clean exact commit; unchanged stage5 architecture/cancellation evidence remains as previously reviewed. This approves the stage5 scope; real external model/Telegram/gateway/device proof is not claimed."
+  },
+  "findings": [],
+  "resolved_findings": [
+    "R1-LAUNCH-001: transport no longer blocks normal engine ticks.",
+    "R1-LAUNCH-002: all project tasks drain after unexpected errors; actual thread completion remains the retry/shutdown barrier."
+  ],
+  "tests": {
+    "focused_tests": {
+      "status": "PASS",
+      "count": 14,
+      "seconds": 3.044,
+      "log": "C:\\nqt35\\client\\reviews\\runtime-launch-modes-rework2-tests.txt"
+    },
+    "independent_quiescence_probes": {
+      "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+      "cases": [
+        {
+          "case": "malformed_receipt",
+          "engine_ticks_during_held_worker": 13,
+          "same_project_worker_calls": 1,
+          "maximum_overlapping_workers": 1,
+          "shutdown_waited_for_real_worker": true,
+          "workers_active_after_join": 0,
+          "completed_batches": 1,
+          "batch_result": {
+            "failed_projects": 0
+          },
+          "domain_error": {
+            "http_status": 409,
+            "code": "OPERATION_CORRUPT"
+          }
+        },
+        {
+          "case": "sqlite_error",
+          "engine_ticks_during_held_worker": 13,
+          "same_project_worker_calls": 1,
+          "maximum_overlapping_workers": 1,
+          "shutdown_waited_for_real_worker": true,
+          "workers_active_after_join": 0,
+          "completed_batches": 1,
+          "batch_result": {
+            "failed_projects": 1
+          },
+          "domain_error": null
+        },
+        {
+          "case": "attribute_error",
+          "engine_ticks_during_held_worker": 12,
+          "same_project_worker_calls": 1,
+          "maximum_overlapping_workers": 1,
+          "shutdown_waited_for_real_worker": true,
+          "workers_active_after_join": 0,
+          "completed_batches": 1,
+          "batch_result": {
+            "failed_projects": 1
+          },
+          "domain_error": null
+        }
+      ],
+      "all_passed": true
+    },
+    "git_diff_check": "PASS",
+    "prior_evidence": [
+      "runtime-launch-modes.json",
+      "runtime-launch-modes-rework1.json"
+    ]
+  },
+  "scope_notes": [
+    "Reviewed all four changed files against5501a79 and verified clean HEAD78b805c.",
+    "No source edits, branch changes, live credentials, real external model or bot activity.",
+    "Previously reviewed stage5 runtime/architecture and cancellation behavior are unchanged by this narrow rework.",
+    "Independent approval; no coordination of verdict with peer reviewer."
+  ],
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-db6c19a9aa785b6c41f3f6d1",
+      "source_assignment_id": "assignment-70f7abd530651fabfff35a93",
+      "result_key": "result-425842f63e59fd1fb702cae0502f3a667c70ed750b903fe7b1b0351cf4453ce4",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "changed_file_sha256": {
+    "docs/telegram-managed-sprint-launcher-v1/launch-modes.md": "4574ebd68b8c2a7e1bf27606d1bfc9bdaf67597312d86a81701dd585ba57e0f3",
+    "nginx_qa/telegram_launcher_intake.py": "2688d462b6793c1731f1f822ffbdcda0a7f3993457dc33a8c690eab2d82a4ca6",
+    "nginx_qa/telegram_launcher_store.py": "f961e14c137e3e06e8f03cab8616bc53fb9929481ee5df972145ea5743882156",
+    "tests/test_telegram_launcher_launch_modes.py": "49dc59dbf85bc6923128c70440fc25ebb6920bf6e9daf1b65fc04b0d28518ff5"
+  },
+  "submitted_at": "2026-11-03T19:07:58.922379+00:00"
+}

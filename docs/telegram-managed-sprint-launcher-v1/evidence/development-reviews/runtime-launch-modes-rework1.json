@@ -1,0 +1,90 @@
+{
+  "recorded_at": "2026-11-03T19:04:27.463830+00:00",
+  "verdict": "REJECT",
+  "baseline_commit": "dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce",
+  "result_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\launch-modes\\assignment-65ce3810beb5c2bfeb84e868",
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T19:02:00.842955+00:00",
+        "assignment_id": "review-f8781b5880f2395133c2fcde",
+        "created_at": "2026-11-03T19:02:00.842955+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
+        "result_key": "result-3f2fec81fefe6ec5bccecb8bf901bde6fca5e8dde7dd3f8a624d1a1b98fc1bd5",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-runtime-reviewer",
+        "reviewer_index": 1,
+        "reviewer_phone": "6681",
+        "source_assignment_id": "assignment-65ce3810beb5c2bfeb84e868",
+        "status": "active"
+      }
+    }
+  },
+  "decision_payload": {
+    "assignment_id": "review-f8781b5880f2395133c2fcde",
+    "status": "REJECT",
+    "feedback": "REJECT R1-LAUNCH-002: reconcile_operations uses asyncio.gather without draining siblings after an uncaught project exception. A real malformed stored executor_receipt=[] raises AttributeError in LauncherOperations._validate_client_receipts, outside the per-project catch lists. Independent probe held one healthy project's to_thread worker while this corrupt project failed: 3 ticks launched 3 overlapping workers for the same healthy project, and the continuity thread exited on shutdown with all 3 workers still active. The batch future is therefore not a proof of quiescence; retry storms and resource teardown underneath live mutations are possible. Await every project task even when one fails (for example gather(return_exceptions=True) with observed failures), isolate unexpected project exceptions, and preserve actual worker completion rather than cancelling wrappers. Add a malformed/unexpected-project-failure regression with a held sibling: engine ticks continue, only one recovery batch remains in flight, and shutdown cannot complete until that sibling finishes. The previous starvation defect is fixed and all 8 isolation/lifespan tests passed, but this new exception path blocks approval."
+  },
+  "findings": [
+    {
+      "id": "R1-LAUNCH-002",
+      "severity": "blocking",
+      "location": "nginx_qa/telegram_launcher_intake.py:reconcile_operations / asyncio.gather",
+      "evidence": {
+        "result_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
+        "real_malformed_stored_receipt_error": "AttributeError",
+        "same_healthy_project_worker_calls": 3,
+        "maximum_overlapping_healthy_workers": 3,
+        "active_workers_when_reconciler_exited": 3,
+        "reconciler_exited_before_workers_released": true,
+        "engine_ticks": 3,
+        "scope": "Disposable functions and threads; real receipt validator; no external services or source edits"
+      },
+      "feedback": "REJECT R1-LAUNCH-002: reconcile_operations uses asyncio.gather without draining siblings after an uncaught project exception. A real malformed stored executor_receipt=[] raises AttributeError in LauncherOperations._validate_client_receipts, outside the per-project catch lists. Independent probe held one healthy project's to_thread worker while this corrupt project failed: 3 ticks launched 3 overlapping workers for the same healthy project, and the continuity thread exited on shutdown with all 3 workers still active. The batch future is therefore not a proof of quiescence; retry storms and resource teardown underneath live mutations are possible. Await every project task even when one fails (for example gather(return_exceptions=True) with observed failures), isolate unexpected project exceptions, and preserve actual worker completion rather than cancelling wrappers. Add a malformed/unexpected-project-failure regression with a held sibling: engine ticks continue, only one recovery batch remains in flight, and shutdown cannot complete until that sibling finishes. The previous starvation defect is fixed and all 8 isolation/lifespan tests passed, but this new exception path blocks approval."
+    }
+  ],
+  "tests": {
+    "isolation_lifespan": {
+      "status": "PASS",
+      "count": 8,
+      "seconds": 0.451,
+      "log": "C:\\nqt35\\client\\reviews\\runtime-launch-modes-rework1-isolation-tests.txt"
+    },
+    "quiescence_exception_probe": "CONFIRMED_BLOCKER",
+    "git_diff_check": "PASS",
+    "prior_exact_baseline_tests": "78 tests and nine cancellation checks passed on dbb99d1; retained evidence runtime-launch-modes.json"
+  },
+  "scope_notes": [
+    "The rework changes only main.py, launcher intake concurrency, documentation and tests.",
+    "Original engine tick starvation is fixed; normal bounded-concurrency and normal shutdown tests pass.",
+    "No source edits, branch changes, live credentials, real external model or bot activity."
+  ],
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-f8781b5880f2395133c2fcde",
+      "source_assignment_id": "assignment-65ce3810beb5c2bfeb84e868",
+      "result_key": "result-3f2fec81fefe6ec5bccecb8bf901bde6fca5e8dde7dd3f8a624d1a1b98fc1bd5",
+      "decision": "REJECT",
+      "status": "REWORK_ENQUEUED",
+      "deduplicated": false
+    }
+  },
+  "changed_file_sha256": {
+    "docs/telegram-managed-sprint-launcher-v1/launch-modes.md": "289667194d6b76658f3c5fa3987da6c7fb95917d53fddd9603c2c62938b2ae92",
+    "main.py": "8c11c42e2819da80b0d010c9f34b10e9c0227e23d94c32f71074e5075f7c7f99",
+    "nginx_qa/telegram_launcher_intake.py": "f7e61055a7858540358033074b490b6a59f1c637356c9c998b810e727b16561e",
+    "tests/test_telegram_launcher_launch_modes.py": "a9a0f80f67d85592ad61a665a1e24c1541a7823b27b4bb9b5fe29b94b1881327"
+  },
+  "submitted_at": "2026-11-03T19:04:56.858729+00:00"
+}

@@ -1,0 +1,133 @@
+{
+  "stage": "telegram-controls",
+  "verdict": "APPROVE",
+  "reviewer": {
+    "id": "tmsl-security-reviewer",
+    "phone": "6682",
+    "independent": true
+  },
+  "reviewed_at": "2026-11-03T19:22:16.083079+00:00",
+  "baseline_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
+  "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+  "review_assignment_id": "review-8a692b9361ac2dbc2fae10f2",
+  "source_assignment_id": "assignment-c3126a37d8f79613b14ccaa5",
+  "result_key": "result-cd1071065a0d1a0e2b07fc9401465369500fd6c950b9b32ac68fa66424f1a4f5",
+  "workspace": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-3677fd7dd2a9cdc235bc0673\\nodes\\telegram-controls\\assignment-c3126a37d8f79613b14ccaa5",
+  "identity": {
+    "http_status": 200,
+    "body": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "assignment_kind": "review",
+      "assignment": {
+        "activated_at": "2026-11-03T19:18:11.971319+00:00",
+        "assignment_id": "review-8a692b9361ac2dbc2fae10f2",
+        "created_at": "2026-11-03T19:18:11.971319+00:00",
+        "decided_at": null,
+        "decision": null,
+        "request_fingerprint": null,
+        "response": null,
+        "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
+        "result_key": "result-cd1071065a0d1a0e2b07fc9401465369500fd6c950b9b32ac68fa66424f1a4f5",
+        "result_outcome": "DONE",
+        "reviewer_id": "tmsl-security-reviewer",
+        "reviewer_index": 2,
+        "reviewer_phone": "6682",
+        "source_assignment_id": "assignment-c3126a37d8f79613b14ccaa5",
+        "status": "active"
+      }
+    }
+  },
+  "effective_scope_or_ack_required": false,
+  "findings": [],
+  "resolved_early_findings": [
+    {
+      "finding": "gateway_origin accepted legacy IPv4 loopback and trailing-dot local host spellings",
+      "resolution": "Canonical/legacy inet_aton syntax and global-address checks reject noncanonical/private IPv4; trailing-dot hostnames are rejected. Extended exact-commit tests pass."
+    }
+  ],
+  "source_review": [
+    "Reviewed all ten changed files and actual control/notification/provider call paths; source is pinned and clean.",
+    "The authenticated bounded webhook dispatcher selects only launcher callbacks; authority comes from callback_query.from and private chat, with strict accessible message date. Handles contain random public routing data, not credentials or authority.",
+    "Handle ownership includes user/chat/project/operation/instance/attempt generation/action and 24-hour expiry. Current read/start grants are reloaded across I/O; duplicate Start uses the existing operation lock and engine idempotency.",
+    "Status uses explicit bounded fields from actual engine records. Raw results, prompts, feedback, private paths and queue payloads are omitted. Typed check/artifact/PR claims remain labelled agent-reported and tied to accepted result commit; graph DONE is not test PASS.",
+    "HTTPS origin accepts operator configuration only, rejects private/noncanonical IP, local suffix/trailing-dot, credential, query, fragment and path forms. Public link has only the opaque handle; gateway authentication is not implemented or approved here.",
+    "SQLite triggers freeze safe owner/lifecycle/instance intent in the operation transaction. Indexed one-time backfill and migration marker commit together; rollback preserves retryability without duplicating history.",
+    "Notice claim/finish use persisted leases, at most five attempts and static errors; wrong/stale lease cannot finish a replacement claim. Delivery requires current read and actual scoped Telegram ACK, survives retired slots, never activates, and honestly allows duplicate physical messages after lost ACK.",
+    "Independent single-flight launcher and notification batches retain gather-all failure isolation and actual thread quiescence before resource teardown."
+  ],
+  "tests": [
+    {
+      "command": "C:/nqt35/v/Scripts/python.exe -X utf8 -B -m unittest tests.test_telegram_launcher_controls -v",
+      "count": 9,
+      "result": "PASS",
+      "seconds": 111.174
+    },
+    {
+      "command": "C:/nqt35/v/Scripts/python.exe -X utf8 -B -m unittest tests.test_launcher_transport_migration tests.test_telegram_launcher_delivery_lifecycle tests.test_telegram_launcher_launch_modes.LauncherReconciliationLoopTests tests.test_managed_import.ManagedAppLifespanTests -q",
+      "count": 13,
+      "result": "PASS",
+      "seconds": 0.885
+    },
+    {
+      "suite": "independent stdin unittest with disposable Git and mocked Telegram provider",
+      "test": "test_foreign_authorized_owner_and_final_disclosure_reauthorization",
+      "count": 1,
+      "result": "PASS",
+      "seconds": 14.795,
+      "assertions": [
+        "A second private-chat user with read/start grant for the same project cannot resolve the first owner handle.",
+        "Revoking read after keyboard preparation but before callback send blocks sendMessage; only non-disclosing callback receipt was sent.",
+        "Notifier read revocation at the same boundary produces suppressed/ACCESS_REVOKED, with no provider call.",
+        "No activation occurs in status or failed disclosure paths."
+      ]
+    }
+  ],
+  "independent_test_count": 23,
+  "author_evidence": "C:/nqt35/client/stage6-summary.txt and stage6-*.txt; reported sets overlap and are not added to independent count",
+  "limitations": [
+    "Protected HMAC initData/session/CSRF gateway is a later graph stage.",
+    "Mock Telegram and disposable Git tests do not prove real Bot, public tunnel, mobile client, production executor or external model integration.",
+    "No native child-process tests or source edits by this reviewer."
+  ],
+  "provenance": {
+    "baseline_is_ancestor": true,
+    "head_matches_result": true,
+    "diff_check": "PASS",
+    "worktree_clean_before": true,
+    "changed_file_sha256": {
+      "configure_telegram.py": "61dfd8d143256f842c020d49809c1530e6648e9d6ef6bb2712f0364178ff4c9e",
+      "docs/telegram-managed-sprint-launcher-v1/telegram-controls.md": "3d8210a8ef7a34967f7f0e63921da101445af684fd5cee3e2add9ee65bbebd6e",
+      "main.py": "ff9c5c1d39f9663432260ba258671ec507b68d61de618f60c37aaf30a8b142de",
+      "nginx_qa/launcher_transport_store.py": "c0aa86df3f5d4c4e0ccf28411650c548280347d2bd4b746d75b6f5bc95380b0d",
+      "nginx_qa/managed_import.py": "94a371c28fb03bf52b861bd39b488806cd76c06967c46014dad77f843a995e3e",
+      "nginx_qa/telegram_launcher.py": "1ec8433b751ea7f19ad2ce313dea0ecce06408a06dc528664a650a8d31e7e9d3",
+      "nginx_qa/telegram_launcher_controls.py": "26017b94c0766c2c1ef600fdd4971841bb1e3515e7f187aea3269bbe10ceba65",
+      "tests/test_launcher_transport_migration.py": "d4bb91e3c7b1c37d829940816ca9e8face074cfc6532aba9dbf8d82e7920d1d2",
+      "tests/test_telegram_launcher_controls.py": "49307e8abbce4c1a29cfc2f238c74f219ace23793816ef6874cc467b59970b34",
+      "tests/test_telegram_launcher_delivery_lifecycle.py": "c9799211992905e8da41f89d58356aeb29c5aa36032983931882023255354a1e"
+    },
+    "worktree_clean_after": true
+  },
+  "decision_request": {
+    "assignment_id": "review-8a692b9361ac2dbc2fae10f2",
+    "status": "APPROVE",
+    "feedback": "APPROVE exact 2f59b53c2ba765f12079f8000e0ba60f90c9d469 for Telegram controls/outbox stage only. Twenty-three focused independent checks passed: 9 controls, 13 migration/lifecycle/background regressions and 1 supplemental disclosure/owner probe. Verified webhook-gated callback_query.from private identity, opaque owner/project/operation/instance/generation/action/expiry binding, current Start/read checks, idempotent Start, read-only engine projection, typed agent-labelled reports without raw-summary fallback, canonical public HTTPS validation, atomic safe lifecycle intents, one-time rollback-safe indexed backfill, lease fencing and bounded at-least-once retry. Another read/start-authorized owner cannot use the handle; read revocation immediately before callback/notifier send prevents disclosure and does not activate work. Both background transports preserve normal ticks and actual shutdown quiescence. Early legacy-loopback/trailing-dot origin finding is fixed. Signed initData/session/CSRF gateway is explicitly next stage; real Bot/mobile/external-model delivery remains unverified."
+  },
+  "decision_request_schema": "PASS",
+  "decision_submitted": true,
+  "api_receipt": {
+    "http_status": 200,
+    "body": {
+      "assignment_id": "review-8a692b9361ac2dbc2fae10f2",
+      "source_assignment_id": "assignment-c3126a37d8f79613b14ccaa5",
+      "result_key": "result-cd1071065a0d1a0e2b07fc9401465369500fd6c950b9b32ac68fa66424f1a4f5",
+      "decision": "APPROVE",
+      "status": "REVIEW_ACCEPTED",
+      "deduplicated": false
+    }
+  },
+  "response_schema_errors": [],
+  "response_binding_valid": true
+}
