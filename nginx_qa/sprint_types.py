@@ -1408,6 +1408,10 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
     if state.get("sprint_type") != SprintType.MANAGED_WORKSPACE_V1.value:
         return ()
 
+    if state.get("status") == "stopped" or "operator_cancellation" in state:
+        from .managed_cancellation import cancellation_issues
+        return cancellation_issues(state, managed_activation_invariant_issues)
+
     issues: list[str] = []
     schema_version = state.get("schema_version")
     legacy_runtime_v1 = type(schema_version) is int and schema_version == 1
@@ -5995,11 +5999,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         if (not isinstance(cancellation, Mapping) or cancellation.get("never_activated") is not True
             or status != "failed" or workflow is not None
             or not isinstance(cancelled_attempt, Mapping) or cancelled_attempt.get("status") != "failed"
-            or cancelled_attempt.get("updated_at") != cancellation.get("stopped_at")
+            or (not cancellation.get("preserved_error_sha256") and cancelled_attempt.get("updated_at") != cancellation.get("stopped_at"))
             or active_id_set or outcomes or assignment_by_id or receipt_by_key or review_assignment_by_id
             or review_by_assignment_id or rework_by_id or integration_by_id or integration_workspace_by_id
             or branch_lease_by_id or workspace_by_id or port_lease_by_id or process_by_id
-            or journal_by_result or outbox_by_id or successful_activation_attempts):
+            or journal_by_result or successful_activation_attempts
+            or any(event.get("event_type") != "COORDINATOR_ENQUEUE" for event in outbox_by_id.values())
+            or any(item.get("status") == "pending" for item in recovery_by_id.values())):
             add("PREPARATION_CANCELLATION_INVALID")
         else:
             valid_preparation_cancellation = True
@@ -6159,7 +6165,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 and token_id not in stranded_rework_limit_token_ids
                 for token_id, token in token_by_id.items()
             )
-            or any(event.get("status") == "pending" for event in outbox_by_id.values())
+            or (not valid_preparation_cancellation and any(event.get("status") == "pending" for event in outbox_by_id.values()))
         ):
             add("TERMINAL_STATE_HAS_LIVE_WORK")
         if status == "completed":
@@ -6366,6 +6372,7 @@ def managed_project_control_invariant_issues(
             or record.get("workspace_source_commit")
             != parent.get("workspace_source_commit")
             or record.get("sprint_id") != parent.get("sprint_id")
+            or record.get("evidence", {}).get("launcher") != parent.get("evidence", {}).get("launcher")
         ):
             issues.append("START_RECOVERY_LINEAGE_INVALID")
 

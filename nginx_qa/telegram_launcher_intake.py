@@ -201,6 +201,99 @@ def reauthorize(message, principal, original_policy, action="prepare"):
     return latest
 
 
+def provision_and_prepare(operations, operation_id, principal, project_policy):
+    from nginx_qa.telegram_launcher_execution import current_principal
+    importer = operations.importer
+    importer.validate_mutation_roots()
+    digest = hashlib.sha256(("launcher-action:" + operation_id).encode()).hexdigest()
+    with importer.git_provider.request_operation_lock(digest, timeout=30):
+        principal = current_principal(principal, "prepare", project_policy)
+        record = operations.get(operation_id, principal)
+        if record["lifecycle"] in {"Stopped", "Completed"} or record.get("stop_requested"):
+            return record
+        if record["envelope"]["manifest"]["git"]["source_ref"] != project_policy["source_ref"]:
+            fail("SOURCE_REF_FORBIDDEN", "Source policy changed.", 403)
+        spec = importer.git_provider.resolve_repository(project_policy["repository_id"])
+        if repository_binding(spec) != record["repository_binding"]:
+            fail("REPOSITORY_BINDING_CHANGED", "Restore the original repository binding.", 409)
+        if not record["published"]:
+            if "manifest_publish" not in principal.actions:
+                return record
+            repository = importer.git_provider.ensure_mirror(project_policy["repository_id"], fetch=True)
+            intent = record["provision_intent"]
+            if intent is None:
+                intent = importer.git_provider.create_launcher_manifest_commit(repository, operation_id=operation_id,
+                    source_commit=record["envelope"]["manifest"]["git"]["expected_source_commit"],
+                    manifest_blob=canonical_json_bytes(record["envelope"]["manifest"]), created_at=record["created_at"])
+                record = operations.update(operation_id, principal, provision_intent=intent)
+            principal = current_principal(principal, "manifest_publish", project_policy)
+            try:
+                importer.git_provider.publish_launcher_manifest(repository, intent)
+            except ManagedGitError:
+                return operations.update(operation_id, principal, blocked_reason="PUBLICATION_UNAVAILABLE")
+            record = operations.update(operation_id, principal, published=True, blocked_reason="PREPARATION_REQUIRED")
+        principal = current_principal(principal, "prepare", project_policy)
+        record = operations.prepare(operation_id, principal)
+        current_principal(principal, "prepare", project_policy)
+        return record
+
+
+async def continue_operation(operations, record, principal, project_policy, host):
+    """Resume the same durable operation after delivery, callback or restart."""
+    from nginx_qa.telegram_launcher_execution import current_principal, launch, stop
+    principal = current_principal(principal, "stop" if record.get("stop_requested") else "prepare", project_policy)
+    record = await asyncio.to_thread(operations.get, record["operation_id"], principal)
+    if record["lifecycle"] in {"Stopped", "Completed"}:
+        return record
+    if record.get("stop_requested"):
+        return await stop(operations, record["operation_id"], principal, project_policy, host)
+    record = await asyncio.to_thread(provision_and_prepare, operations, record["operation_id"], principal, project_policy)
+    principal = current_principal(principal, "prepare", project_policy)
+    if (record["envelope"]["autonomous_mode"] or record.get("launch_requested")) and record["lifecycle"] not in {"Running", "Completed", "Stopped", "Failed"}:
+        try:
+            record = await launch(operations, record["operation_id"], principal, project_policy, host)
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise
+            principal = current_principal(principal, "prepare", project_policy)
+            record = await asyncio.to_thread(operations.update, record["operation_id"], principal, blocked_reason="START_PERMISSION_REQUIRED")
+    return record
+
+
+async def reconcile_operations(host):
+    """Transport recovery called by the existing managed reconciliation loop."""
+    from nginx_qa.telegram_launcher import ENABLED_ENV, Principal
+    from nginx_qa.telegram_launcher_execution import current_principal
+    if os.getenv(ENABLED_ENV, "").lower() not in {"1", "true"}:
+        return
+    policy = load_policy()
+    config = await host.read_git_config()
+    for project_id, project_policy in policy["projects"].items():
+        try:
+            _, _, project, context = host.project_for_group_api(config, project_id)
+            registry = host.managed_repository_registry_for_project(project, context)
+            importer = host.managed_sprint_importer_factory(host.load_managed_runtime_config(), registry)
+            if not importer.store.database_path.exists():
+                continue
+            operations = LauncherOperations(importer)
+            spec = importer.git_provider.resolve_repository(project_policy["repository_id"])
+            if canonical_remote_from_address(str(project.get("git_address") or context.get("git_address") or "")) != spec.canonical_remote:
+                continue
+            with importer.store._transaction() as connection:
+                records = [operations._decode(row) for row in connection.execute(
+                    "SELECT * FROM telegram_launcher_operations WHERE project_id = ? AND holds_slot = 1", (project_id,))]
+            for record in records:
+                try:
+                    principal = Principal(record["user_id"], record["chat_id"], project_id, frozenset())
+                    principal = current_principal(principal, "stop" if record.get("stop_requested") else "prepare", project_policy)
+                    await continue_operation(operations, record, principal, project_policy, host)
+                except (HTTPException, ManagedImportError, ManagedGitError, RuntimeError, ValueError):
+                    # A revoked/blocked operation cannot break other projects.
+                    continue
+        except (HTTPException, ManagedImportError, ManagedGitError, WorkspaceError, KeyError, TypeError, ValueError, RuntimeError):
+            continue
+
+
 async def maybe_handle_upload(update, message, host):
     if not launcher_message_selected(message):
         return None
@@ -272,27 +365,7 @@ async def maybe_handle_upload(update, message, host):
                 fail("REPOSITORY_BINDING_CHANGED", "Restore the original repository binding to resume this operation.", 409)
             repository = None
         reauthorize(message, principal, policy)
-        if not record["published"] and "manifest_publish" not in principal.actions:
-            return operations.public(record, deduplicated=deduplicated)
-        if not record["published"]:
-            if repository is None:
-                repository = await asyncio.to_thread(importer.git_provider.ensure_mirror, project_policy["repository_id"], fetch=True)
-            intent = record["provision_intent"]
-            if intent is None:
-                intent = await asyncio.to_thread(importer.git_provider.create_launcher_manifest_commit,
-                    repository, operation_id=record["operation_id"], source_commit=candidate["manifest"]["git"]["expected_source_commit"],
-                    manifest_blob=canonical_json_bytes(candidate["manifest"]), created_at=record["created_at"])
-                record = await asyncio.to_thread(operations.update, record["operation_id"], principal, provision_intent=intent)
-            reauthorize(message, principal, policy, "manifest_publish")
-            try:
-                await asyncio.to_thread(importer.git_provider.publish_launcher_manifest, repository, intent)
-            except ManagedGitError:
-                record = await asyncio.to_thread(operations.update, record["operation_id"], principal, blocked_reason="PUBLICATION_UNAVAILABLE")
-                reauthorize(message, principal, policy)
-                return operations.public(record, deduplicated=deduplicated)
-            record = await asyncio.to_thread(operations.update, record["operation_id"], principal, published=True, blocked_reason="PREPARATION_REQUIRED")
-        reauthorize(message, principal, policy)
-        record = await asyncio.to_thread(operations.prepare, record["operation_id"], principal)
+        record = await continue_operation(operations, record, principal, project_policy, host)
         reauthorize(message, principal, policy)
         return operations.public(record, deduplicated=deduplicated)
     except WorkspaceError:

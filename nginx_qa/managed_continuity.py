@@ -454,11 +454,16 @@ class ManagedContinuityRuntime:
     def scope_mutate(self, project_id: str, sprint_id: str, mutator: Callable) -> tuple[dict[str, Any], Any]:
         """Commit scope/audit under the same exclusion as ordinary execution."""
         def mutate(state: dict[str, Any], _connection: sqlite3.Connection) -> Any:
+            if state.get("operator_stop_requested") or state.get("preparation_cancellation"):
+                raise ManagedContinuityError("SPRINT_STOPPED", 409, "scope-mutation")
             changed, response = mutator(deepcopy(state))
             state.clear()
             state.update(changed)
             return response
         with self._sprint_lock(sprint_id):
+            state = self.store.runtime_state(project_id, sprint_id)
+            if state and (state.get("operator_stop_requested") or state.get("preparation_cancellation")):
+                raise ManagedContinuityError("SPRINT_STOPPED", 409, "scope-mutation")
             return self.store.mutate_runtime_state(project_id, sprint_id, mutate)
 
     @staticmethod
@@ -715,6 +720,8 @@ class ManagedContinuityRuntime:
 
     @staticmethod
     def _binding_is_live(binding: _AssignmentBinding) -> bool:
+        if binding.state.get("operator_stop_requested") or binding.state.get("preparation_cancellation"):
+            return False
         if binding.record.get("status") not in {
             "prepared",
             "active",
@@ -1399,6 +1406,8 @@ class ManagedContinuityRuntime:
         assignment_id = str(assignment["assignment_id"])
         if (
             assignment.get("status") != "active"
+            or binding.state.get("operator_stop_requested")
+            or binding.state.get("preparation_cancellation")
             or payload.get("from_commit") != assignment.get("initial_head_commit")
             or payload.get("status") not in assignment.get("allowed_outcomes", [])
             or self._has_unresolved_assignment_context(
@@ -1894,6 +1903,8 @@ class ManagedContinuityRuntime:
             state = self.store.runtime_state(project_id, sprint_id)
             if state is None:
                 raise RuntimeError("managed sprint runtime disappeared")
+            if state.get("operator_stop_requested") or state.get("preparation_cancellation"):
+                return delivered
             # A successor assignment and its outbox record commit before the
             # local Git publication receipt, because Git cannot participate in
             # the SQLite transaction.  Every drainage entry point (including
@@ -2975,6 +2986,8 @@ class ManagedContinuityRuntime:
         payload: Mapping[str, Any],
         correlation_id: str,
     ) -> ManagedContinuityResult:
+        if state.get("operator_stop_requested") or state.get("preparation_cancellation"):
+            raise ManagedContinuityError(RECOVERY_CONFLICT, 409, correlation_id)
         if _is_rework_limit_context(context):
             raise ManagedContinuityError(
                 RECOVERY_CONFLICT, 409, correlation_id
@@ -3473,6 +3486,7 @@ class ManagedContinuityRuntime:
             if not isinstance(child, Mapping) or child.get("status") not in {
                 "VALIDATING",
                 "PREPARING",
+                "PREPARED",
                 "ACTIVATING",
                 "FAILED",
                 "SUCCEEDED",
@@ -4539,6 +4553,7 @@ class ManagedContinuityRuntime:
             raise ManagedContinuityError(REVIEW_CONFLICT, 409, correlation_id)
         if (
             binding.state.get("status") != "active"
+            or binding.state.get("operator_stop_requested")
             or binding.record.get("status") != "active"
         ):
             raise ManagedContinuityError(REVIEW_CONFLICT, 409, correlation_id)
@@ -7916,12 +7931,12 @@ class ManagedContinuityRuntime:
         progress = 0
         for _ in range(max_steps):
             state = self.store.runtime_state(project_id, sprint_id)
-            if state is None or state.get("status") != "active":
+            if state is None or state.get("status") != "active" or state.get("operator_stop_requested"):
                 return progress
             self._recover_assignment_publications(state)
             progress += self.drain_outbox(project_id, sprint_id)
             state = self.store.runtime_state(project_id, sprint_id)
-            if state is None or state.get("status") != "active":
+            if state is None or state.get("status") != "active" or state.get("operator_stop_requested"):
                 return progress
             if self._settle_superseded_pending_recoveries(
                 project_id, sprint_id, state
@@ -8787,6 +8802,8 @@ class ManagedContinuityRuntime:
                     IDEMPOTENCY_KEY_CONFLICT, 409, correlation
                 )
             if recovery_id is not None:
+                if state.get("operator_stop_requested") or state.get("preparation_cancellation"):
+                    raise ManagedContinuityError(RECOVERY_CONFLICT, 409, correlation)
                 assert isinstance(recovery_context, Mapping)
                 return self._resume_existing_repair_recovery(
                     project_id,
@@ -8805,7 +8822,7 @@ class ManagedContinuityRuntime:
                 project_id, sprint_id, reconcile=True
             )
             return ManagedContinuityResult(response)
-        if state.get("status") != "active":
+        if state.get("status") != "active" or state.get("operator_stop_requested"):
             raise ManagedContinuityError(GRAPH_REVISION_CONFLICT, 409, correlation)
         if state.get("graph_revision") != request["expected_revision"]:
             raise ManagedContinuityError(GRAPH_REVISION_CONFLICT, 409, correlation)

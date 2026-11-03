@@ -1414,10 +1414,18 @@ def _reconcile_managed_continuity_background(
     runtime: ManagedContinuityRuntime,
     stop_event: threading.Event,
     interval_seconds: float,
+    event_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     while not stop_event.is_set():
         try:
             runtime.reconcile_all()
+            if event_loop is not None:
+                from nginx_qa.telegram_launcher_intake import reconcile_operations
+                # Configuration locks belong to the ASGI loop. Never create a
+                # second event loop in this worker thread to acquire them.
+                asyncio.run_coroutine_threadsafe(
+                    reconcile_operations(sys.modules[__name__]), event_loop
+                ).result()
         except Exception:
             # HTTP readiness and legacy traffic must not depend on a transient
             # Git/workspace failure in one managed sprint.  The recurring loop
@@ -1480,6 +1488,7 @@ async def app_lifespan(_: FastAPI):
                         managed_continuity_runtime,
                         managed_continuity_stop_event,
                         _MANAGED_CONTINUITY_RECONCILE_SECONDS,
+                        asyncio.get_running_loop(),
                     ),
                     name="managed-continuity-reconcile",
                     daemon=True,

@@ -928,6 +928,7 @@ class _SupervisorRepository:
         *,
         owner: str,
         ttl_seconds: float,
+        for_stop: bool = False,
     ) -> _ProcessContext | None:
         now = _utc_now(self.clock)
         expires = (now + timedelta(seconds=max(ttl_seconds, 1.0))).isoformat()
@@ -960,6 +961,8 @@ class _SupervisorRepository:
                     sprint_row,
                     process_id=process_id,
                 )
+                if state.get("operator_stop_requested") and not for_stop:
+                    return None
                 context = self._context_from_state(
                     project_id,
                     sprint_id,
@@ -1302,6 +1305,8 @@ class _SupervisorRepository:
                         PROCESS_STATE_CONFLICT, "managed runtime disappeared"
                     )
                 state = json.loads(sprint_row["state_json"])
+                if state.get("operator_stop_requested"):
+                    return None
                 parent = self._find_record(
                     state,
                     "processes",
@@ -6509,6 +6514,7 @@ class ManagedProcessSupervisor:
                 sprint_id,
                 process_id,
                 owner=self.claim_owner,
+                for_stop=True,
                 ttl_seconds=max(
                     self.health_timeout_seconds
                     + (self.stop_timeout_seconds * 2)

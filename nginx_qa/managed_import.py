@@ -1023,19 +1023,28 @@ class ManagedImportStore:
             expected = owner.get("evidence", {}).get("cancellation", {})
             owner_error = owner.get("error") if isinstance(owner.get("error"), Mapping) else {}
             if (not isinstance(cancellation, Mapping) or matching_status != "FAILED"
-                or owner_error.get("detail", {}).get("error") != "PREPARATION_STOPPED"
+                or (owner_error.get("detail", {}).get("error") != "PREPARATION_STOPPED"
+                    and (expected.get("preserved_error_sha256") != canonical_json_sha256(owner_error)
+                         or cancellation.get("preserved_error_sha256") != expected.get("preserved_error_sha256")))
                 or cancellation.get("attempt_id") != owner.get("attempt_id")
                 or cancellation.get("operation_id") != expected.get("operation_id")
                 or cancellation.get("stopped_at") != expected.get("at")
                 or expected.get("never_activated") is not True):
                 issues.append("PREPARATION_CANCELLATION_BINDING_INVALID")
+        owner = matching_fenced[0] if len(matching_fenced) == 1 else {}
+        for marker in ("operator_stop_requested", "operator_cancellation"):
+            if (marker in state or marker in owner.get("evidence", {})) and (
+                matching_status != "SUCCEEDED" or state.get(marker) != owner.get("evidence", {}).get(marker)):
+                issues.append("OPERATOR_CANCELLATION_BINDING_INVALID")
+        if owner.get("evidence", {}).get("cancellation") and not state.get("preparation_cancellation"):
+            issues.append("PREPARATION_CANCELLATION_BINDING_INVALID")
         active_sprint_id = control.get("active_sprint_id")
         if row_status == "active" and active_sprint_id != row_sprint_id:
             issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
         if require_indexed or row_status == "active":
             if active_sprint_id != row_sprint_id:
                 issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
-            if row_status not in {"active", "completed", "failed", "blocked"}:
+            if row_status not in {"active", "completed", "failed", "blocked", "stopped"}:
                 issues.append("ACTIVE_SPRINT_STATUS_INVALID")
             successful_fences = [
                 record.get("fencing_token")
@@ -1937,6 +1946,8 @@ class ManagedImportStore:
             if require_active and current.get("status") != "active":
                 raise RuntimeError("managed sprint is not active")
 
+            if current.get("operator_stop_requested") or current.get("preparation_cancellation"):
+                raise RuntimeError("operator stop prevents new graph mutations")
             candidate = deepcopy(current)
             result = mutator(candidate, connection)
             if candidate != current:
@@ -2208,7 +2219,7 @@ class ManagedImportStore:
                 state = json.loads(row["state_json"])
             except (TypeError, json.JSONDecodeError):
                 continue
-            if not isinstance(state, Mapping):
+            if not isinstance(state, Mapping) or state.get("operator_stop_requested") or state.get("preparation_cancellation"):
                 continue
             recoveries = [
                 recovery
@@ -2754,18 +2765,40 @@ class ManagedImportStore:
                 or operation["payload_sha256"] != canonical_json_sha256(envelope)
                 or envelope["project_id"] != project_id or type(envelope["autonomous_mode"]) is not bool
                 or operation["published"] is not True
-                or request.idempotency_key != operation_id
                 or request.repository_id != operation["repository_binding"]["repository_id"]
                 or request.ref != intent["ref"] or request.manifest_path != intent["manifest_path"]
                 or intent["manifest_sha256"] != canonical_json_sha256(envelope["manifest"])):
                 raise ValueError
         except (KeyError, TypeError, ValueError):
             raise ManagedImportError("LAUNCHER_RESERVATION_INVALID", 409, "launcher-reservation", phase="VALIDATE") from None
-        return {"operation_id": operation_id, "desired_activation": envelope["autonomous_mode"],
+        context = {"operation_id": operation_id, "desired_activation": envelope["autonomous_mode"],
                 "manifest_sha256": intent["manifest_sha256"], "manifest_commit": intent["commit"],
                 "source_commit": envelope["manifest"]["git"]["expected_source_commit"],
                 "prepare_expires_at": operation.get("prepare_expires_at", (datetime.fromisoformat(operation["created_at"]) + timedelta(days=1)).isoformat()),
                 "repository_binding": deepcopy(operation["repository_binding"])}
+        if request.idempotency_key != operation_id:
+            control, _ = self._load_control(connection, project_id)
+            candidate = self._record(control, request.idempotency_key)
+            seen = set()
+            while isinstance(candidate, Mapping):
+                attempt_id = candidate.get("attempt_id")
+                if attempt_id in seen or candidate.get("evidence", {}).get("launcher") != context:
+                    break
+                seen.add(attempt_id)
+                parent_id = candidate.get("recovery_of_attempt_id")
+                if parent_id is None:
+                    if candidate.get("idempotency_key") == operation_id:
+                        return context
+                    break
+                candidate = self._record_by_attempt(control, parent_id)
+            raise ManagedImportError("LAUNCHER_RESERVATION_INVALID", 409, "launcher-recovery-owner", phase="VALIDATE")
+        return context
+
+    @staticmethod
+    def launcher_attempt(control, operation_id):
+        owned = [r for r in control["start_idempotency_records"]
+                 if r.get("evidence", {}).get("launcher", {}).get("operation_id") == operation_id]
+        return max(owned, key=lambda r: r["recovery_generation"]) if owned else None
 
     def park_prepared(self, project_id, attempt_id, *, operation_id, workspaces, fencing_token, clock):
         """Atomically park a prepared import without publishing executable work."""
@@ -2797,7 +2830,7 @@ class ManagedImportStore:
             return ManagedStartResult(response=deepcopy(receipt), http_status=201)
 
     def cancel_prepared(self, project_id, operation_id, *, clock):
-        """Cancel only a parked, never-activated import; retain all artifacts."""
+        """Retire a never-activated operation; preserve failed attempt evidence."""
         with self._transaction() as connection:
             row = connection.execute("SELECT * FROM telegram_launcher_operations WHERE operation_id = ? AND project_id = ?",
                                      (operation_id, project_id)).fetchone()
@@ -2809,40 +2842,45 @@ class ManagedImportStore:
             self.assert_launcher_slot_available(connection, project_id, operation_id=operation_id)
             control, revision = self._load_control(connection, project_id)
             self._validate_control_snapshot(connection, project_id, control)
-            record = self._record(control, operation_id)
-            if (record is None or record.get("status") != "PREPARED" or control.get("activation_lease") is not None
-                or record["evidence"]["launcher"]["operation_id"] != operation_id):
+            record = self.launcher_attempt(control, operation_id)
+            if control.get("activation_lease") is not None or (record is not None and record.get("status") not in {"PREPARED", "FAILED"}):
                 raise ManagedImportError("OPERATION_STATE_CONFLICT", 409, operation_id, phase="PREPARE")
-            runtime_row = connection.execute(
-                "SELECT * FROM managed_sprints WHERE project_id = ? AND sprint_id = ?",
-                (project_id, record["sprint_id"])).fetchone()
-            state = json.loads(runtime_row["state_json"])
-            issues = self._runtime_row_issues(control, runtime_row, state, require_indexed=False)
-            if issues or state.get("workflow") is not None or state.get("status") != "preparing":
-                raise RuntimeError("only a validated no-work preparation may be cancelled")
-            # Verify the shared resource indexes too; never release a reservation
-            # while a process/lease can outlive it, even if a shell is corrupt.
-            for plan in record["evidence"]["plans"]:
-                assignment_id = plan["assignment_id"]
-                for table in ("managed_process_owners", "managed_port_leases", "branch_leases"):
-                    if connection.execute(f"SELECT 1 FROM {table} WHERE assignment_id = ? LIMIT 1", (assignment_id,)).fetchone():
-                        raise ManagedImportError("RESOURCE_RECOVERY_REQUIRED", 409, operation_id, phase="PREPARE")
             now = _timestamp(clock)
-            error = ManagedImportError("PREPARATION_STOPPED", 409, record["attempt_id"], phase="PREPARE")
-            record.update(status="FAILED", error=error.envelope, http_status=409, updated_at=now)
-            record["evidence"]["cancellation"] = {"operation_id": operation_id, "at": now, "never_activated": True}
-            state["status"] = "failed"
-            state["preparation_cancellation"] = {"operation_id": operation_id,
-                "attempt_id": record["attempt_id"], "stopped_at": now, "never_activated": True}
-            for attempt in state["import_attempts"]:
-                if attempt["attempt_id"] == record["attempt_id"]:
-                    attempt.update(status="failed", updated_at=now)
-            if _runtime_state_schema_errors(state, issue_code="CANCEL_SCHEMA_INVALID") or managed_activation_invariant_issues(state):
-                raise RuntimeError("cancelled preparation state is invalid")
+            if record is not None:
+                runtime_row = connection.execute("SELECT * FROM managed_sprints WHERE project_id = ? AND sprint_id = ?",
+                    (project_id, record["sprint_id"])).fetchone()
+                state = json.loads(runtime_row["state_json"]) if runtime_row is not None else None
+                if state is not None:
+                    issues = self._runtime_row_issues(control, runtime_row, state, require_indexed=False)
+                    if issues or state.get("workflow") is not None or state.get("status") not in {"preparing", "failed"}:
+                        raise RuntimeError("only a validated no-work preparation may be cancelled")
+                for plan in record["evidence"].get("plans", []):
+                    for table in ("managed_process_owners", "managed_port_leases", "branch_leases"):
+                        if connection.execute(f"SELECT 1 FROM {table} WHERE assignment_id = ? LIMIT 1", (plan["assignment_id"],)).fetchone():
+                            raise ManagedImportError("RESOURCE_RECOVERY_REQUIRED", 409, operation_id, phase="PREPARE")
+                cancellation = {"operation_id": operation_id, "at": now, "never_activated": True}
+                failed_before = record["status"] == "FAILED"
+                if failed_before:
+                    cancellation["preserved_error_sha256"] = canonical_json_sha256(record["error"])
+                else:
+                    error = ManagedImportError("PREPARATION_STOPPED", 409, record["attempt_id"], phase="PREPARE")
+                    record.update(status="FAILED", error=error.envelope, http_status=409, updated_at=now)
+                record["evidence"]["cancellation"] = cancellation
+                if state is not None:
+                    state["status"] = "failed"
+                    state["preparation_cancellation"] = {"operation_id": operation_id,
+                        "attempt_id": record["attempt_id"], "stopped_at": now, "never_activated": True}
+                    if failed_before:
+                        state["preparation_cancellation"]["preserved_error_sha256"] = cancellation["preserved_error_sha256"]
+                    for attempt in state["import_attempts"]:
+                        if attempt["attempt_id"] == record["attempt_id"] and not failed_before:
+                            attempt.update(status="failed", updated_at=now)
+                    if _runtime_state_schema_errors(state, issue_code="CANCEL_SCHEMA_INVALID") or managed_activation_invariant_issues(state):
+                        raise RuntimeError("cancelled preparation state is invalid")
+                    connection.execute("UPDATE managed_sprints SET status = 'failed', state_json = ? WHERE project_id = ? AND sprint_id = ?",
+                                       (_json_text(state), project_id, record["sprint_id"]))
             operation.update(lifecycle="Stopped", blocked_reason=None, updated_at=now)
             self._write_control(connection, control, revision)
-            connection.execute("UPDATE managed_sprints SET status = 'failed', state_json = ? WHERE project_id = ? AND sprint_id = ?",
-                               (_json_text(state), project_id, record["sprint_id"]))
             connection.execute("UPDATE telegram_launcher_operations SET holds_slot = 0, record_json = ? WHERE operation_id = ?",
                                (_json_text(operation), operation_id))
             return deepcopy(operation)
@@ -3970,7 +4008,6 @@ class ManagedImportStore:
 
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
-            self.assert_launcher_slot_available(connection, project_id)
             self._validate_control_snapshot(connection, project_id, control)
             row = connection.execute(
                 """
@@ -4019,6 +4056,8 @@ class ManagedImportStore:
                 )
                 if not isinstance(child, dict):
                     raise RuntimeError("managed retry child is missing")
+                owner = child.get("evidence", {}).get("launcher", {}).get("operation_id")
+                self.assert_launcher_slot_available(connection, project_id, operation_id=owner)
                 return deepcopy(child)
             if recovery.get("status") != "pending":
                 raise ManagedRetryImportConflict(
@@ -4069,6 +4108,9 @@ class ManagedImportStore:
                 raise ManagedRetryImportConflict(
                     "managed retry parent is not failed"
                 )
+            owner_context = parent_control.get("evidence", {}).get("launcher")
+            owner = owner_context.get("operation_id") if isinstance(owner_context, Mapping) else None
+            self.assert_launcher_slot_available(connection, project_id, operation_id=owner)
             pinned_identity = parent_control.get("pinned_identity")
             workspace_source_commit = parent_control.get(
                 "workspace_source_commit"
@@ -4205,6 +4247,10 @@ class ManagedImportStore:
                 "repository_binding": deepcopy(dict(binding)),
                 "request": deepcopy(dict(request_record)),
             }
+            if owner is not None:
+                if parent_control.get("evidence", {}).get("cancellation"):
+                    raise ManagedRetryImportConflict("a stopped launcher import cannot be resumed")
+                child_evidence["launcher"] = deepcopy(owner_context)
             child = {
                 "idempotency_key": recovery_key,
                 "request_fingerprint": parent_control["request_fingerprint"],
@@ -7032,6 +7078,8 @@ class TransactionalSprintImporter:
         state = self.store.runtime_state(str(pinned["project_id"]), sprint_id)
         if not isinstance(state, Mapping):
             raise RuntimeError("managed success runtime is missing")
+        if state.get("operator_stop_requested"):
+            return
         if restore_ports:
             self._restore_reserved_ports(
                 self._restorable_reserved_ports(state),
@@ -7279,6 +7327,10 @@ class TransactionalSprintImporter:
         # this or another process.  A lost-owner crash leaves the file lock
         # free even while its durable activation lease is still live, so a
         # short nonblocking probe distinguishes those cases safely.
+        owner = evidence.get("launcher") if isinstance(evidence, Mapping) else None
+        if isinstance(owner, Mapping) and record.get("recovery_of_attempt_id") is not None:
+            return self.start(project_id, request, request_lock_timeout=0.01,
+                _launcher_operation_id=owner["operation_id"], _prepare_only=True)
         return self.start(
             project_id,
             request,
