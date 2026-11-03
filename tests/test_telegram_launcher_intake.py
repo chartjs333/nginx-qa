@@ -24,7 +24,7 @@ from tests.test_managed_import import ManagedImportFixture
 from tests.test_telegram_launcher_prompt import message, policy, request
 
 
-class LauncherIntakeTests(ManagedImportFixture):
+class LauncherIntakeFixture(ManagedImportFixture):
     def setUp(self):
         super().setUp()
         self.imp = self.importer()
@@ -60,16 +60,21 @@ class LauncherIntakeTests(ManagedImportFixture):
         return record, repository
 
     def assert_no_activation(self):
-        self.assertFalse((Path(self.runtime_config["managed_root"]) / "projects").exists())
         if self.imp.store.database_path.exists():
             with self.imp.store._transaction() as connection:
-                for table in ("managed_sprints", "managed_queue_items", "managed_process_owners", "managed_port_leases"):
+                for row in connection.execute("SELECT state_json FROM managed_sprints"):
+                    state = json.loads(row["state_json"])
+                    self.assertIsNone(state["workflow"])
+                    self.assertEqual("preparing", state["status"])
+                for table in ("managed_queue_items", "managed_process_owners", "managed_port_leases"):
                     self.assertEqual(0, connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
+
+class LauncherIntakeTests(LauncherIntakeFixture):
     def test_text_upload_publishes_exact_manifest_replays_and_preserves_main(self):
         first = self.ingest()
-        self.assertEqual("Created", first["status"])
-        self.assertEqual("PREPARATION_REQUIRED", first["blocked_reason"])
+        self.assertEqual("Waiting", first["status"])
+        self.assertIsNone(first["blocked_reason"])
         self.assertFalse(first["activated"])
         record = self.operations.get(first["operation_id"], self.principal)
         intent = record["provision_intent"]
@@ -95,7 +100,8 @@ class LauncherIntakeTests(ManagedImportFixture):
         os.environ[launcher.POLICY_ENV] = json.dumps(self.policy)
         resumed = self.ingest()
         self.assertEqual(blocked["operation_id"], resumed["operation_id"])
-        self.assertEqual("PREPARATION_REQUIRED", resumed["blocked_reason"])
+        self.assertEqual("Waiting", resumed["status"])
+        self.assertIsNone(resumed["blocked_reason"])
         self.assert_no_activation()
 
     def test_malformed_unauthorized_and_invalid_graph_create_nothing(self):
@@ -286,7 +292,7 @@ class LauncherIntakeTests(ManagedImportFixture):
         opener.open.return_value = response
         with patch.object(intake.urllib.request, "build_opener", return_value=opener):
             result = self.ingest(update)
-            self.assertEqual("Created", result["status"])
+            self.assertEqual("Waiting", result["status"])
             response.read.assert_called_once_with(launcher.MAX_UPDATE_BYTES + 1)
             response.read.return_value = b"x" * (launcher.MAX_UPDATE_BYTES + 1)
             with self.assertRaises(HTTPException) as exc:

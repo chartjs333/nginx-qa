@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -69,6 +70,13 @@ class LauncherOperations:
     def reserve(self, principal: Principal, keys: tuple[str, str], envelope: Mapping[str, Any],
                 transport: Mapping[str, Any], repository_binding: Mapping[str, Any]) -> dict[str, Any]:
         digest = canonical_json_sha256(envelope)
+        try:
+            quota = int(os.getenv("NGINX_QA_LAUNCHER_PREPARED_LIMIT", "100"))
+            ttl = int(os.getenv("NGINX_QA_LAUNCHER_PREPARED_TTL_SECONDS", "86400"))
+            if not 1 <= quota <= 100 or not 300 <= ttl <= 604800:
+                raise ValueError
+        except ValueError:
+            fail("LIMIT_CONFIG_INVALID", "Prepared limit must be 1..100 and TTL 300..604800 seconds.", 503)
         with self.store._transaction() as connection:
             replay = self._replay(connection, principal, keys, digest, transport)
             if replay is not None:
@@ -84,7 +92,7 @@ class LauncherOperations:
                 fail("PROJECT_BUSY", "This project already has a managed import in progress.", 409)
             # Bounded prepared/blocked receipts across distinct projects. History
             # is retained; retirement is an explicit later lifecycle operation.
-            if connection.execute("SELECT COUNT(*) FROM telegram_launcher_operations WHERE holds_slot = 1").fetchone()[0] >= 100:
+            if connection.execute("SELECT COUNT(*) FROM telegram_launcher_operations WHERE holds_slot = 1").fetchone()[0] >= quota:
                 fail("PREPARED_QUOTA_EXCEEDED", "The pending instance quota is full.", 409)
             now = datetime.now(timezone.utc).isoformat()
             record = {"operation_id": "launch-" + uuid4().hex, "project_id": principal.project_id,
@@ -93,6 +101,7 @@ class LauncherOperations:
                 "payload_sha256": digest, "envelope": deepcopy(dict(envelope)),
                 "repository_binding": deepcopy(dict(repository_binding)),
                 "created_at": now, "updated_at": now, "lifecycle": "Created",
+                "prepare_expires_at": (datetime.fromisoformat(now) + timedelta(seconds=ttl)).isoformat(),
                 "blocked_reason": "PUBLICATION_REQUIRED", "provision_intent": None,
                 "published": False, "instance_id": None, "sprint_id": None}
             # Ensure the canonical project control exists in this same commit.
@@ -108,6 +117,12 @@ class LauncherOperations:
                 fail("OPERATION_NOT_FOUND", "Launcher operation was not found.", 404)
             record = self._decode(row)
             self._owner(record, principal)
+            control, _ = self.store._load_control(connection, principal.project_id)
+            self.store._validate_control_snapshot(connection, principal.project_id, control)
+            attempt = self.store._record(control, operation_id)
+            if attempt and attempt.get("status") == "FAILED" and record["lifecycle"] != "Stopped":
+                record.update(lifecycle="Failed", blocked_reason=attempt["error"]["detail"]["error"],
+                              sprint_id=attempt.get("sprint_id"), attempt_id=attempt["attempt_id"])
             return record
 
     def update(self, operation_id: str, principal: Principal, **changes) -> dict[str, Any]:
@@ -133,6 +148,28 @@ class LauncherOperations:
             connection.execute("UPDATE telegram_launcher_operations SET record_json = ? WHERE operation_id = ?",
                                (json.dumps(record, ensure_ascii=False), operation_id))
             return record
+
+    def preparation_request(self, operation_id: str, principal: Principal):
+        from nginx_qa.sprint_types import StartSprintFromGitRequest
+        record = self.get(operation_id, principal)
+        if not record["published"] or not isinstance(record["provision_intent"], dict):
+            fail("PUBLICATION_REQUIRED", "Publish the immutable manifest before preparation.", 409)
+        intent = record["provision_intent"]
+        return StartSprintFromGitRequest(repository_id=record["repository_binding"]["repository_id"],
+            ref=intent["ref"], manifest_path=intent["manifest_path"], idempotency_key=operation_id)
+
+    def prepare(self, operation_id: str, principal: Principal) -> dict[str, Any]:
+        if "prepare" not in principal.actions:
+            fail("ACCESS_DENIED", "Preparation permission is required.", 403)
+        request = self.preparation_request(operation_id, principal)
+        self.importer.prepare(principal.project_id, request, operation_id=operation_id)
+        return self.get(operation_id, principal)
+
+    def cancel_prepared(self, operation_id: str, principal: Principal) -> dict[str, Any]:
+        if "stop" not in principal.actions:
+            fail("ACCESS_DENIED", "Stop permission is required.", 403)
+        self.get(operation_id, principal)
+        return self.store.cancel_prepared(principal.project_id, operation_id, clock=self.importer.clock)
 
     @staticmethod
     def public(record: Mapping[str, Any], *, deduplicated: bool = False) -> dict[str, Any]:

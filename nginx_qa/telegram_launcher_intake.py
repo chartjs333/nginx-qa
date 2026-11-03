@@ -272,7 +272,7 @@ async def maybe_handle_upload(update, message, host):
                 fail("REPOSITORY_BINDING_CHANGED", "Restore the original repository binding to resume this operation.", 409)
             repository = None
         reauthorize(message, principal, policy)
-        if "manifest_publish" not in principal.actions:
+        if not record["published"] and "manifest_publish" not in principal.actions:
             return operations.public(record, deduplicated=deduplicated)
         if not record["published"]:
             if repository is None:
@@ -291,6 +291,8 @@ async def maybe_handle_upload(update, message, host):
                 reauthorize(message, principal, policy)
                 return operations.public(record, deduplicated=deduplicated)
             record = await asyncio.to_thread(operations.update, record["operation_id"], principal, published=True, blocked_reason="PREPARATION_REQUIRED")
+        reauthorize(message, principal, policy)
+        record = await asyncio.to_thread(operations.prepare, record["operation_id"], principal)
         reauthorize(message, principal, policy)
         return operations.public(record, deduplicated=deduplicated)
     except WorkspaceError:

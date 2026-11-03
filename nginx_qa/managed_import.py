@@ -1004,19 +1004,31 @@ class ManagedImportStore:
                 (
                     preactivation
                     and row_status == "preparing"
-                    and matching_status in {"PREPARING", "ACTIVATING"}
+                    and matching_status in {"PREPARING", "PREPARED", "ACTIVATING"}
                 )
                 or (
                     preactivation
                     and row_status == "failed"
                     and matching_status
-                    in {"VALIDATING", "PREPARING", "ACTIVATING", "FAILED"}
+                    in {"VALIDATING", "PREPARING", "PREPARED", "ACTIVATING", "FAILED"}
                 )
                 or (not preactivation and matching_status == "SUCCEEDED")
             )
         )
         if not fence_owner_valid:
             issues.append("RUNTIME_ACTIVATION_FENCE_MISMATCH")
+        cancellation = state.get("preparation_cancellation")
+        if cancellation is not None:
+            owner = matching_fenced[0] if len(matching_fenced) == 1 else {}
+            expected = owner.get("evidence", {}).get("cancellation", {})
+            owner_error = owner.get("error") if isinstance(owner.get("error"), Mapping) else {}
+            if (not isinstance(cancellation, Mapping) or matching_status != "FAILED"
+                or owner_error.get("detail", {}).get("error") != "PREPARATION_STOPPED"
+                or cancellation.get("attempt_id") != owner.get("attempt_id")
+                or cancellation.get("operation_id") != expected.get("operation_id")
+                or cancellation.get("stopped_at") != expected.get("at")
+                or expected.get("never_activated") is not True):
+                issues.append("PREPARATION_CANCELLATION_BINDING_INVALID")
         active_sprint_id = control.get("active_sprint_id")
         if row_status == "active" and active_sprint_id != row_sprint_id:
             issues.append("ACTIVE_SPRINT_INDEX_MISMATCH")
@@ -1792,7 +1804,7 @@ class ManagedImportStore:
                         and item.get("sprint_id") == row["sprint_id"]
                         and item.get("fencing_token") == row["fencing_token"]
                         and item.get("status")
-                        in {"VALIDATING", "PREPARING", "ACTIVATING"}
+                        in {"VALIDATING", "PREPARING", "PREPARED", "ACTIVATING"}
                     ),
                     None,
                 )
@@ -1801,6 +1813,9 @@ class ManagedImportStore:
                         raise RuntimeError(
                             "managed running import has no fenced owner"
                         )
+                    continue
+                if owner.get("status") == "PREPARED":
+                    self.assert_launcher_slot_available(connection, project_id, operation_id=owner["evidence"]["launcher"]["operation_id"])
                     continue
                 attempt_id = str(owner["attempt_id"])
                 if running_ids != [attempt_id]:
@@ -2310,6 +2325,7 @@ class ManagedImportStore:
             if record.get("status") not in {
                 "VALIDATING",
                 "PREPARING",
+                "PREPARED",
                 "ACTIVATING",
             }:
                 continue
@@ -2714,8 +2730,122 @@ class ManagedImportStore:
             "SELECT operation_id FROM telegram_launcher_operations "
             "WHERE project_id = ? AND holds_slot = 1", (project_id,),
         ).fetchone()
-        if row is not None and row["operation_id"] != operation_id:
+        if (row is not None and row["operation_id"] != operation_id) or (operation_id is not None and row is None):
             raise ManagedImportError("PROJECT_BUSY", 409, "launcher-reservation", phase="VALIDATE")
+
+    def launcher_request_context(self, project_id, request, operation_id):
+        """Validate the durable reservation, never a caller-supplied exemption."""
+        with self._transaction() as connection:
+            return self._launcher_request_context(connection, project_id, request, operation_id)
+
+    def _launcher_request_context(self, connection, project_id, request, operation_id):
+        self.assert_launcher_slot_available(connection, project_id, operation_id=operation_id)
+        if operation_id is None:
+            return None
+        row = connection.execute(
+            "SELECT * FROM telegram_launcher_operations WHERE operation_id = ? AND project_id = ? AND holds_slot = 1",
+            (operation_id, project_id),
+        ).fetchone()
+        try:
+            operation = json.loads(row["record_json"])
+            envelope = operation["envelope"]
+            intent = operation["provision_intent"]
+            if (operation["operation_id"] != operation_id or operation["project_id"] != project_id
+                or operation["payload_sha256"] != canonical_json_sha256(envelope)
+                or envelope["project_id"] != project_id or type(envelope["autonomous_mode"]) is not bool
+                or operation["published"] is not True
+                or request.idempotency_key != operation_id
+                or request.repository_id != operation["repository_binding"]["repository_id"]
+                or request.ref != intent["ref"] or request.manifest_path != intent["manifest_path"]
+                or intent["manifest_sha256"] != canonical_json_sha256(envelope["manifest"])):
+                raise ValueError
+        except (KeyError, TypeError, ValueError):
+            raise ManagedImportError("LAUNCHER_RESERVATION_INVALID", 409, "launcher-reservation", phase="VALIDATE") from None
+        return {"operation_id": operation_id, "desired_activation": envelope["autonomous_mode"],
+                "manifest_sha256": intent["manifest_sha256"], "manifest_commit": intent["commit"],
+                "source_commit": envelope["manifest"]["git"]["expected_source_commit"],
+                "prepare_expires_at": operation.get("prepare_expires_at", (datetime.fromisoformat(operation["created_at"]) + timedelta(days=1)).isoformat()),
+                "repository_binding": deepcopy(operation["repository_binding"])}
+
+    def park_prepared(self, project_id, attempt_id, *, operation_id, workspaces, fencing_token, clock):
+        """Atomically park a prepared import without publishing executable work."""
+        with self._transaction() as connection:
+            control, revision = self._load_control(connection, project_id)
+            record = self._record_by_attempt(control, attempt_id)
+            if record is None or record.get("status") != "PREPARING":
+                raise RuntimeError("only a preparing import can be parked")
+            self._assert_fence(control, record, fencing_token)
+            self.assert_launcher_slot_available(connection, project_id, operation_id=operation_id)
+            context = record["evidence"]["launcher"]
+            if context["operation_id"] != operation_id:
+                raise RuntimeError("prepared import owner changed")
+            row = connection.execute("SELECT * FROM telegram_launcher_operations WHERE operation_id = ?", (operation_id,)).fetchone()
+            operation = json.loads(row["record_json"])
+            receipt = {"sprint_id": record["sprint_id"], "instance_id": operation_id,
+                       "attempt_id": attempt_id, "status": "prepared", "phase": "PREPARE",
+                       "activated": False, "initial_assignment_ids": [], "deduplicated": False}
+            record["status"] = "PREPARED"
+            record["updated_at"] = _timestamp(clock)
+            record["evidence"].update(prepared_workspaces=deepcopy(workspaces), prepared_receipt=receipt)
+            control["activation_lease"] = None
+            operation.update(instance_id=operation_id, sprint_id=record["sprint_id"], attempt_id=attempt_id,
+                             lifecycle="Prepared" if context["desired_activation"] else "Waiting",
+                             blocked_reason=None, updated_at=record["updated_at"])
+            self._write_control(connection, control, revision)
+            connection.execute("UPDATE telegram_launcher_operations SET record_json = ? WHERE operation_id = ?",
+                               (_json_text(operation), operation_id))
+            return ManagedStartResult(response=deepcopy(receipt), http_status=201)
+
+    def cancel_prepared(self, project_id, operation_id, *, clock):
+        """Cancel only a parked, never-activated import; retain all artifacts."""
+        with self._transaction() as connection:
+            row = connection.execute("SELECT * FROM telegram_launcher_operations WHERE operation_id = ? AND project_id = ?",
+                                     (operation_id, project_id)).fetchone()
+            if row is None:
+                raise ManagedImportError("OPERATION_NOT_FOUND", 404, "launcher-cancel", phase="PREPARE")
+            operation = json.loads(row["record_json"])
+            if operation.get("lifecycle") == "Stopped" and not row["holds_slot"]:
+                return deepcopy(operation)
+            self.assert_launcher_slot_available(connection, project_id, operation_id=operation_id)
+            control, revision = self._load_control(connection, project_id)
+            self._validate_control_snapshot(connection, project_id, control)
+            record = self._record(control, operation_id)
+            if (record is None or record.get("status") != "PREPARED" or control.get("activation_lease") is not None
+                or record["evidence"]["launcher"]["operation_id"] != operation_id):
+                raise ManagedImportError("OPERATION_STATE_CONFLICT", 409, operation_id, phase="PREPARE")
+            runtime_row = connection.execute(
+                "SELECT * FROM managed_sprints WHERE project_id = ? AND sprint_id = ?",
+                (project_id, record["sprint_id"])).fetchone()
+            state = json.loads(runtime_row["state_json"])
+            issues = self._runtime_row_issues(control, runtime_row, state, require_indexed=False)
+            if issues or state.get("workflow") is not None or state.get("status") != "preparing":
+                raise RuntimeError("only a validated no-work preparation may be cancelled")
+            # Verify the shared resource indexes too; never release a reservation
+            # while a process/lease can outlive it, even if a shell is corrupt.
+            for plan in record["evidence"]["plans"]:
+                assignment_id = plan["assignment_id"]
+                for table in ("managed_process_owners", "managed_port_leases", "branch_leases"):
+                    if connection.execute(f"SELECT 1 FROM {table} WHERE assignment_id = ? LIMIT 1", (assignment_id,)).fetchone():
+                        raise ManagedImportError("RESOURCE_RECOVERY_REQUIRED", 409, operation_id, phase="PREPARE")
+            now = _timestamp(clock)
+            error = ManagedImportError("PREPARATION_STOPPED", 409, record["attempt_id"], phase="PREPARE")
+            record.update(status="FAILED", error=error.envelope, http_status=409, updated_at=now)
+            record["evidence"]["cancellation"] = {"operation_id": operation_id, "at": now, "never_activated": True}
+            state["status"] = "failed"
+            state["preparation_cancellation"] = {"operation_id": operation_id,
+                "attempt_id": record["attempt_id"], "stopped_at": now, "never_activated": True}
+            for attempt in state["import_attempts"]:
+                if attempt["attempt_id"] == record["attempt_id"]:
+                    attempt.update(status="failed", updated_at=now)
+            if _runtime_state_schema_errors(state, issue_code="CANCEL_SCHEMA_INVALID") or managed_activation_invariant_issues(state):
+                raise RuntimeError("cancelled preparation state is invalid")
+            operation.update(lifecycle="Stopped", blocked_reason=None, updated_at=now)
+            self._write_control(connection, control, revision)
+            connection.execute("UPDATE managed_sprints SET status = 'failed', state_json = ? WHERE project_id = ? AND sprint_id = ?",
+                               (_json_text(state), project_id, record["sprint_id"]))
+            connection.execute("UPDATE telegram_launcher_operations SET holds_slot = 0, record_json = ? WHERE operation_id = ?",
+                               (_json_text(operation), operation_id))
+            return deepcopy(operation)
 
     def register_or_resume(
         self,
@@ -2725,6 +2855,7 @@ class ManagedImportStore:
         workspace_source_commit: str | None,
         *,
         repository_binding: Mapping[str, Any] | None = None,
+        launcher_operation_id: str | None = None,
         clock: Callable[[], datetime],
         attempt_id_factory: Callable[[], str],
     ) -> tuple[dict[str, Any], bool]:
@@ -2735,7 +2866,7 @@ class ManagedImportStore:
         now_text = now.isoformat()
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
-            self.assert_launcher_slot_available(connection, project_id)
+            launcher_context = self._launcher_request_context(connection, project_id, request, launcher_operation_id)
             reconciled = self._reconcile_superseded_attempts(
                 control,
                 updated_at=now_text,
@@ -2833,6 +2964,10 @@ class ManagedImportStore:
                     "manifest_path": request.manifest_path,
                 },
             }
+            if launcher_context is not None:
+                if not isinstance(repository_binding, Mapping) or any(repository_binding.get(key) != value for key, value in launcher_context["repository_binding"].items()):
+                    raise ManagedImportError("REPOSITORY_BINDING_CHANGED", 409, attempt_id, phase="VALIDATE")
+                evidence["launcher"] = launcher_context
             if repository_binding is not None:
                 evidence["repository_binding"] = deepcopy(
                     dict(repository_binding)
@@ -3004,12 +3139,14 @@ class ManagedImportStore:
         project_id: str,
         request: StartSprintFromGitRequest,
         *,
+        launcher_operation_id: str | None = None,
         clock: Callable[[], datetime],
     ) -> dict[str, Any]:
         fingerprint = request.request_fingerprint(project_id)
         now = _utc_now(clock)
         with self._transaction() as connection:
             control, revision = self._load_control(connection, project_id)
+            self._launcher_request_context(connection, project_id, request, launcher_operation_id)
             reconciled = self._reconcile_superseded_attempts(
                 control,
                 updated_at=now.isoformat(),
@@ -3160,6 +3297,7 @@ class ManagedImportStore:
                 allowed = {
                     "VALIDATING": {"VALIDATING", "PREPARING", "FAILED"},
                     "PREPARING": {"PREPARING", "ACTIVATING", "FAILED"},
+                    "PREPARED": {"PREPARED", "PREPARING", "FAILED"},
                     "ACTIVATING": {"ACTIVATING", "FAILED"},
                 }
                 if status not in allowed.get(str(record.get("status")), set()):
@@ -3297,6 +3435,7 @@ class ManagedImportStore:
             if current_status not in {
                 "VALIDATING",
                 "PREPARING",
+                "PREPARED",
                 "ACTIVATING",
             }:
                 raise RuntimeError("managed start attempt is not preparing")
@@ -4031,7 +4170,7 @@ class ManagedImportStore:
                 for item in control.get("start_idempotency_records", [])
                 if isinstance(item, Mapping)
                 and item.get("status")
-                in {"VALIDATING", "PREPARING", "ACTIVATING"}
+                in {"VALIDATING", "PREPARING", "PREPARED", "ACTIVATING"}
             ]
             if nonterminal:
                 raise ManagedRetryImportConflict(
@@ -4453,7 +4592,7 @@ class ManagedImportStore:
                     not isinstance(candidate, dict)
                     or candidate is record
                     or candidate.get("status")
-                    not in {"VALIDATING", "PREPARING", "ACTIVATING"}
+                    not in {"VALIDATING", "PREPARING", "PREPARED", "ACTIVATING"}
                 ):
                     continue
                 candidate_token = candidate.get("fencing_token")
@@ -7001,13 +7140,33 @@ class TransactionalSprintImporter:
                 ],
             ) from exc
 
+    def prepare(self, project_id, request, *, operation_id):
+        """Prepare a reserved launcher instance. No assignment is activated."""
+        if not isinstance(operation_id, str) or re.fullmatch(r"launch-[0-9a-f]{32}", operation_id) is None:
+            raise ManagedImportError("LAUNCHER_RESERVATION_INVALID", 409, "launcher-prepare", phase="PREPARE")
+        return self.start(project_id, request, _launcher_operation_id=operation_id, _prepare_only=True)
+
+    def activate_prepared(self, project_id, request, *, operation_id):
+        """Trusted engine boundary; transport must authorize Start separately."""
+        self.validate_mutation_roots()
+        existing = self.store.lookup(project_id, request.idempotency_key)
+        if existing is None or not existing.get("evidence", {}).get("prepared_receipt"):
+            raise ManagedImportError("PREPARATION_REQUIRED", 409, operation_id, phase="PREPARE")
+        return self.start(project_id, request, _launcher_operation_id=operation_id)
+
     def start(
         self,
         project_id: str,
         request: StartSprintFromGitRequest,
         *,
         request_lock_timeout: float | None = None,
+        _launcher_operation_id: str | None = None,
+        _prepare_only: bool = False,
     ) -> ManagedStartResult:
+        def transact():
+            if _launcher_operation_id is None:
+                return self._start_transaction(project_id, request)
+            return self._start_transaction(project_id, request, launcher_operation_id=_launcher_operation_id, prepare_only=_prepare_only)
         try:
             # Serialize the pre-record Git-pin window as well as the normal
             # activation.  Without this lock, an identical concurrent caller
@@ -7024,9 +7183,9 @@ class TransactionalSprintImporter:
             except (WorkspaceError, KeyError, TypeError, ValueError):
                 # Let the transaction path preserve its phase-specific public
                 # normalization without creating a lock below an unsafe root.
-                return self._start_transaction(project_id, request)
+                return transact()
             if terminal:
-                return self._start_transaction(project_id, request)
+                return transact()
             binding_key = self._request_binding_key(
                 project_id, request.idempotency_key
             )
@@ -7040,7 +7199,7 @@ class TransactionalSprintImporter:
             )
             try:
                 with request_lock:
-                    return self._start_transaction(project_id, request)
+                    return transact()
             except FileLockTimeout:
                 raise ManagedImportError(
                     PROJECT_ACTIVATION_IN_PROGRESS,
@@ -7130,6 +7289,7 @@ class TransactionalSprintImporter:
         self,
         project_id: str,
         request: StartSprintFromGitRequest,
+        *, launcher_operation_id: str | None = None, prepare_only: bool = False,
     ) -> ManagedStartResult:
         try:
             self._assert_control_store_root_safe()
@@ -7149,6 +7309,29 @@ class TransactionalSprintImporter:
             ) from None
         fingerprint = request.request_fingerprint(project_id)
         existing = self.store.lookup(project_id, request.idempotency_key)
+        launcher_context = None
+        if launcher_operation_id is not None or (existing is not None and existing.get("evidence", {}).get("launcher")):
+            self._assert_mutation_roots_safe()
+            launcher_context = self.store.launcher_request_context(project_id, request, launcher_operation_id)
+            if launcher_context is None:
+                raise ManagedImportError("LAUNCHER_START_REQUIRED", 409, "launcher-reservation", phase="VALIDATE")
+            if (existing is None or existing.get("status") not in {"SUCCEEDED", "FAILED"}) and datetime.fromisoformat(launcher_context["prepare_expires_at"]) <= _utc_now(self.clock):
+                raise ManagedImportError("PREPARATION_EXPIRED", 409, "launcher-reservation", phase="VALIDATE")
+            if existing and existing.get("evidence", {}).get("launcher") != launcher_context:
+                raise ManagedImportError("LAUNCHER_RESERVATION_INVALID", 409, "launcher-reservation", phase="VALIDATE")
+            if prepare_only and existing and existing.get("status") == "PREPARED":
+                receipt = deepcopy(existing["evidence"]["prepared_receipt"])
+                receipt["deduplicated"] = True
+                return ManagedStartResult(response=receipt, http_status=200)
+        def resolve_source(provider, repository, source_ref, *, owner_id):
+            if launcher_context is None:
+                return provider.resolve_and_pin_commit(repository, source_ref, owner_id=owner_id)
+            # Intake already verified and pinned this source before publication.
+            # A later main update must not replace or invalidate the approved run.
+            commit = launcher_context["source_commit"]
+            provider.pin_commit(repository, commit, owner_id=owner_id)
+            return commit
+
         if existing is not None:
             if existing.get("request_fingerprint") != fingerprint:
                 raise ManagedImportError(
@@ -7433,8 +7616,8 @@ class TransactionalSprintImporter:
                 if not workspace_source_commit:
                     try:
                         workspace_source_commit = (
-                            git_provider.resolve_and_pin_commit(
-                                repository,
+                            resolve_source(
+                                git_provider, repository,
                                 source_ref,
                                 owner_id=f"{request_pin_owner}:workspace-source",
                             )
@@ -7505,6 +7688,8 @@ class TransactionalSprintImporter:
                     request.ref,
                     owner_id=f"{request_pin_owner}:manifest",
                 )
+            if launcher_context is not None and manifest_commit != launcher_context["manifest_commit"]:
+                raise ManagedImportError("LAUNCHER_MANIFEST_CHANGED", 409, "launcher-reservation", phase="VALIDATE")
             manifest_blob = git_provider.read_blob(
                 repository,
                 manifest_commit,
@@ -7540,12 +7725,18 @@ class TransactionalSprintImporter:
                     phase="VALIDATE",
                     supported=["managed_workspace_v1"],
                 )
+            if launcher_context is not None and (
+                manifest_commit != launcher_context["manifest_commit"]
+                or hashlib.sha256(manifest_blob).hexdigest() != launcher_context["manifest_sha256"]
+            ):
+                raise ManagedImportError("LAUNCHER_MANIFEST_CHANGED", 409, "launcher-reservation", phase="VALIDATE")
             record, raced = self.store.register_or_resume(
                 project_id,
                 request,
                 None,
                 None,
                 repository_binding=self._repository_binding(repository.spec),
+                launcher_operation_id=launcher_operation_id,
                 clock=self.clock,
                 attempt_id_factory=self.attempt_id_factory,
             )
@@ -7553,7 +7744,7 @@ class TransactionalSprintImporter:
                 # Another root/process won the durable intent.  Re-enter using
                 # its frozen repository binding; never continue with this
                 # caller's pre-dispatch provider.
-                return self._start_transaction(project_id, request)
+                return self._start_transaction(project_id, request, launcher_operation_id=launcher_operation_id, prepare_only=prepare_only)
             if record.get("status") in {"SUCCEEDED", "FAILED"}:
                 self._ensure_succeeded_publication(record)
                 return self._replay(record)
@@ -7676,8 +7867,8 @@ class TransactionalSprintImporter:
                     )
                 )
             try:
-                workspace_source_commit = git_provider.resolve_and_pin_commit(
-                    repository,
+                workspace_source_commit = resolve_source(
+                    git_provider, repository,
                     source_ref,
                     owner_id=f"{request_pin_owner}:workspace-source",
                 )
@@ -7786,7 +7977,7 @@ class TransactionalSprintImporter:
             if latest.get("status") in {"SUCCEEDED", "FAILED"}:
                 self._ensure_succeeded_publication(latest)
                 return self._replay(latest)
-            record = self.store.resume_existing(project_id, request, clock=self.clock)
+            record = self.store.resume_existing(project_id, request, clock=self.clock, launcher_operation_id=launcher_operation_id)
             if record.get("status") in {"SUCCEEDED", "FAILED"}:
                 self._ensure_succeeded_publication(record)
                 return self._replay(record)
@@ -7932,7 +8123,10 @@ class TransactionalSprintImporter:
                 preflight = deepcopy(dict(stored_preflight))
                 # Reconstruct all executable plan members deterministically;
                 # stored plans are only tamper-evident recovery evidence.
-                snapshot = preflight["lease_snapshot"]
+                snapshot = (self._snapshot() if launcher_context is not None and evidence.get("prepared_receipt")
+                            else preflight["lease_snapshot"])
+                preflight["lease_snapshot"] = deepcopy(snapshot)
+                preflight["lease_snapshot_sha256"] = canonical_json_sha256(snapshot)
                 plans, plan_issues = self._activation_plan(
                     project_id,
                     provenance,
@@ -7982,6 +8176,11 @@ class TransactionalSprintImporter:
                 record,
                 fencing_token,
             )
+            if prepare_only:
+                result = self.store.park_prepared(project_id, attempt_id, operation_id=launcher_operation_id,
+                    workspaces=workspaces, fencing_token=fencing_token, clock=self.clock)
+                self._fault("after_prepared_park", attempt_id=attempt_id)
+                return result
             port_leases, process_records, resource_issues = (
                 self._planned_runtime_resources(
                     plans,

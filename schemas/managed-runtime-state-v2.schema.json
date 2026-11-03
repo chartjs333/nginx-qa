@@ -53,6 +53,17 @@
     "runtime_config": {"$ref": "managed-runtime-config-v1.schema.json"},
     "status": {"enum": ["preparing", "active", "completed", "failed", "blocked"]},
     "graph_revision": {"type": "integer", "minimum": 1},
+    "preparation_cancellation": {
+      "type": "object",
+      "required": ["operation_id", "attempt_id", "stopped_at", "never_activated"],
+      "properties": {
+        "operation_id": {"type": "string", "pattern": "^launch-[0-9a-f]{32}$"},
+        "attempt_id": {"type": "string", "minLength": 1},
+        "stopped_at": {"$ref": "#/$defs/timestamp"},
+        "never_activated": {"const": true}
+      },
+      "additionalProperties": false
+    },
     "execution_revision": {"type": "integer", "minimum": 0, "description": "Execution/audit cursor; independent of immutable graph-definition revision."},
     "scope_control": {"type": "object", "description": "Versioned scope aggregate, validated for immutable binding and ACK lineage on every store read and write."},
     "graph_revisions": {
@@ -209,7 +220,8 @@
     {
       "if": {
         "properties": {"status": {"enum": ["failed", "blocked"]}},
-        "required": ["status"]
+        "required": ["status"],
+        "not": {"required": ["preparation_cancellation"]}
       },
       "then": {
         "properties": {"coordinator_contexts": {"minItems": 1}}
