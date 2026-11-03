@@ -39,7 +39,7 @@ class LauncherOperations:
                 raise ValueError
             LauncherOperations._validate_client_receipts(record)
             return record
-        except (ValueError, KeyError, TypeError):
+        except (ValueError, KeyError, TypeError, AttributeError):
             fail("OPERATION_CORRUPT", "Launcher operation requires operator recovery.", 409)
 
     @staticmethod
@@ -53,6 +53,8 @@ class LauncherOperations:
                 receipt = record.get(key)
                 if receipt is None:
                     continue
+                if not isinstance(receipt, dict):
+                    raise ValueError
                 expected = descriptor(record)
                 if key == "executor_receipt":
                     ids = receipt.get("initial_assignment_ids")

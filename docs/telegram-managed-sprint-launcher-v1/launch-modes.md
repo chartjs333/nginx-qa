@@ -97,3 +97,8 @@ real isolated child-process fixtures. They cover concurrent/repeated Start,
 permission revocation, lost ACK, restart, preparation recovery and cancellation
 before launch/during work/pending review. These tests do not demonstrate a real
 Telegram conversation, external AI, public tunnel or phone/tablet session.
+
+Recovery collects every project result even after an unexpected SQLite or corrupt
+record error. The batch cannot finish, retry, or release shutdown resource holders
+while sibling thread-backed mutations are still running. Invalid stored client
+receipt types are rejected as OPERATION_CORRUPT before field access.

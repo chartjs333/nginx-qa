@@ -518,6 +518,66 @@ class ExistingClientAdapterContractTests(unittest.TestCase):
 
 
 class LauncherReconciliationLoopTests(unittest.IsolatedAsyncioTestCase):
+    async def test_unexpected_project_failure_drains_thread_backed_siblings_before_retry_or_shutdown(self):
+        import sqlite3
+        import threading
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        import main
+        import nginx_qa.telegram_launcher_intake as intake
+        for error in (sqlite3.OperationalError("fixture locked database"), AttributeError("fixture corrupt receipt")):
+            with self.subTest(error=type(error).__name__):
+                stop_event, entered, release = threading.Event(), threading.Event(), threading.Event()
+                workers = []
+                def pending(host, config, project_id, policy):
+                    if project_id == "bad":
+                        raise error
+                    return object(), [{"user_id": "1", "chat_id": "1", "operation_id": project_id}]
+                def held_worker():
+                    workers.append(1)
+                    entered.set()
+                    if not release.wait(5):
+                        raise TimeoutError("fixture cleanup deadline")
+                async def resume(*args):
+                    await asyncio.to_thread(held_worker)
+                runtime = unittest.mock.Mock()
+                host = SimpleNamespace(read_git_config=AsyncMock(return_value={}))
+                original = intake.reconcile_operations
+                async def batch(ignored, **kwargs):
+                    return await original(host, **kwargs)
+                with patch.dict(os.environ, {"NGINX_QA_TELEGRAM_LAUNCHER_ENABLED": "true"}), \
+                     patch.object(intake, "load_policy", return_value={"projects": {"bad": {}, "healthy": {}}}), \
+                     patch.object(intake, "pending_project_operations", side_effect=pending), \
+                     patch.object(execution, "current_principal", side_effect=lambda p, *args: p), \
+                     patch.object(intake, "continue_operation", side_effect=resume), \
+                     patch.object(intake, "reconcile_operations", side_effect=batch):
+                    thread = threading.Thread(target=main._reconcile_managed_continuity_background,
+                        args=(runtime, stop_event, 0.005, asyncio.get_running_loop()), daemon=True)
+                    thread.start()
+                    try:
+                        self.assertTrue(await asyncio.to_thread(entered.wait, 2))
+                        await asyncio.sleep(0.06)
+                        self.assertEqual(1, len(workers), "failed sibling must not release single-flight barrier")
+                        self.assertGreater(runtime.reconcile_all.call_count, 2)
+                        stop_event.set()
+                        await asyncio.to_thread(thread.join, 0.03)
+                        self.assertTrue(thread.is_alive(), "a failed sibling is not shutdown quiescence")
+                        release.set()
+                        await asyncio.to_thread(thread.join, 2)
+                        self.assertFalse(thread.is_alive())
+                        self.assertEqual(1, len(workers))
+                    finally:
+                        stop_event.set()
+                        release.set()
+                        await asyncio.to_thread(thread.join, 2)
+
+    async def test_malformed_stored_executor_receipt_is_a_safe_domain_error(self):
+        for field in ("executor_receipt", "executor_stop_receipt"):
+            with self.subTest(field=field), self.assertRaises(HTTPException) as raised:
+                LauncherOperations._validate_client_receipts({field: []})
+            self.assertEqual(409, raised.exception.status_code)
+            self.assertEqual("OPERATION_CORRUPT", raised.exception.detail["error"])
+
     async def test_background_transport_recovery_uses_the_asgi_event_loop(self):
         import threading
         import main

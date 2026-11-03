@@ -306,7 +306,13 @@ async def reconcile_operations(host, *, stop_event=None):
             except (HTTPException, ManagedImportError, ManagedGitError, WorkspaceError, KeyError, TypeError, ValueError, RuntimeError, OSError):
                 # One blocked/corrupt project cannot starve other projects.
                 return
-    await asyncio.gather(*(recover_project(project_id, project_policy) for project_id, project_policy in policy["projects"].items()))
+    # A corrupt row/SQLite failure can raise outside the expected domain errors.
+    # gather's default early exception propagation would orphan still-running
+    # siblings, falsely ending the single-flight/shutdown barrier. Never cancel
+    # thread-backed mutations: collect every child before returning to the host.
+    results = await asyncio.gather(*(recover_project(project_id, project_policy)
+        for project_id, project_policy in policy["projects"].items()), return_exceptions=True)
+    return {"failed_projects": sum(isinstance(result, BaseException) for result in results)}
 
 
 async def maybe_handle_upload(update, message, host):
