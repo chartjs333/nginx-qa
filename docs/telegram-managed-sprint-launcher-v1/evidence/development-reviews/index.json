@@ -1,10 +1,10 @@
 {
   "kind": "index_of_retained_independent_engine_review_receipts",
-  "note": "Projection of actual saved reports, not a new review or engine mutation.",
+  "note": "Projection of actual saved reports, not a new review or engine mutation. report_sha256 binds Git-delivered LF bytes; original_report_sha256 binds original reviewer file. Only CRLF normalization separates them.",
   "reports": [
     {
       "report": "runtime-architecture-rework1.json",
-      "report_sha256": "5d113c78b849f176a3eff97b1ac566b6d5d63191c5a2e15c3b8db9146f1b02d6",
+      "report_sha256": "6f1e60053af4b24c99e2a67d8d3b5454d4bcff7db95a15370cda67f717379766",
       "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -17,11 +17,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "5d113c78b849f176a3eff97b1ac566b6d5d63191c5a2e15c3b8db9146f1b02d6",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-gateway.json",
-      "report_sha256": "3a32252f17e86130bda989c53e6220cf8c2e7c806936cd0c853cf9dfaeb12dd1",
+      "report_sha256": "0f7de0270b27849265428a2922b49ab0ea5000b0eb3edae1dae50c449a62c5e9",
       "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -34,11 +36,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "3a32252f17e86130bda989c53e6220cf8c2e7c806936cd0c853cf9dfaeb12dd1",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-intake-rework1.json",
-      "report_sha256": "3dbef09f4a841bf6f66caa62830f653d2dc303695dcd6ed19a41063494f40308",
+      "report_sha256": "3fdc6680460fe917970bd8e71349b720dc7779460ecb5f0f70a969916f2ca6cc",
       "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -51,11 +55,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "3dbef09f4a841bf6f66caa62830f653d2dc303695dcd6ed19a41063494f40308",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-intake.json",
-      "report_sha256": "66acdd62d2d3a59be56aa759b68781a9c641c4522ef43a62f631c98f254e6461",
+      "report_sha256": "d759abe4b6c6b50a6ac4929f3d830c866fc652aea62db33e19d73102d4f692ec",
       "result_commit": "7586467472a25b97cf53c91dd4ea598cbebe3e45",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -68,11 +74,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "66acdd62d2d3a59be56aa759b68781a9c641c4522ef43a62f631c98f254e6461",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-launch-modes-rework1.json",
-      "report_sha256": "96e367cf613fc6315ef990d6b4fd40e16aa7494ad0c0ebc62c87fafea77f16f8",
+      "report_sha256": "9bd70dbb8ffe78452baddb13c1c86e0d717099812868daa2cb43a60d03576dd2",
       "result_commit": "5501a7918c7b324eebf267b6319c59fe245ba4a2",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -85,11 +93,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "96e367cf613fc6315ef990d6b4fd40e16aa7494ad0c0ebc62c87fafea77f16f8",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-launch-modes-rework2.json",
-      "report_sha256": "5f60d29a5029148a873aaa96a48c5f4ffd1b0d2fd7d6afe346cbc43d082983b1",
+      "report_sha256": "338cdef43ef3200ea29dac752e3579252fe84516112be6320b23f0c22a10201c",
       "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -102,11 +112,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "5f60d29a5029148a873aaa96a48c5f4ffd1b0d2fd7d6afe346cbc43d082983b1",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-preparation.json",
-      "report_sha256": "c66408f417f47d8bed31f3c1db3958bd20621fbfe22a094d09ef858877340d84",
+      "report_sha256": "1bba4eb14192d3bb780f010df3d7a9eb8f3e3ee8c19ffb680b81a4ff04b9b56d",
       "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -119,11 +131,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "c66408f417f47d8bed31f3c1db3958bd20621fbfe22a094d09ef858877340d84",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-prompt-rework1.json",
-      "report_sha256": "aeff4d43beaf02a2e15c8ca404f6d95155c74880575118001f170ed254d74879",
+      "report_sha256": "648313070c78539b409d3d7a535cabbf2ab0519f3ca1831fb4625148c2fd7c15",
       "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -136,11 +150,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "aeff4d43beaf02a2e15c8ca404f6d95155c74880575118001f170ed254d74879",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-prompt.json",
-      "report_sha256": "6cecce53e2a803f2d55c4e52f8a21e94145e33607c5a71f4e5da20760414a953",
+      "report_sha256": "1b7465deb08feff32fb1c5813decd44b595e23428048df04623e87ad2ccbb988",
       "result_commit": "c71336af45f7a2fc74f0738f35210f7856f01317",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -153,11 +169,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "6cecce53e2a803f2d55c4e52f8a21e94145e33607c5a71f4e5da20760414a953",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-qualification-rework1.json",
-      "report_sha256": "43f499041586e508538d2f32ac31dcbbaacb0dcca8fa83ec5c296099cd2b9ff9",
+      "report_sha256": "3a050a72b29881e5514708fd1116f28393bcb5f892f37e82f810a218404d0322",
       "result_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -170,11 +188,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "43f499041586e508538d2f32ac31dcbbaacb0dcca8fa83ec5c296099cd2b9ff9",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "runtime-telegram-controls.json",
-      "report_sha256": "4d09c08b41bf93637d05320bf6ae137fa512e5908b64d75752b97ad71efd842f",
+      "report_sha256": "677db9781fe72c5ece2ec291bb43aa93104e43d9217cd0a790d73ead14db22c9",
       "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
       "reviewer_phone": "6681",
       "engine_receipts": [
@@ -187,11 +207,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "4d09c08b41bf93637d05320bf6ae137fa512e5908b64d75752b97ad71efd842f",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-architecture-rework1.json",
-      "report_sha256": "9ab03d14d051d2376f1a4498e43ae8d7866784258b28f6c83d65e80f57b0967f",
+      "report_sha256": "8b23e18c73b038af43864e6697474e6f4eb07924eff470ff7f48ae4616aa603f",
       "result_commit": "e6efa11aef5b4fa29b957f45d768e2ce05b65fba",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -204,11 +226,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "9ab03d14d051d2376f1a4498e43ae8d7866784258b28f6c83d65e80f57b0967f",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-architecture.json",
-      "report_sha256": "591f81a5e79676680d9692f9f87f022ef772bf84fcfb379c260bc44bc5447b5e",
+      "report_sha256": "90819fb648f2bdb620b7373ccbac3e1bd4f72201a4c269deb55901912ad91dc4",
       "result_commit": "ab97f351b8833e2ed88ec994870d2bd9f94e3c45",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -221,11 +245,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "591f81a5e79676680d9692f9f87f022ef772bf84fcfb379c260bc44bc5447b5e",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-gateway.json",
-      "report_sha256": "0af42ba98200b50b5ee2eb8ac6fa3f197fed352fb2d4cb82622c02985b805c4f",
+      "report_sha256": "e28de8efbcfe16cc2fc2d0a99cdabfd2daaf02e8c6d7efedd2526757012f054d",
       "result_commit": "6b603a16fb84da35e9c8f06b40ced3b3be5e5f11",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -238,11 +264,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-gateway-receipt.json"
+      "separate_receipt": "security-gateway-receipt.json",
+      "original_report_sha256": "0af42ba98200b50b5ee2eb8ac6fa3f197fed352fb2d4cb82622c02985b805c4f",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-intake-rework1.json",
-      "report_sha256": "47feccb469ba39e6d0804bf51d84999cf2c5d00a0d6c3e1a61b60d6de68258f9",
+      "report_sha256": "ca0494647e9776f8624a5f6c299ac7256331baef41df458c9137928e3a0d6e56",
       "result_commit": "866e36ce03b4f5329d90564a55de5c709067fc74",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -255,11 +283,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "47feccb469ba39e6d0804bf51d84999cf2c5d00a0d6c3e1a61b60d6de68258f9",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-launch-modes-rework2.json",
-      "report_sha256": "25b2223dac8e79d9e7c0072564aa1d1ecf3bddc82e871b55e3e2e0564fc95699",
+      "report_sha256": "41eb5817b61ba7113ac8791eb1c01497a292e620c199a497a61276f6015348b0",
       "result_commit": "78b805cb976f9aac87f2e8906ef064bc10909a27",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -272,11 +302,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-launch-modes-rework2-receipt.json"
+      "separate_receipt": "security-launch-modes-rework2-receipt.json",
+      "original_report_sha256": "25b2223dac8e79d9e7c0072564aa1d1ecf3bddc82e871b55e3e2e0564fc95699",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-launch-modes.json",
-      "report_sha256": "3c3e17ece624b621b26ad773856344cce6009cdfe94080bb66611443042a4a1c",
+      "report_sha256": "79167529399ba7742d7987922d776158b3796ae2365e28ba7832ea58aa6ff8d5",
       "result_commit": "dbb99d1aa1334b9b2f60ced52db4fd0e0d3583ce",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -289,11 +321,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-launch-modes-receipt.json"
+      "separate_receipt": "security-launch-modes-receipt.json",
+      "original_report_sha256": "3c3e17ece624b621b26ad773856344cce6009cdfe94080bb66611443042a4a1c",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-preparation.json",
-      "report_sha256": "4afc0761a15fca4341cade59933924b07fcc6e9ad98803c72bc6d567aeabe204",
+      "report_sha256": "74c63941ff99db0a4a82637650df14976d8b0fb31f6a8afef9ca0a87e0981c5b",
       "result_commit": "75549ce4e7390cad53b7980bab9696a88d304120",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -306,11 +340,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-preparation-receipt.json"
+      "separate_receipt": "security-preparation-receipt.json",
+      "original_report_sha256": "4afc0761a15fca4341cade59933924b07fcc6e9ad98803c72bc6d567aeabe204",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-prompt-rework1.json",
-      "report_sha256": "7650d78a236bd81f851b61ff78b687f6b643324179fff1940447c838bd184f29",
+      "report_sha256": "2de6d166650231b7a027d4d1d8707e5273beea2477dd1824a27fe66a1493a4be",
       "result_commit": "3e715c13193222a96a7ac8f39ac181974b13a4bb",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -323,11 +359,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": null
+      "separate_receipt": null,
+      "original_report_sha256": "7650d78a236bd81f851b61ff78b687f6b643324179fff1940447c838bd184f29",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-qualification-rework1.json",
-      "report_sha256": "ee270eb0daaa118482cc1591d7c558e3626599460656ffd921336b41824d518d",
+      "report_sha256": "9064fd1acaaa0c606fe3e87ac11bf2f682f49d33f4d99ee9430591b09b8a3c91",
       "result_commit": "d72fa097b6d5f0591fec1998c855eee7b38ac747",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -340,11 +378,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-qualification-rework1-receipt.json"
+      "separate_receipt": "security-qualification-rework1-receipt.json",
+      "original_report_sha256": "ee270eb0daaa118482cc1591d7c558e3626599460656ffd921336b41824d518d",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-qualification.json",
-      "report_sha256": "1f0a8941ae713d0888cf62cdbbdc0a712ab92cc7c4a48a367127447d96e392a4",
+      "report_sha256": "7e64dd645b1206c85bb3e2eb50be24ba4d9da36c852cdd596a00323adbd361a1",
       "result_commit": "59db1780ef5b66650e47b15afa142e50af2f5e42",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -357,11 +397,13 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-qualification-receipt.json"
+      "separate_receipt": "security-qualification-receipt.json",
+      "original_report_sha256": "1f0a8941ae713d0888cf62cdbbdc0a712ab92cc7c4a48a367127447d96e392a4",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     },
     {
       "report": "security-telegram-controls.json",
-      "report_sha256": "2a7d30dc029a3a135064787a4eeb3a3f4fa38cc9025488c662764b3f1539b196",
+      "report_sha256": "970ef2807e195b29f53c0be48d0ac92e95e87ad6a278d5f8c6b7f3ade7ec333d",
       "result_commit": "2f59b53c2ba765f12079f8000e0ba60f90c9d469",
       "reviewer_phone": "6682",
       "engine_receipts": [
@@ -374,7 +416,9 @@
           "deduplicated": false
         }
       ],
-      "separate_receipt": "security-telegram-controls-receipt.json"
+      "separate_receipt": "security-telegram-controls-receipt.json",
+      "original_report_sha256": "2a7d30dc029a3a135064787a4eeb3a3f4fa38cc9025488c662764b3f1539b196",
+      "delivery_normalization": "CRLF to LF only; original retained under C:/nqt35/client/reviews"
     }
   ]
 }
