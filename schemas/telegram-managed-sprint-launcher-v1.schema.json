@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/schemas/telegram-managed-sprint-launcher-v1.schema.json",
+  "title": "Telegram Managed Sprint Launcher v1 transport envelope",
+  "description": "Opt-in transport contract. Validation alone never grants execution or Git publication authority. The embedded manifest is still handled by the existing Managed Sprint Engine.",
+  "type": "object",
+  "required": [
+    "kind",
+    "schema_version",
+    "project_id",
+    "autonomous_mode",
+    "manifest"
+  ],
+  "properties": {
+    "kind": {
+      "const": "telegram_managed_sprint_v1"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "project_id": {
+      "type": "string",
+      "pattern": "^9[0-9]{3}$",
+      "description": "Canonical project phone resolved from the server registry; not a caller-created alias."
+    },
+    "autonomous_mode": {
+      "type": "boolean",
+      "description": "true requests authorized automatic activation; false prepares and waits. No implicit default in this explicit envelope."
+    },
+    "manifest": {
+      "$ref": "managed-workspace-sprint-v1.schema.json"
+    }
+  },
+  "additionalProperties": false
+}

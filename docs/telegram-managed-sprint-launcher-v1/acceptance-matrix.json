@@ -1,0 +1,134 @@
+{
+  "contract": "Telegram Managed Sprint Launcher v1",
+  "scope_amendment": "One active Managed Sprint per canonical project; no same-project parallel runs.",
+  "cases": [
+    {
+      "id": "TMSL-AT-01",
+      "owner": "prompt-export",
+      "positive": "Installed schema/version/digest changes are reflected in text and file prompts; permissions and repository/task context are verified.",
+      "negative": "No source/runtime mutation or secret disclosure; oversized/unauthorized prompt rejected.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-02",
+      "owner": "prompt-export",
+      "positive": "A JSON fixture based on the exported prompt passes envelope + actual managed validators.",
+      "negative": "External-model round trip remains NOT_RUN until a real model output and validation evidence are captured.",
+      "status": "NOT_RUN",
+      "external_evidence_required": true
+    },
+    {
+      "id": "TMSL-AT-03",
+      "owner": "telegram-intake",
+      "positive": "Text/document imports bind canonical project, actor, immutable Git manifest and source checksums.",
+      "negative": "Untrusted registry/root/transport overrides and ambiguous input rejected before workspace creation.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-04",
+      "owner": "telegram-intake",
+      "positive": "Strict JSON, shape, roles, graph, Git and permission failures have actionable stable errors.",
+      "negative": "Zero instance/workspace/task/process effects on invalid/unauthorized input; no duplicate keys/nonfinite values.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-05",
+      "owner": "instance-preparation",
+      "positive": "A new permitted run obtains distinct instance, branch/workspace and durable ownership.",
+      "negative": "Prepared/Waiting never enqueues task/review assignments or starts agent processes.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-06",
+      "owner": "launch-modes",
+      "positive": "true activates using explicit current start/executor capabilities and the existing agent cycle.",
+      "negative": "Missing/revoked capability or executor yields a truthful blocked receipt, not fake Running.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-07",
+      "owner": "launch-modes",
+      "positive": "false prepares and waits, then authorized Telegram/UI Start activates; legacy no-flag behavior remains.",
+      "negative": "Manual waiting snapshots contain no issued assignments; duplicate Start cannot spawn twice.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-08",
+      "owner": "launch-modes",
+      "positive": "Three simultaneous different requests for the same canonical project: one accepted, two PROJECT_BUSY, including old/new API races.",
+      "negative": "Existing active/pending/prepared state is unchanged by losers; no alias projects or separate DBs bypass the slot.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-09",
+      "owner": "instance-preparation",
+      "positive": "Separate run worktrees/branches/results; file checksums resolve from source commit.",
+      "negative": "Traversal/reparse/dirty/diverged/lease conflict rejection; completed history retained.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-10",
+      "owner": "instance-preparation",
+      "positive": "Two existing test projects and successive runs have independent queues/state/logs.",
+      "negative": "Failure/cancel in one cannot mutate or stop another; no live project data fixtures.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-11",
+      "owner": "telegram-intake",
+      "positive": "Repeated update/message delivery and ambiguous ACK return the same persisted operation.",
+      "negative": "Changed payload with same key conflicts; another user cannot replay/read the saved result.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-12",
+      "owner": "telegram-controls",
+      "positive": "Three exact buttons, proper callback ownership and safe length; concurrent Start is idempotent.",
+      "negative": "Stale/cross-user/cross-instance callback denied, delivery retries do not repeat activation.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-13",
+      "owner": "launch-modes",
+      "positive": "Crash injection at reserve/provision/prepare/activate/outbox boundaries preserves durable intent.",
+      "negative": "Manual parked attempts stay parked on restart; quotas/cancel free only proved owned resources.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    },
+    {
+      "id": "TMSL-AT-14",
+      "owner": "gateway-auth",
+      "positive": "Allowlisted gateway routes, fake tunnel outage/reconnect, independent engine execution.",
+      "negative": "Real authorized tunnel/mobile demonstration is separately gated; mocks never count as external evidence.",
+      "status": "NOT_RUN",
+      "external_evidence_required": true
+    },
+    {
+      "id": "TMSL-AT-15",
+      "owner": "gateway-auth",
+      "positive": "Valid private Mini App identity leads to one-use exchange and scoped session.",
+      "negative": "Tamper/stale/replay/racing exchange/wrong user/instance/revoke/CSRF/SSRF/WS/SSE and URL/log secret leakage denied.",
+      "status": "NOT_RUN",
+      "external_evidence_required": true
+    },
+    {
+      "id": "TMSL-AT-16",
+      "owner": "qa-qualification",
+      "positive": "Legacy/core/inbound/PR16 regressions, two distinct exact-commit reviews, reject/rework/reapproval.",
+      "negative": "No self approval or fake reports; release cannot be DONE without required actual external evidence and authorized PR.",
+      "status": "NOT_RUN",
+      "external_evidence_required": false
+    }
+  ]
+}
