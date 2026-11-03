@@ -54,8 +54,12 @@ Limits for the new transport: at most 1 MiB UTF-8 input; at most 64 nesting leve
 depth/count excess before recursive schema validation. Reject duplicate keys,
 nonfinite numbers, invalid UTF-8, unsupported versions and unknown envelope fields.
 Code fences are accepted only through a bounded explicit text adapter; the inner
-document remains strict JSON. Text/caption/document precedence is deterministic;
-ambiguity is rejected. Reject edited messages and channel posts for v1 launcher
+document remains strict JSON. Text/caption/document selection is deterministic: launcher text uses its explicit
+kind; documents opt in with the reserved managed-sprint.json filename or caption
+/sprint_import <project phone>. Unmarked files retain legacy transport behavior;
+any launcher namespace reaching the legacy parser is refused before mutation.
+A caption project must match the envelope. Ambiguous text/attachment combinations
+are rejected. Reject edited messages and channel posts for v1 launcher
 mutations; ordinary private messages and owned callback queries are supported.
 Declared document size is only an early bound; actual streamed bytes are bounded.
 

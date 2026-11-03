@@ -192,7 +192,9 @@ def build_authoring_prompt(project_id: str, git_address: str, task: str,
     }, ensure_ascii=False, indent=2)
     task_json = json.dumps({"untrusted_user_task": task}, ensure_ascii=False, indent=2)
     rules = """Create a single strict JSON Telegram Managed Sprint Launcher v1 envelope.
-Return JSON only, without prose or code fences. The supported kind is
+Return JSON only, without prose or code fences. For Telegram document upload,
+save the response as managed-sprint.json, or attach any .json with caption
+/sprint_import <canonical project phone>. The supported kind is
 telegram_managed_sprint_v1, schema_version 1, canonical project_id, an explicit
 boolean autonomous_mode, and manifest with sprint_type managed_workspace_v1.
 Default the suggested new envelope to autonomous_mode=false; true is only an
@@ -273,8 +275,12 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
     update = await bounded_update(request)
     message = update.get("message")
     if not isinstance(message, dict):
-        if any(key in update for key in ("edited_message", "channel_post", "edited_channel_post")):
-            fail("UNSUPPORTED_UPDATE", "Launcher mutations require an original private message.")
+        from nginx_qa.telegram_launcher_intake import launcher_message_selected
+        for key in ("edited_message", "channel_post", "edited_channel_post"):
+            other = update.get(key)
+            if isinstance(other, dict) and (launcher_message_selected(other)
+                    or str(other.get("text", "")).startswith("/sprint_prompt")):
+                fail("UNSUPPORTED_UPDATE", "Launcher mutations require an original private message.")
         return None
     command = prompt_command(message)
     if command is None:

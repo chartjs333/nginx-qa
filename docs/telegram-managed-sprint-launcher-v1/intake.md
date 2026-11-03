@@ -1,12 +1,25 @@
 # Managed JSON intake
 
-The opt-in launcher accepts its versioned envelope as a complete JSON text, a
-single `json` code fence, or a `.json` document without a caption. The private
-Telegram user needs the project's `prepare` grant. A document is downloaded only
-after sender authorization; project permission is checked again after download.
-The enabled webhook always requires its configured secret. Disabling the feature
-preserves the previous Telegram path. With it enabled, document downloads require
-launcher preparation permission; non-launcher JSON still uses legacy dispatch.
+The opt-in launcher accepts its versioned envelope as JSON text, a single `json`
+code fence, or an explicitly selected document. For a document, use the reserved
+filename **managed-sprint.json**, or attach any `.json` with the exact caption
+`/sprint_import 9000` (substitute the canonical project phone). Do not combine a
+text body and attachment, or add a different caption to the reserved filename.
+
+The marker selects the new adapter before download. The private Telegram user
+needs `prepare`; a caption's project is checked before download and must match
+the envelope afterward. With only the reserved filename, the sender needs a
+preparation grant for at least one project before download, followed by the
+specific envelope project's grant after parsing. All grants are rechecked after
+async work. Unknown launcher versions fail in the new adapter.
+
+Unmarked documents and unrelated legacy text/channel posts retain their original
+dispatch, permissions and parsing. An unmarked launcher envelope read by the old
+parser is rejected with `LAUNCHER_TRANSPORT_REQUIRED` before any runtime mutation.
+That old download path retains its existing transport behavior; it is not the
+new launcher ingress. Marked channel/edited requests are rejected. The enabled
+webhook requires its configured secret; disabling the feature preserves the old
+Telegram path (except reserved launcher envelopes cannot bypass into legacy).
 
 The envelope requires `kind: telegram_managed_sprint_v1`, `schema_version: 1`, the
 canonical project phone, boolean `autonomous_mode`, and a complete `manifest`.

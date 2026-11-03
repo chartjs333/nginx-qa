@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import os
 import re
 import urllib.error
@@ -20,6 +21,36 @@ from nginx_qa.telegram_launcher_store import LauncherOperations
 from nginx_qa.workspace_manager import WorkspaceError
 
 KIND = "telegram_managed_sprint_v1"
+DOCUMENT_NAME = "managed-sprint.json"
+
+
+def launcher_text_selected(text: Any) -> bool:
+    """Peek only at top-level namespace; leave unrelated legacy syntax alone."""
+    if not isinstance(text, str):
+        return False
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        match = re.fullmatch(r"```(?:json)?\s*\n([\s\S]*?)\n```", stripped)
+        if not match:
+            return False
+        stripped = match.group(1)
+    if not stripped.startswith("{"):
+        return False
+    try:
+        pairs = json.loads(stripped, object_pairs_hook=lambda items: items)
+        # Preserve duplicate top-level keys during selection; strict parsing
+        # later rejects any ambiguous launcher envelope before side effects.
+        return any(k == "kind" and isinstance(v, str) and v.startswith("telegram_managed_sprint_") for k, v in pairs)
+    except (ValueError, TypeError, RecursionError):
+        return False
+
+
+def launcher_message_selected(message: Mapping[str, Any]) -> bool:
+    document, caption = message.get("document"), message.get("caption")
+    return (launcher_text_selected(message.get("text")) or launcher_text_selected(caption)
+            or (isinstance(document, dict) and isinstance(document.get("file_name"), str)
+                and document["file_name"].casefold() == DOCUMENT_NAME)
+            or (isinstance(caption, str) and caption.strip().startswith("/sprint_import")))
 
 
 def bounded_object(raw: bytes) -> dict[str, Any]:
@@ -79,7 +110,7 @@ def validate_envelope(envelope: Mapping[str, Any]) -> None:
             stack.extend(item.values())
         elif isinstance(item, list):
             stack.extend(item)
-    if any("process" in n.get("workspace", {}) for n in manifest["nodes"]):
+    if any(isinstance(n.get("workspace"), dict) and "process" in n["workspace"] for n in manifest["nodes"]):
         fail("PROCESS_TEMPLATE_REQUIRED", "Uploaded process commands are disabled in launcher v1.")
     root_git = manifest["git"]
     if not root_git["expected_source_commit"] or not git_ref_format_valid(root_git["source_ref"]):
@@ -171,15 +202,24 @@ def reauthorize(message, principal, original_policy, action="prepare"):
 
 
 async def maybe_handle_upload(update, message, host):
+    if not launcher_message_selected(message):
+        return None
     text, document = message.get("text"), message.get("document")
     candidate = text_object(text) if isinstance(text, str) else None
     policy = None
+    caption_project = None
     if isinstance(document, dict):
-        if text or message.get("caption"):
-            fail("AMBIGUOUS_PAYLOAD", "Send one JSON document without a text or caption.")
+        caption = message.get("caption")
+        if text:
+            fail("AMBIGUOUS_PAYLOAD", "Send one launcher JSON document without additional text.")
+        if caption:
+            match = re.fullmatch(r"/sprint_import\s+(9[0-9]{3})", caption.strip()) if isinstance(caption, str) else None
+            if match is None:
+                fail("AMBIGUOUS_PAYLOAD", "Use caption /sprint_import <project phone> or reserved filename managed-sprint.json.")
+            caption_project = match.group(1)
         policy = load_policy()
         allowed = False
-        for project_id in policy["projects"]:
+        for project_id in ([caption_project] if caption_project else policy["projects"]):
             try:
                 download_principal = authorize_message(message, project_id, "prepare", policy)
                 allowed = True
@@ -193,7 +233,9 @@ async def maybe_handle_upload(update, message, host):
         reauthorize(message, download_principal, policy)
         candidate = bounded_object(raw)
     if candidate is None or not isinstance(candidate.get("kind"), str) or not candidate["kind"].startswith("telegram_managed_sprint_"):
-        return None
+        fail("LAUNCHER_ENVELOPE_REQUIRED", "Explicit launcher uploads require a managed launcher envelope.")
+    if caption_project is not None and candidate.get("project_id") != caption_project:
+        fail("PROJECT_IDENTITY_MISMATCH", "Caption project differs from the envelope project.", 403)
     policy = policy or load_policy()
     principal = authorize_message(message, str(candidate.get("project_id", "")), "prepare", policy)
     validate_envelope(candidate)

@@ -255,7 +255,7 @@ class LauncherIntakeTests(ManagedImportFixture):
     def test_document_authority_is_checked_before_download_and_after_await(self):
         update = self.update()
         update["message"].pop("text")
-        update["message"]["document"] = {"file_name": "sprint.json", "file_id": "file", "file_unique_id": "unique"}
+        update["message"]["document"] = {"file_name": "managed-sprint.json", "file_id": "file", "file_unique_id": "unique"}
         denied = copy.deepcopy(update)
         denied["message"]["from"]["id"] = 999
         with patch.object(intake, "download_document") as download:
@@ -276,7 +276,7 @@ class LauncherIntakeTests(ManagedImportFixture):
     def test_document_success_and_actual_byte_bound(self):
         update = self.update()
         update["message"].pop("text")
-        update["message"]["document"] = {"file_name": "sprint.json", "file_id": "file", "file_unique_id": "unique"}
+        update["message"]["document"] = {"file_name": "managed-sprint.json", "file_id": "file", "file_unique_id": "unique"}
         self.host.telegram_api_json.return_value = {"ok": True, "result": {"file_path": "documents/file.json"}}
         response = Mock()
         response.__enter__ = Mock(return_value=response)
@@ -308,6 +308,90 @@ class LauncherIntakeTests(ManagedImportFixture):
             main.legacy_sprint_import_dispatch(self.manifest)
         self.assertIn("MANAGED_GIT_START_REQUIRED", str(exc.exception.detail))
         self.assertFalse(self.imp.store.database_path.exists())
+
+    def test_terminal_workspace_extension_types_do_not_raise_typeerror(self):
+        # Terminal extension fields are allowed by the installed schema. They
+        # neither declare an executable process nor change dispatch into 500.
+        self.policy["grants"][0]["actions"].remove("manifest_publish")
+        os.environ[launcher.POLICY_ENV] = json.dumps(self.policy)
+        for index, value in enumerate((None, False, 1), 1):
+            candidate = copy.deepcopy(self.envelope)
+            terminal = next(n for n in candidate["manifest"]["nodes"] if n.get("type") == "terminal")
+            terminal["workspace"] = value
+            intake.validate_envelope(candidate)
+            try:
+                result = self.ingest(self.update(index, candidate))
+                self.assertEqual("Created", result["status"])
+            except HTTPException as exc:
+                self.assertEqual(409, exc.status_code)
+                self.assertEqual("PROJECT_BUSY", exc.detail["error"])
+        self.assert_no_activation()
+
+    def test_unselected_legacy_documents_channels_and_text_keep_dispatch(self):
+        import main
+        self.policy["grants"][0]["actions"] = ["prompt"]
+        os.environ[launcher.POLICY_ENV] = json.dumps(self.policy)
+        legacy = {"agents": {"items": []}}
+        cases = [
+            {"update_id": 1, "channel_post": {"text": json.dumps(legacy)}},
+            {"update_id": 2, "message": {**message(), "text": None,
+                "document": {"file_name": "agents.json", "file_id": "old", "file_unique_id": "old-unique"}}},
+            {"update_id": 3, "message": message('{"agents":{},"old":1,"old":2}')},
+            {"update_id": 4, "message": message('{"agents":{},"extension":NaN}')},
+        ]
+        for update in cases:
+            req = request(update)
+            async def legacy_handler(current_request, mode):
+                self.assertIs(req, current_request)
+                self.assertEqual(update, json.loads(await current_request.body()))
+                return {"legacy": True}
+            with patch.object(main, "_telegram_actor_import_for_mode", side_effect=legacy_handler) as old, patch.object(intake, "download_document") as download:
+                self.assertEqual({"legacy": True}, asyncio.run(main.telegram_actor_import_for_mode(req, "sequential")))
+                old.assert_called_once()
+                download.assert_not_called()
+        self.assertFalse(self.imp.store.database_path.exists())
+
+    def test_marked_unsupported_updates_and_namespace_cannot_use_legacy(self):
+        import main
+        for key in ("channel_post", "edited_message", "edited_channel_post"):
+            update = {"update_id": 1, key: self.update()["message"]}
+            with self.assertRaises(HTTPException) as exc:
+                self.ingest(update)
+            self.assertEqual("UNSUPPORTED_UPDATE", exc.exception.detail["error"])
+        for kind in (intake.KIND, "telegram_managed_sprint_v999"):
+            with self.assertRaises(HTTPException) as exc:
+                main.legacy_sprint_import_dispatch({"kind": kind, "agents": {"items": []}})
+            self.assertEqual("LAUNCHER_TRANSPORT_REQUIRED", exc.exception.detail["error"])
+        ambiguous = '{"kind":"telegram_managed_sprint_v1","kind":"old","agents":{}}'
+        self.assertTrue(intake.launcher_text_selected(ambiguous))
+        with self.assertRaises(HTTPException) as exc:
+            self.ingest({"update_id": 1, "message": message(ambiguous)})
+        self.assertEqual("INVALID_JSON", exc.exception.detail["error"])
+        self.assertFalse(self.imp.store.database_path.exists())
+
+    def test_explicit_document_caption_binds_project_before_and_after_download(self):
+        update = self.update()
+        update["message"].pop("text")
+        update["message"].update(document={"file_name": "any.json", "file_id": "file", "file_unique_id": "unique"},
+                                  caption=f"/sprint_import {self.project_id}")
+        mismatched = copy.deepcopy(self.envelope)
+        mismatched["project_id"] = "9001"
+        with patch.object(intake, "download_document", return_value=canonical_json_bytes(mismatched)):
+            with self.assertRaises(HTTPException) as exc:
+                self.ingest(update)
+        self.assertEqual("PROJECT_IDENTITY_MISMATCH", exc.exception.detail["error"])
+        update["message"]["caption"] = "/sprint_import 9001"
+        with patch.object(intake, "download_document") as download:
+            with self.assertRaises(HTTPException) as exc:
+                self.ingest(update)
+            download.assert_not_called()
+        self.assertEqual(403, exc.exception.status_code)
+        update["message"]["caption"] = f"/sprint_import {self.project_id}"
+        self.policy["grants"][0]["actions"].remove("manifest_publish")
+        os.environ[launcher.POLICY_ENV] = json.dumps(self.policy)
+        with patch.object(intake, "download_document", return_value=canonical_json_bytes(self.envelope)):
+            result = self.ingest(update)
+        self.assertEqual("PUBLICATION_REQUIRED", result["blocked_reason"])
 
 
 if __name__ == "__main__":

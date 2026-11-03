@@ -5630,6 +5630,12 @@ def legacy_sprint_import_dispatch(
 
     if not isinstance(payload, dict):
         return None
+    if isinstance(payload.get("kind"), str) and payload["kind"].startswith("telegram_managed_sprint_"):
+        raise HTTPException(status_code=400, detail={
+            "error": "LAUNCHER_TRANSPORT_REQUIRED",
+            "message": "Use the launcher Telegram text envelope, managed-sprint.json, or /sprint_import caption.",
+            "correlation_id": correlation_id or str(uuid4()),
+        })
     try:
         selection = resolve_sprint_type(payload)
     except SprintTypeUnsupported as exc:
