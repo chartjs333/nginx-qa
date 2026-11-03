@@ -5168,6 +5168,10 @@ class TransactionalSprintImporter:
         )
         self.workspace_manager
 
+    def validate_mutation_roots(self) -> None:
+        """Read-only guard for adapters before Git caches or store initialization."""
+        self._assert_mutation_roots_safe()
+
     def _snapshot(self) -> dict[str, Any]:
         extra = (
             deepcopy(dict(self.lease_snapshot_provider()))

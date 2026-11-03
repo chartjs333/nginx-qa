@@ -17,7 +17,7 @@ from fastapi import HTTPException, Request
 
 from nginx_qa import telegram_launcher as launcher
 from nginx_qa.git_provider import ManagedGitProvider, RepositorySpec
-from nginx_qa.managed_import import managed_schema_errors
+from nginx_qa.managed_import import managed_schema_errors, TransactionalSprintImporter
 
 
 def policy():
@@ -166,6 +166,8 @@ class PromptDispatchTests(unittest.IsolatedAsyncioTestCase):
             managed_repository_registry_for_project=Mock(return_value={}),
             load_managed_runtime_config=Mock(return_value={"managed_root": str(Path(tempfile.gettempdir()) / "never-created-prompt-test"), "git_fetch_timeout_seconds": 30}),
             managed_git_credential_resolver=Mock(), telegram_api_json=Mock(return_value={"ok": True}))
+        self.host.managed_sprint_importer_factory = Mock(return_value=SimpleNamespace(
+            validate_mutation_roots=Mock(), git_provider=Mock()))
         self.export = {"prompt": "Author 🚀", "contract_sha256": "a" * 64, "prompt_sha256": "b" * 64}
 
     async def test_disabled_feature_does_not_consume_body_or_load_policy(self):
@@ -226,6 +228,45 @@ class PromptDispatchTests(unittest.IsolatedAsyncioTestCase):
             result = await main.telegram_actor_import_for_mode(request({}), "sequential")
         self.assertEqual({"ok": True}, result)
         self.assertIs(main, handler.call_args.args[1])
+
+    async def test_unsafe_roots_fail_before_any_mirror_store_or_delivery(self):
+        from tests.test_managed_import import ManagedImportFixture
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_fixture = SimpleNamespace(base=root)
+            valid = ManagedImportFixture.runtime_config_fixture(config_fixture)
+            for unsafe in (root / "protected" / "mirror", root / "service" / "mirror",
+                           root / "runtime" / "mirror", root / "prompts" / "mirror"):
+                runtime = {**valid, "managed_root": str(unsafe)}
+                self.host.load_managed_runtime_config.return_value = runtime
+                importer = TransactionalSprintImporter(runtime, {})
+                self.host.managed_sprint_importer_factory.return_value = importer
+                before = sorted(str(p.relative_to(root)) for p in root.rglob("*"))
+                with patch.object(importer.git_provider, "ensure_mirror") as fetch, patch.object(launcher, "send_prompt_document") as document:
+                    with self.assertRaises(HTTPException) as exc:
+                        await launcher.maybe_handle_prompt(request({"update_id": 1, "message": message()}), self.host)
+                self.assertEqual("RUNTIME_ROOT_NOT_ISOLATED", exc.exception.detail["error"])
+                fetch.assert_not_called()
+                document.assert_not_called()
+                self.assertEqual(before, sorted(str(p.relative_to(root)) for p in root.rglob("*")))
+                self.assertFalse(importer.store.database_path.exists())
+
+    async def test_valid_guard_is_read_only_and_precedes_source_context(self):
+        from tests.test_managed_import import ManagedImportFixture
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runtime = ManagedImportFixture.runtime_config_fixture(SimpleNamespace(base=root))
+            importer = TransactionalSprintImporter(runtime, {})
+            self.host.load_managed_runtime_config.return_value = runtime
+            self.host.managed_sprint_importer_factory.return_value = importer
+            def source(provider, config):
+                self.assertIs(provider, importer.git_provider)
+                self.assertEqual([], list(root.iterdir()))
+                return {}
+            with patch.object(launcher, "source_context", side_effect=source), patch.object(launcher, "build_authoring_prompt", return_value=self.export), patch.object(launcher, "send_prompt_document"):
+                result = await launcher.maybe_handle_prompt(request({"update_id": 1, "message": message()}), self.host)
+            self.assertTrue(result["ok"])
+            self.assertEqual([], list(root.iterdir()))
 
 
 if __name__ == "__main__":

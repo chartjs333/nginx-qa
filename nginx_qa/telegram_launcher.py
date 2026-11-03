@@ -23,6 +23,7 @@ from nginx_qa.git_provider import ManagedGitError, ManagedGitProvider, canonical
 from nginx_qa.inbound_proposals import configured_secret_values, contains_recognized_secret
 from nginx_qa.managed_import import parse_strict_json_object
 from nginx_qa.sprint_types import git_ref_format_valid, relative_git_path_valid
+from nginx_qa.workspace_manager import WorkspaceError
 
 ROOT = Path(__file__).resolve().parents[1]
 ENABLED_ENV = "NGINX_QA_TELEGRAM_LAUNCHER_ENABLED"
@@ -287,12 +288,16 @@ async def maybe_handle_prompt(request: Request, host: Any) -> dict[str, Any] | N
         _, _, project, context = host.project_for_group_api(config, project_id)
         registry = host.managed_repository_registry_for_project(project, context)
         runtime = host.load_managed_runtime_config()
-        provider = ManagedGitProvider(runtime["managed_root"], registry,
-            credential_resolver=host.managed_git_credential_resolver,
-            command_timeout=float(runtime["git_fetch_timeout_seconds"]))
+        # Construction is side-effect free. Reuse the engine's complete read-only
+        # root guard before the provider can create even its Git mirror cache.
+        importer = host.managed_sprint_importer_factory(runtime, registry)
+        importer.validate_mutation_roots()
+        provider = importer.git_provider
         source = await asyncio.to_thread(source_context, provider, policy["projects"][project_id])
         exported = await asyncio.to_thread(build_authoring_prompt, project_id,
                     str(project.get("git_address") or context.get("git_address") or ""), task, source)
+    except WorkspaceError:
+        fail("RUNTIME_ROOT_NOT_ISOLATED", "Managed roots must be isolated before prompt export.", 409)
     except (ManagedGitError, KeyError, ValueError, OSError):
         fail("GIT_CONTEXT_INVALID", "Cannot resolve the authorized project source and checksums.", 409)
     # Permissions may have been revoked while Git fetching was in flight.
