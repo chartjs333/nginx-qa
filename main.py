@@ -15,6 +15,7 @@ import secrets
 import shutil
 import stat
 import subprocess
+import sys
 import threading
 import time as time_module
 import urllib.error
@@ -38203,6 +38204,11 @@ async def telegram_actor_import_for_mode(
     request: Request,
     assignment_mode: str,
 ) -> dict[str, Any]:
+    from nginx_qa.telegram_launcher import maybe_handle_prompt
+
+    launcher_response = await maybe_handle_prompt(request, sys.modules[__name__])
+    if launcher_response is not None:
+        return launcher_response
     try:
         return await _telegram_actor_import_for_mode(request, assignment_mode)
     except HTTPException as exc:

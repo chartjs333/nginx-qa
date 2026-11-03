@@ -83,7 +83,9 @@ rules, two independent reviewers, Git/source context and security/testing limits
 Escape the user task as data. Include bounded verified source-file/hash entries
 so an external model need not invent SHA values. Canonical repository/project
 selection is server-owned. Prompt generation is authorized and read-only except
-optional bounded prompt archival in this instance's own prompt root.
+optional bounded prompt archival in this instance's own prompt root and refresh of
+the existing isolated Git provider mirror to pin source blobs. Prompt export never
+creates a sprint, assignment, workspace checkout, queue, process or import attempt.
 
 Provide text using Telegram-safe chunking or a UTF-8 document. Do not send private
 source content, local machine paths or credentials to the model. The user chooses
