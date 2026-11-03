@@ -180,6 +180,21 @@ def assert_powershell_success(
 
 
 class StagingIsolationTests(unittest.TestCase):
+    def normalized_example(self, environment):
+        # The old template is a static example; a host may already have a
+        # junction at a protected path (D:/Prompt on this workstation). Assert
+        # its rejection first, then inspect the same config with canonical
+        # protected roots. Never relax the production non-alias guard.
+        if os.name == "nt":
+            protected = json.loads(environment["NGINX_QA_PROTECTED_ROOTS"])
+            canonical = [str(Path(value).resolve()) for value in protected]
+            if any(os.path.normcase(os.path.abspath(value)) != os.path.normcase(resolved)
+                   for value, resolved in zip(protected, canonical)):
+                with self.assertRaisesRegex(ValueError, "filesystem alias"):
+                    normalize_managed_runtime_config(environment)
+                environment = {**environment, "NGINX_QA_PROTECTED_ROOTS": json.dumps(canonical)}
+        return normalize_managed_runtime_config(environment)
+
     @unittest.skipUnless(os.name == "nt", "PowerShell behavior is Windows-specific")
     def test_telegram_launcher_profile_is_isolated_and_refuses_root_override(self) -> None:
         completed = run_powershell(
@@ -221,7 +236,7 @@ class StagingIsolationTests(unittest.TestCase):
 
     def test_environment_example_normalizes_to_the_frozen_staging_config(self) -> None:
         environment = parse_environment_example()
-        config = normalize_managed_runtime_config(environment)
+        config = self.normalized_example(environment)
 
         self.assertEqual((), managed_runtime_config_invariant_issues(config))
         self.assertEqual("127.0.0.1", config["http_host"])
@@ -418,7 +433,7 @@ class StagingIsolationTests(unittest.TestCase):
 
     def test_mutable_roots_are_dedicated_state_base_children(self) -> None:
         environment = parse_environment_example()
-        config = normalize_managed_runtime_config(environment)
+        config = self.normalized_example(environment)
         state_base = Path(environment["NGINX_QA_STAGING_STATE_BASE"])
         mutable_roots = [
             Path(environment["NGINX_QA_STAGING_VENV_ROOT"]),

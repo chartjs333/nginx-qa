@@ -3865,6 +3865,10 @@ class ManagedProcessSupervisorTests(ManagedImportFixture):
     @unittest.skipUnless(os.name == "nt", "Windows Job resource limits")
     def test_windows_job_enforces_assignment_process_limit(self) -> None:
         manifest = self.single_process_manifest("--mode", "spawn-descendant")
+        # A Windows venv shim starts another interpreter before service.py.
+        # Use the real interpreter so this one-process Job tests the fixture's
+        # forbidden descendant, not the shim's own bootstrap child.
+        manifest["nodes"][0]["workspace"]["process"]["command"][0] = getattr(sys, "_base_executable", sys.executable)
         manifest["nodes"][0]["workspace"]["process"]["resource_limits"][  # type: ignore[index]
             "process_count"
         ] = 1

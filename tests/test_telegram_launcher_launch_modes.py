@@ -386,9 +386,14 @@ class LauncherLaunchModeTests(intake_tests.LauncherIntakeFixture):
         client = FakeExistingClient(self)
         self.allow_start(client)
         self.envelope["autonomous_mode"] = True
+        updates = {}
+        for number in (1, 2, 3):
+            envelope = copy.deepcopy(self.envelope)
+            envelope["manifest"]["nodes"][0]["tasks"][0]["message"] += " Distinct candidate " + str(number)
+            updates[number] = self.update(number, envelope=envelope)
         def ingest(number):
             try:
-                return self.ingest(self.update(number))["status"]
+                return self.ingest(updates[number])["status"]
             except HTTPException as exc:
                 return exc.detail["error"]
         with ThreadPoolExecutor(max_workers=3) as pool:
