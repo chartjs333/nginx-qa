@@ -849,7 +849,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "No adapter/reference yields NOT_CONFIGURED and useful deterministic advice; no automatic account/key/provider migration.",
         "Harden existing transport without using clone-specific parser/raw key route; bounded safe JSON/error/cost controls.",
@@ -857,9 +857,15 @@
         "No inference on passive GET; request caps prevent silent paid retry; unavailable token/cost accounting is explicit."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_llm_advisor.py::TestLLMAdvisor::test_a16_deterministic_fallback_when_provider_not_configured",
+      "tested_commit": "84540d31a8297d090a5cefa87bbfa586563e58f5",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a16_deterministic_fallback_when_provider_not_configured",
+          "summary": "Deterministic diagnostic fallback when provider is unconfigured, timeout, or invalid."
+        }
+      ]
     },
     {
       "id": "A17",
@@ -869,7 +875,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Only minimal pseudonymous checks, allowed IDs and sanitized question enter model; no raw repository/config/log/path/secrets.",
         "Strict output rejects duplicate keys, extra fields, unknown/stale checks, fabricated evidence, unknown actions/arguments and invalid byte/depth limits.",
@@ -877,9 +883,15 @@
         "Inference uncertainty is distinct from verified facts; proposed action opens a fresh server plan."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_llm_advisor.py::TestLLMAdvisor::test_a17_context_minimization_and_canary_redaction",
+      "tested_commit": "84540d31a8297d090a5cefa87bbfa586563e58f5",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a17_context_minimization_and_canary_redaction",
+          "summary": "Context minimization, canary secret redaction, Draft 2020-12 strict response schema, zero direct mutation authority."
+        }
+      ]
     },
     {
       "id": "A18",

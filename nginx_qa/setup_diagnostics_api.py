@@ -23,6 +23,7 @@ from .setup_diagnostics import (
     _OPAQUE_ID_PATTERN,
 )
 from .setup_operations import SetupOperationsManager
+from .setup_advisor import SetupAdvisor
 from .managed_import import ManagedImportStore
 
 
@@ -40,7 +41,9 @@ def register_setup_diagnostics_api(host: Any) -> None:
     app = host.app
     read_gate = DiagnosticReadGate(max_cache_entries=32, default_ttl=5.0)
     operations_manager = SetupOperationsManager()
+    advisor = SetupAdvisor()
     host.setup_operations_manager = operations_manager
+    host.setup_advisor = advisor
 
     def _same_origin(request: Request) -> None:
         origin = request.headers.get("origin")
@@ -209,7 +212,6 @@ def register_setup_diagnostics_api(host: Any) -> None:
         except Exception as exc:
             raise HTTPException(400, {"error": "INVALID_PLAN_REQUEST", "message": str(exc)}) from exc
 
-        # Read current snapshot to validate preconditions and binding
         git_config_path = getattr(host, "git_config_path", None)
         state_base = getattr(host, "state_base", None) or (Path(os.environ["NGINX_QA_STAGING_STATE_BASE"]) if "NGINX_QA_STAGING_STATE_BASE" in os.environ else None)
         collector = DiagnosticSnapshotCollector(git_config_path=git_config_path, state_base=state_base)
@@ -274,5 +276,34 @@ def register_setup_diagnostics_api(host: Any) -> None:
             raise HTTPException(404, {"error": "OPERATION_NOT_FOUND", "message": str(exc)}) from exc
 
         response = JSONResponse(receipt)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/api/v1/projects/{project_id}/setup/advice")
+    async def get_setup_advice(
+        project_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        _authenticate_operator(request)
+        if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise HTTPException(400, {"error": "INVALID_PROJECT_ID"})
+
+        raw_body = await request.body()
+        try:
+            advice_req = parse_strict_json_with_limits(raw_body)
+        except Exception as exc:
+            raise HTTPException(400, {"error": "INVALID_ADVICE_REQUEST", "message": str(exc)}) from exc
+
+        git_config_path = getattr(host, "git_config_path", None)
+        state_base = getattr(host, "state_base", None) or (Path(os.environ["NGINX_QA_STAGING_STATE_BASE"]) if "NGINX_QA_STAGING_STATE_BASE" in os.environ else None)
+        collector = DiagnosticSnapshotCollector(git_config_path=git_config_path, state_base=state_base)
+        snapshot = collector.collect_snapshot(project_id)
+
+        try:
+            advice = await advisor.get_advice(snapshot, advice_req)
+        except ValueError as exc:
+            raise HTTPException(400, {"error": "ADVICE_REQUEST_INVALID", "message": str(exc)}) from exc
+
+        response = JSONResponse(advice)
         response.headers["Cache-Control"] = "no-store"
         return response
