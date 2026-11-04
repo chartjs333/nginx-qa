@@ -16,13 +16,38 @@ param(
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9A-Fa-f]{40}$")]
-    [string]$ExpectedCommit
+    [string]$ExpectedCommit,
+
+    # Explicit, narrowly allowed deployment identity; never an environment override.
+    [string]$DeploymentBranch = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # BEGIN TESTABLE FUNCTIONS
+function Resolve-StagingDeploymentBranch {
+    param(
+        [string]$Profile,
+        [string]$DefaultBranch,
+        [string]$DeploymentBranch = ""
+    )
+    if ($DeploymentBranch -ceq "") {
+        return $DefaultBranch
+    }
+    if ($Profile -cne "setup-diagnostics-wizard-v1") {
+        throw "DeploymentBranch is available only for the private setup wizard."
+    }
+    $allowed = @(
+        "codex/sdw-qualified-host-20261104",
+        "codex/sdw-qualified-host-continuation-20261104"
+    )
+    if ($allowed -cnotcontains $DeploymentBranch) {
+        throw "DeploymentBranch is not an approved setup wizard deployment identity."
+    }
+    return $DeploymentBranch
+}
+
 function Resolve-NormalizedPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -878,6 +903,8 @@ elseif ($Profile -eq "setup-diagnostics-wizard-v1") {
     $expectedServiceRoot = "D:\nq-sdw-launcher"
     $expectedBranch = "codex/sdw-qualified-host-20261104"
 }
+$expectedBranch = Resolve-StagingDeploymentBranch -Profile $Profile `
+    -DefaultBranch $expectedBranch -DeploymentBranch $DeploymentBranch
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
 
