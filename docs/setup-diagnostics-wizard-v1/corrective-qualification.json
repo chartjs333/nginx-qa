@@ -33,7 +33,8 @@
     "docs-only-v1 client profile; coordinator remains operator-controlled",
     "read-only SQLite snapshots bounded to64MiB; concurrent maintenance can return SOURCE_STALE/PLAN_STALE; refresh or replay exact retained key",
     "explicit client/service Stop is terminal; restarting a stopped immutable self-test requires a fresh published profile",
-    "supervised qualification bridge and loopback Git daemon are stopped; neither is an unattended worker"
+    "supervised qualification bridge and loopback Git daemon are stopped; neither is an unattended worker",
+    "History cards display saved receipts; use Refresh status for current native status. A saved APPLYING card is not live execution status."
   ],
   "native_selftest": {
     "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
@@ -45,13 +46,13 @@
       "file": "live-selftest.json",
       "original_path": "C:\\nqt37\\qualification\\live-selftest-evidence.json",
       "original_sha256": "788ad37bb0b7c9d1b7afc4468c65f5f41a2351479ec51dbf47e0d14587671a7e",
-      "delivered_sha256": "69035e1cc1a0b7787d52a0d610ba7ed60fdc7fae1ce75459907b8750405d537f"
+      "delivered_sha256": "ca673f8882957b11e5aef728af2dd21aab966651ae4b597a30f87c182b0d0570"
     },
     {
       "file": "browser.json",
-      "original_path": "C:\\nqt37\\qualification\\browser-evidence.json",
-      "original_sha256": "d8d7d1ab3a8c829fb7697f02250726f6c3ae45a657d5f333158ecce8282f5065",
-      "delivered_sha256": "175159d34b4f1eeb6cb17a6c3599428b063726e0d46fd811c0375976b8ce0c20"
+      "original_path": "C:\\nqt37\\qualification\\browser-evidence-v2.json",
+      "original_sha256": "1af6cf36d3ba0bc0fcb91775964a07dc36d78938d81a641f72efa064374740d2",
+      "delivered_sha256": "127c10e84aff9e3357ac53dc6c92bbee5ac1d630abcffc5f5e7320dac1639d82"
     },
     {
       "file": "fixture-provenance.json",
@@ -76,6 +77,21 @@
       "original_path": "C:\\nqt35\\client\\sdw-corrective-20261104\\test-20261104T153616.json",
       "original_sha256": "33eee4494aedf284cc5242454f11f023d37771c1a5350411e84c9a63051e5842",
       "delivered_sha256": "42900c6522a36ec6f9b771e9f95929350a2b082830f6ba53248bedb3058d01c9"
+    },
+    {
+      "file": "browser-harness.cjs",
+      "original_path": "C:\\nqt35\\client\\sdw-corrective-20261104\\browser_qualification.cjs",
+      "original_sha256": "0ed1edb46872a3b56fdfcc7c98af15c3a604e9b4cd79a5db9db74c4f9582de53",
+      "delivered_sha256": "0ed1edb46872a3b56fdfcc7c98af15c3a604e9b4cd79a5db9db74c4f9582de53"
     }
-  ]
+  ],
+  "rework": {
+    "rejected_result_commit": "20741323234bcca2a2133a82eb79b64590698f37",
+    "native_review": "review-92be2a6e7ca7758060fd1b75",
+    "reason": "Original browser harness could match an old SUCCEEDED card before Apply returned. Its live Apply/Reload claim is invalidated.",
+    "fix": "Await exact POST /plans/{new_plan_id}/apply response, assert fresh receipt and its exact operation card, reload, assert same operation in server history and DOM.",
+    "browser_operation_id": "op-6fee207b10a788f6d6dceb9c",
+    "product_code_unchanged": true
+  },
+  "evidence_normalization": "The live selftest field was renamed to both_attempt_reservations_released: both records belong to the same project9010. Original bytes/hash are retained."
 }

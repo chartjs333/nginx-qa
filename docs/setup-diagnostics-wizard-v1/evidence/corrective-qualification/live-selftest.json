@@ -119,7 +119,6 @@
   "client_phase": "TERMINAL",
   "real_result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
   "remote_commit_verified": true,
-  "both_project_slots_released": true,
   "exact_apply_replay_same_operation": true,
   "named_owner_repair_recovers_receipt": true,
   "native_assignments_including_reviews_after_replay": 3,
@@ -127,5 +126,6 @@
   "release_limits": [
     "Supervised test is not unattended Codex CLI acceptance.",
     "Actual tool-free LLM advisor/provider and external Telegram/tunnel remain unqualified."
-  ]
+  ],
+  "both_attempt_reservations_released": true
 }

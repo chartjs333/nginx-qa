@@ -7,54 +7,105 @@
   "advice_text": "Детерминированный диагностический отчёт. Ответ модели не получен. Причина: CODEX_TOOL_ISOLATION_UNVERIFIED. Статусы UNKNOWN, STALE и UNOBSERVED не подтверждают готовность. Рекомендации не выполняют действий.",
   "plan_cancel_apply": true,
   "history_after_reload": true,
+  "cancelled_plan_id": "plan-2cd0946743ef70fd34112ab1",
+  "applied_plan_id": "plan-a6f2a94b90e3361e15352aa2",
+  "apply_path": "/api/v1/projects/9000/setup/plans/plan-a6f2a94b90e3361e15352aa2/apply",
+  "apply_response": {
+    "kind": "setup_operation_receipt",
+    "schema_version": 1,
+    "operation_id": "op-6fee207b10a788f6d6dceb9c",
+    "plan_id": "plan-a6f2a94b90e3361e15352aa2",
+    "plan_digest": "5fd4e1cd049452d5337ffc133f25d2c653be6e9f36e24345c3a5482768b43b4d",
+    "project_id": "9000",
+    "action_id": "setup.open",
+    "state": "SUCCEEDED",
+    "created_at": "2026-11-04T15:51:43.936018+00:00",
+    "updated_at": "2026-11-04T15:51:43.941019+00:00",
+    "native_operation_id": null,
+    "native_sprint_id": null,
+    "evidence_ids": [
+      "setup-help-worker"
+    ],
+    "error_code": null,
+    "retryable": false,
+    "deduplicated": false
+  },
+  "exact_operation_after_reload": "op-6fee207b10a788f6d6dceb9c",
   "page_errors": [],
   "requests": [
     {
       "path": "/api/v1/operator/session",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/operator/session",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/setup/projects",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/advice",
+      "method": "POST",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
       "status": 200
     },
     {
-      "path": "/api/v1/operator/session",
-      "status": 200
-    },
-    {
-      "path": "/api/v1/setup/projects",
+      "path": "/api/v1/projects/9000/setup/plans/plan-a6f2a94b90e3361e15352aa2/apply",
+      "method": "POST",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
       "status": 200
     },
     {
       "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
       "status": 200
     }
   ]
