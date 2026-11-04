@@ -23,6 +23,7 @@ from .setup_diagnostics import (
     parse_strict_json_with_limits,
     get_contracts_schema,
     compute_authority_fingerprint,
+    DiagnosticSnapshotCollector,
     ACTION_IDS,
 )
 from .setup_worker_adapter import SetupWorkerAdapter
@@ -86,12 +87,54 @@ def compute_plan_digest(plan: Mapping[str, Any]) -> str:
 class SetupOperationsManager:
     """Manages ActionPlan generation, ApplyRequest execution and OperationReceipt lifecycle."""
 
-    def __init__(self, *, worker_adapter: SetupWorkerAdapter | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        worker_adapter: SetupWorkerAdapter | None = None,
+        durable_store_dir: Path | None = None,
+    ) -> None:
         self.worker_adapter = worker_adapter or SetupWorkerAdapter()
+        self.durable_store_dir = durable_store_dir
         self._plans: dict[str, dict[str, Any]] = {}  # plan_digest -> plan
         self._receipts: dict[str, dict[str, Any]] = {}  # operation_id -> receipt
         self._idempotency_map: dict[tuple[str, str, str], str] = {}  # (actor, project, key) -> operation_id
+        self._policy_generations: dict[str, int] = {}  # actor_id -> policy_generation
         self._lock = asyncio.Lock()
+        self._load_durable_state()
+
+    def _load_durable_state(self) -> None:
+        if not self.durable_store_dir or not self.durable_store_dir.exists():
+            return
+        receipts_file = self.durable_store_dir / "wizard-operation-receipts.jsonl"
+        if receipts_file.exists():
+            for line in receipts_file.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    try:
+                        record = json.loads(line)
+                        op_id = record.get("operation_id")
+                        actor = record.get("actor_id", "default-actor")
+                        proj = record.get("project_id", "9000")
+                        idemp_key = record.get("idempotency_key", "")
+                        if op_id:
+                            self._receipts[op_id] = record
+                        if idemp_key:
+                            self._idempotency_map[(actor, proj, idemp_key)] = op_id
+                    except Exception:
+                        pass
+
+    def _persist_receipt(self, actor_id: str, idempotency_key: str, receipt: dict[str, Any]) -> None:
+        if not self.durable_store_dir:
+            return
+        self.durable_store_dir.mkdir(parents=True, exist_ok=True)
+        receipts_file = self.durable_store_dir / "wizard-operation-receipts.jsonl"
+        persist_obj = {**receipt, "actor_id": actor_id, "idempotency_key": idempotency_key}
+        with open(receipts_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(persist_obj, ensure_ascii=False) + "\n")
+
+    def revoke_actor_policy(self, actor_id: str) -> None:
+        """Bump actor policy generation to immediately revoke older plans and sessions."""
+        current = self._policy_generations.get(actor_id, 1)
+        self._policy_generations[actor_id] = current + 1
 
     def create_plan(
         self,
@@ -101,6 +144,7 @@ class SetupOperationsManager:
         *,
         snapshot: Mapping[str, Any],
         host: Any = None,
+        authority_fingerprint_override: str | None = None,
     ) -> dict[str, Any]:
         """Validate PlanRequest, verify preconditions and generate an immutable ActionPlan."""
         action_id = plan_req.get("action_id")
@@ -187,9 +231,10 @@ class SetupOperationsManager:
             resources.append({"kind": "instance", "id": inst_id})
             effects.append(f"Open recovery context for instance {inst_id}")
 
-        authority_fp = compute_authority_fingerprint(
+        policy_gen = self._policy_generations.get(actor_id, 1)
+        authority_fp = authority_fingerprint_override or compute_authority_fingerprint(
             project_id,
-            policy_generation=1,
+            policy_generation=policy_gen,
             control_revision=1,
         )
 
@@ -232,6 +277,7 @@ class SetupOperationsManager:
         apply_req: Mapping[str, Any],
         *,
         host: Any = None,
+        current_authority_fingerprint: str | None = None,
     ) -> dict[str, Any]:
         """Apply a validated ActionPlan with idempotency checks and server fencing."""
         # 1. Validate ApplyRequest schema
@@ -259,6 +305,16 @@ class SetupOperationsManager:
             if plan is None:
                 raise LookupError("PLAN_STALE: ActionPlan not found or expired")
 
+            # Authority fingerprint recheck (stale plan fence)
+            policy_gen = self._policy_generations.get(actor_id, 1)
+            current_fp = current_authority_fingerprint or compute_authority_fingerprint(
+                project_id,
+                policy_generation=policy_gen,
+                control_revision=1,
+            )
+            if plan["authority_fingerprint"] != current_fp:
+                raise ValueError("PLAN_STALE: Authority fingerprint mismatch; state changed since plan creation")
+
             now_iso = datetime.now(timezone.utc).isoformat()
             if now_iso > plan["expires_at"]:
                 raise ValueError("PLAN_STALE: ActionPlan has expired")
@@ -270,6 +326,7 @@ class SetupOperationsManager:
             action_id = plan["action_id"]
             args = plan["arguments"]
 
+            # Intent-before-effect record
             receipt: dict[str, Any] = {
                 "kind": "setup_operation_receipt",
                 "schema_version": 1,
@@ -288,6 +345,7 @@ class SetupOperationsManager:
                 "retryable": False,
                 "deduplicated": False,
             }
+            self._persist_receipt(actor_id, idempotency_key, receipt)
 
             # 4. Execute typed action
             try:
@@ -321,7 +379,12 @@ class SetupOperationsManager:
                     receipt["state"] = "SUCCEEDED"
                     receipt["evidence_ids"].append(f"evidence-selftest-stop-{self_test_id}")
 
-                elif action_id in ("diagnostics.refresh", "setup.open", "recovery.open", "git.probe", "telegram.probe"):
+                elif action_id == "recovery.open":
+                    inst_id = args.get("instance_id", "")
+                    receipt["state"] = "SUCCEEDED"
+                    receipt["evidence_ids"].append(f"recovery-context-{inst_id}")
+
+                elif action_id in ("diagnostics.refresh", "setup.open", "git.probe", "telegram.probe"):
                     receipt["state"] = "SUCCEEDED"
 
                 receipt["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -336,6 +399,7 @@ class SetupOperationsManager:
 
             self._receipts[operation_id] = receipt
             self._idempotency_map[idemp_key] = operation_id
+            self._persist_receipt(actor_id, idempotency_key, receipt)
             return receipt
 
     def get_operation(self, project_id: str, operation_id: str) -> dict[str, Any]:

@@ -635,7 +635,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Change source/registry/policy/host initialization, project reservation, adapter binding, expiry or selected instance between plan/apply; reject before effect.",
         "Model/caller cannot supply expected state, resources, grants or authority fingerprint to bypass server resolution.",
@@ -649,9 +649,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a10_stale_plan_and_authority_fences",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a10_stale_plan_and_authority_fences",
+          "summary": "Authority fingerprint mismatch rejection, plan expiry fence, actor policy revocation."
+        }
+      ]
     },
     {
       "id": "A11",
@@ -700,7 +706,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Crash before/after durable intent, native activation and external ACK resumes the same attempt/session.",
         "Lost reply does not trigger a new activation, alternate key or false failure; unknown unreconcilable effect stays UNKNOWN/BLOCKED.",
@@ -721,9 +727,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a12_restart_and_durable_intent_replay",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a12_restart_and_durable_intent_replay",
+          "summary": "Durable intent logging, crash recovery replay from JSONL, duplicate apply deduplication."
+        }
+      ]
     },
     {
       "id": "A13",
@@ -811,7 +823,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Unknown action/argument, raw command/SQL/path/env/process ID and unapproved candidate rejected before handler.",
         "Only server catalog operations reach existing importer/Git/continuity/supervisor APIs.",
@@ -819,9 +831,15 @@
         "Dirty/diverged Git and unknown ownership go to native Coordinator, no reset/clean/state edit."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a15_typed_actions_and_injection_rejection",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a15_typed_actions_and_injection_rejection",
+          "summary": "Strict allowlist rejection of unknown actions and shell/SQL arguments, cross-project lookup isolation."
+        }
+      ]
     },
     {
       "id": "A16",
