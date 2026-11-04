@@ -1,0 +1,22 @@
+{
+  "export": "C:\\nq-sdwc-test-kfc3yffj",
+  "modules": [
+    "tests.test_windows_launcher",
+    "tests.test_staging_isolation",
+    "tests.test_staging_legacy_inventory",
+    "tests.test_safe_operations_recovery",
+    "tests.test_setup_private_api",
+    "tests.test_operator_session",
+    "tests.test_setup_diagnostics",
+    "tests.test_setup_diagnostics_regressions",
+    "tests.test_llm_advisor",
+    "tests.test_wizard_ui",
+    "tests.test_setup_native",
+    "tests.test_setup_worker_corrective",
+    "tests.test_worker_connection_selftest",
+    "tests.test_launcher_transport_migration",
+    "tests.test_managed_client_git_transport"
+  ],
+  "exit_code": 0,
+  "log": "C:\\nqt35\\client\\sdw-corrective-20261104\\test-20261104T153616.log"
+}

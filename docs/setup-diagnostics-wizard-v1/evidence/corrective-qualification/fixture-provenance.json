@@ -1,0 +1,9 @@
+{
+  "manifest_commit": "c16314270b130c57fa79985faab098470dc775cf",
+  "manifest_sha256": "d459853d585962ccf7dc69621d82bda0549d31d38c5494811c793854401b5b24",
+  "previous_attempt": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+  "previous_attempt_outcome": "Stopped via actual wizard stop; retained, never rewritten",
+  "ref": "refs/heads/launcher/setup-selftest-r3-20261104",
+  "repository": "git://127.0.0.1/setup-selftest.git",
+  "source_commit": "890425134beff380cb7f983908ee937dd628c2ce"
+}

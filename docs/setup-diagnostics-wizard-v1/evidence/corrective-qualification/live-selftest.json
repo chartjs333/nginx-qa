@@ -1,0 +1,131 @@
+{
+  "at": "2026-11-04T15:45:03.226317+00:00",
+  "status": "PASS",
+  "kind": "live_native_engine_with_sequential_supervised_agents",
+  "automatic_codex_cli": false,
+  "host_code_commit": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+  "client_code_commit": "8a4b38f2e0ffbdd13a596f316c6e33b65452ab60",
+  "project_id": "9010",
+  "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+  "native_operation_id": "launch-95c3330a4aa2495a93db44bf9278de82",
+  "operation_receipt": {
+    "action_id": "selftest.start",
+    "created_at": "2026-11-04T15:39:50.609554+00:00",
+    "deduplicated": false,
+    "error_code": null,
+    "evidence_ids": [
+      "launch-95c3330a4aa2495a93db44bf9278de82"
+    ],
+    "kind": "setup_operation_receipt",
+    "native_operation_id": "launch-95c3330a4aa2495a93db44bf9278de82",
+    "native_sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+    "operation_id": "op-e66113dd4e309b42bb6d462a",
+    "plan_digest": "b56d163a580a9833ef22c62663bfbe882aff94db170fe832eb75ac67d0f0bf79",
+    "plan_id": "plan-b253ca3d900a37807c3ec0ee",
+    "project_id": "9000",
+    "retryable": false,
+    "schema_version": 1,
+    "state": "SUCCEEDED",
+    "updated_at": "2026-11-04T15:40:05.571719+00:00"
+  },
+  "author": {
+    "agent_id": "selftest-author",
+    "agent_phone": "7101",
+    "allowed_outcomes": [
+      "DONE",
+      "STOP",
+      "NEED_DECISION"
+    ],
+    "assignment_id": "assignment-d20f5e61d48676fcd36c458b",
+    "branch_lease_id": "branch-lease-70e7ef6aa08f0f963488d115f0839ca0202e55ef3bf7b4af1420ce3dc728425e",
+    "completed_at": "2026-11-04T15:43:16.412638+00:00",
+    "created_at": "2026-11-04T15:39:59.523566+00:00",
+    "graph_revision": 1,
+    "initial_head_commit": "890425134beff380cb7f983908ee937dd628c2ce",
+    "integration_id": null,
+    "node_id": "document",
+    "occurrence_id": "occ-42deca460e8b2c06f381841ef6f4c5125361e77b91ada4a7259e2433ae5d1e31",
+    "outcome": "DONE",
+    "result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+    "rework_cycle": 0,
+    "source_commit": "890425134beff380cb7f983908ee937dd628c2ce",
+    "source_kind": "sprint_source",
+    "source_result_keys": [],
+    "status": "completed",
+    "workspace_id": "workspace-d8f0ad21fe66df1a426c8ab44212bee4fe40e7607fbb424d20d141fbb32140d7"
+  },
+  "reviews": [
+    {
+      "assignment_id": "review-6e9b7b6809ae7e787ffcb4de",
+      "decided_at": "2026-11-04T15:42:18.821216+00:00",
+      "decision": "APPROVE",
+      "feedback": "Verified current-task.json has task_id review-6e9b7b6809ae7e787ffcb4de, attempt_nonce e38d7abfd738923c20ce13101a3a7505, and schema.title review. Independently inspected the complete Git diff from 890425134beff380cb7f983908ee937dd628c2ce to f1148f56787fd905d6880583e89205b9b67cdab9, the committed document, and the actual workspace document. The diff adds only docs/setup-selftest.md; Git status is clean, including untracked files. The actual and committed documents match and contain exactly the required headings: Purpose, Execution, Review, and Limitations. They identify a disposable native Managed Sprint self-test for project 9010, state that the existing nginx-qa engine assigns work and controls transitions, require two independent Reviewer approvals, and state that this documentation task does not prove production readiness or external Telegram/provider connectivity. No secrets or invented test results appear in the added content. This review establishes document content and change scope; it does not independently establish the author's prior execution history or runtime/connectivity behavior. I made no edits, commits, pushes, HTTP calls, credential accesses, server starts, or delegations. All read-only commands completed; none remain running.",
+      "request_fingerprint": "9ba7e335792a1656a2daf4834cf97487407e53c70fc7797d708c2ade7496c0eb",
+      "response": {
+        "assignment_id": "review-6e9b7b6809ae7e787ffcb4de",
+        "decision": "APPROVE",
+        "deduplicated": false,
+        "result_key": "result-69ca46ba306ea8ac9e0b093afe999c05b149dbaadc6d37eee0e2feeb678241f8",
+        "source_assignment_id": "assignment-d20f5e61d48676fcd36c458b",
+        "status": "REVIEW_ACCEPTED"
+      },
+      "result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+      "result_key": "result-69ca46ba306ea8ac9e0b093afe999c05b149dbaadc6d37eee0e2feeb678241f8",
+      "result_outcome": "DONE",
+      "reviewer_id": "selftest-review-a",
+      "reviewer_index": 1,
+      "source_assignment_id": "assignment-d20f5e61d48676fcd36c458b"
+    },
+    {
+      "assignment_id": "review-85b6775d779f7fd7072383fa",
+      "decided_at": "2026-11-04T15:43:16.412638+00:00",
+      "decision": "APPROVE",
+      "feedback": "Confirmed current-task.json task_id review-85b6775d779f7fd7072383fa, attempt_nonce 3435da874ede94993520ed62e0f7c852, and schema.title review. Independently inspected the complete Git diff from 890425134beff380cb7f983908ee937dd628c2ce to f1148f56787fd905d6880583e89205b9b67cdab9: the sole change is addition of docs/setup-selftest.md. Read both the actual document and its committed contents. All four required headings are present: Purpose, Execution, Review, Limitations. Content identifies a disposable native Managed Sprint self-test for project 9010, states that the existing nginx-qa engine assigns work and controls transitions, requires two independent Reviewer approvals, and explicitly disclaims proof of production readiness or external Telegram/provider connectivity. No secrets, invented test results, or additional changed files appear in the inspected diff. Git status is clean. These checks establish document content and scope compliance; they do not independently establish the author's historical actions or operational connectivity. No files were modified and no commits, pushes, HTTP calls, credential access, servers, or delegation were performed during this review. All review commands completed successfully.",
+      "request_fingerprint": "0894aa0153e015142ae7f6e6f00b6e37302ac284358a5f9d5ad72b7f0f83d524",
+      "response": {
+        "assignment_id": "review-85b6775d779f7fd7072383fa",
+        "decision": "APPROVE",
+        "deduplicated": false,
+        "result_key": "result-69ca46ba306ea8ac9e0b093afe999c05b149dbaadc6d37eee0e2feeb678241f8",
+        "source_assignment_id": "assignment-d20f5e61d48676fcd36c458b",
+        "status": "REVIEW_ACCEPTED"
+      },
+      "result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+      "result_key": "result-69ca46ba306ea8ac9e0b093afe999c05b149dbaadc6d37eee0e2feeb678241f8",
+      "result_outcome": "DONE",
+      "reviewer_id": "selftest-review-b",
+      "reviewer_index": 2,
+      "source_assignment_id": "assignment-d20f5e61d48676fcd36c458b"
+    }
+  ],
+  "branch_leases": [
+    {
+      "acquired_at": "2026-11-04T15:39:59.523566+00:00",
+      "assignment_id": "assignment-d20f5e61d48676fcd36c458b",
+      "branch": "agent/setup-selftest-root-r3",
+      "initial_head_commit": "890425134beff380cb7f983908ee937dd628c2ce",
+      "lease_id": "branch-lease-70e7ef6aa08f0f963488d115f0839ca0202e55ef3bf7b4af1420ce3dc728425e",
+      "mirror_storage_key": "mirror-aa5fe65c6c0719cf9e059c893334dc1f2989d3873e57c15a6f5b1291cee1fdcd",
+      "mode": "write",
+      "released_at": "2026-11-04T15:43:16.412638+00:00",
+      "repository_id": "main",
+      "repository_key": "127.0.0.1/setup-selftest",
+      "source_commit": "890425134beff380cb7f983908ee937dd628c2ce",
+      "status": "released"
+    }
+  ],
+  "port_leases": [],
+  "owned_processes": [],
+  "client_phase": "TERMINAL",
+  "real_result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+  "remote_commit_verified": true,
+  "both_project_slots_released": true,
+  "exact_apply_replay_same_operation": true,
+  "named_owner_repair_recovers_receipt": true,
+  "native_assignments_including_reviews_after_replay": 3,
+  "original_failed_publication_attempt": "Stopped through the real wizard; its history was preserved.",
+  "release_limits": [
+    "Supervised test is not unattended Codex CLI acceptance.",
+    "Actual tool-free LLM advisor/provider and external Telegram/tunnel remain unqualified."
+  ]
+}

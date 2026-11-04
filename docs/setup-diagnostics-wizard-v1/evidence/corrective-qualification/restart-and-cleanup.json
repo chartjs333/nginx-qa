@@ -1,0 +1,26 @@
+{
+  "listeners": [
+    {
+      "LocalAddress": "127.0.0.1",
+      "LocalPort": 18038,
+      "OwningProcess": 85424
+    }
+  ],
+  "old_host_stopped_via_owned_console": true,
+  "git_helpers_stopped": true,
+  "bridge_stopped": true,
+  "processes": [
+    {
+      "ProcessId": 99748,
+      "ParentProcessId": 59096,
+      "CreationDate": "2026-11-04T16:44:27.629912+01:00",
+      "CommandLine": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File D:\\nq-sdw-launcher\\run_staging.ps1 -Action Start -Profile setup-diagnostics-wizard-v1 -ExpectedCommit 65662f69db52c27b6c0972ccec8031cfb68a02fc"
+    },
+    {
+      "ProcessId": 85424,
+      "ParentProcessId": 99156,
+      "CreationDate": "2026-11-04T16:44:31.983209+01:00",
+      "CommandLine": "\"C:\\Python312\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038"
+    }
+  ]
+}

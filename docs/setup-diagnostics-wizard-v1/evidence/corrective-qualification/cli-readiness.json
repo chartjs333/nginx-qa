@@ -1,0 +1,10 @@
+{
+  "state": "BLOCKED",
+  "error": "CODEX_SANDBOX_UNAVAILABLE",
+  "reason": "HOST_MXC_UNSUPPORTED",
+  "guidance": [
+    "This backend requires Windows 11 build 26100.9278/26200.9278 or newer; Windows 10 cannot run MXC. Use a qualified supported host or the authorized operator client.",
+    "This service does not provision Windows accounts, request UAC, or fall back to unelevated mode.",
+    "An authorized operator client may complete native assignments separately; this is not automatic CLI execution."
+  ]
+}

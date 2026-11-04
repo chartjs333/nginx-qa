@@ -1,0 +1,61 @@
+{
+  "kind": "real_headless_edge_live_http",
+  "url": "http://127.0.0.1:18038/setup",
+  "paired_named_actor": true,
+  "projects": 2,
+  "checks": 16,
+  "advice_text": "Детерминированный диагностический отчёт. Ответ модели не получен. Причина: CODEX_TOOL_ISOLATION_UNVERIFIED. Статусы UNKNOWN, STALE и UNOBSERVED не подтверждают готовность. Рекомендации не выполняют действий.",
+  "plan_cancel_apply": true,
+  "history_after_reload": true,
+  "page_errors": [],
+  "requests": [
+    {
+      "path": "/api/v1/operator/session",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/advice",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "status": 200
+    }
+  ]
+}
