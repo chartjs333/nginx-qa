@@ -1,0 +1,244 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/setup-diagnostics-wizard-v1",
+    "expected_source_commit": "fc4b050e79b8cb919740c913212abed1a8f73a09",
+    "assigned_branch": "agent/sdwn-20261104-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "isolated-worker",
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "sdwn-20261104-runtime-reviewer",
+        "name": "Independent Reviewer / Runtime and UX",
+        "phone": "6981",
+        "git_branch": "review/sdwn-20261104-runtime",
+        "profile": "Независимо проверяй exact result commit, existing engine reuse, реальные worker/provider capabilities, deterministic diagnostics, ownership/state/idempotency, UX, regressions и тесты. Не используй approval другого Reviewer как доказательство. REJECT с воспроизводимым дефектом; новый commit требует нового review. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      },
+      {
+        "id": "sdwn-20261104-security-reviewer",
+        "name": "Independent Reviewer / Security and Evidence",
+        "phone": "6982",
+        "git_branch": "review/sdwn-20261104-security",
+        "profile": "Независимо проверяй exact result commit, ACL/secret boundaries, SSRF/injection, LLM advisory-only, typed allowlist, stale-plan/current-policy fences, public gateway isolation, отсутствие скрытых мутаций и честность real vs fixture evidence. Не автор кода; не выдавай свои решения через другого агента. REJECT при обходе или недоказанной приёмке. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "isolated-worker",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwn-20261104-isolated-worker",
+        "name": "isolated-worker",
+        "phone": "6901",
+        "profile": "User explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWN-001",
+          "queue": "worker-all",
+          "message": "Implement and qualify a Linux/WSL2 worker backend over the current native managed Codex client. Provision the separate owned distro as needed; use a non-root model runtime, protected credential handling, bounded environment and process tree, actual denied host/out-of-scope writes/reads and network. Preserve existing strict Windows backend. Use explicit owned workspace projection and robust native Git publication/checkpoints; avoid shell interpolation/DrvFs traversal/interop escape. --check must exercise actual boundary and report real capabilities. Cancellation must prove Linux descendants retired, including launcher-loss path, with no global WSL shutdown. Add meaningful focused tests and record actual Linux sandbox canary evidence. Do not claim unattended acceptance before real model/result/two reviews.\n\nUser explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwn-20261104-isolated-worker",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "tool-free-advisor",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "tool-free-advisor",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwn-20261104-tool-free-advisor",
+        "name": "tool-free-advisor",
+        "phone": "6902",
+        "profile": "User explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWN-002",
+          "queue": "worker-all",
+          "message": "Implement and live-qualify an advisor using existing supported authenticated Codex interfaces with demonstrably no executable tools, apps, MCP, browser, hooks, skills or mutation authority. Disable environment/capability exposure and prove actual outbound tool inventory and rejection of tool requests before execution, not only output filtering. Inspect installed schemas/config/official docs; do not treat empty dynamicTools as disabling builtins. Use strict bounded JSON/schema/facts/proposals and cancellation. Retain existing Responses transport and explicit deterministic fallback if real guarantees cannot be established. No extraction/replay of OAuth to unsupported endpoints or new paid keys. Tests include malicious diagnostic/question inputs and no secret exposure.\n\nUser explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwn-20261104-tool-free-advisor",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "qualification",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "qualification",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwn-20261104-qualification",
+        "name": "qualification",
+        "phone": "6903",
+        "profile": "User explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWN-003",
+          "queue": "worker-all",
+          "message": "Qualify exact final backend/advisor with real native autonomous self-test on distinct existing test project9010, fresh immutable manifest/branches and actual model author/two independent model reviewers. Native engine owns graph and decision validation. Verify real published result, exact replay, restart/recovery/Stop and no lingering Linux processes/leases. Test private UI with actual advisor response and no tool authority. Investigate and complete achievable real Telegram/tunnel gates from existing authorized configuration; never hijack an unrelated bot webhook or invent mobile acceptance. Run targeted regression suite and preserve real versus fixture evidence. PASS means code qualification only, not automatically full release.\n\nUser explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwn-20261104-qualification",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "PASS": "release",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "FAIL": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "release",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwn-20261104-release",
+        "name": "release",
+        "phone": "6904",
+        "profile": "User explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWN-004",
+          "queue": "worker-all",
+          "message": "Deliver reviewed source, usable own host, simple launch/login/stop flow and actual live evidence. Update draft PR18 on its existing base PR17 without main merge. GO requires actual unattended native selftest and actual safe advisor, UI and durable lifecycle proof. Describe inherited Telegram/mobile/tunnel acceptance accurately; no blanket readiness from local tests. Finish every achievable integration and record exact external inputs only if truly unavailable. Preserve old qualified version as rollback; upgrade only owned host with ownership checks.\n\nUser explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwn-20261104-release",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "GO": "done",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "NO_GO": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwn-20261104-coordinator",
+        "name": "Continuity Coordinator",
+        "phone": "6900",
+        "profile": "User explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWN-005",
+          "queue": "worker-all",
+          "message": "Continue real remaining work through native recovery/repair. Exhaust safe available alternatives before final external gate. Do not declare original objective complete for blocked state. A genuine final blocked result must receive independent reviews then actual context-bound BLOCK_EXTERNAL and invariant checks.\n\nUser explicitly renewed authorization to complete all remaining work and run agents sequentially. Use existing Managed Sprint Engine and issued workspace/branch only; one active canonical project9000. Preserve accepted old history, main and unrelated services. No direct control DB writes or substitute scheduler. Publish exact assigned commit before native result. Every result requires two genuine independent reviewer decisions. A previous BLOCKED_EXTERNAL is not proof alternatives were exhausted. Existing user-authorized separate Ubuntu WSL2 distro NginxQaWorker-20261104 is available; Docker/default/global WSL settings must remain intact. New resource directory D:/nq-sdw-worker-runtime is owned for this task. No need for new paid API credentials: first qualify existing ChatGPT-authenticated Codex via supported interfaces. Never expose credentials, forge capabilities, weaken isolation or claim mocks as live success. Test actual filesystem/network/process retirement boundaries, original native identities/results/independent reviews and durable receipts. Retain explicit fallback until actual advisor proof. New acceptance uses fresh immutable test manifest/branches in real distinct project9010, not an alias of9000. Each stage must continue all achievable work; concrete remaining external requirements are recorded honestly. No automatic main merge."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwn-20261104-continuity",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "RESUME_1": "isolated-worker",
+        "RESUME_2": "tool-free-advisor",
+        "RESUME_3": "qualification",
+        "RESUME_4": "release",
+        "BLOCKED_EXTERNAL": "blocked-external",
+        "FAILED": "failed"
+      }
+    },
+    {
+      "id": "done",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Мастер реализован и принят с доказательствами."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Результаты сохранены; нужны документированные внешние условия."
+    },
+    {
+      "id": "failed",
+      "type": "terminal",
+      "status": "FAILED",
+      "message": "Невосстановимый дефект или исчерпанный rework; evidence сохранена."
+    }
+  ],
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    },
+    {
+      "path": "docs/universal-managed-sprint-contract.md",
+      "sha256": "d7b4c6c12e3aadc03018b3a8cbc1f989f278784fad151d9dfe24e7366123a146"
+    }
+  ],
+  "planning": {
+    "title": "Setup Diagnostics Wizard live readiness continuation",
+    "source_commit": "fc4b050e79b8cb919740c913212abed1a8f73a09",
+    "previous_sprint_id": "msv1-46c7d98104fe9a3aac42de85d7fe99d8049df35de89832c2e933248b5a9a2cdb",
+    "implementation_acceptance": "NOT_RUN",
+    "live_acceptance": "NOT_RUN",
+    "independent_reviewers": 2,
+    "new_resource": "Owned Ubuntu24.04.5 WSL2 distro NginxQaWorker-20261104, official image SHA256 verified."
+  }
+}
