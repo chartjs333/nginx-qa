@@ -61,5 +61,13 @@
   ],
   "main_merged": false,
   "draft_pr_dependency": 17,
-  "provenance_note": "Windows Git autocrlf can change working copy byte hashes; compare original bytes at indexed paths and canonical Git blobs after CRLF normalization."
+  "provenance_note": "Windows Git autocrlf can change working copy byte hashes; compare original bytes at indexed paths and canonical Git blobs after CRLF normalization.",
+  "draft_pr": {
+    "number": 18,
+    "url": "https://github.com/chartjs333/nginx-qa/pull/18",
+    "head": "codex/setup-diagnostics-wizard-v1",
+    "base": "agent/tmsl-v1-release-documentation",
+    "draft": true,
+    "creation_head": "a3bac47ba482bbc40e31e620817c36e1a0acb4e3"
+  }
 }

@@ -93,3 +93,5 @@ Draft PR зависит от PR17. `main` не объединялся. Для о
 [corrective-qualification.md](corrective-qualification.md),
 [corrective-contract.md](corrective-contract.md),
 [managed-codex-client.md](managed-codex-client.md).
+
+Draft PR: https://github.com/chartjs333/nginx-qa/pull/18. База — ветка PR17; автоматического слияния нет.
