@@ -1,0 +1,17 @@
+{
+  "http_status": 200,
+  "phone": "6981",
+  "request": {
+    "assignment_id": "review-36dc41a30248ad55e7b2f361",
+    "status": "REJECT",
+    "feedback": "Independent runtime REJECT of exact a4ef5146ca52648ff953ebdab91cd52d0c376e9b relative to be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc. P2 blocking contract gap: nginx_qa/setup_ollama_advisor.py builds advice_schema(facts) and sends it as Ollama format, but returns the response text without validating that same schema. SetupAdvisor.validate_model_advice checks only the broader common AdviceResponse contract. Concrete isolated reproduction using the production ollama provider selection and an injected httpx MockTransport: /api/show reports a valid local GGUF completion model; /api/generate returns done:true, done_reason:stop, correct model and a base-valid result with two fresh project.slot claims, certainty INFERENCE and uncertainty LOW. The schema actually sent rejects four violations (UNKNOWN expected twice, maxItems1, uncertainty HIGH/UNKNOWN), yet production SetupAdvisor accepts it as Ответ модели. Repro: C:/nqt35/client/sdw-continuation-20261104/reviews/runtime-advisor-a4ef514/probe_schema.py; observed schema-probe.json. This is not an operation-execution bypass. It breaks the promised local UNKNOWN/one-claim/uncertainty output contract and lets provider-invalid output be presented as validated model advice rather than explicit fallback. Fix by strictly parsing and locally validating completed Ollama text against the exact dynamic schema derived from its input facts before returning/accepting it; preserve existing shared semantic/freshness validation and Responses compatibility. Add a regression through production provider selection proving this response yields fallback while a complete provider reply still releases admission. Other independent verification passed: 80 targeted tests in10.396s from immutable exact export; source/evidence SHA256 correspondence; actual local qwen2.5:7b production-component call on a fresh issued authenticated snapshot, cancellation/background drain, contender denial, cancelled-key replay and final marker removal PASS in10.281s. Real malicious question did not execute any setup action. Fixed-loopback no-tools transport, bounded metadata/output/deadline, conservative unresolved marker and passive local-configuration distinctions were audited; no further blocker found. New host HTTP/browser deployment remains a separate stage and is not claimed here. No product edits or host/provider restarts were performed."
+  },
+  "response": {
+    "assignment_id": "review-36dc41a30248ad55e7b2f361",
+    "source_assignment_id": "assignment-dee92a3c76576da50919928f",
+    "result_key": "result-329c95c7a0c98051b108782121c5875409d244cdf05a1d3d12c9bfb3e91285eb",
+    "decision": "REJECT",
+    "status": "REWORK_ENQUEUED",
+    "deduplicated": false
+  }
+}

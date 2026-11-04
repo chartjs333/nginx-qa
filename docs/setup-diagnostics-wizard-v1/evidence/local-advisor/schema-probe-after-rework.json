@@ -1,0 +1,12 @@
+{
+  "kind": "fixture_response_schema_probe_not_live_model",
+  "violates_sent_ollama_schema": [
+    "'UNKNOWN' was expected",
+    "'UNKNOWN' was expected",
+    "[{'text': 'Project can probably run.', 'check_ids': ['project.slot'], 'certainty': 'INFERENCE'}, {'text': 'Project can probably run.', 'check_ids': ['project.slot'], 'certainty': 'INFERENCE'}] is too long",
+    "'LOW' is not one of ['HIGH', 'UNKNOWN']"
+  ],
+  "accepted_as_model_advice": false,
+  "explicit_fallback": true,
+  "terminal_admission_marker_retained": false
+}

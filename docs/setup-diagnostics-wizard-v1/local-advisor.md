@@ -46,7 +46,10 @@ never interprets them as operations. Extra tool/message output is rejected.
 The schema fixes the snapshot ID, limits advice to one short claim and proposal,
 permits only actual check IDs and exact server-approved proposal templates, and
 marks local-model claims `UNKNOWN`. The existing schema, freshness and semantic
-validators still validate every response. They do not establish that every
+validators still validate every response. The transport strictly parses the full
+model text and independently enforces the exact dynamic schema sent with that
+request; provider-side constrained decoding alone is never an acceptance check.
+They do not establish that every
 natural-language sentence is correct; the UI explicitly labels model advice as
 recommendations. Setup actions still require the existing Plan/Apply flow.
 

@@ -202,6 +202,44 @@ class OllamaTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Ответ модели", result["explanation"])
         self.assertEqual(len(seen), 2)
 
+    async def test_production_selection_enforces_exact_sent_schema_and_releases_terminal_admission(self):
+        snap = snapshot()
+        cases = []
+        # This is the independent Reviewer's original accepted-by-common-schema
+        # counterexample: fresh references, two inferences and LOW uncertainty.
+        bad = model_output(snap)
+        bad["claims"] = [{"text": "Project can probably run.", "check_ids": ["project.slot"],
+                          "certainty": "INFERENCE"}] * 2
+        bad["uncertainty"] = "LOW"; cases.append(bad)
+        bad = model_output(snap); bad["explanation"] = "я" * 241; cases.append(bad)
+        bad = model_output(snap); bad["proposals"] *= 2; cases.append(bad)
+        bad = model_output(snap); bad["uncertainty"] = "LOW"; cases.append(bad)
+        bad = model_output(snap)
+        bad["claims"] = [{"text": "Inference.", "check_ids": ["project.slot"], "certainty": "INFERENCE"}]
+        cases.append(bad)
+        for index, bad in enumerate(cases):
+            with self.subTest(index=index):
+                # The general contract intentionally remains broader for Responses.
+                self.assertTrue(SetupAdvisor().validate_model_advice(json.dumps(bad), snap)["explanation"].startswith("Ответ модели"))
+                adapter, seen, _ = self.adapter(generate=lambda _, b=bad: httpx.Response(200, json=envelope(b)))
+                advisor = SetupAdvisor(environment={"NGINX_QA_SETUP_ADVISOR_PROVIDER": "ollama",
+                    "NGINX_QA_SETUP_ADVISOR_MODEL": MODEL}, state_dir=self.path)
+                with patch("nginx_qa.setup_ollama_advisor.OllamaAdviceTransport", return_value=adapter):
+                    result = await advisor.get_advice(snap, request(snap, key="dynamic-schema-" + str(index)))
+                sent = json.loads(seen[1].content)["format"]
+                self.assertTrue(list(jsonschema.Draft202012Validator(sent).iter_errors(bad)))
+                self.assertIn("PROVIDER_UNAVAILABLE_OR_INVALID", result["explanation"])
+                self.assertFalse(result["explanation"].startswith("Ответ модели"))
+                self.assertFalse(adapter.marker.exists(), "A done:true response must release terminal admission")
+
+    async def test_complete_model_text_is_strictly_parsed_before_transport_returns(self):
+        for raw in ('{"kind":"setup_advice","kind":"setup_advice"}',
+                    '{} trailing', '{"nested":' * 17 + '0' + '}' * 17):
+            adapter, _, _ = self.adapter(generate=lambda _, v=raw: httpx.Response(200, json=envelope(response=v)))
+            with self.assertRaises(ValueError):
+                await adapter(self.facts, "question")
+            self.assertFalse(adapter.marker.exists())
+
     def test_passive_local_configuration_never_claims_credentials_or_live_generation(self):
         env = {"NGINX_QA_SETUP_ADVISOR_PROVIDER": "ollama", "NGINX_QA_SETUP_ADVISOR_MODEL": MODEL}
         projected = _diagnostic_environment(env)

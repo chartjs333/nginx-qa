@@ -15,6 +15,8 @@ from pathlib import Path
 import re
 import secrets
 
+import jsonschema
+
 from .setup_diagnostics import parse_strict_json_with_limits
 
 OLLAMA_ORIGIN = "http://127.0.0.1:11434"
@@ -175,6 +177,11 @@ class OllamaAdviceTransport:
                     result = envelope.get("response")
                     if not isinstance(result, str) or not result or len(result.encode("utf-8")) > 8192:
                         raise ValueError("OLLAMA_TEXT_INVALID")
+                    # Provider-side constrained decoding is not an acceptance
+                    # boundary. Enforce the exact schema sent for this invocation
+                    # before the common advisor validates semantics/freshness.
+                    parsed = parse_strict_json_with_limits(result, max_bytes=8192, max_depth=16)
+                    jsonschema.Draft202012Validator(body["format"]).validate(parsed)
                     return result
         except (httpx.ConnectError, httpx.ConnectTimeout):
             terminal = True  # No request reached the fixed, direct endpoint.

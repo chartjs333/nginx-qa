@@ -1,30 +1,31 @@
 {
-  "kind": "local_advisor_implementation_and_component_qualification",
+  "kind": "local_advisor_rework_cycle_1_qualification",
   "status": "PASS",
-  "base_commit": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+  "independent_review": "PENDING_NATIVE_REVIEW",
+  "base_commit": "a4ef5146ca52648ff953ebdab91cd52d0c376e9b",
   "assigned_branch": "agent/sdwn-20261104-tool-free-advisor",
+  "assignment_id": "assignment-ba6f022f3ae9c17558dad887",
   "automated": {
     "status": "PASS",
-    "tests": 80,
-    "duration_seconds": 14.937,
+    "tests": 26,
+    "seconds": 2.159,
     "modules": [
       "tests.test_ollama_advisor",
-      "tests.test_llm_advisor",
-      "tests.test_setup_private_api",
-      "tests.test_setup_diagnostics_regressions",
-      "tests.test_setup_diagnostics",
-      "tests.test_wizard_ui"
+      "tests.test_llm_advisor"
     ],
-    "log_sha256": "2f787001550a64ecf3168fd793092a7509922a80ca6eb57279445ad54e3d87de",
-    "exit_code": 0,
-    "original_log_sha256": "cf0f553a600de214749be422f7d24ae4f9a2a43bb878cc6b1d0a347f051950c2"
+    "command": "python -X utf8 -B -m unittest tests.test_ollama_advisor tests.test_llm_advisor -v",
+    "evidence": "Actual command result, tool output chunk758261. Targeted transport, strict parsing, common semantic/freshness and Responses compatibility suite.",
+    "new_regressions": [
+      "Five local-schema violations through production provider selection give explicit fallback while done:true releases admission.",
+      "Duplicate JSON keys, trailing data and excessive nesting rejected by the transport before return."
+    ]
   },
   "live_cases": {
-    "normal_issued_snapshot": "PASS",
-    "malicious_question_unloaded_model": "PASS",
-    "caller_cancel_background_drain_and_admission": "PASS",
-    "same_key_replay": "PASS"
+    "real_normal_on_fresh_issued_snapshot": "PASS",
+    "same_key_replay": "PASS",
+    "terminal_admission_release": "PASS"
   },
+  "live_seconds": 10.235,
   "provider": {
     "provider": "ollama",
     "version": "0.40.11",
@@ -37,20 +38,28 @@
   },
   "source_sha256": {
     "nginx_qa/setup_advisor.py": "b16572d53b2686ee079a7cb8ca8b0d43d082e82b4258d4f7f44a25067e6a04da",
-    "nginx_qa/setup_ollama_advisor.py": "672a8c13fa22126312e54f26992aa7d721973e5254dc92e2c4179cdd72461421",
+    "nginx_qa/setup_ollama_advisor.py": "ecc3e20a0ddf11264351c22716ae2bd3cbf25d6a0cc78cab7334cfca2d557411",
     "nginx_qa/setup_diagnostics.py": "4be8e881e0f6118140a00eeb0762d000051e413b0840664c1e75f10089b37e9b",
     "nginx_qa/setup_diagnostics_api.py": "70627930219ba9d958c3f53233334c5476f8fd9b38eaccb2c287c5b2ef654580",
     "nginx_qa/static/setup.js": "d99f49060be62f29b7295e3e23491d79f9baf2c11508101ddeca8263270b3ef6",
-    "tests/test_ollama_advisor.py": "47fbd8a1102999d0005e31c512609e944f77d5c5abdfcf1109f18b3fa4b63809",
+    "tests/test_ollama_advisor.py": "7c3e99f9874733e305818cd6013cb74e934e962cfc8ad75f0b18ea59f0c3ec3f",
     "tests/live_ollama_advisor.py": "900d3ece933e7823d26c822c635517a935e76869d05cc1a4892632fe74c8cd66"
   },
-  "evidence_sha256": {
-    "advisor-live-normal-final.json": "a1b74a683e99ae5226a847ffc5552e8a7213cb65295507ddc4f3b03e313ad220",
-    "advisor-live-malicious-final.json": "ff1466687e693c7a04e0f2c6640d776427190e0af58de27e76ce6a488178641a",
-    "advisor-live-cancellation-final.json": "baa37b8734e6231c63819a3193f5212618b0e6c52793f27342964864e92771ec",
-    "advisor-final-tests.json": "5e103454779ba59d5386376b5a1f9ce6976fc029d2486d10d29aab37bc06af30",
-    "advisor-final-tests.log": "2f787001550a64ecf3168fd793092a7509922a80ca6eb57279445ad54e3d87de",
-    "advisor-provider-observation.json": "c3811068068d54011b9367fe22357817c6f95e84c42834ca951050ad1fdcd256"
+  "rework": {
+    "rejected_commit": "a4ef5146ca52648ff953ebdab91cd52d0c376e9b",
+    "reviewer_phone": "6981",
+    "review_assignment": "review-36dc41a30248ad55e7b2f361",
+    "native_outcome": "REWORK_ENQUEUED",
+    "issue": "Completed Ollama text was validated only against the broader common contract, not the dynamic local schema actually sent.",
+    "fix": "Strictly parse bounded full model text and validate with Draft202012Validator(body[format]) inside the transport, then retain common semantic/freshness validation. A terminal provider response still releases admission on validation failure.",
+    "before_probe": "schema-probe-before-a4ef514.json",
+    "after_probe": "schema-probe-after-rework.json",
+    "receipt": "runtime-review-reject-a4ef514.json"
+  },
+  "inherited_evidence": {
+    "report": "qualification-initial-a4ef514.json",
+    "commit": "a4ef5146ca52648ff953ebdab91cd52d0c376e9b",
+    "note": "Original80test and normal/malicious/cancellation evidence preserved unchanged; they did not detect the narrower-schema contract gap. This rework reports26affected tests and a fresh actual model call, not82 freshly executed tests."
   },
   "scope_limits": [
     "Production SetupAdvisor component with real issued snapshots and real local model; newly deployed privateHTTP/browser acceptance belongs to following stage6903.",
@@ -60,14 +69,19 @@
     "No new API keys, provider downloads, native sprint starts, results, reviews or database mutations.",
     "Model keepalive may retain memory for2minutes; one owned host state bounds its own requests, not all clients of the shared Ollama service."
   ],
-  "prior_evidence_preserved": "Original pre-wording normal/malicious/cancellation journal files retained; final runtime evidence above supersedes them.",
-  "original_evidence_sha256": {
-    "advisor-live-normal-final.json": "381753978102225939c46278347efdead897cacb21b42973b87fe7a4f7733059",
-    "advisor-live-malicious-final.json": "1f525596ccd2297bfbc2d928a12b74bfba1d5020a680200b4e82f79eade1a781",
-    "advisor-live-cancellation-final.json": "e4fb08037b7ad27732c259d6c5fe33fe6f7e1503096d28b4515b69302ba68f53",
-    "advisor-final-tests.json": "17339d33bde2f73805a52cbbb64f7a1bdddc8cc3b83294fe995120cc2c1cf02a",
-    "advisor-final-tests.log": "cf0f553a600de214749be422f7d24ae4f9a2a43bb878cc6b1d0a347f051950c2",
-    "advisor-provider-observation.json": "3f3828d93df79d33c63e34d2cb753ff8871ff9bed25a09f7ebf7697fbccf3713"
+  "evidence_sha256": {
+    "advisor-rework-normal.json": "213a9a75c818057b23eb7f55097de7d05178c5fe3afc525e3a417afea48e0b10",
+    "schema-probe-before-a4ef514.json": "3be390bfda74bea240ddee409302c4881f8462fe47d582af5f160ab3df3017a3",
+    "schema-probe-after-rework.json": "5a46633867e6f3030c4a83f50cfe076f7e214bfaf67842371a46d0bab5d553b0",
+    "runtime-review-reject-a4ef514.json": "80e2b6f2c6d1d26b9eafa0cfb02f8b3eec8102a39bdb53acf13d9241356e67b7",
+    "tests-rework.json": "6801e45f076d189c3b3c1991812fdadb74c9bc161f2c792cb71267667ea8d17e",
+    "qualification-initial-a4ef514.json": "23a684cba9bee7dbfb9eaa96fd7ff3b7492ed0cf696a120169176b4562fee297"
   },
-  "evidence_normalization": "Delivered text evidence uses LF, exact original bytes remain in the protected operator journal. Source hash pins are unchanged."
+  "original_evidence_sha256": {
+    "advisor-rework-normal.json": "5bb68a9874db6d8230593192ed28b6dcba92c4b9d4b59d19d590a3e83a13fb2f",
+    "schema-probe-before-a4ef514.json": "719706b680182bf5b9eb189a4acb4bbfa69b87396ed39995724ea1f7dfd25741",
+    "schema-probe-after-rework.json": "5a46633867e6f3030c4a83f50cfe076f7e214bfaf67842371a46d0bab5d553b0",
+    "runtime-review-reject-a4ef514.json": "d42d559744229d93b3c82b8c2f3cc1b3c4c80b84636ed0da8c0c07416a672fa4"
+  },
+  "evidence_normalization": "Delivered text uses LF; original native review and live evidence bytes remain in the operator journal."
 }

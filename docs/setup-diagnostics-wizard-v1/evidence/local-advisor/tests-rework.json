@@ -1,0 +1,15 @@
+{
+  "status": "PASS",
+  "tests": 26,
+  "seconds": 2.159,
+  "modules": [
+    "tests.test_ollama_advisor",
+    "tests.test_llm_advisor"
+  ],
+  "command": "python -X utf8 -B -m unittest tests.test_ollama_advisor tests.test_llm_advisor -v",
+  "evidence": "Actual command result, tool output chunk758261. Targeted transport, strict parsing, common semantic/freshness and Responses compatibility suite.",
+  "new_regressions": [
+    "Five local-schema violations through production provider selection give explicit fallback while done:true releases admission.",
+    "Duplicate JSON keys, trailing data and excessive nesting rejected by the transport before return."
+  ]
+}
