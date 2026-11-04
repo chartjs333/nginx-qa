@@ -39929,6 +39929,8 @@ import sys as _scope_api_sys
 register_scope_api(_scope_api_sys.modules[__name__])
 from nginx_qa.prompt_archive_api import register_prompt_archive_api
 register_prompt_archive_api(_scope_api_sys.modules[__name__])
+from nginx_qa.setup_diagnostics_api import register_setup_diagnostics_api
+register_setup_diagnostics_api(_scope_api_sys.modules[__name__])
 
 
 if __name__ == "__main__":

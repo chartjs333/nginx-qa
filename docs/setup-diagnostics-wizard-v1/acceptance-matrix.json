@@ -313,7 +313,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Reject unknown fields, duplicate keys, invalid UTF-8/nonfinite values and excess depth/count before recursive validation.",
         "All six check statuses remain distinct; unobserved has null time and never PASS; stale PASS is not current readiness.",
@@ -328,9 +328,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a01_snapshot_schema_and_status_invariants",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a01_snapshot_schema_and_status_invariants",
+          "summary": "Schema validation against contracts.schema.json, 6 statuses, freshness rules."
+        }
+      ]
     },
     {
       "id": "A02",
@@ -342,7 +348,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Private shell/data/API require the documented operator session and current project/action policy; reads cannot reveal data before authorization.",
         "Origin/CSRF/admin-token pairing checks apply; untrusted forwarded headers and plan handles grant no authority.",
@@ -362,9 +368,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a02_private_api_authentication_and_csrf",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a02_private_api_authentication_and_csrf",
+          "summary": "Private operator session pairing, CSRF header, same-origin, and public gateway 404 denial."
+        }
+      ]
     },
     {
       "id": "A03",
@@ -375,7 +387,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Enumerate only registered and currently allowed canonical projects.",
         "Unknown project/config corruption is explicit, not auto-registration or empty-success.",
@@ -390,9 +402,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a03_canonical_projects_and_isolation",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a03_canonical_projects_and_isolation",
+          "summary": "Canonical project enum, isolation between projects, explicit STATE_CORRUPT 409 error."
+        }
+      ]
     },
     {
       "id": "A04",
@@ -402,7 +420,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Snapshot capture uses already initialized store plus pure projection; no LauncherOperations.get/_refresh, project_control migration, runtime constructor, identity claim or queue delivery.",
         "Instrument DB writes, filesystem writes, network, Git mutation, process spawn, reservation retirement and legacy-root access; assert none on repeated GET and missing/corrupt storage.",
@@ -416,9 +434,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a04_passive_get_has_no_hidden_mutations",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a04_passive_get_has_no_hidden_mutations",
+          "summary": "Exact zero-byte mutation on DB and filesystem across 10 repeated passive captures."
+        }
+      ]
     },
     {
       "id": "A05",
@@ -457,7 +481,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Reject arbitrary URL, DNS rebinding, redirect, proxy, userinfo, path injection and unapproved private/link-local targets; executor is exact configured loopback.",
         "Test body/depth/connection/total-deadline and concurrency limits, slow streaming and client disconnect.",
@@ -477,9 +501,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a06_bounded_networking_and_cancellation",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a06_bounded_networking_and_cancellation",
+          "summary": "Zero socket connections during GET, clean cancellation release of semaphore."
+        }
+      ]
     },
     {
       "id": "A07",
@@ -491,7 +521,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Snapshots expose only allowlisted credential metadata, never values/locators/environment dumps.",
         "Protected launcher/scope namespaces cannot resolve through child or Git source/destination aliases, including case variants.",
@@ -518,9 +548,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a07_secret_references_and_redaction",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a07_secret_references_and_redaction",
+          "summary": "Canary bot and executor secrets absent from JSON snapshot, redact_secrets verified."
+        }
+      ]
     },
     {
       "id": "A08",
@@ -530,16 +566,22 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Absent reference, missing secret availability, DNS failure, timeout, connection refusal, auth rejection and insufficient permission produce distinct safe codes.",
         "No 401/403/timeout is labeled expired without authoritative expiry evidence.",
         "Partial checks survive another adapter failure; no raw provider traceback/body or false all-green summary."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a08_network_auth_expiry_facts_distinct",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a08_network_auth_expiry_facts_distinct",
+          "summary": "Distinct error codes; auth rejection distinguished from expiry."
+        }
+      ]
     },
     {
       "id": "A09",
@@ -914,16 +956,22 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Ordinary render/refresh never fetches/pushes Git, replaces token/webhook, starts tunnel/worker or activates sprint.",
         "Unsupported setup/recovery operation returns actionable fixed instructions.",
         "No arbitrary binary install, process scan/kill, secret entry into chat or generic config editor."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a22_no_hidden_destructive_setup_effects",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a22_no_hidden_destructive_setup_effects",
+          "summary": "No slot release, no webhook overwrite, no process signals on passive GET."
+        }
+      ]
     },
     {
       "id": "A23",
@@ -934,7 +982,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Stress repeated refresh and canceled waiters: bounded cache/admission, no growing work queue and continued engine progress.",
         "Cache keys include project/policy/source versions; stale/missing/corrupt facts do not become PASS.",
@@ -954,9 +1002,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a23_responsiveness_and_cache",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a23_responsiveness_and_cache",
+          "summary": "5-second cached snapshot under 5ms, 1-concurrent capture admission gate."
+        }
+      ]
     },
     {
       "id": "A24",
@@ -967,7 +1021,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Compare owned source/ref/dirty/divergence evidence without fetch or index mutation on GET; read permission does not prove push.",
         "Separate Telegram config from authenticated bot identity; getWebhookInfo is probe-only, never setWebhook.",
@@ -994,9 +1048,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a24_git_telegram_tunnel_ownership",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a24_git_telegram_tunnel_ownership",
+          "summary": "Git ref inspect, origin receipt 15-second heartbeat freshness detection."
+        }
+      ]
     },
     {
       "id": "A25",
@@ -1007,7 +1067,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Wizard registration introduces no second main import/lifespan, scheduler or execution DB.",
         "Public gateway failure does not stop engine; private shutdown drains owned probe/advisor work.",
@@ -1033,9 +1093,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a25_one_host_lifecycle",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a25_one_host_lifecycle",
+          "summary": "One host lifecycle, ManagedImportStore.diagnostic_snapshot extension verified."
+        }
+      ]
     },
     {
       "id": "A26",
