@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "at": "2026-11-04T16:23:11.980791+00:00",
+  "requested_outcome": "BLOCKED_EXTERNAL",
+  "source_assignment_id": "assignment-d5fc4e26c8fdba1116737440",
+  "accepted_release_commit": "c7fa6a42a15b71a1c724e596472fe1f29463074d",
+  "accepted_release_outcome": "NO_GO",
+  "accepted_release_reviews": [
+    {
+      "role": "runtime",
+      "assignment_id": "review-4aec0f9c3a1cab55ce82b90b",
+      "decision": "APPROVE",
+      "original_sha256": "2b3808ac621736f30229477c4e8a065c2289b4a95a73771ef618bf8df435d452"
+    },
+    {
+      "role": "security",
+      "assignment_id": "review-8df89ccbf7286843b11eecba",
+      "decision": "APPROVE",
+      "original_sha256": "d963f3e388cc8e01f1d97e3b95b5a0b4cd51c81664b40edaac9cc34e1de9076f"
+    }
+  ],
+  "product_code_commit": "8a4b38f2e0ffbdd13a596f316c6e33b65452ab60",
+  "draft_pr": "https://github.com/chartjs333/nginx-qa/pull/18",
+  "private_url": "http://127.0.0.1:18038/setup",
+  "source_delivery": "D:/nq-sdw-delivery",
+  "product_tests": 148,
+  "pairing_helper_tests": 12,
+  "native_selftest_result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+  "external_requirements": [
+    "Supported qualified sandbox host and Codex CLI; successful strict --check before unattended execution.",
+    "Actual tool-free advisor provider/model/secret reference and live validated response; deterministic fallback is not model acceptance.",
+    "Inherited PR17 external Telegram/mobile/tunnel acceptance."
+  ],
+  "completion_policy": "This commit requests independent review of the external gate, not full product success. After both approvals, settle only the actual matching native failure context with BLOCK_EXTERNAL and require RECOVERY_COMPLETED plus terminal state. Never edit control DB.",
+  "preserved_history": [
+    "qualification browser evidence REJECT and proper rework",
+    "release pairing recipient REJECT and proper rework",
+    "initial native selftest stopped through wizard; fresh immutable profile completed"
+  ],
+  "final_receipts_outside_immutable_result": "C:/nqt35/client/sdw-corrective-20261104/FINAL_DELIVERY.json",
+  "main_merged": false,
+  "product_or_host_code_changed_by_this_node": false
+}

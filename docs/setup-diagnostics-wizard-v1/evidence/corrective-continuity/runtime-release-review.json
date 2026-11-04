@@ -1,0 +1,18 @@
+{
+  "http_status": 200,
+  "phone": "6881",
+  "submitted_at": "2026-11-04T16:22:15.572329+00:00",
+  "request": {
+    "assignment_id": "review-4aec0f9c3a1cab55ce82b90b",
+    "status": "APPROVE",
+    "feedback": "APPROVE truthful NO_GO release rework at exact c7fa6a42a15b71a1c724e596472fe1f29463074d. Independently inspected the new pairing helper and exact included tests. Static ownership alone is no longer sufficient: the helper connects without HTTP, correlates the exact reverse established tuple and sole loopback listener PID, validates stable before/after process records, full trusted system-PowerShell launcher arguments and creation-time ancestry, and loads the key only after proof. HTTP sending remains pinned to the same socket; reconnects and redirects are refused, arbitrary error contents are suppressed. Independent isolated execution of exact Git helper/tests: 12 PASS in0.048s, fake sockets/keys/CIM only. Also independently ran the actual ownership collector on a new live TCP connection without any HTTP or real key read: proven root99748/recipient85424; then closed that socket. This confirms the real collector works on the installed host without repeating protected pairing. The included separate actual named-pairing smoke evidence is bound to the installed helper SHA. All four helper hashes match installed files, included helper matches canonical Git after LF/CRLF normalization, and all six recorded restricted ACL snapshots match live ACLs. The trusted operator installation/account boundary is explicit; protection against a compromised operator or OS admin is not claimed. Git proves seven delivery/evidence-only changes since fad38ab, no product-code delta. Prior product qualification remains applicable without a broad rerun. Clean delivery and PR18 both point at c7; PR18 remains draft/unmerged on the PR17 branch. Owned host remains clean/pinned65662f6, temporary bridge/Git listeners absent, fresh GETs18035/18036/18038 return200. No remaining blocker in the local-delivery correction. The release outcome remains NO_GO because mandatory unattended CLI isolation and actual LLM advisor gates are still externally unsatisfied; external Telegram/mobile/tunnel acceptance is not newly claimed. This approval is of truthful delivery/NO_GO evidence, not full release readiness or completion of those external gates. Evidence C:/nqt35/client/sdw-corrective-20261104/reviews/runtime-release-c7fa6a4/."
+  },
+  "response": {
+    "assignment_id": "review-4aec0f9c3a1cab55ce82b90b",
+    "source_assignment_id": "assignment-4f8ae5199839e2dd8ddfe3b3",
+    "result_key": "result-f0ad9a5692f39e7d22828f718dde5eb4ecba5be7e1037506b5efc2672e117862",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}
