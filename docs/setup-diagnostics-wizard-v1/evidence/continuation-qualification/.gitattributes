@@ -1,2 +1,2 @@
 # Evidence hashes cover exact original bytes, including historical CRLF files.
-* -text
+* -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
