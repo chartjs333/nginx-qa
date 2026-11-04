@@ -1,0 +1,11 @@
+{
+  "http_status": 200,
+  "response": {
+    "assignment_id": "review-98a99ae1063019a44b0c9b69",
+    "source_assignment_id": "assignment-0c211c34f47a807545391c0b",
+    "result_key": "result-179e1130fc05ffc081ff8c82d2caecb4af66cf9d8d4dd658ea836cc0604bfc11",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}

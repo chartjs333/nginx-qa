@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "at": "2026-11-04T16:00:38.407308+00:00",
+  "release_outcome": "NO_GO",
+  "meaning": "Usable local wizard and qualified code delivered; mandatory unattended CLI/live advisor external gates remain unsatisfied.",
+  "qualified_commit": "65e0bc0f152aa68241f7f153af6070abbd4c16a6",
+  "product_code_commit": "8a4b38f2e0ffbdd13a596f316c6e33b65452ab60",
+  "host_code_commit": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+  "host_clean": true,
+  "live_http_status": {
+    "18035": 200,
+    "18036": 200,
+    "18038": 200
+  },
+  "private_url": "http://127.0.0.1:18038/setup",
+  "source_delivery": "D:/nq-sdw-delivery",
+  "delivery_branch": "codex/setup-diagnostics-wizard-v1",
+  "reviews_of_qualification": [
+    {
+      "role": "runtime",
+      "review_id": "review-81b9e5146a270d05dbb605bd",
+      "result_key": "result-179e1130fc05ffc081ff8c82d2caecb4af66cf9d8d4dd658ea836cc0604bfc11",
+      "original_sha256": "61cb65f3649db5992104649de943c8567d6c26b24b1d847734ed27f13602e439"
+    },
+    {
+      "role": "security",
+      "review_id": "review-98a99ae1063019a44b0c9b69",
+      "result_key": "result-179e1130fc05ffc081ff8c82d2caecb4af66cf9d8d4dd658ea836cc0604bfc11",
+      "original_sha256": "6f9602fa358cbaccc571d4257835e66a640211f0c7bcc426e5d52b9e857a3024"
+    }
+  ],
+  "review_scope": "Qualification approval is not full live release GO.",
+  "temporary_services_stopped": [
+    "present-operator qualification bridge18039",
+    "fixture Git daemon9418",
+    "fixture Git daemon18441"
+  ],
+  "local_helpers": [
+    {
+      "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\authorize_wizard_browser.py",
+      "sha256": "dfc4f09f8e1b048dcb73ebaa338e632e834fcc20cd8c9cb4209b68b5007428e4"
+    },
+    {
+      "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\start_wizard.ps1",
+      "sha256": "3e7e444975c19e766fd7ae9223082938c7472a7891b0b4e3c83ca6d5542324e2"
+    },
+    {
+      "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\stop_wizard.ps1",
+      "sha256": "39b4f2e82056e2bbf0551c8eb854968dc4efb249da24e936e4e470d52dc9df0f"
+    },
+    {
+      "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\stop_owned_console.py",
+      "sha256": "4717a946142ecfc6a04712f2c5b61fabc43511aa5d3f96398a886eff2b4443d7"
+    }
+  ],
+  "rollback": "Stop only verified owned18038process tree; preserve C37state/owner marker, all Git history and existing18035/18036services.",
+  "external_gates": [
+    "Qualified supported sandbox host and CLI for unattended execution",
+    "Actual configured tool-free advisor response",
+    "Inherited PR17 external Telegram/mobile/tunnel acceptance"
+  ],
+  "main_merged": false,
+  "draft_pr_dependency": 17,
+  "provenance_note": "Windows Git autocrlf can change working copy byte hashes; compare original bytes at indexed paths and canonical Git blobs after CRLF normalization."
+}
