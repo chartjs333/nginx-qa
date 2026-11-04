@@ -23,6 +23,7 @@
     applying: false,
     advising: false,
     adviceRequest: null,
+    sessionGeneration: 0,
     epoch: 0,
     receipts: [],
   };
@@ -140,7 +141,7 @@
     const ready = state.authenticated && !!state.currentSnapshot;
     const confirmation = !!state.pendingPlan && !state.attempt;
     el("refresh").disabled = !state.authenticated || !state.currentProject || state.busy || state.applying || confirmation;
-    el("project").disabled = state.busy || state.applying || confirmation;
+    el("project").disabled = !state.authenticated || state.busy || state.applying || confirmation;
     el("advisor-submit").disabled = !ready || state.advising;
     el("session-check").disabled = state.applying || confirmation;
     document.querySelectorAll(".btn-chip").forEach(n => { n.disabled = !ready || state.advising; });
@@ -203,14 +204,22 @@
 
   async function checkSession() {
     if (state.applying || (state.pendingPlan && !state.attempt)) return;
+    const generation = ++state.sessionGeneration;
+    const preferredProject = state.currentProject;
     closePlan();
     state.authenticated = false;
     state.actor = null;
     state.csrf = null;
+    state.currentProject = null;
+    el("project").replaceChildren();
+    // Older requests may still finish, but cannot keep the new session busy or
+    // commit their success, failure or finally handlers into its UI context.
+    state.busy = state.planning = state.advising = state.inspecting = false;
     invalidateSnapshot();
     showError(null);
     try {
       const session = await api("/api/v1/operator/session", {method: "GET"});
+      if (generation !== state.sessionGeneration) return;
       if (session.authenticated === true && session.csrf_token) {
         if (!opaque(session.actor_id)) throw new Error("Контекст оператора не подтверждён");
         state.authenticated = true;
@@ -218,8 +227,8 @@
         state.csrf = session.csrf_token;
         showNotice("Операторская сессия подтверждена. Изменения защищены CSRF.");
         el("pairing").hidden = true;
-        await loadProjects();
-        if (state.currentProject) await refreshSnapshot();
+        await loadProjects(generation, preferredProject);
+        if (generation === state.sessionGeneration && state.currentProject) await refreshSnapshot(generation);
       } else {
         showNotice("Подтвердите сессию через локальный операторский инструмент.");
         el("pairing-code").textContent = session.pairing_code || "Код недоступен";
@@ -227,13 +236,19 @@
         el("sync").textContent = "Ожидается подтверждение";
       }
     } catch (err) {
+      if (generation !== state.sessionGeneration) return;
+      state.authenticated = false;
+      state.actor = state.csrf = state.currentProject = null;
+      el("project").replaceChildren();
+      invalidateSnapshot();
       showNotice("Доступ не подтверждён");
       showError(err.message);
-    } finally { syncControls(); }
+    } finally { if (generation === state.sessionGeneration) syncControls(); }
   }
 
-  async function loadProjects() {
+  async function loadProjects(generation, preferredProject) {
     const data = await api("/api/v1/setup/projects");
+    if (generation !== state.sessionGeneration) return;
     const select = el("project");
     select.replaceChildren();
     const projects = data.projects || [];
@@ -241,50 +256,51 @@
       const opt = make("option", p.project_id + " · " + (p.name || ""));
       opt.value = String(p.project_id); select.append(opt);
     });
-    if (projects.some(p => String(p.project_id) === state.currentProject)) {
-      select.value = state.currentProject;
+    if (projects.some(p => String(p.project_id) === preferredProject)) {
+      select.value = preferredProject;
     }
     state.currentProject = select.value || null;
     if (!state.currentProject) showError("Нет доступных проектов. Проверьте реестр и права.");
   }
 
-  async function refreshSnapshot() {
-    if (state.busy || state.applying || !state.authenticated || !state.currentProject || (state.pendingPlan && !state.attempt)) return;
+  async function refreshSnapshot(generation = state.sessionGeneration) {
+    if (generation !== state.sessionGeneration || state.busy || state.applying || !state.authenticated || !state.currentProject || (state.pendingPlan && !state.attempt)) return;
     state.busy = true; invalidateSnapshot();
     const epoch = state.epoch;
     const project = state.currentProject;
+    const current = () => generation === state.sessionGeneration && epoch === state.epoch && project === state.currentProject;
     el("sync").textContent = "Загрузка диагностики…";
     showError(null);
     try {
       const snapshot = await api("/api/v1/projects/" + encodeURIComponent(project) + "/setup/snapshot");
-      if (epoch !== state.epoch || project !== state.currentProject) return;
+      if (!current()) return;
       state.currentSnapshot = snapshot;
       renderSnapshot(snapshot);
       renderOperations(snapshot);
       el("sync").textContent = "Диагностика обновлена";
     } catch (err) {
+      if (!current()) return;
       showError("Диагностика недоступна: " + err.message);
       el("sync").textContent = "Данные не подтверждены";
     } finally {
-      if (epoch === state.epoch && project === state.currentProject) {
-        await loadRecordedOperations(project, epoch);
+      if (current()) {
+        await loadRecordedOperations(project, epoch, generation);
       }
-      state.busy = false;
-      syncControls();
+      if (current()) { state.busy = false; syncControls(); }
     }
   }
 
-  async function loadRecordedOperations(project, epoch) {
+  async function loadRecordedOperations(project, epoch, generation) {
     try {
       const history = await api("/api/v1/projects/" + encodeURIComponent(project) + "/setup/operations");
-      if (epoch !== state.epoch || project !== state.currentProject) return;
+      if (generation !== state.sessionGeneration || epoch !== state.epoch || project !== state.currentProject) return;
       state.receipts = [];
       el("receipts-list").replaceChildren();
       const operations = (history.operations || []).slice(0, 20);
       operations.reverse().forEach(receipt => recordReceipt(receipt, project, true));
       if (!operations.length) el("receipts-list").append(make("p", "У этого оператора нет сохранённых операций в проекте.", "hint"));
     } catch (err) {
-      if (epoch === state.epoch && project === state.currentProject) {
+      if (generation === state.sessionGeneration && epoch === state.epoch && project === state.currentProject) {
         el("receipts-list").replaceChildren(make("p", "История операций недоступна: " + err.message, "hint"));
       }
     }
@@ -399,6 +415,7 @@
       return;
     }
 
+    const generation = state.sessionGeneration, epoch = state.epoch;
     state.advising = true;
     syncControls();
     showError(null);
@@ -423,15 +440,15 @@
           body: JSON.stringify(reqBody),
         }
       );
-      if (!state.currentSnapshot || advice.snapshot_id !== state.currentSnapshot.snapshot_id || project !== state.currentProject) return;
+      if (generation !== state.sessionGeneration || epoch !== state.epoch || !state.currentSnapshot || advice.snapshot_id !== state.currentSnapshot.snapshot_id || project !== state.currentProject) return;
       renderAdvice(advice);
       el("sync").textContent = "Совет получен";
     } catch (err) {
+      if (generation !== state.sessionGeneration || epoch !== state.epoch) return;
       showError("Ошибка получения совета LLM: " + err.message);
       el("sync").textContent = "Ошибка консультации";
     } finally {
-      state.advising = false;
-      syncControls();
+      if (generation === state.sessionGeneration) { state.advising = false; syncControls(); }
     }
   }
 
@@ -497,6 +514,7 @@
     if (!(state.currentSnapshot.available_action_ids || []).includes(actionId)) { showError("Операция отсутствует в разрешённом каталоге"); return; }
     const project = state.currentProject;
     const snapshotId = state.currentSnapshot.snapshot_id;
+    const generation = state.sessionGeneration, epoch = state.epoch;
     state.planning = true; syncControls();
     showError(null);
     el("sync").textContent = "Формирование плана " + actionId + "…";
@@ -516,7 +534,7 @@
           body: JSON.stringify(planReq),
         }
       );
-      if (!state.currentSnapshot || snapshotId !== state.currentSnapshot.snapshot_id || project !== state.currentProject) return;
+      if (generation !== state.sessionGeneration || epoch !== state.epoch || !state.currentSnapshot || snapshotId !== state.currentSnapshot.snapshot_id || project !== state.currentProject) return;
       if (plan.project_id !== project || plan.actor_id !== state.actor || plan.snapshot_id !== snapshotId || !digest(plan.plan_digest)) throw new Error("План не соответствует проекту или снимку");
       state.pendingPlan = plan;
       state.retryPermitted = true;
@@ -525,9 +543,10 @@
       showPlanDialog(plan);
       el("sync").textContent = "План сформирован";
     } catch (err) {
+      if (generation !== state.sessionGeneration || epoch !== state.epoch) return;
       showError("Не удалось сформировать план: " + err.message);
       el("sync").textContent = "Ошибка создания плана";
-    } finally { state.planning = false; syncControls(); }
+    } finally { if (generation === state.sessionGeneration) { state.planning = false; syncControls(); } }
   }
 
   function showPlanDialog(plan) {
@@ -599,14 +618,16 @@
   async function inspectPendingApply() {
     const attempt = state.attempt;
     if (!attempt || state.applying || state.inspecting || !state.authenticated || state.actor !== attempt.actor_id) return;
-    const epoch = state.epoch, project = state.currentProject, actor = state.actor;
+    const generation = state.sessionGeneration, epoch = state.epoch, project = state.currentProject, actor = state.actor;
+    const current = () => generation === state.sessionGeneration && state.attempt === attempt &&
+      state.actor === actor && state.epoch === epoch && state.currentProject === project;
     state.inspecting = true; syncControls(); showError(null);
     try {
       const result = await api("/api/v1/projects/" + encodeURIComponent(attempt.project_id) +
         "/setup/plans/" + encodeURIComponent(attempt.plan_id) + "/inspect", {method: "POST", body: JSON.stringify({
           schema_version: 1, plan_digest: attempt.plan_digest, idempotency_key: attempt.idempotency_key})});
       // A delayed inspection cannot replace another page/session's confirmation.
-      if (state.attempt !== attempt || state.actor !== actor || state.epoch !== epoch || state.currentProject !== project) return;
+      if (!current()) return;
       if (!result || result.kind !== "setup_apply_inspection" || result.schema_version !== 1 ||
           !planMatchesAttempt(result.plan, attempt) || typeof result.retry_permitted !== "boolean") {
         throw new Error("Ответ проверки не соответствует исходному запросу");
@@ -629,9 +650,10 @@
           "Права на действие отозваны. Запрос сохранён; доступно обновление диагностики и повторное подтверждение сессии.");
       }
     } catch (err) {
+      if (!current()) return;
       showError("Проверка исходного запроса недоступна: " + err.message + ". Запрос сохранён.");
       if (err.status === 401 || err.status === 403) await checkSession();
-    } finally { state.inspecting = false; syncControls(); }
+    } finally { if (generation === state.sessionGeneration) { state.inspecting = false; syncControls(); } }
   }
 
   async function applyPendingPlan() {
@@ -710,12 +732,12 @@
       }
       const update = make("button", "Обновить статус"); update.type = "button";
       update.addEventListener("click", async () => {
-        const epoch = state.epoch;
+        const generation = state.sessionGeneration, epoch = state.epoch;
         update.disabled = true;
         try {
           const value = await api("/api/v1/projects/" + encodeURIComponent(p) +
             "/setup/operations/" + encodeURIComponent(r.operation_id));
-          if (epoch !== state.epoch || p !== state.currentProject) return;
+          if (generation !== state.sessionGeneration || epoch !== state.epoch || p !== state.currentProject) return;
           if (!receiptMatchesPlan(value, r) || value.operation_id !== r.operation_id) throw new Error("Квитанция не соответствует операции");
           const attempt = state.attempt;
           if (attempt && value.operation_id === state.attemptOperationId && state.actor === attempt.actor_id && value.project_id === attempt.project_id &&
@@ -723,7 +745,10 @@
             clearAttempt(); closePlan();
           }
           recordReceipt(value, p);
-        } catch (err) { showError("Статус недоступен: " + err.message); update.disabled = false; }
+        } catch (err) {
+          if (generation !== state.sessionGeneration || epoch !== state.epoch || p !== state.currentProject) return;
+          showError("Статус недоступен: " + err.message); update.disabled = false;
+        }
       });
       card.append(update); list.append(card);
     });

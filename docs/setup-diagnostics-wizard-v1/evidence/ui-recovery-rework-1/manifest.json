@@ -1,0 +1,60 @@
+{
+  "kind": "sdwu_001_session_generation_rework",
+  "task_id": "SDWU-001",
+  "assignment_id": "assignment-ebfcafa10ce41d446beb9e2f",
+  "rejected_base_commit": "7a39bd90eae245f68da902d3d6974a8b76100b14",
+  "original_review_status": "REJECT_REWORK_ENQUEUED",
+  "original_reproducer_rerun": "PASS_FINDING_REPRODUCED_IDENTICALLY",
+  "affected_tests": {
+    "passed": 7,
+    "failed": 0
+  },
+  "new_reordered_cases": 16,
+  "new_fixture_categories": 5,
+  "existing_ui_categories": 9,
+  "existing_recovery_categories": 11,
+  "native_result_and_new_reviews": "PENDING_PARENT",
+  "live_after_fix_qualification": "NOT_RUN_IN_IMPLEMENTATION_STAGE",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "6f9af9c9dd27d7488f2591feabbe0092a398e1db3a2949be7d6cfcec54be04cc",
+      "bytes": 101
+    },
+    {
+      "path": "affected-tests.txt",
+      "sha256": "3ad177713119a62af5a2323ab1ac77b6b87f8708a3ad126e1cabe642501cb0e7",
+      "bytes": 987
+    },
+    {
+      "path": "original-probe-rerun.json",
+      "sha256": "eb909a41baaef339a685393f047d69700685ca8289fc1a7d3ace06b3e2d62198",
+      "bytes": 1281
+    },
+    {
+      "path": "probe-session-order.cjs",
+      "sha256": "6646603ae415a24407a29e34be5b46603acd2840a5f27741aa5f0a7cb4e123fa",
+      "bytes": 2763
+    },
+    {
+      "path": "probe-session-order.json",
+      "sha256": "eb909a41baaef339a685393f047d69700685ca8289fc1a7d3ace06b3e2d62198",
+      "bytes": 1281
+    },
+    {
+      "path": "review-receipt.json",
+      "sha256": "3ab20f57fc9db6583fbcb6623acf7d1580fb96eaa9253396728c7418d4a57f6c",
+      "bytes": 3174
+    },
+    {
+      "path": "run-original-review-probe.cjs",
+      "sha256": "3a8a5bf609edecfb903075c15591b0fed10678eb35bf164e9907b4a0677bdd70",
+      "bytes": 832
+    },
+    {
+      "path": "session-ordering-results.json",
+      "sha256": "c7863937b85f763308ea29346a2a9708b9b6813a0beb0c98925852822491eaef",
+      "bytes": 524
+    }
+  ]
+}

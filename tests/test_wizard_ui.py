@@ -28,6 +28,15 @@ TEST_ADMIN_TOKEN = "e" * 32
 
 
 class TestWizardUI(unittest.TestCase):
+    def test_session_generation_and_reordered_context_responses(self):
+        root = Path(__file__).resolve().parents[1]
+        node = shutil.which("node")
+        self.assertIsNotNone(node)
+        run = subprocess.run([node, str(root / "tests/setup_ui_session_harness.cjs")],
+                             cwd=root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertTrue(json.loads(run.stdout)["passed"])
+
     def test_rejected_and_uncertain_apply_recovery(self):
         root = Path(__file__).resolve().parents[1]
         node = shutil.which("node")

@@ -1,0 +1,17 @@
+{
+  "tested_sha": "7a39bd90eae245f68da902d3d6974a8b76100b14",
+  "fixture_only": true,
+  "latest_authoritative_actor": "operator-current",
+  "before_late_response": {
+    "inspect_disabled": true,
+    "message": "Сохранён исходный запрос для проекта 9001. Пока его результат не подтверждён, новые операции заблокированы. Закрытие окна не отменяет отправленный запрос. Подтвердите вход тем же оператором, который отправил запрос."
+  },
+  "after_late_response": {
+    "inspect_disabled": false,
+    "message": "Сохранён исходный запрос для проекта 9001. Пока его результат не подтверждён, новые операции заблокированы. Закрытие окна не отменяет отправленный запрос."
+  },
+  "inspection_sent": true,
+  "inspection_csrf": "csrf-original",
+  "original_key_preserved": true,
+  "finding": "An older session GET overwrites the newer operator and re-enables the original operator attempt. Backend authorization still guards actual requests; this is a client session ordering defect."
+}

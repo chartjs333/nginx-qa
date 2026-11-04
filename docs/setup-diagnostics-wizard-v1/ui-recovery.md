@@ -102,3 +102,32 @@ receipt remains `UNKNOWN`, the existing native recovery process is required.
 branches, other profiles, exact remote SHA/origin checks and ownership gates are
 unchanged. This is permission for the later qualified deployment identity, not
 evidence that deployment has happened.
+
+## Native review rework 1: session response ordering
+
+Runtime reviewer 7081 rejected `7a39bd90eae245f68da902d3d6974a8b76100b14`
+with a reproducible P2 client-context defect. If session check A was delayed,
+check B could accept a newer operator, then A could overwrite that actor/CSRF
+and re-enable inspection of the old actor's bookmark. Backend authorization
+still guarded the request; this finding did not demonstrate an authorization
+bypass. The actual `REJECT` / `REWORK_ENQUEUED` receipt and original reproduction
+are preserved in [`evidence/ui-recovery-rework-1`](evidence/ui-recovery-rework-1/).
+
+Every session check now advances a generation. Session response, project list,
+snapshot/history and error/finally handlers can commit only to their current
+generation/context. A new check detaches old busy work so it cannot block fresh
+diagnostics. Old advice, plan, inspection and status responses are also fenced;
+in particular an old inspection 401 cannot restart authentication after B.
+The unresolved Apply identity is preserved throughout. Owned Stop semantics,
+backend contracts and installed services are unchanged.
+
+The reviewer's exact probe was rerun against its frozen rejected export, with
+only its output destination redirected; it reproduced the finding again.
+The new production-JS fixture covers five categories (16 reordered cases):
+authenticated/unauthenticated/failed session responses, delayed project lists,
+snapshot/history success and failure, old action failures, and same-actor stale
+advice/plan success while newer work is still pending. All seven affected
+`tests.test_wizard_ui` tests passed, retaining the existing 9 request/receipt and
+11 Apply-recovery categories. These are synthetic ordering tests, not installed
+browser qualification. New native DONE, independent reviews and post-fix live
+qualification are still subsequent steps at publication of this rework.
