@@ -1,0 +1,25 @@
+{
+  "at": "2026-11-04T21:05:29.464249+00:00",
+  "sprint_id": "msv1-037169541a573215147a7ba72ea4474f88baa075e13ec24cd7a0358f70bf04cf",
+  "graph_revision": 2,
+  "qualification_assignment": "assignment-88df34ebcdb772f8c87b9678",
+  "qualification_commit": "0882ace8f2d1dc051fad6f1d52ea16487ad3c5ad",
+  "outcome": "PASS",
+  "independent_reviews": [
+    {
+      "assignment_id": "review-1db3647fa84c92221f09cfbc",
+      "reviewer_id": "sdwu-20261104-runtime-reviewer",
+      "decision": "APPROVE",
+      "result_commit": "0882ace8f2d1dc051fad6f1d52ea16487ad3c5ad",
+      "decided_at": "2026-11-04T20:55:18.840024+00:00"
+    },
+    {
+      "assignment_id": "review-634c61cb9851900bf85e9e7b",
+      "reviewer_id": "sdwu-20261104-security-reviewer",
+      "decision": "APPROVE",
+      "result_commit": "0882ace8f2d1dc051fad6f1d52ea16487ad3c5ad",
+      "decided_at": "2026-11-04T20:58:21.764337+00:00"
+    }
+  ],
+  "mode": "Read-only native observation; this is qualification acceptance, not a future release decision."
+}

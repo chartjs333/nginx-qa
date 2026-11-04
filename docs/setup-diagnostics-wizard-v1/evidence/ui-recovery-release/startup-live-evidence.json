@@ -1,0 +1,207 @@
+{
+  "at": "2026-11-04T21:01:31.162623+00:00",
+  "status": "PASS",
+  "kind": "release_current_owned_idempotent_startup",
+  "tested_product_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "helpers": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification",
+  "startup_sha256": "33ea09239fd7fd10d74ee41bdb054ff9d1a92d4bd69a4bf6ac5832fc66235c9b",
+  "before": {
+    "processes": [
+      {
+        "port": 9418,
+        "chain": [
+          {
+            "pid": 107092,
+            "parent": 102304,
+            "born": "2026-11-04T17:33:10.8874380Z",
+            "image": "C:\\Program Files\\Git\\mingw64\\libexec\\git-core\\git-daemon.exe",
+            "command": "git-daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          },
+          {
+            "pid": 102304,
+            "parent": 83276,
+            "born": "2026-11-04T17:33:10.8687490Z",
+            "image": "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+            "command": "git.exe daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          },
+          {
+            "pid": 83276,
+            "parent": 109096,
+            "born": "2026-11-04T17:33:10.7841940Z",
+            "image": "C:\\Program Files\\Git\\cmd\\git.exe",
+            "command": "\"C:\\Program Files\\Git\\cmd\\git.exe\" daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          }
+        ]
+      },
+      {
+        "port": 18038,
+        "chain": [
+          {
+            "pid": 122260,
+            "parent": 128204,
+            "born": "2026-11-04T20:45:55.2042130Z",
+            "image": "C:\\Python312\\python.exe",
+            "command": "\"C:\\Python312\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038"
+          },
+          {
+            "pid": 128204,
+            "parent": 114340,
+            "born": "2026-11-04T20:45:55.1911000Z",
+            "image": "C:\\nqt37\\v\\Scripts\\python.exe",
+            "command": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038"
+          },
+          {
+            "pid": 114340,
+            "parent": 117408,
+            "born": "2026-11-04T20:45:50.8015890Z",
+            "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "command": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File D:\\nq-sdw-launcher\\run_staging.ps1 -Action Start -Profile setup-diagnostics-wizard-v1 -ExpectedCommit c9193d7d6cab67f0b191a86f5e0e268bce074f9e -DeploymentBranch codex/sdw-qualified-ui-focus-recovery-20261104 "
+          }
+        ]
+      },
+      {
+        "port": 18039,
+        "chain": [
+          {
+            "pid": 123192,
+            "parent": 127396,
+            "born": "2026-11-04T20:39:30.8183190Z",
+            "image": "C:\\Python312\\python.exe",
+            "command": "\"C:\\Python312\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+          },
+          {
+            "pid": 127396,
+            "parent": 120964,
+            "born": "2026-11-04T20:39:30.6492760Z",
+            "image": "C:\\nqt37\\v\\Scripts\\python.exe",
+            "command": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+          }
+        ]
+      }
+    ],
+    "native": [
+      {
+        "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "state_sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "state_sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      },
+      {
+        "sprint_id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "state_sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      }
+    ],
+    "client_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+    "environment_sha256": "5e01540a5d9762ca6d97d13847bd06d8bb90bc2ce603aec8f9cbce34884ab6fa",
+    "owner_sha256": "952e568a20bf7b88f74868e6cda48cefefbc753783dd9dac8290dee14783ae4d"
+  },
+  "after": {
+    "processes": [
+      {
+        "port": 9418,
+        "chain": [
+          {
+            "pid": 107092,
+            "parent": 102304,
+            "born": "2026-11-04T17:33:10.8874380Z",
+            "image": "C:\\Program Files\\Git\\mingw64\\libexec\\git-core\\git-daemon.exe",
+            "command": "git-daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          },
+          {
+            "pid": 102304,
+            "parent": 83276,
+            "born": "2026-11-04T17:33:10.8687490Z",
+            "image": "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+            "command": "git.exe daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          },
+          {
+            "pid": 83276,
+            "parent": 109096,
+            "born": "2026-11-04T17:33:10.7841940Z",
+            "image": "C:\\Program Files\\Git\\cmd\\git.exe",
+            "command": "\"C:\\Program Files\\Git\\cmd\\git.exe\" daemon --reuseaddr --base-path=C:/nqt37/qualification/git --export-all --enable=receive-pack --listen=127.0.0.1 --port=9418 C:/nqt37/qualification/git"
+          }
+        ]
+      },
+      {
+        "port": 18038,
+        "chain": [
+          {
+            "pid": 122260,
+            "parent": 128204,
+            "born": "2026-11-04T20:45:55.2042130Z",
+            "image": "C:\\Python312\\python.exe",
+            "command": "\"C:\\Python312\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038"
+          },
+          {
+            "pid": 128204,
+            "parent": 114340,
+            "born": "2026-11-04T20:45:55.1911000Z",
+            "image": "C:\\nqt37\\v\\Scripts\\python.exe",
+            "command": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038"
+          },
+          {
+            "pid": 114340,
+            "parent": 117408,
+            "born": "2026-11-04T20:45:50.8015890Z",
+            "image": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+            "command": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File D:\\nq-sdw-launcher\\run_staging.ps1 -Action Start -Profile setup-diagnostics-wizard-v1 -ExpectedCommit c9193d7d6cab67f0b191a86f5e0e268bce074f9e -DeploymentBranch codex/sdw-qualified-ui-focus-recovery-20261104 "
+          }
+        ]
+      },
+      {
+        "port": 18039,
+        "chain": [
+          {
+            "pid": 123192,
+            "parent": 127396,
+            "born": "2026-11-04T20:39:30.8183190Z",
+            "image": "C:\\Python312\\python.exe",
+            "command": "\"C:\\Python312\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+          },
+          {
+            "pid": 127396,
+            "parent": 120964,
+            "born": "2026-11-04T20:39:30.6492760Z",
+            "image": "C:\\nqt37\\v\\Scripts\\python.exe",
+            "command": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+          }
+        ]
+      }
+    ],
+    "native": [
+      {
+        "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "state_sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "state_sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      },
+      {
+        "sprint_id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "state_sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      }
+    ],
+    "client_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+    "environment_sha256": "5e01540a5d9762ca6d97d13847bd06d8bb90bc2ce603aec8f9cbce34884ab6fa",
+    "owner_sha256": "952e568a20bf7b88f74868e6cda48cefefbc753783dd9dac8290dee14783ae4d"
+  },
+  "process_identity_unchanged": true,
+  "native_history_unchanged": true,
+  "new_job_or_model_run": false,
+  "restart_performed": false,
+  "logs": {
+    "pre-host-proof.txt": "a464bbbfec6b2db9141ac272a225fc52c89e4178c8c02d78c0b2142c295baa39",
+    "pre-client-proof.txt": "d56e1cf44f2dbe01b94376e9288c96773d2d825a5efef8f2184621f2e8664b1c",
+    "startup-live.log": "f7665d9670de79fdcf16140f868c09ba9a002d73b98695a738b19d3393d2524e"
+  }
+}

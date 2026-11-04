@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "kind": "SDWU-003_local_release_recommendation",
+  "at": "2026-11-04T21:05:29.481249+00:00",
+  "recommendation": "GO",
+  "scope": "Qualified local Setup/Diagnostics Wizard with Apply and keyboard recovery",
+  "native_release_result_submitted": false,
+  "native_release_reviews": "PENDING_ROOT_SUBMISSION",
+  "native_sprint_completion": "NOT_CLAIMED_BY_RELEASE_AUTHOR",
+  "final_observed_report": "C:/nqt37/FINAL_DELIVERY.json",
+  "sprint_id": "msv1-037169541a573215147a7ba72ea4474f88baa075e13ec24cd7a0358f70bf04cf",
+  "graph_revision": 2,
+  "accepted_qualification": {
+    "commit": "0882ace8f2d1dc051fad6f1d52ea16487ad3c5ad",
+    "outcome": "PASS",
+    "independent_approvals": 2,
+    "evidence": "evidence/ui-recovery-release/qualification-native-acceptance.json"
+  },
+  "installed_product": {
+    "commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+    "branch": "codex/sdw-qualified-ui-focus-recovery-20261104",
+    "source": "D:/nq-sdw-launcher",
+    "wizard": "http://127.0.0.1:18038/setup",
+    "client": "http://127.0.0.1:18039",
+    "state_root": "C:/nqt37",
+    "product_code_changed_by_release": false
+  },
+  "delivery": {
+    "source": "D:/nq-sdw-delivery",
+    "branch": "codex/setup-diagnostics-wizard-v1",
+    "draft_pr": "https://github.com/chartjs333/nginx-qa/pull/18",
+    "base_pr": "https://github.com/chartjs333/nginx-qa/pull/17",
+    "main_or_pr_merged": false,
+    "candidate_head": "Exact published release SHA is recorded in the external release-final-result.json after commit."
+  },
+  "operator_guide": "ui-recovery-delivery.md",
+  "operator_helpers": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification",
+  "commands": {
+    "Запустить мастер.cmd": "C:\\nqt37\\Запустить мастер.cmd",
+    "Вход в мастер.cmd": "C:\\nqt37\\Вход в мастер.cmd",
+    "Остановить мастер.cmd": "C:\\nqt37\\Остановить мастер.cmd"
+  },
+  "validation": {
+    "retained_baseline": {
+      "source": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+      "distinct_tests": 192,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "current_affected_tests": {
+      "source": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+      "tests": 9,
+      "status": "PASS",
+      "overlaps_baseline_not_added": true
+    },
+    "separate_authorizer_tests": 12,
+    "separate_startup_tests": 3,
+    "actual_installed_edge_groups_passed": 6,
+    "actual_installed_http_responses": 69,
+    "isolated_edge_focus_groups_passed": 10,
+    "isolated_edge_apply_order_cases_passed": 2,
+    "automatic_apply": 0,
+    "page_errors": 0,
+    "actual_owned_stack_idempotent_startup": "PASS",
+    "release_startup_process_and_history_unchanged": true,
+    "current_exact_helper_copies": 18,
+    "actual_host_restart_receipt_restoration": "PASS",
+    "reviewer_repetition_counts_not_summed": true,
+    "new_model_run_requested_for_release": false,
+    "new_service_restart_for_release": false
+  },
+  "execution_provenance": {
+    "original_model_client": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "original_model_host": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+    "result": "73c00855b3a0ff3501047a18bfff8680e9672912",
+    "actual_original_independent_models": 3,
+    "current_imported_module_blobs_identical": 16,
+    "existing_schema_definitions_changed": [],
+    "new_model_run": false,
+    "native_history_byte_identical": true,
+    "revalidated_history": "native-history-on-installed-host.json",
+    "current_installed_product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e"
+  },
+  "requirements": {
+    "R01_R19": "evidence/ui-focus-qualification/qualification.json#original_requirements_coverage",
+    "E01_E04": "evidence/ui-focus-qualification/qualification.json",
+    "current_qualification": "ui-focus-qualification.md"
+  },
+  "limits": {
+    "worker_profile": "docs-only-v1 for bounded regular-file repositories and an explicit document allowlist",
+    "telegram_bot_webhook_allowed_actor": "EXTERNAL_INPUT_REQUIRED",
+    "physical_telegram_phone_tablet": "NOT_RUN",
+    "public_wizard_exposure": false,
+    "current_gateway": "503_GATEWAY_OFFLINE_FAIL_CLOSED",
+    "enabled_gateway_fixture": "5_PRIVATE_PATHS_404",
+    "historical_cloudflare": {
+      "checks": 24,
+      "status": "PASS",
+      "source": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+      "date": "2026-11-03",
+      "current_tunnel_running": false
+    },
+    "project9000": "Registry-only here; STORE_UNAVAILABLE is not replaced with another host database.",
+    "project9010": "Actual completed native self-test history."
+  },
+  "history": "Original rejection,7002 NEED_DECISION, focus/order reproductions and harness-only failures remain immutable. Their pre-review wording is not rewritten."
+}

@@ -1,0 +1,46 @@
+{
+  "kind": "exact_release_evidence_bytes",
+  "product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "artifacts": {
+    ".gitattributes": {
+      "sha256": "2cacd8c5b88d28a6324a5b106d17970ce30df8e32f9b76c87d00d4ca430747a8",
+      "bytes": 73
+    },
+    "current-helper-verification.json": {
+      "sha256": "8e26dce2925e4c2043e51cd5bde1765df95d65c8727ec00dc68a84c4f5144f78",
+      "bytes": 2391
+    },
+    "pre-client-proof.txt": {
+      "sha256": "d56e1cf44f2dbe01b94376e9288c96773d2d825a5efef8f2184621f2e8664b1c",
+      "bytes": 294
+    },
+    "pre-host-proof.txt": {
+      "sha256": "a464bbbfec6b2db9141ac272a225fc52c89e4178c8c02d78c0b2142c295baa39",
+      "bytes": 143
+    },
+    "qualification-native-acceptance.json": {
+      "sha256": "e585006c463cd30c00bf9498bc28551f1a251dd71778cdd4628996568bc4dccc",
+      "bytes": 1037
+    },
+    "qualification-runtime-review.json": {
+      "sha256": "1b3fe3e60445e38c418fe37e2ff985c85e34e94c7e0d2323b0005dc3d0d1d182",
+      "bytes": 4374
+    },
+    "qualification-security-review.json": {
+      "sha256": "058f507fe43b8ff0ad6b2a75e8cfa99023f97bd40678d46d5a1f3bfa77f5e043",
+      "bytes": 357
+    },
+    "startup-live-evidence.json": {
+      "sha256": "85fec99313ce682c8429ac32e8240c0ed9f399850adb453ab4bf6c22e264c0c4",
+      "bytes": 9686
+    },
+    "startup-live.log": {
+      "sha256": "f7665d9670de79fdcf16140f868c09ba9a002d73b98695a738b19d3393d2524e",
+      "bytes": 806
+    },
+    "verify_current_startup.py": {
+      "sha256": "1059e0655df4e41ec0956abecfa4f00cfda2c23971985d033a071608e960e737",
+      "bytes": 4270
+    }
+  }
+}

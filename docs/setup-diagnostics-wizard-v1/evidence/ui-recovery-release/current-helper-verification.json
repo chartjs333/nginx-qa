@@ -1,0 +1,31 @@
+{
+  "product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "helper_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification",
+  "helper_sha256": {
+    "authorize_wizard_browser.py": "6c0fc31c50cd96f0dcf6d88ff4cc484a01e8e18623cc0f5aabc221e515b25a69",
+    "browser_recovery_qualification.cjs": "17b2ce7c3b012fafb4d0e99556f04790839c501232105e3dbfdd0fbb8bde0055",
+    "check_gateway.py": "f9ae1c3e66648c48f0dbae1d209d39bbe356fecdd7f4bf455e7205bdb29d4c49",
+    "check_installed_native_history.py": "681ca684c2e1de5c4f5a64e9083355c9539d898005ecdb9c23cdb032c2ed101a",
+    "deploy_owned_host.py": "48e061be25db8a3c7b891d2142d1487b44802f2c828ce7e404a16bee2e293cd5",
+    "http_qualification.py": "113d1445c140b3acc611c7edc56978623afadff51ec885982d5f411fb49e97cb",
+    "restart_owned_host.py": "d64ee0a10c1b9e5e6fea95a3501a87f1ac785a481f101aca624771ce23dfa483",
+    "run_regressions.py": "b16baf7a0e3a11cf48894a9aa544ffc7879f2f21b4239e4401509957b0394089",
+    "serve_stable_client.py": "2ad246f10017d1ce7d730032401ca0baf504aa8181685400de38a1be752182b7",
+    "start_all.ps1": "33ea09239fd7fd10d74ee41bdb054ff9d1a92d4bd69a4bf6ac5832fc66235c9b",
+    "start_client.ps1": "906077b67a36cc66ea12a7b98323e870a4fd7d66aff1c4d1aaf3772a86007909",
+    "start_git_fixture.ps1": "5744332eda0aa66e1701bfb9ef477f7db9338351a1160f683c95533519ad3d70",
+    "start_wizard.ps1": "a48cdc8254b6b6a906e1644751bd06d655929d2d9240a064a225832834825178",
+    "stop_wizard.py": "f75e7daec7dde8a4bbb7f796ee1a4450f2fd6f9ed5b7143cdbab4bca92baaf45",
+    "test_authorize_wizard_browser.py": "82ada63f4406fbb51197202bb3920bb7d2d4c5fb50ce3e7d40ed2a499bdac642",
+    "test_start_all.py": "7a94ea90da217d3e642b2d85fe55a2b6d1578c0ced395b226dffcd1d084e35bf",
+    "verify_installation.py": "e5930320e9b063a6e9714cfa9f5271862cea17272c372cb56e700a9789d1aeb8",
+    "verify_stable_client.py": "28036293ea651f507049d1ebde7443fdc2c7b3ac8cc2ae10a9149c40dc1a0a14"
+  },
+  "command_sha256": {
+    "Запустить мастер.cmd": "ac0bbdc59b7c656f867dd5e161b69034613e03d674b86e74b375c48838422594",
+    "Вход в мастер.cmd": "1fa7f6d311559bfc004a1ec7b748b0db8fbd6ace39fc3f2f07a02024ef224cd2",
+    "Остановить мастер.cmd": "318c89a8743101871ee85b1163473ea82ca6004b7d3f93fc166dbee067af3815"
+  },
+  "product_changed_by_release": false,
+  "helper_code_changed_by_release": false
+}
