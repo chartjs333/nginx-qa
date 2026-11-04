@@ -1,0 +1,54 @@
+{
+  "status": "PASS",
+  "collected_at_utc": "2026-11-04T17:17:55.408833+00:00",
+  "profile": "docs-only-v1",
+  "base_commit": "fc4b050e79b8cb919740c913212abed1a8f73a09",
+  "assigned_branch": "agent/sdwn-20261104-isolated-worker",
+  "supervisor_sha256": "3733580317d94d92aed85fc950a62effdc497159d6f4bcd1bd1114f4e6bc2938",
+  "source_sha256": {
+    "nginx_qa/managed_codex_client.py": "97dd7bd1f7b37eb123204afb006f06d8f00bcea31e41617ff838f5c97136f017",
+    "nginx_qa/managed_wsl_runner.py": "00a0ae401c788114f277f50aac7262a613c52564cf991f16042c1f8e3305959a",
+    "nginx_qa/wsl_worker_supervisor.py": "3733580317d94d92aed85fc950a62effdc497159d6f4bcd1bd1114f4e6bc2938",
+    "scripts/install_wsl_worker.py": "a2090158d4e30c6135e231a5d26cc2a0d71df29e375c662192a9aefb75c87b5e",
+    "tests/wsl_cli_smoke.py": "559f7f2c5c508ecc0bd19dcd4d2902b2c9bdf9bbc3a7c9b815e99966a42b383d",
+    "tests/wsl_runtime_qualification.py": "406ca31fc9809e70417684abc1d7e38743d76d2783c2c83b495a01823d244f51"
+  },
+  "runtime_hashes": {
+    "codex": "e6d386e8822288f6d5f327e966a5a5e1de928de8795bb6149716005a410f38f2",
+    "codex-code-mode-host": "e9369405b2308bd5de62cabf4e88ba48334c89717f9ff1b1e05de4ef6ce06a99",
+    "rg": "e62198eb19b136b88c330af83647b5a962cb99b6b1f066758568f12de1974849",
+    "codex-resources/bwrap": "755c8d6a9b893905a4aabab058bd6c02c453e5e8653adb84fc08e570607f3f36"
+  },
+  "regression_runs": [
+    {
+      "modules": [
+        "tests.test_managed_wsl_runner",
+        "tests.test_setup_worker_corrective",
+        "tests.test_managed_client_git_transport"
+      ],
+      "passed": 49,
+      "seconds": 57.047,
+      "timing": "before final truncated-header regression was added"
+    },
+    {
+      "modules": [
+        "tests.test_managed_wsl_runner"
+      ],
+      "passed": 14,
+      "seconds": 1.407,
+      "timing": "after final controller changes"
+    }
+  ],
+  "unique_regression_tests": 50,
+  "live_lifecycle_cases": 6,
+  "actual_cli_model_smoke": "PASS",
+  "native_sprint_acceptance": false,
+  "independent_implementation_review": "PENDING_NATIVE_REVIEW",
+  "limits": [
+    "docs-only; small bounded regular-file repo; no general coding profile",
+    "No worker refresh authority: expired/unsupported cached ChatGPT login fails closed",
+    "Hard supervisor loss can retain private auth snapshot until owned-job reconciliation",
+    "Pinned CLI alpha version; changing runtime requires requalification",
+    "Attempt evidence is retained; operator capacity and retention required"
+  ]
+}

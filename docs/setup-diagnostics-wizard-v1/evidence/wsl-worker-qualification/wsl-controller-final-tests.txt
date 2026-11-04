@@ -1,0 +1,19 @@
+test_destination_rejects_hardlink (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_destination_rejects_hardlink) ... ok
+test_document_path_rejects_escape_and_non_docs (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_document_path_rejects_escape_and_non_docs) ... ok
+test_expired_access_token_does_not_reach_cli (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_expired_access_token_does_not_reach_cli) ... ok
+test_false_quiescence_never_clears_quarantine (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_false_quiescence_never_clears_quarantine) ... ok
+test_import_rejects_foreign_document (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_import_rejects_foreign_document) ... ok
+test_no_allowlist_never_probes_or_runs (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_no_allowlist_never_probes_or_runs) ... ok
+test_quarantine_clears_only_after_real_stop_receipt (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_quarantine_clears_only_after_real_stop_receipt) ... ok
+test_quiescence_failure_retains_slot (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_quiescence_failure_retains_slot) ... ok
+test_refresh_authority_never_leaves_source (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_refresh_authority_never_leaves_source) ... ok
+test_restart_readiness_rejects_live_orphan_cgroup (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_restart_readiness_rejects_live_orphan_cgroup) ... ok
+test_small_head_cannot_hide_large_historical_blob (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_small_head_cannot_hide_large_historical_blob) ... ok
+test_stop_before_execution_never_probes (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_stop_before_execution_never_probes) ... ok
+test_truncated_object_headers_cannot_pass_expansion_fence (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_truncated_object_headers_cannot_pass_expansion_fence) ... ok
+test_unsupported_login_fails_explicitly (tests.test_managed_wsl_runner.ControllerBoundaryTests.test_unsupported_login_fails_explicitly) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 1.407s
+
+OK

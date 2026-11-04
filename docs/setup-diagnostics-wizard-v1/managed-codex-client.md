@@ -13,6 +13,11 @@ assignments and two independent reviews are supported. Coordinator/recovery
 assignments fail closed with `CLIENT_ROLE_REQUIRES_OPERATOR`. This is an explicit
 limit, not a completed recovery claim.
 
+An explicitly selected, separately owned WSL2 backend is now available for this
+same limited profile. See [WSL installation, boundaries and qualification](wsl-managed-client.md).
+It extends the existing client without changing native graph or result authority.
+The Windows MXC-specific limits below still apply when `sandbox_backend` is `mxc`.
+
 ## Operator configuration
 
 Save the configuration outside agent workspaces. First check the configured CLI
@@ -153,13 +158,15 @@ Setting `sandbox_backend` to `elevated` returns
 that result. No sandbox secret files are read by this adapter and it never
 provisions accounts, launches UAC or changes global Codex settings.
 
-The immediately executable automatic path is a supported, already configured
-Windows 11 host with a pinned compatible CLI, existing login and a passing
-`--check`. An explicitly authorized operator client can instead perform native
+An automatic path is a supported, already configured Windows 11 host with a
+pinned compatible CLI, existing login and a passing `--check`. The explicit
+`wsl2-bwrap` docs-only backend provides a separately qualified path on the current
+Windows 10 machine; follow its dedicated runbook and resource limits. An
+explicitly authorized operator client can also perform native
 assignments and independent reviews on this machine; that is supervised execution,
 not proof that the automatic CLI backend passed qualification.
 
-CLI processes and Git helpers run in existing native Windows Job primitives.
+For the `mxc` backend, CLI processes and Git helpers run in existing native Windows Job primitives.
 There are at most two active client sessions and two simultaneous CLI processes,
 one session per admitted project. Each role has bounded wall time, memory, process
 count, CPU, output and prompt size. Child environments omit protected control

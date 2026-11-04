@@ -1,2 +1,11 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# These qualified runtime files carry exact cross-platform SHA-256 pins.
+nginx_qa/managed_codex_client.py text eol=lf
+nginx_qa/managed_wsl_runner.py text eol=lf
+nginx_qa/wsl_worker_supervisor.py text eol=lf
+scripts/install_wsl_worker.py text eol=lf
+tests/test_managed_wsl_runner.py text eol=lf
+tests/wsl_runtime_qualification.py text eol=lf
+tests/wsl_cli_smoke.py text eol=lf

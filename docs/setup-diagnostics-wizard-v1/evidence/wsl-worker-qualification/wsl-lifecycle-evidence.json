@@ -1,0 +1,101 @@
+{
+  "status": "PASS",
+  "kind": "live_owned_WSL_boundary_and_lifecycle_no_model",
+  "checks": [
+    {
+      "case": "deadline_double_fork_setsid",
+      "status": "PASS",
+      "evidence": {
+        "error": "WSL_DEADLINE_EXCEEDED",
+        "marker": "daemon-4",
+        "retired": true
+      }
+    },
+    {
+      "case": "controller_pipe_eof",
+      "status": "PASS",
+      "evidence": {
+        "error": "WSL_CONTROLLER_EOF",
+        "marker": "daemon-4",
+        "retired": true
+      }
+    },
+    {
+      "case": "stop_during_preparation_prevents_future_spawn",
+      "status": "PASS",
+      "evidence": {
+        "error": "WSL_JOB_CANCELLED",
+        "marker": "untouched",
+        "retired": false
+      }
+    },
+    {
+      "case": "restart_detects_orphan_without_postfork_receipt_and_pidfd_stop_retires",
+      "status": "PASS"
+    },
+    {
+      "case": "linux_supervisor_SIGKILL_pdeath_and_namespace_retirement",
+      "status": "PASS"
+    },
+    {
+      "case": "actual_file_size_and_process_pressure_retired",
+      "status": "PASS",
+      "evidence": {
+        "file_limit": 16777216,
+        "file_errno": 27,
+        "file_size": 16777216,
+        "forked": 61,
+        "fork_errno": 11
+      }
+    }
+  ],
+  "final_boundary": {
+    "state": "PASS",
+    "backend": "wsl2-bwrap",
+    "boundary": "native-canary-verified",
+    "existing_login": true,
+    "evidence": [
+      {
+        "role": "author",
+        "nonce": "c42c9b4c0a5145dd8830dac6df1cd9ef",
+        "uid": 1000,
+        "read": true,
+        "doc_write": true,
+        "git_write": false,
+        "unapproved_write": false,
+        "outside_write": false,
+        "secret_read": false,
+        "host_read": false,
+        "sibling_read": false,
+        "interop": false,
+        "socket_attempted": true,
+        "socket_allowed": false,
+        "external_socket_attempted": true,
+        "external_socket_allowed": false,
+        "quiescent": true,
+        "loopback_control_reachable": true
+      },
+      {
+        "role": "review",
+        "nonce": "53c2dc8ae6214d90ad503f3177291c46",
+        "uid": 1000,
+        "read": true,
+        "doc_write": false,
+        "git_write": false,
+        "unapproved_write": false,
+        "outside_write": false,
+        "secret_read": false,
+        "host_read": false,
+        "sibling_read": false,
+        "interop": false,
+        "socket_attempted": true,
+        "socket_allowed": false,
+        "external_socket_attempted": true,
+        "external_socket_allowed": false,
+        "quiescent": true,
+        "loopback_control_reachable": true
+      }
+    ]
+  },
+  "native_sprint_acceptance": false
+}

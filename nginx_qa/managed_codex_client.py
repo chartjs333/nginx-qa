@@ -294,7 +294,7 @@ print(json.dumps(r))
         finally:
             job.close()
 
-    def run(self, *, cwd, prompt, schema, directory, job_name, stop):
+    def run(self, *, cwd, prompt, schema, directory, job_name, stop, allowed_paths=None):
         # Resume and direct callers must pass the same preflight as prepare.
         if stop.is_set():
             raise ValueError("CLIENT_STOPPING")
@@ -357,6 +357,15 @@ print(json.dumps(r))
             self._slots.release()
 
 
+def configured_runner(config):
+    if config.get("sandbox_backend") == "wsl2-bwrap":
+        from .managed_wsl_runner import WslCodexRunner
+        return WslCodexRunner(config)
+    return CodexRunner(config["node_path"], config["codex_script"],
+        timeout=config.get("role_timeout_seconds", 600),
+        sandbox_backend=config.get("sandbox_backend", "mxc"))
+
+
 class ManagedCodexClient:
     def __init__(self, config, *, runner=None, api=None, resolver=trusted_control_resolver):
         self.config = deepcopy(config)
@@ -376,9 +385,7 @@ class ManagedCodexClient:
         self.lock, self.threads, self.stops = threading.RLock(), {}, {}
         self.thread_context = threading.local()
         self.resolver = resolver
-        self.runner = runner or CodexRunner(config["node_path"], config["codex_script"],
-                                            timeout=config.get("role_timeout_seconds", 600),
-                                            sandbox_backend=config.get("sandbox_backend", "mxc"))
+        self.runner = runner or configured_runner(config)
         self.api = api or NativeAPI(config["engine_url"], config.get("role_secret_refs", {}), resolver)
         self.validators = {}
         for kind, name in (("identity", "managed-current-identity-response-v1"),
@@ -808,7 +815,8 @@ class ManagedCodexClient:
                 session["assignments"][assignment_id] = attempt
                 self._save()
             output = self.runner.run(cwd=root, prompt=prompt, schema=schema,
-                directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop)
+                directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop,
+                allowed_paths=project["allowed_document_paths"])
         jsonschema.Draft202012Validator(schema).validate(output)
         if stop.is_set():
             return
@@ -933,9 +941,7 @@ def diagnose(config):
     """Local readiness only: no service, state journal, resume, native API or model."""
     runner = None
     try:
-        runner = CodexRunner(config["node_path"], config["codex_script"],
-            timeout=config.get("role_timeout_seconds", 600),
-            sandbox_backend=config.get("sandbox_backend", "mxc"))
+        runner = configured_runner(config)
         runner.ready()
         return deepcopy(runner.sandbox_diagnostic)
     except Exception:
