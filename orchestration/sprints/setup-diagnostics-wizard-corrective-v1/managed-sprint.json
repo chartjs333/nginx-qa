@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/agent/sdw-v1-20261104-continuity",
+    "expected_source_commit": "2fd020a4562aac857a34dd519e52cd6556b65f02",
+    "assigned_branch": "agent/sdwc-20261104-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "implementation",
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "sdwc-20261104-runtime-reviewer",
+        "name": "Independent Reviewer / Runtime and UX",
+        "phone": "6881",
+        "git_branch": "review/sdwc-20261104-runtime",
+        "profile": "Независимо проверяй exact result commit, existing engine reuse, реальные worker/provider capabilities, deterministic diagnostics, ownership/state/idempotency, UX, regressions и тесты. Не используй approval другого Reviewer как доказательство. REJECT с воспроизводимым дефектом; новый commit требует нового review. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      },
+      {
+        "id": "sdwc-20261104-security-reviewer",
+        "name": "Independent Reviewer / Security and Evidence",
+        "phone": "6882",
+        "git_branch": "review/sdwc-20261104-security",
+        "profile": "Независимо проверяй exact result commit, ACL/secret boundaries, SSRF/injection, LLM advisory-only, typed allowlist, stale-plan/current-policy fences, public gateway isolation, отсутствие скрытых мутаций и честность real vs fixture evidence. Не автор кода; не выдавай свои решения через другого агента. REJECT при обходе или недоказанной приёмке. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "implementation",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwc-20261104-implementation",
+        "name": "Corrective implementation",
+        "phone": "6801",
+        "profile": "Use the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWC-001",
+          "queue": "worker-all",
+          "message": "Correct all audited defects in setup diagnostics, operations, worker/provider adapters and private UI. Start with audit C:/nqt35/client/setup-diagnostics-wizard-v1/audit-20261104/reproduced-findings.json and accepted architecture/contracts. Implement genuine native selftest prepare/start/status/stop with original executor receipts and real project/repository permission and slot checks; never synthesize native operation/sprint IDs. Discover/configure existing Codex CLI as an actual bounded client adapter where feasible, preserving native engine orchestration and separate independent reviewers. Implement a real advisory-only model transport over an existing configured provider/client; do not claim fallback means model invocation. Fix UI GET pairing/authorize/CSRF and schema-correct plan_digest/confirmed fields; preserve retry idempotency. Preserve issued snapshot IDs for advice and plans. Enforce current actor/project/action policy, owner-bound plans, configuration/control freshness, truthful statuses, isolated state, durable idempotency and ambiguous-operation reconciliation, bounded cancellation that retains admission until actual work finishes. Reject malformed/unauthenticated capability probes; never fill affirmative guarantees. Fix missing-store PASS, cross-project counters, hard-coded runtime paths, stale worker binding and tunnel ownership. Replace fake-positive tests with meaningful API/UI/native lifecycle/security regressions. Correct evidence and documentation. Separate human setup instructions from claims of working code. Provide clear actually usable setup and recovery flow.\n\nUse the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwc-20261104-implementation",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "qualification",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "qualification",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwc-20261104-qualification",
+        "name": "Corrective qualification",
+        "phone": "6802",
+        "profile": "Use the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWC-002",
+          "queue": "worker-all",
+          "message": "Independently qualify the corrected exact code. Reproduce the audit failures and prove each fixed with behavior-level tests, including actual frontend request shapes, real operator session flow, stale/forged/cross-actor plans, cancellation pressure, missing/corrupt state, malformed capability receipts, restart/dedup and native engine selftest integration. Run relevant original engine/launcher regressions and full listed 37 tests without weakening assertions. Exercise a real browser on an isolated owned host, real existing Codex advisor and native small selftest with real result commit and two independent reviewers when available. Live gates and fixture gates remain distinct. Update acceptance evidence to actual tested Git contents; do not cite parent SHAs lacking tests. Report exact environment, commands, counts and residual limitations. PASS is automated qualification only, never automatically live release acceptance.\n\nUse the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwc-20261104-qualification",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "PASS": "release",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "FAIL": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "release",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwc-20261104-release",
+        "name": "Corrective release",
+        "phone": "6803",
+        "profile": "Use the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWC-003",
+          "queue": "worker-all",
+          "message": "Deliver a usable corrected wizard: final owned isolated host on verified unused ports if staging contract permits; real private UI smoke/browser proof; accurate launch/configuration/recovery instructions and rollback. Create/update a separate draft PR with clear dependency on existing Telegram Launcher PR17 and exact validation. Never merge main. Final source/evidence must be reviewed by both independent Reviewers. GO requires mandatory live engine selftest/result/two reviews, actual advisor, functional browser actions and durable state proof; NO_GO only for evidenced genuine external blockers after all achievable implementation, tests and documentation are complete. Do not call the whole task complete for a terminal external block.\n\nUse the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwc-20261104-release",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "GO": "done",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "NO_GO": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwc-20261104-coordinator",
+        "name": "Continuity Coordinator",
+        "phone": "6800",
+        "profile": "Используй только существующий versioned repair/recovery contract; сохраняй evidence и approvals."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWC-004",
+          "queue": "worker-all",
+          "message": "Use native versioned future-only repair/recovery for actual failures; preserve accepted history and meaningful evidence. Recover remaining work rather than prematurely declaring success. For genuine final external blockers submit reviewed BLOCKED_EXTERNAL then settle the actual failure context through native BLOCK_EXTERNAL recovery and verify RECOVERY_COMPLETED/terminal state. No manual DB edits.\n\nUse the existing Managed Sprint Engine and actual issued workspace/branch. The user authorized corrections through delivery and independent agents. Do not edit historical accepted workspaces, main, running control/release source or manually modify engine state. Only one active canonical nginx-qa project. Every result needs two genuine independent Reviewer APPROVE decisions for its exact commit. Commit/publish assigned branch before submitting result. Rework uses the new issued workspace. Never count fake native IDs, mock execution, source-only checks or model claims as live success. Existing Codex CLI is installed and ChatGPT-authenticated; prefer adapting that existing client over creating a second orchestrator or requiring new paid keys. Advisors must have no tools/mutation authority, strict fact/action/schema validation and bounded work. Engine owns assignments, graph, results, reviews and cancellation; client adapters only consume that protocol. Use isolated fixtures for tests and actual configured adapters for live acceptance. Live self-test must use an explicitly registered distinct test repository/project and normal reviews, never an alias of project9000. Record unknown/blocked honestly, preserve secrets and ownership. Do not auto-merge or alter active production services. Continue all achievable work; route genuine external blockers through Coordinator rather than fake success."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwc-20261104-continuity",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "RESUME_1": "implementation",
+        "RESUME_2": "qualification",
+        "RESUME_3": "release",
+        "BLOCKED_EXTERNAL": "blocked-external",
+        "FAILED": "failed"
+      }
+    },
+    {
+      "id": "done",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Мастер реализован и принят с доказательствами."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Результаты сохранены; нужны документированные внешние условия."
+    },
+    {
+      "id": "failed",
+      "type": "terminal",
+      "status": "FAILED",
+      "message": "Невосстановимый дефект или исчерпанный rework; evidence сохранена."
+    }
+  ],
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    },
+    {
+      "path": "docs/universal-managed-sprint-contract.md",
+      "sha256": "d7b4c6c12e3aadc03018b3a8cbc1f989f278784fad151d9dfe24e7366123a146"
+    }
+  ],
+  "planning": {
+    "title": "Setup Diagnostics Wizard corrective delivery",
+    "purpose": "Complete missing implementation and repair misleading success, UI, authority, persistence and evidence defects.",
+    "source_commit": "2fd020a4562aac857a34dd519e52cd6556b65f02",
+    "previous_sprint_id": "msv1-7a819e5beed270622b74da4248f1d9e5c8a50feb7c79da9e86243989d2cc4614",
+    "audit_path": "C:/nqt35/client/setup-diagnostics-wizard-v1/audit-20261104/reproduced-findings.json",
+    "implementation_acceptance": "NOT_RUN",
+    "live_acceptance": "NOT_RUN",
+    "independent_reviewers": 2
+  }
+}
