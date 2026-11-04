@@ -12,7 +12,7 @@ import re
 from typing import Any
 
 from fastapi import HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from .legacy_scope_control import ADMIN_TOKEN_HEADER, verify_admin_token
 from .setup_diagnostics import (
@@ -44,6 +44,42 @@ def register_setup_diagnostics_api(host: Any) -> None:
     advisor = SetupAdvisor()
     host.setup_operations_manager = operations_manager
     host.setup_advisor = advisor
+
+    assets = Path(__file__).parent / "static"
+
+    @app.get("/setup")
+    async def get_setup_page(request: Request) -> FileResponse:
+        html_file = assets / "setup.html"
+        if not html_file.exists():
+            raise HTTPException(404, {"error": "UI_NOT_FOUND"})
+        return FileResponse(
+            html_file,
+            headers={
+                "Cache-Control": "no-store",
+                "Content-Security-Policy": (
+                    "default-src 'self'; script-src 'self'; style-src 'self'; "
+                    "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get("/setup/assets/{name}")
+    async def get_setup_asset(name: str) -> FileResponse:
+        if name not in {"setup.js", "setup.css"}:
+            raise HTTPException(404, {"error": "ASSET_NOT_FOUND"})
+        asset_file = assets / name
+        if not asset_file.exists():
+            raise HTTPException(404, {"error": "ASSET_NOT_FOUND"})
+        media_type = "application/javascript" if name.endswith(".js") else "text/css"
+        return FileResponse(
+            asset_file,
+            media_type=media_type,
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     def _same_origin(request: Request) -> None:
         origin = request.headers.get("origin")

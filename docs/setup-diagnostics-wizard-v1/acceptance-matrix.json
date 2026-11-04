@@ -902,16 +902,27 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Adversarial service/log/README/question/model text cannot change system policy, reveal canaries or request arbitrary operations.",
         "Render explanations via escaped text, not HTML or executable Markdown; CSP and fixed destinations remain.",
         "Test nested/encoded secret and command injection, malicious links and misleading model PASS/DONE claims."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_wizard_ui.py::TestWizardUI::test_a18_xss_and_injection_immunity and tests/test_llm_advisor.py::TestLLMAdvisor::test_a18_advisory_api_and_injection_defense",
+      "tested_commit": "9d25b94981660f12de1b85ec71f6722c3df1b0b2",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_wizard_ui.py::TestWizardUI::test_a18_xss_and_injection_immunity",
+          "summary": "Verification of pure textContent rendering, zero DOM sinks (no innerHTML/outerHTML/document.write/eval), CSP header enforcement."
+        },
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a18_advisory_api_and_injection_defense",
+          "summary": "Rejection of prompt injection attacks, strict Draft 2020-12 schema validation, canary redaction."
+        }
+      ]
     },
     {
       "id": "A19",
@@ -1007,7 +1018,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "First setup and return diagnostics use the same page; causal worker discovery/probe/plan/self-test flow is clear.",
         "Show timestamp/freshness, evidence level, exact blocker and next allowed step; separate LLM inference and verified facts.",
@@ -1015,9 +1026,15 @@
         "Keyboard/focus/accessibility, mobile-width layout and no regression in existing execution/Launcher UI."
       ],
       "existing_regression_refs": [],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_wizard_ui.py::TestWizardUI::test_a21_russian_reusable_wizard_ux",
+      "tested_commit": "9d25b94981660f12de1b85ec71f6722c3df1b0b2",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_wizard_ui.py::TestWizardUI::test_a21_russian_reusable_wizard_ux",
+          "summary": "Russian language UI, Plan & Apply modal confirmation flow, accessibility ARIA roles, responsive CSS layout."
+        }
+      ]
     },
     {
       "id": "A22",
