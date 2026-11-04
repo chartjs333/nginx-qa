@@ -45,6 +45,15 @@ def _now():
     return datetime.now(timezone.utc).isoformat()
 
 
+class SetupApplyNotStarted(ValueError):
+    """A durable rejected receipt fences even a delayed same-key request."""
+    def __init__(self, plan, receipt):
+        super().__init__("PLAN_STALE")
+        self.plan_id = plan["plan_id"]
+        self.plan_digest = plan["plan_digest"]
+        self.receipt = deepcopy(receipt)
+
+
 class SetupOperationsManager:
     """One durable, owner-bound intent per idempotency key.
 
@@ -216,6 +225,22 @@ class SetupOperationsManager:
                 finally:
                     raise
 
+    def _reject_stale_apply(self, actor, project, plan, idem):
+        # Authority can change back while an earlier HTTP request is queued.
+        # Reserve the exact key before declaring nonexecution, so that queued
+        # request cannot later run after this rejection has reached the browser.
+        opid, now = "op-" + secrets.token_hex(12), _now()
+        receipt = {"kind": "setup_operation_receipt", "schema_version": 1, "operation_id": opid,
+            "plan_id": plan["plan_id"], "plan_digest": plan["plan_digest"], "project_id": project,
+            "action_id": plan["action_id"], "state": "BLOCKED", "created_at": now, "updated_at": now,
+            "native_operation_id": None, "native_sprint_id": None, "evidence_ids": [],
+            "error_code": "PLAN_STALE", "retryable": False, "deduplicated": False}
+        get_receipt_validator().validate(receipt)
+        self._state["operations"][opid] = {"actor_id": actor, "receipt": receipt}
+        self._state["idempotency"][idem] = opid
+        self._save()
+        raise SetupApplyNotStarted(plan, receipt)
+
     def _apply_sync(self, actor, project, request, path_plan_id):
         with self._locked():
             self._load()
@@ -237,9 +262,9 @@ class SetupOperationsManager:
             binding_version = self.binding_authority(actor, project)
             fingerprint = self._authority(actor, project)
             if plan["authority_fingerprint"] != fingerprint:
-                raise ValueError("PLAN_STALE: Authority fingerprint mismatch")
+                self._reject_stale_apply(actor, project, plan, idem)
             if datetime.fromisoformat(plan["expires_at"]) <= datetime.now(timezone.utc):
-                raise ValueError("PLAN_STALE: ActionPlan has expired")
+                self._reject_stale_apply(actor, project, plan, idem)
             if plan["confirmation_required"] and not request["confirmed"]:
                 raise ValueError("CONFIRMATION_REQUIRED")
             opid, now = "op-" + secrets.token_hex(12), _now()
@@ -298,6 +323,48 @@ class SetupOperationsManager:
             receipt.update(state="UNKNOWN", error_code="OPERATION_REQUIRES_RECONCILIATION", retryable=False)
         get_receipt_validator().validate(receipt)
         return receipt
+
+    def inspect_apply(self, actor_id, project_id, request, *, plan_id):
+        """Read the original server plan and exact-key receipt, never apply.
+
+        Absence of a receipt is not proof that an HTTP attempt cannot arrive
+        later. The client must retain the same key, even when this read returns
+        null. Atomic ledger replacement lets this reader avoid a write/lock.
+        """
+        _validator("ApplyInspectionRequest").validate(request)
+        self._authorize(actor_id, project_id, "read")
+        if self.durable_store_dir is None:
+            raise LookupError("PLAN_NOT_FOUND")
+        reader = SetupOperationsManager(worker_adapter=self.worker_adapter,
+            durable_store_dir=self.durable_store_dir)
+        reader._load()
+        plan = reader._state["plans"].get(request["plan_digest"])
+        if plan is None:
+            raise LookupError("PLAN_NOT_FOUND")
+        if (plan["actor_id"] != actor_id or plan["project_id"] != project_id
+                or plan["plan_id"] != plan_id):
+            raise PermissionError("PLAN_OWNER_MISMATCH")
+        idem = hashlib.sha256(canonical_json_bytes([actor_id, project_id, request["idempotency_key"]])).hexdigest()
+        opid = reader._state["idempotency"].get(idem)
+        receipt = None
+        if opid:
+            record = reader._state["operations"][opid]
+            if record["actor_id"] != actor_id or record["receipt"]["project_id"] != project_id:
+                raise PermissionError("OPERATION_OWNER_MISMATCH")
+            if record["receipt"]["plan_digest"] != plan["plan_digest"]:
+                raise ValueError("IDEMPOTENCY_CONFLICT")
+            # Return recorded evidence only. In particular, do not call a status
+            # reader, reconcile native state, construct a worker or write a lock.
+            receipt = deepcopy(record["receipt"])
+        retry_permitted = True
+        try:
+            self._authorize(actor_id, project_id, plan["action_id"])
+        except PermissionError:
+            retry_permitted = False
+        result = {"kind": "setup_apply_inspection", "schema_version": 1,
+                  "plan": deepcopy(plan), "receipt": receipt, "retry_permitted": retry_permitted}
+        _validator("ApplyInspectionResponse").validate(result)
+        return result
 
     def get_operation(self, project_id, operation_id, *, actor_id):
         if self.durable_store_dir is None:

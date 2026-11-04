@@ -1,0 +1,66 @@
+{
+  "kind": "sdwu_001_implementation_evidence",
+  "task_id": "SDWU-001",
+  "source_base_commit": "d4f415b5cf2d0944344b1a3bce074257588fbfc7",
+  "before_fix_product_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "actual_before_fix_browser": "PASS_REPRODUCED",
+  "isolated_python_suite": {
+    "failed": 0,
+    "passed": 32
+  },
+  "final_changed_ui_tests": {
+    "failed": 0,
+    "passed": 2,
+    "note": "Subset rerun after acknowledged native APPLYING flow refinement; not additional distinct tests."
+  },
+  "final_ui_fault_categories": 11,
+  "live_after_fix_qualification": "NOT_RUN_IN_IMPLEMENTATION_STAGE",
+  "native_result_and_reviews": "PENDING",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "e69231777f32164b754dcb776fbd66aa31672d6003f09378fda7f9b19928479e",
+      "bytes": 96
+    },
+    {
+      "path": "implementation-final-boundaries.txt",
+      "sha256": "a5b17080e839858bcff2674c1f919a02524c00b7b9a834d2d39c8dc50f29a840",
+      "bytes": 644
+    },
+    {
+      "path": "implementation-tests-final.txt",
+      "sha256": "80e6a245d2629574cc763abb5e60eb0b6d3e85c7837fd3f3963ee0e6dd185c6e",
+      "bytes": 16650
+    },
+    {
+      "path": "implementation-ui-final.txt",
+      "sha256": "6feafdeda1605a1acc2fb52a38e704a22ebdb047afb89d5bf1acde78a6c7c231",
+      "bytes": 387
+    },
+    {
+      "path": "repro_before.cjs",
+      "sha256": "ccaecdf842f81f9bc5b5d9b6287d42ad828945c1f9a64c1f5811ca0a4a9c0e46",
+      "bytes": 3104
+    },
+    {
+      "path": "repro-before.json",
+      "sha256": "ed54aa90a7e8b7f315124c05762b227a3b3154a83d85a692cda41dce639d45bb",
+      "bytes": 679
+    },
+    {
+      "path": "repro-before.png",
+      "sha256": "b84ec0a34f6eaeb92f34ddf8f4ede1a63dc9269ebc2b7dcf0aaa17b7dd353a1d",
+      "bytes": 129910
+    },
+    {
+      "path": "ui-fixture-results.json",
+      "sha256": "bc36c9a07488919f138b3d36bec77c5e2f8d38c810559befe35b4ec641ceeaf4",
+      "bytes": 936
+    }
+  ],
+  "final_passivity_and_allowlist_tests": {
+    "passed": 3,
+    "failed": 0,
+    "note": "Existing subset rerun with explicit forbidden lock/save/status callbacks and consistent array separator."
+  }
+}

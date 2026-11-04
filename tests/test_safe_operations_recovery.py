@@ -5,10 +5,11 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from concurrent.futures import ThreadPoolExecutor
 
 import jsonschema
-from nginx_qa.setup_operations import SetupOperationsManager
+from nginx_qa.setup_operations import SetupOperationsManager, SetupApplyNotStarted
 
 
 class TestSafeOperationsRecovery(unittest.TestCase):
@@ -81,6 +82,88 @@ class TestSafeOperationsRecovery(unittest.TestCase):
         self.assertEqual(1, len({r["operation_id"] for r in results}))
         self.assertEqual([False, True], sorted(r["deduplicated"] for r in results))
         self.assertEqual("SUCCEEDED", self.make_manager().get_operation("9000", results[0]["operation_id"], actor_id="alice")["state"])
+
+    def test_stale_rejection_durably_fences_late_same_key_after_authority_returns(self):
+        import threading
+        release = threading.Event()
+        plan = self.plan()
+        request = self.request(plan)
+        def delayed_original():
+            if not release.wait(5):
+                raise AssertionError("Test release missing")
+            return asyncio.run(self.make_manager().apply_plan("alice", "9000", request, plan_id=plan["plan_id"]))
+        with ThreadPoolExecutor(1) as pool:
+            late = pool.submit(delayed_original)
+            try:
+                self.fp = "d" * 64
+                with self.assertRaises(SetupApplyNotStarted) as rejected:
+                    asyncio.run(self.manager.apply_plan("alice", "9000", request, plan_id=plan["plan_id"]))
+                receipt = rejected.exception.receipt
+                self.assertEqual(("BLOCKED", "PLAN_STALE"), (receipt["state"], receipt["error_code"]))
+                self.fp = self.snapshot["authority_fingerprint"]
+            finally:
+                release.set()
+            replay = late.result(timeout=5)
+        self.assertEqual([], self.calls)
+        self.assertEqual(receipt["operation_id"], replay["operation_id"])
+        self.assertTrue(replay["deduplicated"])
+        ledger = json.loads((self.root / "operations.json").read_bytes())
+        self.assertEqual(1, len(ledger["operations"]))
+        self.assertEqual(1, len(ledger["idempotency"]))
+
+    def test_inspection_is_passive_and_absence_does_not_reserve_a_key(self):
+        plan = self.plan()
+        req = {k:v for k,v in self.request(plan).items() if k != "confirmed"}
+        def tree():
+            return {str(p.relative_to(self.root)): (p.read_bytes(), p.stat().st_mtime_ns)
+                    for p in self.root.rglob("*") if p.is_file()}
+        def forbidden(*args, **kwargs):
+            raise AssertionError("Passive inspection called status/effect/write callback")
+        def inspect():
+            with patch.object(SetupOperationsManager, "_locked", side_effect=forbidden), \
+                 patch.object(SetupOperationsManager, "_save", side_effect=forbidden), \
+                 patch.object(SetupOperationsManager, "_public_record", side_effect=forbidden):
+                return self.manager.inspect_apply("alice", "9000", req, plan_id=plan["plan_id"])
+        self.manager.status_reader = forbidden
+        self.manager.action_handlers["diagnostics.refresh"] = forbidden
+        before = tree()
+        inspected = inspect()
+        self.assertIsNone(inspected["receipt"])
+        self.assertEqual(plan, inspected["plan"])
+        self.assertTrue(inspected["retry_permitted"])
+        self.assertEqual(before, tree())
+        ledger = json.loads((self.root / "operations.json").read_bytes())
+        self.assertEqual({}, ledger["operations"])
+        self.assertEqual({}, ledger["idempotency"])
+        # A late original remains possible after the absent read.
+        self.manager.action_handlers["diagnostics.refresh"] = self.action
+        applied = asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        before = tree()
+        inspected = inspect()
+        self.assertEqual(applied, inspected["receipt"])
+        self.assertEqual(before, tree())
+        self.assertEqual(1, len(self.calls))
+
+    def test_inspection_owner_project_key_and_current_permissions(self):
+        plan = self.plan()
+        req = {k:v for k,v in self.request(plan).items() if k != "confirmed"}
+        asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        for actor, project, path in (("bob","9000",plan["plan_id"]), ("alice","9001",plan["plan_id"]),
+                                     ("alice","9000","other-plan")):
+            with self.subTest(actor=actor, project=project, path=path), self.assertRaises(PermissionError):
+                self.manager.inspect_apply(actor, project, req, plan_id=path)
+        other = self.plan()
+        with self.assertRaisesRegex(ValueError, "IDEMPOTENCY_CONFLICT"):
+            self.manager.inspect_apply("alice","9000",{**req,"plan_digest":other["plan_digest"]},plan_id=other["plan_id"])
+        def read_only(actor, project, action):
+            if action != "read": raise PermissionError("action revoked")
+        self.manager.authorize = read_only
+        result = self.manager.inspect_apply("alice","9000",req,plan_id=plan["plan_id"])
+        self.assertFalse(result["retry_permitted"])
+        self.assertEqual("SUCCEEDED", result["receipt"]["state"])
+        self.manager.authorize = lambda *args: (_ for _ in ()).throw(PermissionError("all revoked"))
+        with self.assertRaises(PermissionError):
+            self.manager.inspect_apply("alice","9000",req,plan_id=plan["plan_id"])
 
     def test_crash_intent_cannot_repeat_an_ambiguous_effect(self):
         class Crash(BaseException):

@@ -1,0 +1,20 @@
+{
+  "kind": "actual_installed_browser_real_wall_clock_expiry_before_fix",
+  "source_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "at": "2026-11-04T19:19:01.524Z",
+  "waitMs": 121442,
+  "plan_id": "plan-7993f5007cd53acd1e97f44e",
+  "expires_at": "2026-11-04T19:18:59.896382+00:00",
+  "http_status": 409,
+  "response": {
+    "detail": {
+      "error": "PLAN_STALE"
+    }
+  },
+  "error_text": "Ответ о применении не получен: PLAN_STALE. Повтор использует тот же ключ.",
+  "modal_open": true,
+  "refresh_disabled": true,
+  "session_check_disabled": true,
+  "project_disabled": true,
+  "new_model_or_sprint_started": false
+}

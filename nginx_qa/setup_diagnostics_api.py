@@ -16,7 +16,7 @@ from .legacy_scope_control import ADMIN_TOKEN_HEADER, verify_admin_token
 from .setup_diagnostics import (DiagnosticSnapshotCollector, DiagnosticReadGate,
     parse_strict_json_with_limits, canonical_json_bytes, ACTION_IDS, _PROJECT_ID_PATTERN, _OPAQUE_ID_PATTERN,
     open_readonly_snapshot, get_contracts_schema, DiagnosticSourceUnavailable)
-from .setup_operations import SetupOperationsManager
+from .setup_operations import SetupOperationsManager, SetupApplyNotStarted
 from .setup_worker_adapter import SetupWorkerAdapter
 from .setup_advisor import SetupAdvisor, AdvisorBusyError
 from .setup_policy import SetupPolicy
@@ -222,6 +222,9 @@ def register_setup_diagnostics_api(host: Any) -> None:
     def handle(exc):
         if isinstance(exc, HTTPException):
             raise exc
+        if isinstance(exc, SetupApplyNotStarted):
+            raise HTTPException(409, {"error": "PLAN_STALE", "apply_outcome": "NOT_STARTED",
+                "plan_id": exc.plan_id, "plan_digest": exc.plan_digest, "receipt": exc.receipt}) from None
         if isinstance(exc, PermissionError):
             raise HTTPException(403, {"error": "SETUP_ACCESS_DENIED"}) from None
         if isinstance(exc, LookupError):
@@ -322,6 +325,26 @@ def register_setup_diagnostics_api(host: Any) -> None:
             value = await manager.apply_plan(actor, project_id, await body(request), plan_id=plan_id)
             authorize(actor, project_id, "read")
             gate.invalidate(project_id, actor_id=actor)
+            return response(value)
+        except SetupApplyNotStarted as exc:
+            # The negative receipt is durable, but disclosure still requires
+            # current read authority, just like a successful Apply response.
+            try:
+                authorize(actor, project_id, "read")
+            except Exception as denied:
+                handle(denied)
+            handle(exc)
+        except Exception as exc:
+            handle(exc)
+
+    @app.post("/api/v1/projects/{project_id}/setup/plans/{plan_id}/inspect")
+    async def inspect_apply(project_id: str, plan_id: str, request: Request):
+        try:
+            actor = authenticated(request)
+            authorize(actor, project_id, "read")
+            value = await asyncio.to_thread(manager.inspect_apply, actor, project_id,
+                await body(request), plan_id=plan_id)
+            authorize(actor, project_id, "read")
             return response(value)
         except Exception as exc:
             handle(exc)

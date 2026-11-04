@@ -1,0 +1,8 @@
+test_inspection_is_passive_and_absence_does_not_reserve_a_key (tests.test_safe_operations_recovery.TestSafeOperationsRecovery.test_inspection_is_passive_and_absence_does_not_reserve_a_key) ... ok
+test_defaults_and_explicit_wizard_identities (tests.test_staging_deployment_branch.DeploymentBranchTests.test_defaults_and_explicit_wizard_identities) ... ok
+test_other_profiles_and_unapproved_ref_forms_are_rejected (tests.test_staging_deployment_branch.DeploymentBranchTests.test_other_profiles_and_unapproved_ref_forms_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 1.851s
+
+OK

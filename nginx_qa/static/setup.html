@@ -37,6 +37,11 @@
   </section>
   <button type="button" id="session-check">Проверить подтверждение сессии</button>
   <p id="error" role="alert" hidden></p>
+  <section id="apply-recovery" class="notice" hidden aria-label="Восстановление запроса">
+    <p id="apply-recovery-message" role="status" aria-live="polite"></p>
+    <button type="button" id="apply-inspect">Проверить результат исходного запроса</button>
+    <p class="hint">Проверка только читает сохранённый план и квитанцию. Повторное выполнение требует отдельного подтверждения и использует исходный ключ.</p>
+  </section>
 
   <div class="dashboard-grid">
     <!-- Левая колонка: Диагностические проверки -->

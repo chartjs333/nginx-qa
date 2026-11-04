@@ -1871,6 +1871,63 @@
         "correlation_id",
         "retryable"
       ]
+    },
+    "ApplyInspectionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "schema_version",
+        "plan_digest",
+        "idempotency_key"
+      ]
+    },
+    "ApplyInspectionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_apply_inspection"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "plan": {
+          "$ref": "#/$defs/ActionPlan"
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OperationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_permitted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "plan",
+        "receipt",
+        "retry_permitted"
+      ]
     }
   }
 }

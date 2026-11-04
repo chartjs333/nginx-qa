@@ -8,6 +8,13 @@
   const state = {
     csrf: null,
     authenticated: false,
+    actor: null,
+    attempt: null,
+    attemptOperationId: null,
+    storageBlocked: false,
+    inspecting: false,
+    planning: false,
+    retryPermitted: true,
     currentProject: null,
     currentSnapshot: null,
     busy: false,
@@ -69,14 +76,81 @@
     }
   }
 
+  const ATTEMPT_STORAGE_KEY = "nginx-qa.setup.pending-apply.v1";
+  const opaque = value => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value);
+  const digest = value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  const projectId = value => typeof value === "string" && /^[0-9]{4}$/.test(value);
+
+  function validAttempt(value) {
+    return value && typeof value === "object" && !Array.isArray(value) &&
+      Object.keys(value).sort().join(",") === "actor_id,idempotency_key,plan_digest,plan_id,project_id,schema_version" &&
+      value.schema_version === 1 && opaque(value.actor_id) && opaque(value.plan_id) &&
+      projectId(value.project_id) && digest(value.plan_digest) &&
+      typeof value.idempotency_key === "string" && /^ui-apply-[a-f0-9-]{36}$/.test(value.idempotency_key);
+  }
+
+  function restoreAttempt() {
+    try {
+      const raw = global.sessionStorage.getItem(ATTEMPT_STORAGE_KEY);
+      if (raw === null) return;
+      if (raw.length > 2048) throw new Error("Stored request is too large");
+      const attempt = JSON.parse(raw);
+      if (!validAttempt(attempt)) throw new Error("Invalid stored request");
+      state.attempt = attempt;
+    } catch (_) { state.storageBlocked = true; }
+  }
+
+  function persistAttempt(plan, key) {
+    const attempt = {schema_version: 1, actor_id: plan.actor_id, project_id: plan.project_id,
+      plan_id: plan.plan_id, plan_digest: plan.plan_digest, idempotency_key: key};
+    if (!validAttempt(attempt)) throw new Error("Некорректный контекст исходного запроса");
+    const raw = JSON.stringify(attempt);
+    global.sessionStorage.setItem(ATTEMPT_STORAGE_KEY, raw);
+    if (global.sessionStorage.getItem(ATTEMPT_STORAGE_KEY) !== raw) throw new Error("Ключ запроса не сохранён");
+    state.attempt = attempt;
+  }
+
+  function clearAttempt() {
+    try {
+      global.sessionStorage.removeItem(ATTEMPT_STORAGE_KEY);
+      if (global.sessionStorage.getItem(ATTEMPT_STORAGE_KEY) !== null) throw new Error("Stored request remains");
+      state.attempt = null;
+      state.attemptOperationId = null;
+      state.storageBlocked = false;
+      return true;
+    } catch (_) {
+      state.storageBlocked = true;
+      return false;
+    }
+  }
+
+  function renderRecovery() {
+    const attempt = state.attempt;
+    el("apply-recovery").hidden = !attempt && !state.storageBlocked;
+    let message = "";
+    if (state.storageBlocked) message = "Сохранённый контекст запроса недоступен. Новые операции заблокированы; диагностика и вход доступны. Проверьте сохранённую историю с оператором, не удаляйте неизвестный запрос для повторного запуска.";
+    else if (attempt) message = "Сохранён исходный запрос для проекта " + attempt.project_id + ". Пока его результат не подтверждён, новые операции заблокированы. Закрытие окна не отменяет отправленный запрос." +
+      (state.actor !== attempt.actor_id ? " Подтвердите вход тем же оператором, который отправил запрос." : "");
+    el("apply-recovery-message").textContent = message;
+    el("apply-inspect").disabled = !attempt || state.storageBlocked || !state.authenticated ||
+      state.actor !== attempt.actor_id || state.applying || state.inspecting;
+  }
+
   function syncControls() {
     const ready = state.authenticated && !!state.currentSnapshot;
-    el("refresh").disabled = !state.authenticated || !state.currentProject || state.busy || !!state.pendingPlan;
-    el("project").disabled = state.busy || !!state.pendingPlan;
+    const confirmation = !!state.pendingPlan && !state.attempt;
+    el("refresh").disabled = !state.authenticated || !state.currentProject || state.busy || state.applying || confirmation;
+    el("project").disabled = state.busy || state.applying || confirmation;
     el("advisor-submit").disabled = !ready || state.advising;
-    el("session-check").disabled = !!state.pendingPlan;
+    el("session-check").disabled = state.applying || confirmation;
     document.querySelectorAll(".btn-chip").forEach(n => { n.disabled = !ready || state.advising; });
-    document.querySelectorAll(".btn-op").forEach(n => { n.disabled = !ready || !!state.pendingPlan; });
+    for (const selector of [".btn-op", ".btn-action"]) document.querySelectorAll(selector).forEach(n => {
+      n.disabled = !ready || state.planning || !!state.pendingPlan || !!state.attempt || state.storageBlocked;
+    });
+    el("plan-apply-btn").disabled = state.applying || !state.pendingPlan || !state.authenticated ||
+      state.pendingPlan.actor_id !== state.actor || !state.retryPermitted || state.storageBlocked;
+    el("plan-cancel-btn").textContent = state.attempt ? "Закрыть, сохранив запрос" : "Отмена";
+    renderRecovery();
   }
   function invalidateSnapshot() {
     state.currentSnapshot = null;
@@ -128,15 +202,19 @@
   }
 
   async function checkSession() {
-    if (state.pendingPlan) return;
+    if (state.applying || (state.pendingPlan && !state.attempt)) return;
+    closePlan();
     state.authenticated = false;
+    state.actor = null;
     state.csrf = null;
     invalidateSnapshot();
     showError(null);
     try {
       const session = await api("/api/v1/operator/session", {method: "GET"});
       if (session.authenticated === true && session.csrf_token) {
+        if (!opaque(session.actor_id)) throw new Error("Контекст оператора не подтверждён");
         state.authenticated = true;
+        state.actor = session.actor_id;
         state.csrf = session.csrf_token;
         showNotice("Операторская сессия подтверждена. Изменения защищены CSRF.");
         el("pairing").hidden = true;
@@ -171,7 +249,7 @@
   }
 
   async function refreshSnapshot() {
-    if (state.busy || !state.authenticated || !state.currentProject || state.pendingPlan) return;
+    if (state.busy || state.applying || !state.authenticated || !state.currentProject || (state.pendingPlan && !state.attempt)) return;
     state.busy = true; invalidateSnapshot();
     const epoch = state.epoch;
     const project = state.currentProject;
@@ -411,7 +489,7 @@
   }
 
   async function createPlan(actionId, actionArgs) {
-    if (!state.currentSnapshot || state.pendingPlan) {
+    if (!state.currentSnapshot || state.planning || state.pendingPlan || state.attempt || state.storageBlocked) {
       showError("Диагностический снимок недоступен");
       return;
     }
@@ -419,6 +497,7 @@
     if (!(state.currentSnapshot.available_action_ids || []).includes(actionId)) { showError("Операция отсутствует в разрешённом каталоге"); return; }
     const project = state.currentProject;
     const snapshotId = state.currentSnapshot.snapshot_id;
+    state.planning = true; syncControls();
     showError(null);
     el("sync").textContent = "Формирование плана " + actionId + "…";
 
@@ -438,8 +517,9 @@
         }
       );
       if (!state.currentSnapshot || snapshotId !== state.currentSnapshot.snapshot_id || project !== state.currentProject) return;
-      if (plan.project_id !== project || plan.snapshot_id !== snapshotId || !plan.plan_digest) throw new Error("План не соответствует проекту или снимку");
+      if (plan.project_id !== project || plan.actor_id !== state.actor || plan.snapshot_id !== snapshotId || !digest(plan.plan_digest)) throw new Error("План не соответствует проекту или снимку");
       state.pendingPlan = plan;
+      state.retryPermitted = true;
       state.applyKey = "ui-apply-" + global.crypto.randomUUID();
       syncControls();
       showPlanDialog(plan);
@@ -447,7 +527,7 @@
     } catch (err) {
       showError("Не удалось сформировать план: " + err.message);
       el("sync").textContent = "Ошибка создания плана";
-    }
+    } finally { state.planning = false; syncControls(); }
   }
 
   function showPlanDialog(plan) {
@@ -483,46 +563,124 @@
     }
   }
 
-  async function applyPendingPlan() {
-    if (!state.pendingPlan || state.applying) return;
-    state.applying = true;
-    const plan = state.pendingPlan;
+  function planMatchesAttempt(plan, attempt) {
+    return plan && plan.kind === "setup_action_plan" && plan.schema_version === 1 &&
+      plan.plan_id === attempt.plan_id && plan.plan_digest === attempt.plan_digest &&
+      plan.project_id === attempt.project_id && plan.actor_id === attempt.actor_id &&
+      typeof plan.action_id === "string" && Array.isArray(plan.effects) && Array.isArray(plan.resources);
+  }
 
-    el("plan-apply-btn").disabled = true;
-    showError(null);
-    el("sync").textContent = "Применение плана " + plan.plan_id + "…";
+  function receiptMatchesPlan(receipt, plan) {
+    const fields = ["kind", "schema_version", "operation_id", "plan_id", "plan_digest", "project_id", "action_id", "state",
+      "created_at", "updated_at", "native_operation_id", "native_sprint_id", "evidence_ids", "error_code", "retryable", "deduplicated"];
+    return receipt && typeof receipt === "object" && !Array.isArray(receipt) &&
+      Object.keys(receipt).sort().join(",") === fields.sort().join(",") &&
+      receipt.kind === "setup_operation_receipt" && receipt.schema_version === 1 && opaque(receipt.operation_id) &&
+      receipt.plan_id === plan.plan_id && receipt.plan_digest === plan.plan_digest &&
+      receipt.project_id === plan.project_id && receipt.action_id === plan.action_id &&
+      ["PLANNED", "APPLYING", "SUCCEEDED", "FAILED", "BLOCKED", "UNKNOWN"].includes(receipt.state) &&
+      typeof receipt.created_at === "string" && Number.isFinite(Date.parse(receipt.created_at)) &&
+      typeof receipt.updated_at === "string" && Number.isFinite(Date.parse(receipt.updated_at)) &&
+      [receipt.native_operation_id, receipt.native_sprint_id].every(v => v === null || opaque(v)) &&
+      Array.isArray(receipt.evidence_ids) && receipt.evidence_ids.length <= 32 && receipt.evidence_ids.every(opaque) &&
+      new Set(receipt.evidence_ids).size === receipt.evidence_ids.length &&
+      (receipt.error_code === null || (typeof receipt.error_code === "string" && /^[A-Z][A-Z0-9_]{0,79}$/.test(receipt.error_code))) &&
+      typeof receipt.retryable === "boolean" && typeof receipt.deduplicated === "boolean";
+  }
 
-    const applyReq = {
-      schema_version: 1,
-      plan_digest: plan.plan_digest,
-      confirmed: true,
-      idempotency_key: state.applyKey,
-    };
+  function receiptResolvesAttempt(receipt) {
+    // An acknowledged native job is no longer an uncertain HTTP attempt.
+    // Keep its normal owned Stop/recovery flow usable while agents are running.
+    return ["SUCCEEDED", "FAILED", "BLOCKED"].includes(receipt.state) ||
+      (receipt.state === "APPLYING" && ["selftest.start", "selftest.stop"].includes(receipt.action_id) &&
+       opaque(receipt.native_operation_id));
+  }
 
+  async function inspectPendingApply() {
+    const attempt = state.attempt;
+    if (!attempt || state.applying || state.inspecting || !state.authenticated || state.actor !== attempt.actor_id) return;
+    const epoch = state.epoch, project = state.currentProject, actor = state.actor;
+    state.inspecting = true; syncControls(); showError(null);
     try {
-      const receipt = await api(
-        "/api/v1/projects/" + encodeURIComponent(plan.project_id) + "/setup/plans/" + encodeURIComponent(plan.plan_id) + "/apply",
-        {
-          method: "POST",
-          body: JSON.stringify(applyReq),
-        }
-      );
+      const result = await api("/api/v1/projects/" + encodeURIComponent(attempt.project_id) +
+        "/setup/plans/" + encodeURIComponent(attempt.plan_id) + "/inspect", {method: "POST", body: JSON.stringify({
+          schema_version: 1, plan_digest: attempt.plan_digest, idempotency_key: attempt.idempotency_key})});
+      // A delayed inspection cannot replace another page/session's confirmation.
+      if (state.attempt !== attempt || state.actor !== actor || state.epoch !== epoch || state.currentProject !== project) return;
+      if (!result || result.kind !== "setup_apply_inspection" || result.schema_version !== 1 ||
+          !planMatchesAttempt(result.plan, attempt) || typeof result.retry_permitted !== "boolean") {
+        throw new Error("Ответ проверки не соответствует исходному запросу");
+      }
+      if (result.receipt !== null) {
+        if (!receiptMatchesPlan(result.receipt, result.plan)) throw new Error("Квитанция не соответствует исходному запросу");
+        state.attemptOperationId = result.receipt.operation_id;
+        if (receiptResolvesAttempt(result.receipt)) clearAttempt();
+        closePlan();
+        recordReceipt(result.receipt, attempt.project_id, true);
+        el("sync").textContent = receiptResolvesAttempt(result.receipt) ? "Найдена сохранённая квитанция исходного запроса" :
+          "Операция ещё не завершена. Исходный ключ сохранён; проверьте текущий статус операции.";
+      } else {
+        // No recorded intent does not rule out a delayed in-flight request.
+        state.pendingPlan = result.plan;
+        state.applyKey = attempt.idempotency_key;
+        state.retryPermitted = result.retry_permitted;
+        showPlanDialog(result.plan);
+        showError(result.retry_permitted ? "Квитанция пока не найдена. Можно явно подтвердить повтор исходного запроса с тем же ключом." :
+          "Права на действие отозваны. Запрос сохранён; доступно обновление диагностики и повторное подтверждение сессии.");
+      }
+    } catch (err) {
+      showError("Проверка исходного запроса недоступна: " + err.message + ". Запрос сохранён.");
+      if (err.status === 401 || err.status === 403) await checkSession();
+    } finally { state.inspecting = false; syncControls(); }
+  }
 
+  async function applyPendingPlan() {
+    if (!state.pendingPlan || state.applying || !state.authenticated || state.pendingPlan.actor_id !== state.actor ||
+        !state.retryPermitted || state.storageBlocked) return;
+    const plan = state.pendingPlan, key = state.applyKey;
+    if (state.attempt && (!planMatchesAttempt(plan, state.attempt) || key !== state.attempt.idempotency_key)) return;
+    // Fail before sending if an uncertain request cannot survive a page reload.
+    try { persistAttempt(plan, key); }
+    catch (_) { showError("Запрос не отправлен: не удалось сохранить его ключ в этой вкладке. Проверьте доступность хранилища браузера."); return; }
+    state.applying = true; syncControls(); showError(null);
+    el("sync").textContent = "Применение плана " + plan.plan_id + "…";
+    let refresh = false, reauthenticate = false, rejected = false;
+    try {
+      const receipt = await api("/api/v1/projects/" + encodeURIComponent(plan.project_id) + "/setup/plans/" + encodeURIComponent(plan.plan_id) + "/apply", {
+        method: "POST", body: JSON.stringify({schema_version: 1, plan_digest: plan.plan_digest, confirmed: true, idempotency_key: key})});
+      if (!receiptMatchesPlan(receipt, plan)) throw new Error("Некорректная или чужая квитанция; результат не подтверждён");
+      state.attemptOperationId = receipt.operation_id;
+      if (receiptResolvesAttempt(receipt)) clearAttempt();
+      state.pendingPlan = null; state.applyKey = null;
       el("plan-dialog").close();
-      state.pendingPlan = null;
-      state.applyKey = null;
       recordReceipt(receipt, plan.project_id);
       el("sync").textContent = "Состояние операции (" + receipt.state + ")";
-
-      // Automatically refresh snapshot to reflect applied effects
-      await refreshSnapshot();
+      refresh = true;
     } catch (err) {
-      showError("Ответ о применении не получен: " + err.message + ". Повтор использует тот же ключ.");
-      el("sync").textContent = "Сбой применения";
+      const detail = err.data && err.data.detail;
+      const notStarted = err.status === 409 && detail && detail.error === "PLAN_STALE" &&
+        detail.apply_outcome === "NOT_STARTED" && detail.plan_id === plan.plan_id && detail.plan_digest === plan.plan_digest &&
+        receiptMatchesPlan(detail.receipt, plan) && detail.receipt.state === "BLOCKED" && detail.receipt.error_code === "PLAN_STALE";
+      el("plan-dialog").close();
+      state.pendingPlan = null;
+      if (notStarted) {
+        clearAttempt(); state.applyKey = null;
+        recordReceipt(detail.receipt, plan.project_id);
+        rejected = true;
+        el("sync").textContent = "Сервер подтвердил: устаревший план не выполнялся";
+        refresh = true;
+        showError("План устарел и не выполнялся. Обновите диагностику и сформируйте новый план.");
+      } else {
+        // Including401/403: authorization can be revoked after a committed effect.
+        showError("Результат исходного запроса не подтверждён: " + err.message + ". Запрос и ключ сохранены; проверьте результат ниже.");
+        el("sync").textContent = "Требуется восстановление исходного запроса";
+        reauthenticate = err.status === 401 || err.status === 403;
+      }
     } finally {
-      state.applying = false;
-      el("plan-apply-btn").disabled = false;
-      syncControls();
+      state.applying = false; syncControls();
+      if (reauthenticate) await checkSession();
+      else if (refresh) await refreshSnapshot();
+      if (rejected) showError("План устарел и не выполнялся. Для нового действия сформируйте новый план. " + (el("error").hidden ? "" : el("error").textContent));
     }
   }
 
@@ -558,6 +716,12 @@
           const value = await api("/api/v1/projects/" + encodeURIComponent(p) +
             "/setup/operations/" + encodeURIComponent(r.operation_id));
           if (epoch !== state.epoch || p !== state.currentProject) return;
+          if (!receiptMatchesPlan(value, r) || value.operation_id !== r.operation_id) throw new Error("Квитанция не соответствует операции");
+          const attempt = state.attempt;
+          if (attempt && value.operation_id === state.attemptOperationId && state.actor === attempt.actor_id && value.project_id === attempt.project_id &&
+              value.plan_id === attempt.plan_id && value.plan_digest === attempt.plan_digest && receiptResolvesAttempt(value)) {
+            clearAttempt(); closePlan();
+          }
           recordReceipt(value, p);
         } catch (err) { showError("Статус недоступен: " + err.message); update.disabled = false; }
       });
@@ -566,7 +730,9 @@
   }
   function closePlan() {
     if (state.applying) return;
-    el("plan-dialog").close(); state.pendingPlan = null; state.applyKey = null; syncControls();
+    el("plan-dialog").close(); state.pendingPlan = null;
+    if (!state.attempt) state.applyKey = null;
+    syncControls();
   }
 
   function init() {
@@ -595,8 +761,10 @@
     el("plan-dialog").addEventListener("cancel", event => { event.preventDefault(); closePlan(); });
     el("plan-apply-btn").addEventListener("click", applyPendingPlan);
     el("session-check").addEventListener("click", checkSession);
+    el("apply-inspect").addEventListener("click", inspectPendingApply);
 
-    // Initial check
+    // A bookmark is never authority and never automatically replays an action.
+    restoreAttempt();
     syncControls();
     checkSession();
   }

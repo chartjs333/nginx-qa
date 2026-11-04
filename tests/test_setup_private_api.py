@@ -228,6 +228,98 @@ class TestSetupPrivateAPI(unittest.TestCase):
         del self.host.scope_api_operator
         self.assertEqual(stranger.get("/api/v1/setup/projects").status_code,401)
 
+    def test_apply_stale_response_has_durable_bound_nonexecution_receipt(self):
+        plan = self.plan()
+        manager = self.host.setup_operations_manager
+        manager.authority = lambda *args: "f" * 64
+        response = self.apply(plan)
+        self.assertEqual(409, response.status_code, response.text)
+        detail = response.json()["detail"]
+        self.assertEqual("NOT_STARTED", detail["apply_outcome"])
+        self.assertEqual(plan["plan_id"], detail["plan_id"])
+        self.assertEqual(plan["plan_digest"], detail["plan_digest"])
+        get_receipt_validator().validate(detail["receipt"])
+        self.assertEqual("BLOCKED", detail["receipt"]["state"])
+        self.assertEqual("PLAN_STALE", detail["receipt"]["error_code"])
+        replay = self.apply(plan)
+        self.assertEqual(200, replay.status_code, replay.text)
+        self.assertEqual(detail["receipt"]["operation_id"], replay.json()["operation_id"])
+        self.assertTrue(replay.json()["deduplicated"])
+
+    def test_first_response_post_effect403_is_reconciled_passively_under_read_grant(self):
+        calls = []
+        def effect_then_revoke(**kwargs):
+            calls.append(kwargs)
+            self.write_policy(actions=[])
+            return {"state": "SUCCEEDED"}
+        self.host.setup_operations_manager.action_handlers["diagnostics.refresh"] = effect_then_revoke
+        plan = self.plan()
+        response = self.apply(plan)
+        self.assertEqual(403, response.status_code, response.text)
+        self.assertNotIn("apply_outcome", response.json()["detail"])
+        self.assertEqual(1, len(calls))
+        path = f"/api/v1/projects/9001/setup/plans/{plan['plan_id']}/inspect"
+        payload = {"schema_version":1,"plan_digest":plan["plan_digest"],"idempotency_key":"apply-fixture"}
+        self.assertEqual(403, self.alice.post(path,json=payload).status_code)
+        self.write_policy(actions=["read"])
+        before = self.tree()
+        inspection = self.alice.post(path,json=payload)
+        self.assertEqual(200, inspection.status_code, inspection.text)
+        result = inspection.json()
+        self.assertEqual("setup_apply_inspection", result["kind"])
+        self.assertEqual(plan, result["plan"])
+        self.assertFalse(result["retry_permitted"])
+        self.assertEqual("SUCCEEDED", result["receipt"]["state"])
+        get_receipt_validator().validate(result["receipt"])
+        self.assertEqual(before, self.tree())
+        self.assertEqual(1, len(calls))
+        self.assertEqual(403, self.bob.post(path,json=payload).status_code)
+        self.assertEqual(403, self.alice.post(path.replace("9001","9002"),json=payload).status_code)
+        token = self.alice.headers.pop("X-Nginx-QA-CSRF")
+        self.assertEqual(403, self.alice.post(path,json=payload).status_code)
+        self.alice.headers["X-Nginx-QA-CSRF"] = token
+        self.alice.headers["Origin"] = "https://foreign.invalid"
+        self.assertEqual(403, self.alice.post(path,json=payload).status_code)
+
+    def test_stale_negative_receipt_is_not_disclosed_after_read_revocation(self):
+        plan = self.plan()
+        manager = self.host.setup_operations_manager
+        manager.authority = lambda *args: "f" * 64
+        original_save = manager._save
+        def persist_then_revoke():
+            original_save()
+            self.write_policy(actions=[])
+        manager._save = persist_then_revoke
+        response = self.apply(plan)
+        self.assertEqual(403, response.status_code, response.text)
+        self.assertEqual({"error":"SETUP_ACCESS_DENIED"}, response.json()["detail"])
+        ledger = json.loads((self.state/"setup"/"operations.json").read_bytes())
+        records = list(ledger["operations"].values())
+        self.assertEqual(1,len(records))
+        self.assertEqual("PLAN_STALE",records[0]["receipt"]["error_code"])
+        path = f"/api/v1/projects/9001/setup/plans/{plan['plan_id']}/inspect"
+        payload = {"schema_version":1,"plan_digest":plan["plan_digest"],"idempotency_key":"apply-fixture"}
+        self.assertEqual(403,self.alice.post(path,json=payload).status_code)
+        self.write_policy(actions=["read"])
+        inspection = self.alice.post(path,json=payload)
+        self.assertEqual(200,inspection.status_code,inspection.text)
+        self.assertEqual(records[0]["receipt"],inspection.json()["receipt"])
+
+    def test_inspection_rechecks_read_before_disclosing_plan_and_receipt(self):
+        plan = self.plan()
+        self.assertEqual(200,self.apply(plan).status_code)
+        manager = self.host.setup_operations_manager
+        original_inspect = manager.inspect_apply
+        def read_then_revoke(*args, **kwargs):
+            result = original_inspect(*args, **kwargs)
+            self.write_policy(actions=[])
+            return result
+        manager.inspect_apply = read_then_revoke
+        path = f"/api/v1/projects/9001/setup/plans/{plan['plan_id']}/inspect"
+        result = self.alice.post(path,json={"schema_version":1,"plan_digest":plan["plan_digest"],"idempotency_key":"apply-fixture"})
+        self.assertEqual(403,result.status_code,result.text)
+        self.assertEqual({"error":"SETUP_ACCESS_DENIED"},result.json()["detail"])
+
     def test_csrf_origin_and_malformed_apply_are_client_errors(self):
         plan = self.plan()
         token = self.alice.headers.pop("X-Nginx-QA-CSRF")
