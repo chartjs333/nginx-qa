@@ -1,0 +1,60 @@
+{
+  "kind": "wizard_console_stop_with_held_native_identities",
+  "at": "2026-11-04T18:22:12.635607+00:00",
+  "source_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "ownership": [
+    {
+      "pid": 54584,
+      "parent_pid": 99156,
+      "name": "python.exe",
+      "executable": "C:\\Python312\\python.exe",
+      "command_line": "\"C:\\Python312\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038",
+      "created": "2026-11-04T18:15:42.8274920Z"
+    },
+    {
+      "pid": 99156,
+      "parent_pid": 70896,
+      "name": "python.exe",
+      "executable": "C:\\nqt37\\v\\Scripts\\python.exe",
+      "command_line": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -E -s -B -m uvicorn staging_host_app:app --host 127.0.0.1 --port 18038",
+      "created": "2026-11-04T18:15:42.8159490Z"
+    },
+    {
+      "pid": 70896,
+      "parent_pid": 82912,
+      "name": "powershell.exe",
+      "executable": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      "command_line": "\"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\" -NoProfile -ExecutionPolicy Bypass -File D:\\nq-sdw-launcher\\run_staging.ps1 -Action Start -Profile setup-diagnostics-wizard-v1 -ExpectedCommit a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca -DeploymentBranch codex/sdw-qualified-host-continuation-20261104 ",
+      "created": "2026-11-04T18:15:38.6940250Z"
+    }
+  ],
+  "before": {
+    "native_sprints": [
+      {
+        "id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      },
+      {
+        "id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      }
+    ],
+    "client_journal_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4"
+  },
+  "native_handle_birth_and_image_verified": true,
+  "signal_sent": true,
+  "console_pids": [
+    54584,
+    70896,
+    99156,
+    114104
+  ],
+  "all_owned_processes_exited": true
+}

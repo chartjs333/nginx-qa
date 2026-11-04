@@ -1,0 +1,28 @@
+{
+  "scope": "Read-only inventory of actual prior release evidence and relevant task configurations; no token values read into output or foreign integration changes.",
+  "cloudflare_tls_http_boundary": {
+    "status": "PASS_HISTORICAL",
+    "recorded_at": "2026-11-03T21:21:37.685598+00:00",
+    "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+    "receipt": "C:\\nqt35\\client\\release-gateway-live-probe.json",
+    "sha256": "e4c6d4e7a1448e6cbf40ef235642540123c30fb51deaf1cdd3eb1f78fb69e852",
+    "checks": 24,
+    "scope": "actual_empty_release_host_and_cloudflare_http_boundary",
+    "still_public": false
+  },
+  "telegram_bot_credentials": {
+    "status": "NOT_CONFIGURED_IN_OWNED_HOST",
+    "protected_references_present": true,
+    "protected_values_present": false
+  },
+  "real_telegram_actor_and_mobile_session": {
+    "status": "NOT_AVAILABLE",
+    "reason": "No configured authorized real Telegram user/bot or phone/tablet session in this isolated deployment."
+  },
+  "user_permission": "Task authorization exists; absent configuration is not a request for repeated permission.",
+  "remaining_external_inputs": [
+    "A bot intended for this deployment and its protected credential/webhook secret.",
+    "An explicitly bound real Telegram user and actual Telegram mobile/tablet acceptance session."
+  ],
+  "action": "Complete worker/advisor/local native lifecycle without weakening guards. Preserve prior actual tunnel proof; do not falsely label all Cloudflare testing NOT_RUN or fabricate real Telegram acceptance."
+}

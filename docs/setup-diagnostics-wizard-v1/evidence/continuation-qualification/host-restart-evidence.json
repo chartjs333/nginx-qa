@@ -1,0 +1,32 @@
+{
+  "status": "PASS",
+  "kind": "real_owned_host_restart",
+  "at": "2026-11-04T18:22:34.100584+00:00",
+  "source_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "named_actor_restored": true,
+  "browser_exact_operation_preserved": "op-239c90787c391117667c74d4",
+  "native_client_history_byte_identical": true,
+  "advisor_admission_quiescent_before_and_after": true,
+  "fresh_project9010_native_checks_pass": true,
+  "exact_r4_apply_replay_no_new_run": {
+    "action_id": "selftest.start",
+    "created_at": "2026-11-04T17:49:33.098218+00:00",
+    "deduplicated": true,
+    "error_code": null,
+    "evidence_ids": [
+      "launch-459a483c56e04c26a92a19f9ab81264a"
+    ],
+    "kind": "setup_operation_receipt",
+    "native_operation_id": "launch-459a483c56e04c26a92a19f9ab81264a",
+    "native_sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+    "operation_id": "op-0c9852bf2809d6e784d8311a",
+    "plan_digest": "ec914e9a35a79ed9acce861d18c676ad695c4f7499be78d61f8e35c323781aef",
+    "plan_id": "plan-ea060a7eba3047606db02a11",
+    "project_id": "9000",
+    "retryable": false,
+    "schema_version": 1,
+    "state": "SUCCEEDED",
+    "updated_at": "2026-11-04T17:49:54.261212+00:00"
+  },
+  "fresh_snapshot_id": "13ee70f38e193c4f21ddd33fb2861726d0a10f384ae2bc9cb11373dc8cbacebf"
+}

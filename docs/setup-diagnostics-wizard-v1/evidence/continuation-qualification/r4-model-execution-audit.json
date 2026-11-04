@@ -1,0 +1,83 @@
+{
+  "status": "PASS",
+  "kind": "actual_independent_cli_contexts_and_tool_execution",
+  "records": [
+    {
+      "assignment_id": "assignment-1aae74d613e95f88c5492498",
+      "role": "assignment",
+      "job": "39d568ce6f7c9594c6a8c3420bc930db176f64b8eddddc3cfab13b68920bf69b",
+      "thread_id": "01a1a7ae-9e3a-76a3-97dd-76bbbc223b9c",
+      "commands": [
+        {
+          "command": "/bin/bash -c 'cat /task/prompt.txt'",
+          "exit_code": 0,
+          "output_sha256": "83af5167cf702a2b8ebb40e2c35b81790cc5152d80cc480a14c0d3d441faeb57"
+        },
+        {
+          "command": "/bin/bash -c 'pwd && rg --files -g AGENTS.md -g setup-selftest.md /work /task'",
+          "exit_code": 127,
+          "output_sha256": "99352fa9c72acad5befe243b3211cfb14879514bcdb5c54b90d674076c2b7b67"
+        },
+        {
+          "command": "/bin/bash -c 'ls -la /work; find /work /task -name AGENTS.md -print'",
+          "exit_code": 0,
+          "output_sha256": "d4593788c5dc6b9fbcb93d019e56a0d127ae8985c770396db9a24ca6728ff484"
+        },
+        {
+          "command": "/bin/bash -c \"cat > /work/docs/setup-selftest.md <<'EOF'\n# Purpose\n\nThis is a disposable native Managed Sprint self-test for project 9010.\n\n# Execution\n\nThe existing nginx-qa engine assigns work and controls transitions.\n\n# Review\n\nTwo independent Reviewer approvals are required.\n\n# Limitations\n\nThis documentation task does not prove production readiness or external Telegram/provider connectivity.\nEOF\ncat /work/docs/setup-selftest.md\n git status --short\"",
+          "exit_code": 0,
+          "output_sha256": "df5d473edfadca3dcf3b96f56a3cdbbb22660e89b81a5b79fbef65dc0d92abe5"
+        }
+      ],
+      "stdout_sha256": "775e8c138b2b59415c50fbb530c80c6c19af8d784f81e60a2e215cc33ca760ea",
+      "prompt_sha256": "83af5167cf702a2b8ebb40e2c35b81790cc5152d80cc480a14c0d3d441faeb57",
+      "retired": true,
+      "auth_snapshot_removed": true
+    },
+    {
+      "assignment_id": "review-79a6851101e2e75ad9cc608b",
+      "role": "review",
+      "job": "adb5903b723de2160ebad84708eead6ed70e2fa853e6274e96f1e5fa18f1446d",
+      "thread_id": "01a1a7af-12a5-7261-8ebe-2fc02c6de415",
+      "commands": [
+        {
+          "command": "/bin/bash -c 'cat /task/prompt.txt'",
+          "exit_code": 0,
+          "output_sha256": "ccdb7b91cc6f7e9a5f7abca3e73bab278233a08e03354bcc67b2a8272ce9620a"
+        },
+        {
+          "command": "/bin/bash -c 'git diff --stat 890425134beff380cb7f983908ee937dd628c2ce 73c00855b3a0ff3501047a18bfff8680e9672912; git diff 890425134beff380cb7f983908ee937dd628c2ce 73c00855b3a0ff3501047a18bfff8680e9672912 --; git status --short; git show 73c00855b3a0ff3501047a18bfff8680e9672912:docs/setup-selftest.md'",
+          "exit_code": 0,
+          "output_sha256": "8dd331e956652c6051e63dc5ed6c49a2a7ff189b05a65e857b63954a004d2d4b"
+        }
+      ],
+      "stdout_sha256": "357b65ee962c3d6ecef4410a650daa7d06c90f7f91f19a398a69670620519d58",
+      "prompt_sha256": "ccdb7b91cc6f7e9a5f7abca3e73bab278233a08e03354bcc67b2a8272ce9620a",
+      "retired": true,
+      "auth_snapshot_removed": true
+    },
+    {
+      "assignment_id": "review-d9ab032d0e07910a9c147ac7",
+      "role": "review",
+      "job": "a495265a63db0d586d727842ded16200cf921e5908c0df64d57575be32036d7b",
+      "thread_id": "01a1a7af-6af5-7de3-a76f-154b7a67f033",
+      "commands": [
+        {
+          "command": "/bin/bash -c 'cat /task/prompt.txt'",
+          "exit_code": 0,
+          "output_sha256": "d39950c920871da9ad685883625fda514db11bb82157806d20678b068accad55"
+        },
+        {
+          "command": "/bin/bash -c 'git diff --name-status 890425134beff380cb7f983908ee937dd628c2ce 73c00855b3a0ff3501047a18bfff8680e9672912\ngit diff 890425134beff380cb7f983908ee937dd628c2ce 73c00855b3a0ff3501047a18bfff8680e9672912 -- docs/setup-selftest.md\ngit show 73c00855b3a0ff3501047a18bfff8680e9672912:docs/setup-selftest.md'",
+          "exit_code": 0,
+          "output_sha256": "cede5a0b33736000fb4bbd5fa884a1d1f52d0e41ec41c7c0cae20f29460f986a"
+        }
+      ],
+      "stdout_sha256": "c60b9071e56b0e22e2f310df6596deb2ee6273bfc8de5cd10aa5da15b9107991",
+      "prompt_sha256": "d39950c920871da9ad685883625fda514db11bb82157806d20678b068accad55",
+      "retired": true,
+      "auth_snapshot_removed": true
+    }
+  ],
+  "remaining_owned_cgroup_pids": 0
+}
