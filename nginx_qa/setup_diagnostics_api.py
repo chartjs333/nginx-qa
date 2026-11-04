@@ -30,7 +30,11 @@ def register_setup_diagnostics_api(host: Any) -> None:
     state = Path(state_raw) if state_raw and Path(state_raw).is_absolute() else None
     policy_raw = getattr(host, "setup_policy_path", None) or os.environ.get("NGINX_QA_SETUP_POLICY_PATH")
     policy = SetupPolicy(Path(policy_raw) if policy_raw else (state / "setup-policy.json" if state else None))
-    git_path = Path(getattr(host, "git_config_path", "port_git_map.json"))
+    def registry_path():
+        # staging_host_app validates and rebinds legacy mutable paths after
+        # importing main (and registering routes). Resolve the trusted host
+        # binding when handling a request, never capture the checkout fallback.
+        return Path(getattr(host, "git_config_path", "port_git_map.json"))
     code_root = Path(getattr(host, "service_root", None) or Path(__file__).resolve().parents[1])
     try:
         runtime_config = host.load_managed_runtime_config()
@@ -45,6 +49,7 @@ def register_setup_diagnostics_api(host: Any) -> None:
     assets = Path(__file__).parent / "static"
 
     def registry():
+        git_path = registry_path()
         if not git_path.exists():
             return {}
         data = parse_strict_json_with_limits(git_path.read_bytes())
@@ -106,7 +111,7 @@ def register_setup_diagnostics_api(host: Any) -> None:
                                             authority_fingerprint=binding_fingerprint(actor, project_id))
         except (LookupError, ValueError, PermissionError):
             binding = None
-        return dict(instance_id=instance_id, code_root=code_root, git_config_path=git_path,
+        return dict(instance_id=instance_id, code_root=code_root, git_config_path=registry_path(),
             store_path=store_path, state_base=state, repository_root=Path(repository_root) if repository_root else None,
             project_metadata=row, binding_metadata=binding, actor_id=actor,
             policy_generation=grant.generation, authority_version=grant.version,

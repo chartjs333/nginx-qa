@@ -163,6 +163,23 @@ class TestSetupPrivateAPI(unittest.TestCase):
         self.assertEqual(self.tree(),before)
         self.assertFalse(self.state.exists())
 
+    def test_staging_path_rebound_after_route_registration_is_used(self):
+        # Production staging imports main/routes before redirecting mutable
+        # registry paths. A captured fallback silently hid every real project.
+        staged = self.root / "staging-registry.json"
+        staged.write_bytes(self.registry.read_bytes())
+        self.registry.write_text('{"projects": {}}', encoding="utf-8")
+        self.host.git_config_path = staged
+        listed = self.alice.get("/api/v1/setup/projects")
+        self.assertEqual(200, listed.status_code, listed.text)
+        self.assertEqual(["9001", "9002"],
+                         [p["project_id"] for p in listed.json()["projects"]])
+        snap = self.snapshot()
+        plan = self.plan(snapshot=snap)
+        applied = self.apply(plan)
+        self.assertEqual(200, applied.status_code, applied.text)
+        self.assertEqual("SUCCEEDED", applied.json()["state"])
+
     def test_snapshot_cannot_cross_actor_project_or_be_invented(self):
         snap = self.snapshot()
         for client,project,sid in ((self.bob,"9001",snap["snapshot_id"]),

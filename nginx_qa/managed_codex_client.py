@@ -17,7 +17,10 @@ from pathlib import Path
 import re
 import secrets
 import shutil
+import socket
+from socketserver import BaseRequestHandler, TCPServer
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -94,24 +97,188 @@ class NativeAPI:
 
 class CodexRunner:
     """Windows Job ownership, finite resources and a fresh CLI context per role."""
-    def __init__(self, node_path, codex_script, *, timeout=600):
+    def __init__(self, node_path, codex_script, *, timeout=600, sandbox_backend="mxc"):
         self.node = str(Path(node_path).resolve(strict=True))
         self.script = str(Path(codex_script).resolve(strict=True))
         self.timeout = min(max(timeout, 30), 1800)
-        self.environment = sanitized_child_environment()
-        for key in list(self.environment):
-            if key.upper() in {"OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"}:
-                self.environment.pop(key)
+        self.sandbox_backend = sandbox_backend
+        self.environment = self.child_environment()
         self._slots = threading.BoundedSemaphore(2)
+        self.sandbox_diagnostic = {"state": "NOT_CHECKED"}
 
-    def ready(self):
+    @staticmethod
+    def child_environment(source=None):
+        """Never inherit the enclosing agent's authority/session or provider overrides."""
+        return {key: value for key, value in sanitized_child_environment(source).items()
+                if not key.upper().startswith(("CODEX_", "OPENAI_"))
+                and key.upper() not in {"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}}
+
+    def _sandbox_unavailable(self, reason):
+        next_step = {
+            "HOST_MXC_UNSUPPORTED": "This backend requires Windows 11 build 26100.9278/26200.9278 or newer; Windows 10 cannot run MXC. Use a qualified supported host or the authorized operator client.",
+            "CLI_STRICT_MXC_UNSUPPORTED": "Install Codex CLI 0.162.0 or newer in an operator-owned location and configure that path; this service never upgrades the CLI.",
+            "ELEVATED_NONINTERACTIVE_ADMISSION_UNSUPPORTED": "Windows 10 elevated sandbox support requires an adapter/backend extension with a documented no-setup/no-UAC admission path. Provisioning it alone does not make this adapter READY.",
+            "NATIVE_BOUNDARY_NOT_PROVEN": "The trusted native canary must read files, enforce role write permissions, deny a real socket connection and deny .git/config writes before READY.",
+        }.get(reason, "Select a supported sandbox backend; unelevated and unknown backends are not admitted.")
+        self.sandbox_diagnostic = {
+            "state": "BLOCKED", "error": "CODEX_SANDBOX_UNAVAILABLE", "reason": reason,
+            "guidance": [next_step,
+                         "This service does not provision Windows accounts, request UAC, or fall back to unelevated mode.",
+                         "An authorized operator client may complete native assignments separately; this is not automatic CLI execution."]}
+        raise ValueError("CODEX_SANDBOX_UNAVAILABLE")
+
+    @staticmethod
+    def _mxc_os_supported():
         if os.name != "nt":
-            raise ValueError("WINDOWS_JOB_OWNERSHIP_REQUIRED")
-        check = subprocess.run([self.node, self.script, "login", "status"],
-            capture_output=True, timeout=10, env=self.environment,
-            creationflags=subprocess.CREATE_NO_WINDOW)
+            return False
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE,
+                           r"SOFTWARE\Microsoft\Windows NT\CurrentVersion") as key:
+            build = int(winreg.QueryValueEx(key, "CurrentBuild")[0])
+            revision = int(winreg.QueryValueEx(key, "UBR")[0])
+        return build > 26200 or (build in {26100, 26200} and revision >= 9278)
+
+    def _bounded_local(self, argv, cwd, *, timeout=8, stop=None):
+        """Own every preflight child; a timed out probe cannot leave a helper behind."""
+        if stop is not None and stop.is_set():
+            raise ValueError("CLIENT_STOPPING")
+        job = _WindowsJob.create("Local\\nq-client-preflight-" + secrets.token_hex(12),
+            {"memory_bytes": 536870912, "process_count": 12, "cpu_percent": 50})
+        child = None
+        try:
+            with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+                child = _spawn_suspended_in_windows_job(job, argv, cwd=str(cwd), environment=self.environment,
+                    stdout_stream=stdout, stderr_stream=stderr, inherit_recovery_job_handle=False)
+                _WindowsJob.resume(child)
+                deadline = time.monotonic() + timeout
+                while child.poll() is None:
+                    if stop is not None and stop.is_set():
+                        raise ValueError("CLIENT_STOPPING")
+                    if (time.monotonic() >= deadline or
+                            os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > 131072):
+                        raise ValueError("CODEX_SANDBOX_PREFLIGHT_LIMIT")
+                    time.sleep(0.02)
+                stdout.seek(0)
+                stderr.seek(0)
+                return subprocess.CompletedProcess(argv, child.returncode, stdout.read(131073), stderr.read(131073))
+        finally:
+            job.terminate()
+            if child:
+                child.wait(timeout=5)
+                child.close()
+            job.close()
+
+    @staticmethod
+    def validate_boundary_evidence(evidence, *, role, nonce, before, after, connections):
+        required = {"nonce", "executed", "read_ok", "doc_write_ok", "socket_attempted",
+                    "socket_denied", "git_write_attempted", "git_write_denied"}
+        if (not isinstance(evidence, dict) or not required.issubset(evidence)
+                or evidence["nonce"] != nonce or evidence["executed"] is not True
+                or evidence["read_ok"] is not True or evidence["socket_attempted"] is not True
+                or evidence["socket_denied"] is not True or evidence["git_write_attempted"] is not True
+                or evidence["git_write_denied"] is not True or before != after or connections
+                or evidence["doc_write_ok"] is not (role == "author")):
+            raise ValueError("CODEX_SANDBOX_BOUNDARY_UNPROVEN")
+
+    def _prove_native_boundary(self, *, stop=None):
+        """Run trusted native canaries before READY; no model self-report is evidence."""
+        with tempfile.TemporaryDirectory(prefix="nq-client-boundary-") as temporary:
+            probe_root = Path(temporary)
+            nonce = secrets.token_hex(16)
+            script = probe_root / "boundary_probe.py"
+            script.write_text('''import json,socket,sys
+from pathlib import Path
+r={"nonce":sys.argv[2],"executed":True}
+r["read_ok"]=Path("README.md").read_text()==sys.argv[2]
+try: Path("docs/probe.md").write_text(sys.argv[2]); r["doc_write_ok"]=True
+except PermissionError: r["doc_write_ok"]=False
+r["socket_attempted"]=True
+s=socket.socket(); s.settimeout(1)
+try: s.connect(("127.0.0.1",int(sys.argv[1]))); s.sendall(sys.argv[2].encode()); r["socket_denied"]=False
+except OSError: r["socket_denied"]=True
+finally: s.close()
+r["git_write_attempted"]=True
+try:
+ with Path(".git/config").open("a") as f: f.write("\\n# forbidden sandbox canary\\n")
+ r["git_write_denied"]=False
+except PermissionError: r["git_write_denied"]=True
+print(json.dumps(r))
+''', encoding="utf-8")
+            connections = []
+            class Handler(BaseRequestHandler):
+                def handle(self):
+                    self.request.settimeout(2)
+                    value = self.request.recv(128)
+                    if value == nonce.encode():
+                        connections.append(True)
+                    self.request.sendall(b"ok")
+            server = TCPServer(("127.0.0.1", 0), Handler)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            def control():
+                with socket.create_connection(server.server_address, timeout=2) as sock:
+                    sock.sendall(b"control")
+                    if sock.recv(2) != b"ok":
+                        raise ValueError("CODEX_SANDBOX_CONTROL_UNAVAILABLE")
+            try:
+                control()
+                for role, profile in (("author", ":workspace"), ("review", ":read-only")):
+                    workspace = probe_root / role
+                    workspace.mkdir()
+                    (workspace / "docs").mkdir()
+                    (workspace / "README.md").write_text(nonce, encoding="utf-8")
+                    initialized = self._bounded_local([shutil.which("git") or "git", "init", str(workspace)], probe_root, stop=stop)
+                    if initialized.returncode:
+                        raise ValueError("CODEX_SANDBOX_FIXTURE_FAILED")
+                    before = (workspace / ".git/config").read_bytes()
+                    argv = [self.node, self.script, "-c", 'windows.sandbox="mxc"', "sandbox",
+                        "--include-managed-config", "-P", "nq-managed-boundary",
+                        "-c", 'permissions.nq-managed-boundary.extends="' + profile + '"',
+                        "-c", "permissions.nq-managed-boundary.network.enabled=false", "-C", str(workspace),
+                        "--", sys.executable, str(script), str(server.server_address[1]), nonce]
+                    process = self._bounded_local(argv, workspace, stop=stop)
+                    if process.returncode != 0:
+                        raise ValueError("CODEX_SANDBOX_NATIVE_PROBE_FAILED")
+                    evidence = strict_object(process.stdout.strip())
+                    control()
+                    self.validate_boundary_evidence(evidence, role=role, nonce=nonce,
+                        before=before, after=(workspace / ".git/config").read_bytes(), connections=connections)
+            finally:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=2)
+
+    def ready(self, *, stop=None):
+        # Elevated's official account-admission path can invoke setup/UAC even
+        # with a valid public marker (e.g. an expired sandbox-account password).
+        # Do not treat a marker as proof or silently choose another backend.
+        if self.sandbox_backend == "elevated":
+            self._sandbox_unavailable("ELEVATED_NONINTERACTIVE_ADMISSION_UNSUPPORTED")
+        if self.sandbox_backend != "mxc":
+            self._sandbox_unavailable("SANDBOX_BACKEND_UNSUPPORTED")
+        try:
+            supported = self._mxc_os_supported()
+        except (OSError, ValueError):
+            supported = False
+        if not supported:
+            self._sandbox_unavailable("HOST_MXC_UNSUPPORTED")
+        version = self._bounded_local([self.node, self.script, "--version"], Path(self.script).parent, stop=stop)
+        match = re.search(rb"(\d+)\.(\d+)\.(\d+)", version.stdout)
+        if version.returncode or not match or tuple(map(int, match.groups())) < (0, 162, 0):
+            self._sandbox_unavailable("CLI_STRICT_MXC_UNSUPPORTED")
+        try:
+            self._prove_native_boundary(stop=stop)
+        except (ValueError, OSError, RuntimeError):
+            if stop is not None and stop.is_set():
+                raise ValueError("CLIENT_STOPPING") from None
+            self._sandbox_unavailable("NATIVE_BOUNDARY_NOT_PROVEN")
+        check = self._bounded_local([self.node, self.script, "login", "status"], Path(self.script).parent, stop=stop)
         if check.returncode or b"Logged in" not in check.stdout + check.stderr:
+            self.sandbox_diagnostic = {"state": "BLOCKED", "error": "CODEX_LOGIN_REQUIRED",
+                "reason": "EXISTING_LOGIN_UNAVAILABLE",
+                "guidance": ["Authenticate the installed Codex CLI under the service account, then repeat --check."]}
             raise ValueError("CODEX_LOGIN_REQUIRED")
+        self.sandbox_diagnostic = {"state": "PASS", "backend": "mxc", "boundary": "native-canary-verified"}
 
     def quiesce(self, job_name):
         job = _WindowsJob.open(job_name)
@@ -128,6 +295,10 @@ class CodexRunner:
             job.close()
 
     def run(self, *, cwd, prompt, schema, directory, job_name, stop):
+        # Resume and direct callers must pass the same preflight as prepare.
+        if stop.is_set():
+            raise ValueError("CLIENT_STOPPING")
+        self.ready(stop=stop)
         while not self._slots.acquire(timeout=0.1):
             if stop.is_set():
                 raise ValueError("CLIENT_STOPPING")
@@ -143,8 +314,9 @@ class CodexRunner:
             output_path.unlink(missing_ok=True)
             job = _WindowsJob.create(job_name, {
                 "memory_bytes": 2147483648, "process_count": 24, "cpu_percent": 50})
-            argv = [self.node, self.script, "exec", "--ignore-user-config", "--ignore-rules",
+            argv = [self.node, self.script, "exec", "--ignore-user-config", "--ignore-rules", "--strict-config",
                 "--ephemeral", "--json", "-c", 'approval_policy="never"',
+                "-c", 'windows.sandbox="mxc"',
                 "-c", "sandbox_workspace_write.network_access=false",
                 "-c", 'web_search="disabled"', "--disable", "multi_agent",
                 "--disable", "apps", "--disable", "browser_use", "--disable", "computer_use",
@@ -205,7 +377,8 @@ class ManagedCodexClient:
         self.thread_context = threading.local()
         self.resolver = resolver
         self.runner = runner or CodexRunner(config["node_path"], config["codex_script"],
-                                            timeout=config.get("role_timeout_seconds", 600))
+                                            timeout=config.get("role_timeout_seconds", 600),
+                                            sandbox_backend=config.get("sandbox_backend", "mxc"))
         self.api = api or NativeAPI(config["engine_url"], config.get("role_secret_refs", {}), resolver)
         self.validators = {}
         for kind, name in (("identity", "managed-current-identity-response-v1"),
@@ -718,11 +891,40 @@ def serve(config):
         client.lockfile.close()
 
 
-def main():
+def diagnose(config):
+    """Local readiness only: no service, state journal, resume, native API or model."""
+    runner = None
+    try:
+        runner = CodexRunner(config["node_path"], config["codex_script"],
+            timeout=config.get("role_timeout_seconds", 600),
+            sandbox_backend=config.get("sandbox_backend", "mxc"))
+        runner.ready()
+        return deepcopy(runner.sandbox_diagnostic)
+    except Exception:
+        # Do not expose paths, configuration contents, exception messages or
+        # captured CLI output; these may contain operator-controlled secrets.
+        if runner and runner.sandbox_diagnostic.get("state") == "BLOCKED":
+            return deepcopy(runner.sandbox_diagnostic)
+        return {"state": "BLOCKED", "error": "CODEX_PREFLIGHT_FAILED",
+                "reason": "CONFIGURATION_OR_LOCAL_PROBE_FAILED",
+                "guidance": ["Verify the configured existing node/CLI paths and local sandbox prerequisites, then repeat --check."]}
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True, help="Operator-owned local configuration JSON")
-    args = parser.parse_args()
+    parser.add_argument("--check", "--diagnose", dest="check", action="store_true",
+                        help="Check CLI/sandbox readiness without serving, resuming or running a model")
+    args = parser.parse_args(argv)
+    if args.check:
+        try:
+            result = diagnose(strict_object(Path(args.config).read_bytes()))
+        except Exception:
+            result = {"state": "BLOCKED", "error": "CODEX_PREFLIGHT_FAILED", "reason": "CONFIGURATION_INVALID"}
+        print(json.dumps(result, sort_keys=True))
+        return 0 if result["state"] == "PASS" else 2
     serve(strict_object(Path(args.config).read_bytes()))
+    return 0
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

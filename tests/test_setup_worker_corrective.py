@@ -2,6 +2,7 @@
 from copy import deepcopy
 import hashlib
 import http.server
+import io
 import json
 import os
 from pathlib import Path
@@ -14,7 +15,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from nginx_qa.setup_worker_adapter import SetupWorkerAdapter, bounded_json_request
-from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner, _CAPS, PROTOCOL
+from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner, _CAPS, PROTOCOL, diagnose, main
 from nginx_qa.process_supervisor import _WindowsJob, _spawn_suspended_in_windows_job
 from nginx_qa.sprint_types import SprintProvenance
 
@@ -178,6 +179,7 @@ class CodexSandboxPolicy(unittest.TestCase):
         runner = object.__new__(CodexRunner)
         runner.node, runner.script, runner.timeout = "node-fixture", "codex-fixture", 30
         runner.environment, runner._slots = {}, threading.BoundedSemaphore(1)
+        runner.ready = MagicMock()
         for title, mode in (("author", "workspace-write"), ("review", "read-only")):
             with self.subTest(role=title), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
@@ -196,6 +198,144 @@ class CodexSandboxPolicy(unittest.TestCase):
                 self.assertEqual(captured[captured.index("-s") + 1], mode)
                 self.assertIn('approval_policy="never"', captured)
                 self.assertIn("--ignore-user-config", captured)
+                self.assertIn("--strict-config", captured)
+                self.assertIn('windows.sandbox="mxc"', captured)
+                self.assertNotIn('windows.sandbox="unelevated"', captured)
+        self.assertEqual(runner.ready.call_count, 2)
+
+    def fixture_runner(self, backend="mxc"):
+        runner = object.__new__(CodexRunner)
+        runner.node, runner.script = "node-fixture", "codex-fixture"
+        runner.sandbox_backend = backend
+        runner.environment = {}
+        runner.sandbox_diagnostic = {"state": "NOT_CHECKED"}
+        runner._bounded_local = MagicMock(return_value=subprocess.CompletedProcess([], 0, b"codex-cli 0.162.0", b""))
+        return runner
+
+    def test_child_context_overrides_and_credentials_are_not_inherited(self):
+        source = {"PATH": "expected", "SystemRoot": "C:/Windows", "CODEX_PERMISSION_PROFILE": "danger-full-access",
+                  "codex_internal_originator_override": "parent", "CODEX_HOME": "elsewhere",
+                  "CODEX_THREAD_ID": "parent-thread", "OPENAI_BASE_URL": "https://untrusted.invalid",
+                  "OPENAI_API_KEY": "secret", "ANTHROPIC_API_KEY": "secret", "GOOGLE_API_KEY": "secret",
+                  "GEMINI_API_KEY": "secret", "NGINX_QA_SCOPE_CONTROL_A": "secret",
+                  "NGINX_QA_LAUNCHER_CONTROL_A": "secret", "TELEGRAM_BOT_TOKEN": "secret"}
+        self.assertEqual(CodexRunner.child_environment(source), {"PATH": "expected", "SystemRoot": "C:/Windows"})
+
+    def test_unsupported_host_is_blocked_without_any_child_or_fallback(self):
+        runner = self.fixture_runner()
+        with patch.object(runner, "_mxc_os_supported", return_value=False), \
+             patch.object(runner, "_prove_native_boundary") as probe:
+            with self.assertRaisesRegex(ValueError, "CODEX_SANDBOX_UNAVAILABLE"):
+                runner.ready()
+        runner._bounded_local.assert_not_called()
+        probe.assert_not_called()
+        self.assertEqual(runner.sandbox_diagnostic["reason"], "HOST_MXC_UNSUPPORTED")
+
+    def test_elevated_or_weaker_mode_never_provisions_or_requests_uac(self):
+        for backend, reason in (("elevated", "ELEVATED_NONINTERACTIVE_ADMISSION_UNSUPPORTED"),
+                                ("unelevated", "SANDBOX_BACKEND_UNSUPPORTED")):
+            runner = self.fixture_runner(backend)
+            with self.assertRaisesRegex(ValueError, "CODEX_SANDBOX_UNAVAILABLE"):
+                runner.ready()
+            runner._bounded_local.assert_not_called()
+            self.assertEqual(runner.sandbox_diagnostic["reason"], reason)
+
+    def test_strict_cli_version_required_before_native_canary(self):
+        runner = self.fixture_runner()
+        runner._bounded_local.return_value.stdout = b"codex-cli 0.161.0"
+        with patch.object(runner, "_mxc_os_supported", return_value=True), \
+             patch.object(runner, "_prove_native_boundary") as probe:
+            with self.assertRaisesRegex(ValueError, "CODEX_SANDBOX_UNAVAILABLE"):
+                runner.ready()
+        probe.assert_not_called()
+        self.assertEqual(runner.sandbox_diagnostic["reason"], "CLI_STRICT_MXC_UNSUPPORTED")
+
+    def test_canary_and_existing_login_both_required_for_ready(self):
+        runner = self.fixture_runner()
+        runner._bounded_local.side_effect = [subprocess.CompletedProcess([], 0, b"codex-cli 0.162.0", b""),
+                                             subprocess.CompletedProcess([], 0, b"", b"Logged in using ChatGPT")]
+        with patch.object(runner, "_mxc_os_supported", return_value=True), \
+             patch.object(runner, "_prove_native_boundary") as probe:
+            runner.ready()
+        probe.assert_called_once()
+        self.assertEqual(runner.sandbox_diagnostic["state"], "PASS")
+        runner._bounded_local.side_effect = [subprocess.CompletedProcess([], 0, b"codex-cli 0.162.0", b""),
+                                             subprocess.CompletedProcess([], 1, b"", b"Not logged in")]
+        with patch.object(runner, "_mxc_os_supported", return_value=True), \
+             patch.object(runner, "_prove_native_boundary"):
+            with self.assertRaisesRegex(ValueError, "CODEX_LOGIN_REQUIRED"):
+                runner.ready()
+        self.assertEqual(runner.sandbox_diagnostic["state"], "BLOCKED")
+
+    def test_direct_or_resumed_run_cannot_bypass_preflight(self):
+        runner = self.fixture_runner()
+        runner.ready = MagicMock(side_effect=ValueError("CODEX_SANDBOX_UNAVAILABLE"))
+        with patch("nginx_qa.managed_codex_client._WindowsJob.create") as job:
+            with self.assertRaisesRegex(ValueError, "CODEX_SANDBOX_UNAVAILABLE"):
+                runner.run(cwd=Path.cwd(), prompt="No model", schema={}, directory=Path.cwd(),
+                           job_name="must-not-launch", stop=threading.Event())
+        job.assert_not_called()
+
+    @unittest.skipUnless(os.name == "nt", "Windows owned preflight cancellation")
+    def test_stop_terminates_an_owned_preflight_child_promptly(self):
+        runner = self.fixture_runner()
+        runner.environment = CodexRunner.child_environment()
+        # Use the real bounded helper, not fixture_runner's protocol mock.
+        stop = threading.Event()
+        timer = threading.Timer(0.15, stop.set)
+        timer.start()
+        started = time.monotonic()
+        try:
+            with self.assertRaisesRegex(ValueError, "CLIENT_STOPPING"):
+                CodexRunner._bounded_local(runner,
+                    [sys.executable, "-c", "import time; time.sleep(20)"], Path.cwd(), stop=stop)
+        finally:
+            timer.cancel()
+        self.assertLess(time.monotonic() - started, 3)
+
+    def test_no_attempt_or_model_claim_never_counts_as_boundary_evidence(self):
+        good = {"nonce": "nonce", "executed": True, "read_ok": True, "doc_write_ok": True,
+                "socket_attempted": True, "socket_denied": True, "git_write_attempted": True, "git_write_denied": True}
+        arguments = dict(role="author", nonce="nonce", before=b"git", after=b"git", connections=[])
+        CodexRunner.validate_boundary_evidence(good, **arguments)
+        for evidence in ({}, {"attempted": True, "network_denied": True, "git_write_denied": True},
+                         {**good, "socket_attempted": False}, {**good, "git_write_attempted": False},
+                         {**good, "nonce": "stale"}, {**good, "doc_write_ok": False}):
+            with self.assertRaisesRegex(ValueError, "BOUNDARY_UNPROVEN"):
+                CodexRunner.validate_boundary_evidence(evidence, **arguments)
+        for changed in ({"connections": [True]}, {"after": b"modified"}, {"role": "review"}):
+            with self.assertRaisesRegex(ValueError, "BOUNDARY_UNPROVEN"):
+                CodexRunner.validate_boundary_evidence(good, **{**arguments, **changed})
+
+    def test_actual_unsandboxed_native_socket_and_git_write_fail_boundary_probe(self):
+        # No model: run only our static canary in its own temporary Git fixture.
+        # A nominal flag must not turn the deliberately absent sandbox into PASS.
+        runner = self.fixture_runner()
+        def local(argv, cwd, **kwargs):
+            command = argv[argv.index("--") + 1:] if argv[0] == runner.node else argv
+            return subprocess.run(command, cwd=cwd, capture_output=True, timeout=8)
+        runner._bounded_local = local
+        with self.assertRaisesRegex(ValueError, "BOUNDARY_UNPROVEN"):
+            runner._prove_native_boundary()
+
+    def test_check_is_sanitized_and_does_not_construct_service_or_resume(self):
+        runner = self.fixture_runner()
+        runner.ready = MagicMock(side_effect=lambda: runner._sandbox_unavailable("HOST_MXC_UNSUPPORTED"))
+        config = {"node_path": "node", "codex_script": "script", "state_dir": "must-not-create"}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "config.json"
+            path.write_text(json.dumps(config))
+            output = io.StringIO()
+            with patch("nginx_qa.managed_codex_client.CodexRunner", return_value=runner), \
+                 patch("nginx_qa.managed_codex_client.ManagedCodexClient") as client, \
+                 patch("nginx_qa.managed_codex_client.serve") as server, patch("sys.stdout", output):
+                self.assertEqual(main(["--config", str(path), "--diagnose"]), 2)
+            client.assert_not_called()
+            server.assert_not_called()
+            self.assertEqual(json.loads(output.getvalue())["reason"], "HOST_MXC_UNSUPPORTED")
+        with patch("nginx_qa.managed_codex_client.CodexRunner", side_effect=ValueError("private-token-secret")):
+            result = diagnose(config)
+        self.assertNotIn("private-token-secret", json.dumps(result))
 
 
 @unittest.skipUnless(os.name == "nt", "Windows owned job contract")

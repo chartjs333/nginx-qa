@@ -15,8 +15,19 @@ limit, not a completed recovery claim.
 
 ## Operator configuration
 
-Save the configuration outside agent workspaces and start the service using the
-same signed-in Windows account as the installed CLI:
+Save the configuration outside agent workspaces. First check the configured CLI
+under the same signed-in Windows account:
+
+```powershell
+C:/Python312/python.exe -m nginx_qa.managed_codex_client --config C:/operator/client.json --check
+```
+
+`--diagnose` is an alias. This command prints sanitized JSON and exits 0 for PASS
+or 2 for BLOCKED. It does not create the service journal, bind an HTTP listener,
+resume a session, contact the native engine, run a model or create a sprint.
+On a supported host it runs bounded trusted native probes in disposable local
+directories and checks the existing CLI login. Capabilities are declarations;
+they do not substitute for this readiness check. Start the service after PASS:
 
 ```powershell
 C:/Python312/python.exe -m nginx_qa.managed_codex_client --config C:/operator/client.json
@@ -33,6 +44,7 @@ When launching with PowerShell `Start-Process`, use `-WindowStyle Hidden`.
   "node_path": "C:/Program Files/nodejs/node.exe",
   "codex_script": "C:/Users/madoev/AppData/Roaming/npm/node_modules/@openai/codex/bin/codex.js",
   "role_timeout_seconds": 600,
+  "sandbox_backend": "mxc",
   "role_secret_refs": {},
   "projects": {
     "9010": {
@@ -76,7 +88,7 @@ they are not proof of task completion.
 
 - `GET /managed-client/capabilities` returns the exact WorkerCapabilities contract.
 - `POST /managed-client/prepare` accepts the native descriptor and returns exact
-  `READY` only after existing CLI login readiness and admission checks.
+  `READY` only after actual sandbox boundary, existing CLI login and admission checks.
 - `POST /managed-client/start` requires that session plus actual native initial
   assignment IDs. It returns exact `ACCEPTED` after verifying native identities.
 - `POST /managed-client/stop` returns exact `STOPPED` only after the client loop
@@ -106,17 +118,54 @@ Reviewers receive the exact source task, source/result commits, and author summa
 no other reviewer's feedback is provided. Review execution uses read-only sandbox.
 These are independent model sessions, not separate Windows user accounts.
 Both role commands explicitly set `sandbox_workspace_write.network_access=false`,
-disable web search and use their fixed sandbox modes with approval policy `never`.
-The installed CLI 0.161.0 schema declares read-only networking disabled by default;
-there is no separate `sandbox_read_only` configuration key. Shell network denial
-must also be exercised during live qualification. The workspace-write setting is
-documented in the [official configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference).
+disable web search, ignore user configuration/rules and use their fixed sandbox
+modes with approval policy `never`. The backend is explicitly `windows.sandbox=mxc`;
+there is no fallback. Every prepare and each resumed/direct role execution first
+runs native boundary canaries, before any model process. The canary must actually
+read a file, allow an author document write, deny a Reviewer write, attempt and
+deny a native socket connection to a verified reachable disposable listener, and
+attempt and deny a `.git/config` write. The parent verifies socket receipts and
+unchanged Git bytes. Missing attempts, a failed probe or model claims alone fail.
+
+This adapter currently admits strict MXC with CLI 0.162.0 or newer and a supported
+Windows 11 build (26100.9278/26200.9278 or newer), followed by the actual canary.
+See the [official Windows sandbox guide](https://learn.chatgpt.com/docs/windows/windows-sandbox).
+The current qualification machine is Windows 10 22H2 build 19045.6456 with CLI
+0.161.0. Its honest readiness result is:
+
+```json
+{"state":"BLOCKED","error":"CODEX_SANDBOX_UNAVAILABLE","reason":"HOST_MXC_UNSUPPORTED"}
+```
+
+Upgrading only the CLI does not supply MXC to Windows 10. Native socket canaries
+on this machine reached the test listener under `unelevated` in both role modes,
+including with explicit network-disabled permission profiles. That weaker backend
+is rejected; a nominal network flag is not treated as isolation proof.
+
+Windows 10's official elevated backend may provide strong isolation after proper
+operator provisioning. This adapter does **not yet admit it**: a valid public
+`CODEX_HOME/.sandbox/setup_marker.json` alone is insufficient. Official account
+admission may trigger automatic setup/UAC when accounts are missing, disabled or
+expired, even with a valid marker. A backend extension with a documented
+noninteractive/no-setup admission path and the same actual canaries is required.
+Setting `sandbox_backend` to `elevated` returns
+`ELEVATED_NONINTERACTIVE_ADMISSION_UNSUPPORTED`; provisioning alone does not change
+that result. No sandbox secret files are read by this adapter and it never
+provisions accounts, launches UAC or changes global Codex settings.
+
+The immediately executable automatic path is a supported, already configured
+Windows 11 host with a pinned compatible CLI, existing login and a passing
+`--check`. An explicitly authorized operator client can instead perform native
+assignments and independent reviews on this machine; that is supervised execution,
+not proof that the automatic CLI backend passed qualification.
 
 CLI processes and Git helpers run in existing native Windows Job primitives.
 There are at most two active client sessions and two simultaneous CLI processes,
 one session per admitted project. Each role has bounded wall time, memory, process
 count, CPU, output and prompt size. Child environments omit protected control
-credentials. Git commits/pushes are restricted to the assigned branch and exact
+credentials and all inherited `CODEX_*` / `OPENAI_*` overrides, including a parent
+agent's permission profile, thread/session identity and custom Codex home. Existing
+login is read from the service account's default Codex home. Git commits/pushes are restricted to the assigned branch and exact
 documentation allowlist; there is no force push/reset.
 
 A process crash kills Jobs without inherited handles. Restart reclaims only
@@ -143,7 +192,10 @@ binding ownership/configuration/freshness and restart, absolute HTTP deadlines,
 native identity admission, real temporary Git commit/push, independent mock role
 attempts, exact sprint provenance, committed/ignored-file scope denial, lost-ACK
 restart before both reviews, native blocked-state release and real local Windows
-Job termination. Protocol fixtures and mock model
+Job termination. Sandbox regressions include real local native socket/Git writes
+deliberately run without isolation to verify rejection, preflight-before-model,
+inherited-authority removal, missing-attempt rejection and diagnostic redaction.
+Protocol fixtures and mock model
 outputs are explicitly identified. They do not constitute a real model/Managed
 Sprint execution; that requires a separately authorized native self-test and its
 native result and two-review evidence.
