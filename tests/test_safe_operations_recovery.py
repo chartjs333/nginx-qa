@@ -1,234 +1,120 @@
-"""Automated qualification suite for Setup and Diagnostics Wizard v1 (safe-operations-recovery).
-
-Acceptance cases:
-- A10: Stale plan and current authority fences
-- A12: Restart and ambiguous external effects
-- A15: Typed actions and native recovery only
-"""
-from __future__ import annotations
-
+"""Regression tests for real fencing and durable intent semantics."""
 import asyncio
-from datetime import datetime, timezone
+from copy import deepcopy
 import json
-import os
 from pathlib import Path
-import shutil
 import tempfile
-import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi.testclient import TestClient
 import jsonschema
-
-import main as app_module
-from nginx_qa.setup_diagnostics import (
-    get_contracts_schema,
-    compute_authority_fingerprint,
-)
-from nginx_qa.setup_operations import (
-    SetupOperationsManager,
-    compute_plan_digest,
-    get_plan_validator,
-    get_apply_validator,
-    get_receipt_validator,
-)
-from nginx_qa.legacy_scope_control import ADMIN_TOKEN_HEADER, ADMIN_TOKEN_ENV
-
-
-TEST_ADMIN_TOKEN = "c" * 32
+from nginx_qa.setup_operations import SetupOperationsManager
 
 
 class TestSafeOperationsRecovery(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        os.environ[ADMIN_TOKEN_ENV] = TEST_ADMIN_TOKEN
-        cls.schema = get_contracts_schema()
-        cls.plan_validator = get_plan_validator()
-        cls.apply_validator = get_apply_validator()
-        cls.receipt_validator = get_receipt_validator()
-        cls.app = app_module.app
-        cls.client = TestClient(cls.app, raise_server_exceptions=False)
-
     def setUp(self):
-        os.environ[ADMIN_TOKEN_ENV] = TEST_ADMIN_TOKEN
-        self.temp_dir = tempfile.mkdtemp(prefix="sdw-ops-test-")
-        self.temp_path = Path(self.temp_dir)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.fp = "a" * 64
+        self.allowed = True
+        self.calls = []
+        self.manager = self.make_manager()
+        self.snapshot = {"snapshot_id": "b" * 64, "project_id": "9000",
+            "authority_fingerprint": self.fp,
+            "available_action_ids": ["diagnostics.refresh", "selftest.start", "selftest.stop", "provider.probe"]}
 
-    def tearDown(self):
-        shutil.rmtree(self.temp_dir, ignore_errors=True)
+    def authorize(self, actor, project, action):
+        if not self.allowed:
+            raise PermissionError("revoked")
 
-    def _sample_snapshot(self) -> dict:
-        return {
-            "kind": "setup_diagnostic_snapshot",
-            "schema_version": 1,
-            "snapshot_id": "a" * 64,
-            "project_id": "9000",
-            "instance_id": None,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "source": {
-                "adapter_id": "test",
-                "adapter_version": "1.0",
-                "code_commit": "0" * 40,
-                "configuration_version": "v1",
-            },
-            "authority_fingerprint": compute_authority_fingerprint("9000", policy_generation=1, control_revision=1),
-            "checks": [],
-            "available_action_ids": ["diagnostics.refresh", "recovery.open"],
-        }
+    def action(self, **scope):
+        self.calls.append(scope)
+        return {"state": "SUCCEEDED", "evidence_ids": ["real-fixture-effect"]}
 
-    # --- A10: Stale plan and current authority fences ---
-    def test_a10_stale_plan_and_authority_fences(self):
-        manager = SetupOperationsManager(durable_store_dir=self.temp_path)
-        snapshot = self._sample_snapshot()
+    def make_manager(self):
+        return SetupOperationsManager(durable_store_dir=self.root, authorize=self.authorize,
+            authority=lambda a, p: self.fp, action_handlers={"diagnostics.refresh": self.action})
 
-        plan_req = {
-            "schema_version": 1,
-            "snapshot_id": "a" * 64,
-            "action_id": "diagnostics.refresh",
-            "arguments": {},
-        }
-        plan = manager.create_plan("actor-1", "9000", plan_req, snapshot=snapshot)
-        digest = plan["plan_digest"]
+    def plan(self, action="diagnostics.refresh", arguments=None):
+        return self.manager.create_plan("alice", "9000", {"schema_version": 1,
+            "snapshot_id": self.snapshot["snapshot_id"], "action_id": action, "arguments": arguments or {}},
+            snapshot=self.snapshot)
 
-        apply_req = {
-            "schema_version": 1,
-            "plan_digest": digest,
-            "idempotency_key": "stale-fence-key-001",
-            "confirmed": True,
-        }
+    @staticmethod
+    def request(plan, key="same-client-retry-key"):
+        return {"schema_version": 1, "plan_digest": plan["plan_digest"], "confirmed": True, "idempotency_key": key}
 
-        async def run_fences_test():
-            # 1. Simulate state change: authority fingerprint changes on server
-            changed_fp = "f" * 64
-            with self.assertRaises(ValueError) as ctx:
-                await manager.apply_plan(
-                    "actor-1",
-                    "9000",
-                    apply_req,
-                    current_authority_fingerprint=changed_fp,
-                )
-            self.assertIn("PLAN_STALE", str(ctx.exception))
-            self.assertIn("Authority fingerprint mismatch", str(ctx.exception))
+    def test_actor_path_project_and_current_grant_are_checked_before_replay(self):
+        plan = self.plan()
+        for actor, project, path in (("bob", "9000", plan["plan_id"]), ("alice", "9001", plan["plan_id"]),
+                                     ("alice", "9000", "plan-unrelated")):
+            with self.assertRaises(PermissionError):
+                asyncio.run(self.manager.apply_plan(actor, project, self.request(plan), plan_id=path))
+        result = asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan), plan_id=plan["plan_id"]))
+        self.assertEqual("SUCCEEDED", result["state"])
+        with self.assertRaises(PermissionError):
+            self.manager.get_operation("9000", result["operation_id"], actor_id="bob")
+        self.allowed = False
+        with self.assertRaises(PermissionError):
+            asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        self.assertEqual(1, len(self.calls))
 
-            # 2. Simulate expired plan
-            plan["expires_at"] = "2020-01-01T00:00:00+00:00"  # past
-            with self.assertRaises(ValueError) as ctx2:
-                await manager.apply_plan("actor-1", "9000", apply_req)
-            self.assertIn("PLAN_STALE", str(ctx2.exception))
-            self.assertIn("expired", str(ctx2.exception))
-
-            # 3. Simulate policy revocation: bumping actor policy generation
-            manager.revoke_actor_policy("actor-1")
-            new_plan = manager.create_plan("actor-1", "9000", plan_req, snapshot=snapshot)
-            # Old plan has old policy_generation fingerprint, cannot be applied
-            with self.assertRaises(ValueError) as ctx3:
-                await manager.apply_plan("actor-1", "9000", apply_req)
-            self.assertIn("PLAN_STALE", str(ctx3.exception))
-
-        asyncio.run(run_fences_test())
-
-    # --- A12: Restart and ambiguous external effects ---
-    def test_a12_restart_and_durable_intent_replay(self):
-        durable_dir = self.temp_path / "durable_ops"
-        manager = SetupOperationsManager(durable_store_dir=durable_dir)
-        snapshot = self._sample_snapshot()
-
-        plan_req = {
-            "schema_version": 1,
-            "snapshot_id": "a" * 64,
-            "action_id": "recovery.open",
-            "arguments": {"instance_id": "inst-test-999"},
-        }
-        plan = manager.create_plan("actor-operator", "9000", plan_req, snapshot=snapshot)
-        digest = plan["plan_digest"]
-
-        apply_req = {
-            "schema_version": 1,
-            "plan_digest": digest,
-            "idempotency_key": "recovery-key-restart-002",
-            "confirmed": True,
-        }
-
-        async def run_restart_test():
-            # 1. Execute apply and get receipt
-            receipt1 = await manager.apply_plan("actor-operator", "9000", apply_req)
-            self.assertEqual(receipt1["state"], "SUCCEEDED")
-            op_id = receipt1["operation_id"]
-
-            # 2. Simulate server restart: create new manager loading from same durable directory
-            restarted_manager = SetupOperationsManager(durable_store_dir=durable_dir)
-
-            # Re-read operation by ID after restart
-            replayed_op = restarted_manager.get_operation("9000", op_id)
-            self.assertEqual(replayed_op["operation_id"], op_id)
-            self.assertEqual(replayed_op["state"], "SUCCEEDED")
-
-            # Duplicate apply after restart returns deduplicated receipt
-            restarted_manager._plans[digest] = plan
-            receipt2 = await restarted_manager.apply_plan("actor-operator", "9000", apply_req)
-            self.assertEqual(receipt2["operation_id"], op_id)
-            self.assertTrue(receipt2["deduplicated"])
-
-        asyncio.run(run_restart_test())
-
-    # --- A15: Typed actions, native recovery and rejection of arbitrary commands ---
-    def test_a15_typed_actions_and_injection_rejection(self):
-        manager = SetupOperationsManager(durable_store_dir=self.temp_path)
-        snapshot = self._sample_snapshot()
-
-        # 1. Reject unknown action
+    def test_forged_snapshot_arguments_and_stale_authority_fail(self):
         with self.assertRaises(ValueError):
-            manager.create_plan(
-                "actor-1",
-                "9000",
-                {
-                    "schema_version": 1,
-                    "snapshot_id": "a" * 64,
-                    "action_id": "arbitrary.shell.exec",
-                    "arguments": {"command": "rm -rf /"},
-                },
-                snapshot=snapshot,
-            )
-
-        # 2. Reject shell injection or unknown arguments via schema validator
-        invalid_args_plan_req = {
-            "schema_version": 1,
-            "snapshot_id": "a" * 64,
-            "action_id": "diagnostics.refresh",
-            "arguments": {"raw_sql": "DROP TABLE managed_projects;"},
-        }
+            self.manager.create_plan("alice", "9000", {"schema_version": 1, "snapshot_id": "c" * 64,
+                "action_id": "diagnostics.refresh", "arguments": {}}, snapshot=self.snapshot)
         with self.assertRaises(jsonschema.ValidationError):
-            manager.create_plan("actor-1", "9000", invalid_args_plan_req, snapshot=snapshot)
+            self.plan(arguments={"shell": "arbitrary"})
+        plan = self.plan()
+        self.fp = "d" * 64
+        with self.assertRaisesRegex(ValueError, "PLAN_STALE"):
+            asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        self.assertEqual([], self.calls)
 
-        # 3. Cross-project isolation: get_operation with wrong project ID fails with 404
-        plan_req = {
-            "schema_version": 1,
-            "snapshot_id": "a" * 64,
-            "action_id": "diagnostics.refresh",
-            "arguments": {},
-        }
-        plan = manager.create_plan("actor-1", "9000", plan_req, snapshot=snapshot)
+    def test_restart_duplicate_and_concurrent_servers_execute_effect_once(self):
+        plan = self.plan()
+        managers = [self.make_manager(), self.make_manager()]
+        with ThreadPoolExecutor(2) as pool:
+            results = list(pool.map(lambda m: asyncio.run(m.apply_plan("alice", "9000", self.request(plan))), managers))
+        self.assertEqual(1, len(self.calls))
+        self.assertEqual(1, len({r["operation_id"] for r in results}))
+        self.assertEqual([False, True], sorted(r["deduplicated"] for r in results))
+        self.assertEqual("SUCCEEDED", self.make_manager().get_operation("9000", results[0]["operation_id"], actor_id="alice")["state"])
 
-        async def run_cross_proj():
-            receipt = await manager.apply_plan(
-                "actor-1",
-                "9000",
-                {
-                    "schema_version": 1,
-                    "plan_digest": plan["plan_digest"],
-                    "idempotency_key": "cross-proj-key",
-                    "confirmed": True,
-                },
-            )
-            op_id = receipt["operation_id"]
-            # Correct project works
-            self.assertEqual(manager.get_operation("9000", op_id)["operation_id"], op_id)
-            # Wrong project raises LookupError
-            with self.assertRaises(LookupError):
-                manager.get_operation("9001", op_id)
+    def test_crash_intent_cannot_repeat_an_ambiguous_effect(self):
+        class Crash(BaseException):
+            pass
+        def crash(**scope):
+            self.calls.append(scope)
+            raise Crash()
+        self.manager.action_handlers["diagnostics.refresh"] = crash
+        plan = self.plan()
+        with self.assertRaises(Crash):
+            asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        replay = asyncio.run(self.make_manager().apply_plan("alice", "9000", self.request(plan)))
+        self.assertEqual("UNKNOWN", replay["state"])
+        self.assertTrue(replay["deduplicated"])
+        self.assertFalse(replay["retryable"])
+        self.assertEqual(1, len(self.calls))
 
-        asyncio.run(run_cross_proj())
+    def test_unconfigured_selftest_has_no_fabricated_ids_or_success(self):
+        with self.assertRaisesRegex(ValueError, "SELFTEST_NOT_CONFIGURED"):
+            self.plan("selftest.start", {"test_profile_id": "small-docs-selftest"})
+        plan = self.plan("selftest.stop", {"self_test_id": "unowned-id"})
+        receipt = asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        self.assertEqual("BLOCKED", receipt["state"])
+        self.assertIsNone(receipt["native_sprint_id"])
+        self.assertIsNone(receipt["native_operation_id"])
 
-
-if __name__ == "__main__":
-    unittest.main()
+    def test_missing_durable_store_and_policy_fail_closed(self):
+        with self.assertRaises(PermissionError):
+            SetupOperationsManager().create_plan("alice", "9000",
+                {"schema_version": 1, "snapshot_id": "b" * 64, "action_id": "diagnostics.refresh", "arguments": {}},
+                snapshot=self.snapshot)
+        plan = self.plan()
+        first = asyncio.run(self.manager.apply_plan("alice", "9000", self.request(plan)))
+        second = self.plan("provider.probe", {"provider_id": "configured"})
+        with self.assertRaisesRegex(ValueError, "IDEMPOTENCY_CONFLICT"):
+            asyncio.run(self.manager.apply_plan("alice", "9000", self.request(second)))
+        self.assertEqual("SUCCEEDED", first["state"])

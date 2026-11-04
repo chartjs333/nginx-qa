@@ -1,5 +1,10 @@
 # Setup and Diagnostics Wizard with LLM Advisor v1 — Release Runbook & Operator Guide
 
+> Историческая инструкция SDW-008. Утверждения о готовности и прежние адреса
+> не являются проверкой исправленной версии. Актуальные контракты, вход и
+> ограничения: [corrective-contract.md](corrective-contract.md). Итоговая
+> квалификация корректирующего спринта оформляется отдельно.
+
 ## 1. Обзор и назначение
 
 Мастер настройки и повторной диагностики (Setup and Diagnostics Wizard v1) предназначен для:

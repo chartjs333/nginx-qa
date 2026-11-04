@@ -249,7 +249,7 @@ async def handle_status_command(message,host):
             fail('INSTANCE_NOT_FOUND','No instance is available for this user.',404)
         with operations.store._transaction() as connection:
             # Select this owner's latest instance, never another user's slot.
-            for row in connection.execute('SELECT * FROM telegram_launcher_operations WHERE project_id=? ORDER BY rowid DESC', (project_id,)):
+            for row in connection.execute("SELECT * FROM telegram_launcher_operations WHERE project_id=? AND COALESCE(json_extract(record_json,'$.owner_kind'),'telegram')='telegram' ORDER BY rowid DESC", (project_id,)):
                 record=operations._decode(row)
                 if (record['user_id'],record['chat_id'])==(principal.user_id,principal.chat_id):
                     return record['operation_id']
@@ -316,7 +316,7 @@ async def reconcile_notifications(host,*,stop_event=None):
             def refresh_projection():
                 with operations.store._transaction() as connection:
                     records=[operations._decode(row) for row in connection.execute(
-                        'SELECT * FROM telegram_launcher_operations WHERE project_id=? AND holds_slot=1',(project_id,))]
+                        "SELECT * FROM telegram_launcher_operations WHERE project_id=? AND holds_slot=1 AND COALESCE(json_extract(record_json,'$.owner_kind'),'telegram')='telegram'",(project_id,))]
                 for record in records:
                     try:
                         principal=Principal(record['user_id'],record['chat_id'],project_id,frozenset())

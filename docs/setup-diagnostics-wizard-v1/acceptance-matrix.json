@@ -3,7 +3,8 @@
   "kind": "setup_diagnostics_wizard_acceptance_matrix",
   "architecture_baseline_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
   "architecture_status": "PREPARED_FOR_INDEPENDENT_REVIEW",
-  "implementation_status": "PASS",
+  "implementation_status": "SUPERSEDED_REQUIRES_CORRECTIVE_QUALIFICATION",
+  "superseded_by": "docs/setup-diagnostics-wizard-v1/corrective-contract.md",
   "external_status": "BLOCKED_EXTERNAL",
   "evidence_policy": {
     "baseline_refs": "Existing methods inspected statically; no execution claim in SDW-001.",

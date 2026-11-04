@@ -10,6 +10,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import json
+import shutil
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -25,6 +28,19 @@ TEST_ADMIN_TOKEN = "e" * 32
 
 
 class TestWizardUI(unittest.TestCase):
+    def test_production_javascript_requests_and_retry_behavior(self):
+        root = Path(__file__).resolve().parents[1]
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required to verify the shipped UI behavior")
+        run = subprocess.run([node, str(root / "tests/setup_ui_harness.cjs")],
+                             cwd=root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        result = json.loads(run.stdout)
+        self.assertTrue(result["passed"])
+        from nginx_qa.setup_advisor import _validator
+        _validator("PlanRequest").validate(result["plan_request"])
+        _validator("ApplyRequest").validate(result["apply_request"])
+
     @classmethod
     def setUpClass(cls):
         os.environ[ADMIN_TOKEN_ENV] = TEST_ADMIN_TOKEN

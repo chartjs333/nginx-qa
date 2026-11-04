@@ -9,7 +9,8 @@ param(
         "premerge-inbound-hub-e2e-v1-short",
         "premerge-inbound-hub-e2e-v1-short-r2",
         "telegram-managed-sprint-launcher-v1",
-        "telegram-managed-sprint-launcher-v1-gateway"
+        "telegram-managed-sprint-launcher-v1-gateway",
+        "setup-diagnostics-wizard-v1"
     )]
     [string]$Profile = "umse-007",
 
@@ -665,10 +666,31 @@ function Get-ExpectedStagingEnvironment {
             "premerge-inbound-hub-e2e-v1-short",
             "premerge-inbound-hub-e2e-v1-short-r2",
             "telegram-managed-sprint-launcher-v1",
-        "telegram-managed-sprint-launcher-v1-gateway"
+        "telegram-managed-sprint-launcher-v1-gateway",
+        "setup-diagnostics-wizard-v1"
         )]
         [string]$Profile = "umse-007"
     )
+
+    if ($Profile -eq "setup-diagnostics-wizard-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18038"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-sdw-launcher"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nq-tmsl","D:/nq-tmsl-launcher","C:/nqt35","C:/nqt36","C:/madoev-eeg"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt37"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt37/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt37/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt37/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt37/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18800-18849"
+            NGINX_QA_INSTANCE_ID = "setup-diagnostics-wizard-v1-18038"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
 
     if ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") {
         return [ordered]@{
@@ -851,6 +873,10 @@ elseif ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") {
 elseif ($Profile -eq "telegram-managed-sprint-launcher-v1") {
     $expectedServiceRoot = "D:\nq-tmsl"
     $expectedBranch = "codex/tmsl-v1-bootstrap"
+}
+elseif ($Profile -eq "setup-diagnostics-wizard-v1") {
+    $expectedServiceRoot = "D:\nq-sdw-launcher"
+    $expectedBranch = "codex/sdw-qualified-host-20261104"
 }
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()

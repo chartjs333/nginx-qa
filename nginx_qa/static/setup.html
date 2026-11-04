@@ -30,6 +30,12 @@
   </section>
 
   <p id="auth" class="notice">Проверка операторской сессии…</p>
+  <section id="pairing" class="notice" hidden>
+    <p>Код привязки сессии: <strong id="pairing-code"></strong></p>
+    <p>Подтвердите код через локальный операторский инструмент сервера. Административный токен в браузер вводить не нужно.</p>
+    <p>Для привязки исполнителя и самопроверки используйте постоянное имя оператора, например madoev. При следующем входе подтвердите сессию с тем же именем — история операций и владение сохранятся.</p>
+  </section>
+  <button type="button" id="session-check">Проверить подтверждение сессии</button>
   <p id="error" role="alert" hidden></p>
 
   <div class="dashboard-grid">
@@ -70,7 +76,7 @@
           <h3>Разъяснение ситуации</h3>
           <div id="advisor-explanation" class="explanation-box"></div>
 
-          <h3>Утверждения модели</h3>
+          <h3>Утверждения и степень уверенности</h3>
           <div id="advisor-claims" class="claims-list"></div>
 
           <h3>Предлагаемые действия</h3>
@@ -87,10 +93,6 @@
         <p class="hint">Действия выполняются серверным кодом строго по модели Plan &amp; Apply с явным подтверждением.</p>
 
         <div id="operations-toolbar" class="operations-toolbar">
-          <button type="button" class="btn-op" data-action="diagnostics.refresh">Обновить проверки</button>
-          <button type="button" class="btn-op" data-action="worker.probe">Опросить исполнителя</button>
-          <button type="button" class="btn-op" data-action="worker.bind">Привязать кандидата</button>
-          <button type="button" class="btn-op" data-action="selftest.run">Запустить самопроверку</button>
         </div>
 
         <div id="receipts-container" class="receipts-container">

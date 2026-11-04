@@ -71,9 +71,15 @@ class LauncherOperations:
 
     @staticmethod
     def _owner(record: Mapping[str, Any], principal: Principal) -> None:
+        if record.get("owner_kind", "telegram") != "telegram":
+            fail("ACCESS_DENIED", "Operation belongs to another ingress.", 403)
         if (record["user_id"], record["chat_id"], record["project_id"]) != (
                 principal.user_id, principal.chat_id, principal.project_id):
             fail("ACCESS_DENIED", "Operation belongs to another Telegram user or project.", 403)
+
+    @staticmethod
+    def _principal_fields(principal: Principal) -> dict[str, Any]:
+        return {"owner_kind": "telegram", "user_id": principal.user_id, "chat_id": principal.chat_id}
 
     def _replay(self, connection, principal, keys, digest, transport):
         rows = connection.execute(
@@ -128,7 +134,7 @@ class LauncherOperations:
                 fail("PREPARED_QUOTA_EXCEEDED", "The pending instance quota is full.", 409)
             now = datetime.now(timezone.utc).isoformat()
             record = {"operation_id": "launch-" + uuid4().hex, "project_id": principal.project_id,
-                "user_id": principal.user_id, "chat_id": principal.chat_id,
+                **self._principal_fields(principal),
                 "dedupe_key": keys[0], "message_key": keys[1], "transport": dict(transport),
                 "payload_sha256": digest, "envelope": deepcopy(dict(envelope)),
                 "repository_binding": deepcopy(dict(repository_binding)),

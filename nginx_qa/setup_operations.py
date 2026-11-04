@@ -1,409 +1,323 @@
-"""Setup and Diagnostics Wizard v1 — typed operations, plan and apply foundation.
-
-Server-owned action catalog, strict plan/apply idempotency, fencing and receipts.
-No shadow scheduler or secondary database.
-"""
+"""Durable operator intents for typed setup actions; execution stays in the engine."""
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from contextlib import nullcontext
+from copy import deepcopy
+from datetime import datetime, timezone, timedelta
 import hashlib
 import json
 import os
 from pathlib import Path
 import secrets
-import time
 from typing import Any, Mapping
 
 import jsonschema
-
-from .setup_diagnostics import (
-    canonical_json_bytes,
-    sha256_digest,
-    parse_strict_json_with_limits,
-    get_contracts_schema,
-    compute_authority_fingerprint,
-    DiagnosticSnapshotCollector,
-    ACTION_IDS,
-)
+from .setup_diagnostics import canonical_json_bytes, sha256_digest, get_contracts_schema
 from .setup_worker_adapter import SetupWorkerAdapter
+from .git_provider import ManagedFileLock
 
 
-_PLAN_VALIDATOR: jsonschema.Draft202012Validator | None = None
-_APPLY_VALIDATOR: jsonschema.Draft202012Validator | None = None
-_RECEIPT_VALIDATOR: jsonschema.Draft202012Validator | None = None
+def _validator(name):
+    schema = get_contracts_schema()
+    return jsonschema.Draft202012Validator(
+        {"$schema": schema["$schema"], "$defs": schema["$defs"], "$ref": "#/$defs/" + name},
+        format_checker=jsonschema.FormatChecker())
 
 
-def get_plan_validator() -> jsonschema.Draft202012Validator:
-    global _PLAN_VALIDATOR
-    if _PLAN_VALIDATOR is None:
-        schema = get_contracts_schema()
-        subschema = {
-            "$schema": schema["$schema"],
-            "$defs": schema["$defs"],
-            "$ref": "#/$defs/ActionPlan",
-        }
-        _PLAN_VALIDATOR = jsonschema.Draft202012Validator(
-            subschema, format_checker=jsonschema.FormatChecker()
-        )
-    return _PLAN_VALIDATOR
+def get_plan_validator():
+    return _validator("ActionPlan")
 
 
-def get_apply_validator() -> jsonschema.Draft202012Validator:
-    global _APPLY_VALIDATOR
-    if _APPLY_VALIDATOR is None:
-        schema = get_contracts_schema()
-        subschema = {
-            "$schema": schema["$schema"],
-            "$defs": schema["$defs"],
-            "$ref": "#/$defs/ApplyRequest",
-        }
-        _APPLY_VALIDATOR = jsonschema.Draft202012Validator(
-            subschema, format_checker=jsonschema.FormatChecker()
-        )
-    return _APPLY_VALIDATOR
+def get_apply_validator():
+    return _validator("ApplyRequest")
 
 
-def get_receipt_validator() -> jsonschema.Draft202012Validator:
-    global _RECEIPT_VALIDATOR
-    if _RECEIPT_VALIDATOR is None:
-        schema = get_contracts_schema()
-        subschema = {
-            "$schema": schema["$schema"],
-            "$defs": schema["$defs"],
-            "$ref": "#/$defs/OperationReceipt",
-        }
-        _RECEIPT_VALIDATOR = jsonschema.Draft202012Validator(
-            subschema, format_checker=jsonschema.FormatChecker()
-        )
-    return _RECEIPT_VALIDATOR
+def get_receipt_validator():
+    return _validator("OperationReceipt")
 
 
-def compute_plan_digest(plan: Mapping[str, Any]) -> str:
-    cleaned = {k: v for k, v in plan.items() if k != "plan_digest"}
-    return sha256_digest(canonical_json_bytes(cleaned))
+def compute_plan_digest(plan):
+    return sha256_digest(canonical_json_bytes({k: v for k, v in plan.items() if k != "plan_digest"}))
+
+
+def _now():
+    return datetime.now(timezone.utc).isoformat()
 
 
 class SetupOperationsManager:
-    """Manages ActionPlan generation, ApplyRequest execution and OperationReceipt lifecycle."""
+    """One durable, owner-bound intent per idempotency key.
 
-    def __init__(
-        self,
-        *,
-        worker_adapter: SetupWorkerAdapter | None = None,
-        durable_store_dir: Path | None = None,
-    ) -> None:
+    Metadata files contain plans and receipts only. Native sprint state, leases,
+    queues, review decisions and graph transitions remain in the canonical DB.
+    Interrupted APPLYING intents are reconciled, never blindly executed twice.
+    """
+    def __init__(self, *, worker_adapter=None, durable_store_dir=None,
+                 authorize=None, authority=None, action_handlers=None,
+                 profile_validator=None, status_reader=None, file_lock=None, binding_authority=None):
         self.worker_adapter = worker_adapter or SetupWorkerAdapter()
-        self.durable_store_dir = durable_store_dir
-        self._plans: dict[str, dict[str, Any]] = {}  # plan_digest -> plan
-        self._receipts: dict[str, dict[str, Any]] = {}  # operation_id -> receipt
-        self._idempotency_map: dict[tuple[str, str, str], str] = {}  # (actor, project, key) -> operation_id
-        self._policy_generations: dict[str, int] = {}  # actor_id -> policy_generation
+        self.durable_store_dir = Path(durable_store_dir) if durable_store_dir else None
+        self.authorize, self.authority = authorize, authority
+        self.action_handlers = action_handlers or {}
+        self.profile_validator, self.status_reader = profile_validator, status_reader
+        self.file_lock = file_lock or ManagedFileLock
+        self.binding_authority = binding_authority or authority
         self._lock = asyncio.Lock()
-        self._load_durable_state()
+        self._state = {"schema_version": 1, "plans": {}, "operations": {}, "idempotency": {}}
 
-    def _load_durable_state(self) -> None:
-        if not self.durable_store_dir or not self.durable_store_dir.exists():
-            return
-        receipts_file = self.durable_store_dir / "wizard-operation-receipts.jsonl"
-        if receipts_file.exists():
-            for line in receipts_file.read_text(encoding="utf-8").splitlines():
-                if line.strip():
-                    try:
-                        record = json.loads(line)
-                        op_id = record.get("operation_id")
-                        actor = record.get("actor_id", "default-actor")
-                        proj = record.get("project_id", "9000")
-                        idemp_key = record.get("idempotency_key", "")
-                        if op_id:
-                            self._receipts[op_id] = record
-                        if idemp_key:
-                            self._idempotency_map[(actor, proj, idemp_key)] = op_id
-                    except Exception:
-                        pass
-
-    def _persist_receipt(self, actor_id: str, idempotency_key: str, receipt: dict[str, Any]) -> None:
-        if not self.durable_store_dir:
-            return
+    def _locked(self):
+        if self.durable_store_dir is None or self.file_lock is None:
+            raise ValueError("DURABLE_STORE_NOT_CONFIGURED")
         self.durable_store_dir.mkdir(parents=True, exist_ok=True)
-        receipts_file = self.durable_store_dir / "wizard-operation-receipts.jsonl"
-        persist_obj = {**receipt, "actor_id": actor_id, "idempotency_key": idempotency_key}
-        with open(receipts_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(persist_obj, ensure_ascii=False) + "\n")
+        for path in (self.durable_store_dir, *self.durable_store_dir.parents):
+            if path.is_symlink() or int(getattr(path.lstat(), "st_file_attributes", 0)) & 0x400:
+                raise ValueError("STATE_PATH_INVALID")
+        return self.file_lock(self.durable_store_dir / "operations.lock")
 
-    def revoke_actor_policy(self, actor_id: str) -> None:
-        """Bump actor policy generation to immediately revoke older plans and sessions."""
-        current = self._policy_generations.get(actor_id, 1)
-        self._policy_generations[actor_id] = current + 1
+    def _load(self):
+        path = self.durable_store_dir / "operations.json"
+        if not path.exists():
+            self._state = {"schema_version": 1, "plans": {}, "operations": {}, "idempotency": {}}
+            return
+        if path.is_symlink() or path.stat().st_size > 16 * 1024 * 1024:
+            raise ValueError("STATE_CORRUPT")
+        from .setup_diagnostics import parse_strict_json_with_limits
+        # This ledger is bounded separately from small browser payloads.
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if (not isinstance(data, dict) or set(data) != {"schema_version", "plans", "operations", "idempotency"}
+                or data["schema_version"] != 1 or any(not isinstance(data[k], dict) for k in ("plans", "operations", "idempotency"))):
+            raise ValueError("STATE_CORRUPT")
+        for digest, plan in data["plans"].items():
+            get_plan_validator().validate(plan)
+            if digest != compute_plan_digest(plan) or digest != plan["plan_digest"]:
+                raise ValueError("STATE_CORRUPT")
+        for opid, record in data["operations"].items():
+            get_receipt_validator().validate(record["receipt"])
+            if record["receipt"]["operation_id"] != opid or not record.get("actor_id"):
+                raise ValueError("STATE_CORRUPT")
+        self._state = data
 
-    def create_plan(
-        self,
-        actor_id: str,
-        project_id: str,
-        plan_req: Mapping[str, Any],
-        *,
-        snapshot: Mapping[str, Any],
-        host: Any = None,
-        authority_fingerprint_override: str | None = None,
-    ) -> dict[str, Any]:
-        """Validate PlanRequest, verify preconditions and generate an immutable ActionPlan."""
-        action_id = plan_req.get("action_id")
-        if action_id not in ACTION_IDS:
-            raise ValueError(f"Unknown or unsupported action_id: {action_id}")
+    def _save(self):
+        path = self.durable_store_dir / "operations.json"
+        raw = canonical_json_bytes(self._state)
+        if len(raw) > 16 * 1024 * 1024:
+            raise ValueError("OPERATION_HISTORY_LIMIT")
+        temp = path.with_name("operations-" + secrets.token_hex(8) + ".tmp")
+        try:
+            with temp.open("xb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temp, path)
+        finally:
+            if temp.exists():
+                temp.unlink()
 
-        snapshot_id = plan_req.get("snapshot_id")
-        if not snapshot_id or len(snapshot_id) != 64:
-            raise ValueError("PlanRequest requires valid 64-character snapshot_id")
+    def _authorize(self, actor, project, action):
+        if self.authorize is None:
+            raise PermissionError("SETUP_POLICY_NOT_CONFIGURED")
+        self.authorize(actor, project, action)
 
-        now_dt = datetime.now(timezone.utc)
-        expires_dt = datetime.fromtimestamp(now_dt.timestamp() + 120, timezone.utc)
-        now_iso = now_dt.isoformat()
-        expires_iso = expires_dt.isoformat()
+    def _authority(self, actor, project):
+        if self.authority is None:
+            raise PermissionError("AUTHORITY_UNAVAILABLE")
+        return self.authority(actor, project)
 
-        plan_id = f"plan-{secrets.token_hex(12)}"
-        args = dict(plan_req.get("arguments", {}))
-        target_project_id = None
-        resources: list[dict[str, str]] = []
-        preconditions: list[dict[str, Any]] = []
-        required_permissions: list[str] = ["read"]
-        effects: list[str] = []
-        confirmation_required = False
+    def create_plan(self, actor_id, project_id, plan_req, *, snapshot, host=None,
+                    authority_fingerprint_override=None):
+        _validator("PlanRequest").validate(plan_req)
+        action = plan_req["action_id"]
+        self._authorize(actor_id, project_id, action)
+        if (snapshot.get("project_id") != project_id or snapshot.get("snapshot_id") != plan_req["snapshot_id"]
+                or action not in snapshot.get("available_action_ids", [])):
+            raise ValueError("SNAPSHOT_MISMATCH")
+        fingerprint = self._authority(actor_id, project_id)
+        if snapshot["authority_fingerprint"] != fingerprint:
+            raise ValueError("PLAN_STALE")
+        args = deepcopy(plan_req["arguments"])
+        target = None
+        resources = []
+        preconditions = []
+        permissions = ["read"]
+        if action.endswith(".probe") or action == "diagnostics.refresh":
+            permissions.append("probe")
+        if action == "worker.bind":
+            permissions.extend(["probe", "configure"])
+        if action == "selftest.start":
+            if self.profile_validator is None:
+                raise ValueError("SELFTEST_NOT_CONFIGURED")
+            profile = self.profile_validator(actor_id, project_id, args["test_profile_id"])
+            if isinstance(profile, tuple):
+                profile = profile[0]
+            target = profile["target_project_id"]
+            resources.append({"kind": "project", "id": target})
+            resources.append({"kind": "self_test", "id": args["test_profile_id"]})
+            permissions.extend(["selftest", "start"])
+            preconditions.append({"check_id": "worker.binding", "required_status": ["PASS"], "must_be_fresh": True})
+        elif action == "selftest.stop":
+            permissions.append("stop")
+            resources.append({"kind": "self_test", "id": args["self_test_id"]})
+        elif action == "git.probe":
+            resources.append({"kind": "repository", "id": args["repository_id"]})
+        elif action == "recovery.open":
+            resources.append({"kind": "instance", "id": args["instance_id"]})
+        if action.startswith("worker."):
+            resources.append({"kind": "adapter", "id": args["candidate_id"]})
+        now = datetime.now(timezone.utc)
+        plan = {
+            "kind": "setup_action_plan", "schema_version": 1,
+            "plan_id": "plan-" + secrets.token_hex(12), "plan_digest": "0" * 64,
+            "actor_id": actor_id, "project_id": project_id, "target_project_id": target,
+            "snapshot_id": snapshot["snapshot_id"], "action_id": action, "arguments": args,
+            "resources": resources, "preconditions": preconditions, "required_permissions": permissions,
+            "effects": [self._effect(action)], "authority_fingerprint": fingerprint,
+            "created_at": now.isoformat(), "expires_at": (now + timedelta(seconds=120)).isoformat(),
+            "confirmation_required": action in {"worker.bind", "selftest.start", "selftest.stop"}}
+        plan["plan_digest"] = compute_plan_digest(plan)
+        get_plan_validator().validate(plan)
+        with self._locked():
+            self._load()
+            # Expired unapplied plans are disposable; operation history is retained.
+            self._state["plans"] = {k: p for k, p in self._state["plans"].items()
+                                    if p["expires_at"] > now.isoformat()
+                                    or any(o["receipt"]["plan_digest"] == k for o in self._state["operations"].values())}
+            if len(self._state["plans"]) >= 4096:
+                raise ValueError("PLAN_LIMIT")
+            self._state["plans"][plan["plan_digest"]] = plan
+            self._save()
+        return deepcopy(plan)
 
-        if action_id == "diagnostics.refresh":
-            effects.append("Refresh passive diagnostic checks from storage and registry")
-            required_permissions.append("probe")
+    @staticmethod
+    def _effect(action):
+        return {
+            "diagnostics.refresh": "Capture current passive diagnostic facts.",
+            "worker.probe": "Authenticate and inspect the configured loopback client.",
+            "worker.bind": "Persist this operator's verified project client binding.",
+            "provider.probe": "Check the configured provider using its bounded health adapter.",
+            "git.probe": "Read remote refs using the registered repository credential.",
+            "telegram.probe": "Read getMe and getWebhookInfo using the configured bot.",
+            "setup.open": "Resolve private setup guidance for the selected topic.",
+            "recovery.open": "Read an existing native instance recovery context.",
+            "selftest.start": "Prepare and activate the pinned test manifest in its separate registered project.",
+            "selftest.stop": "Fence and cancel the owned native self-test and wait for its client stop acknowledgement.",
+        }[action]
 
-        elif action_id == "worker.probe":
-            candidate_id = args.get("candidate_id", "default-executor")
-            resources.append({"kind": "adapter", "id": candidate_id})
-            effects.append(f"Execute bounded HTTP capability probe to loopback worker {candidate_id}")
-            required_permissions.append("probe")
-
-        elif action_id == "worker.bind":
-            candidate_id = args.get("candidate_id", "default-executor")
-            probe_receipt_id = args.get("probe_receipt_id", "")
-            resources.append({"kind": "adapter", "id": candidate_id})
-            effects.append(f"Bind candidate executor {candidate_id} to active wizard configuration")
-            required_permissions.extend(["probe", "configure"])
-            confirmation_required = True
-
-        elif action_id == "selftest.start":
-            test_profile_id = args.get("test_profile_id", "small-docs-selftest")
-            # Enforce project slot isolation: Self-test must run on a separate test project, NOT 9000!
-            target_project_id = "9001"
-            if project_id == "9000" and target_project_id == "9000":
-                raise ValueError("Cannot run self-test on project 9000 while occupied by development sprint")
-
-            resources.append({"kind": "project", "id": target_project_id})
-            resources.append({"kind": "self_test", "id": test_profile_id})
-            preconditions.append({
-                "check_id": "project.slot",
-                "required_status": ["PASS"],
-                "must_be_fresh": True,
-            })
-            required_permissions.extend(["selftest", "start", "stop", "manifest_publish"])
-            effects.append(f"Initialize and start native Managed Sprint self-test on test project {target_project_id}")
-            confirmation_required = True
-
-        elif action_id == "selftest.stop":
-            self_test_id = args.get("self_test_id", "")
-            resources.append({"kind": "self_test", "id": self_test_id})
-            required_permissions.append("stop")
-            effects.append(f"Request graceful cancellation and resource cleanup for self-test {self_test_id}")
-            confirmation_required = True
-
-        elif action_id == "git.probe":
-            repo_id = args.get("repository_id", "main")
-            resources.append({"kind": "repository", "id": repo_id})
-            required_permissions.append("probe")
-            effects.append(f"Perform bounded read-only query on registered repository {repo_id}")
-
-        elif action_id == "telegram.probe":
-            required_permissions.append("probe")
-            effects.append("Query Telegram getMe and getWebhookInfo via configured credentials")
-
-        elif action_id == "setup.open":
-            topic = args.get("topic", "worker")
-            effects.append(f"Open fixed private help documentation for topic: {topic}")
-
-        elif action_id == "recovery.open":
-            inst_id = args.get("instance_id", "")
-            resources.append({"kind": "instance", "id": inst_id})
-            effects.append(f"Open recovery context for instance {inst_id}")
-
-        policy_gen = self._policy_generations.get(actor_id, 1)
-        authority_fp = authority_fingerprint_override or compute_authority_fingerprint(
-            project_id,
-            policy_generation=policy_gen,
-            control_revision=1,
-        )
-
-        raw_plan: dict[str, Any] = {
-            "kind": "setup_action_plan",
-            "schema_version": 1,
-            "plan_id": plan_id,
-            "plan_digest": "0" * 64,  # placeholder
-            "actor_id": actor_id,
-            "project_id": project_id,
-            "target_project_id": target_project_id,
-            "snapshot_id": snapshot_id,
-            "action_id": action_id,
-            "arguments": args,
-            "resources": resources,
-            "preconditions": preconditions,
-            "required_permissions": sorted(set(required_permissions)),
-            "effects": effects,
-            "authority_fingerprint": authority_fp,
-            "created_at": now_iso,
-            "expires_at": expires_iso,
-            "confirmation_required": confirmation_required,
-        }
-
-        # Compute exact plan_digest
-        digest = compute_plan_digest(raw_plan)
-        raw_plan["plan_digest"] = digest
-
-        # Validate strictly against ActionPlan schema
-        validator = get_plan_validator()
-        validator.validate(raw_plan)
-
-        self._plans[digest] = raw_plan
-        return raw_plan
-
-    async def apply_plan(
-        self,
-        actor_id: str,
-        project_id: str,
-        apply_req: Mapping[str, Any],
-        *,
-        host: Any = None,
-        current_authority_fingerprint: str | None = None,
-    ) -> dict[str, Any]:
-        """Apply a validated ActionPlan with idempotency checks and server fencing."""
-        # 1. Validate ApplyRequest schema
-        validator = get_apply_validator()
-        validator.validate(apply_req)
-
-        plan_digest = apply_req["plan_digest"]
-        idempotency_key = apply_req["idempotency_key"]
-        confirmed = apply_req["confirmed"]
-
+    async def apply_plan(self, actor_id, project_id, apply_req, *, host=None, plan_id=None,
+                         current_authority_fingerprint=None):
+        get_apply_validator().validate(apply_req)
+        # A cancelled HTTP waiter must not release the execution lock early.
         async with self._lock:
-            # 2. Check idempotency map
-            idemp_key = (actor_id, project_id, idempotency_key)
-            existing_op_id = self._idempotency_map.get(idemp_key)
-            if existing_op_id:
-                existing_receipt = self._receipts[existing_op_id]
-                # If plan_digest matches, return existing receipt with deduplicated=True
-                if existing_receipt["plan_digest"] == plan_digest:
-                    return {**existing_receipt, "deduplicated": True}
-                else:
-                    raise ValueError("IDEMPOTENCY_CONFLICT: Idempotency key reused with different plan")
-
-            # 3. Lookup plan
-            plan = self._plans.get(plan_digest)
-            if plan is None:
-                raise LookupError("PLAN_STALE: ActionPlan not found or expired")
-
-            # Authority fingerprint recheck (stale plan fence)
-            policy_gen = self._policy_generations.get(actor_id, 1)
-            current_fp = current_authority_fingerprint or compute_authority_fingerprint(
-                project_id,
-                policy_generation=policy_gen,
-                control_revision=1,
-            )
-            if plan["authority_fingerprint"] != current_fp:
-                raise ValueError("PLAN_STALE: Authority fingerprint mismatch; state changed since plan creation")
-
-            now_iso = datetime.now(timezone.utc).isoformat()
-            if now_iso > plan["expires_at"]:
-                raise ValueError("PLAN_STALE: ActionPlan has expired")
-
-            if plan["confirmation_required"] and not confirmed:
-                raise ValueError("CONFIRMATION_REQUIRED: Plan requires explicit user confirmation")
-
-            operation_id = f"op-{secrets.token_hex(12)}"
-            action_id = plan["action_id"]
-            args = plan["arguments"]
-
-            # Intent-before-effect record
-            receipt: dict[str, Any] = {
-                "kind": "setup_operation_receipt",
-                "schema_version": 1,
-                "operation_id": operation_id,
-                "plan_id": plan["plan_id"],
-                "plan_digest": plan_digest,
-                "project_id": project_id,
-                "action_id": action_id,
-                "state": "APPLYING",
-                "created_at": now_iso,
-                "updated_at": now_iso,
-                "native_operation_id": None,
-                "native_sprint_id": None,
-                "evidence_ids": [],
-                "error_code": None,
-                "retryable": False,
-                "deduplicated": False,
-            }
-            self._persist_receipt(actor_id, idempotency_key, receipt)
-
-            # 4. Execute typed action
+            task = asyncio.create_task(asyncio.to_thread(self._apply_sync, actor_id, project_id, dict(apply_req), plan_id))
             try:
-                if action_id == "worker.probe":
-                    candidate_id = args.get("candidate_id", "default-executor")
-                    probe_res = await asyncio.to_thread(self.worker_adapter.probe, candidate_id)
-                    receipt["state"] = "SUCCEEDED" if probe_res.get("status") in ("PASS", "WARN") else "FAILED"
-                    if probe_res.get("status") not in ("PASS", "WARN"):
-                        receipt["error_code"] = probe_res.get("error_code")
-                    receipt["evidence_ids"].append(probe_res["probe_receipt_id"])
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                try:
+                    await asyncio.shield(task)
+                finally:
+                    raise
 
-                elif action_id == "worker.bind":
-                    candidate_id = args.get("candidate_id", "default-executor")
-                    probe_receipt_id = args.get("probe_receipt_id", "")
-                    bind_res = self.worker_adapter.bind(candidate_id, probe_receipt_id)
-                    receipt["state"] = "SUCCEEDED"
-                    receipt["evidence_ids"].append(bind_res["binding_id"])
-
-                elif action_id == "selftest.start":
-                    target = plan.get("target_project_id", "9001")
-                    # Self-test execution on target project
-                    native_sprint = f"sprint-selftest-{secrets.token_hex(8)}"
-                    native_op = f"op-selftest-{secrets.token_hex(8)}"
-                    receipt["native_sprint_id"] = native_sprint
-                    receipt["native_operation_id"] = native_op
-                    receipt["state"] = "SUCCEEDED"
-                    receipt["evidence_ids"].append(f"evidence-selftest-start-{native_sprint}")
-
-                elif action_id == "selftest.stop":
-                    self_test_id = args.get("self_test_id", "")
-                    receipt["state"] = "SUCCEEDED"
-                    receipt["evidence_ids"].append(f"evidence-selftest-stop-{self_test_id}")
-
-                elif action_id == "recovery.open":
-                    inst_id = args.get("instance_id", "")
-                    receipt["state"] = "SUCCEEDED"
-                    receipt["evidence_ids"].append(f"recovery-context-{inst_id}")
-
-                elif action_id in ("diagnostics.refresh", "setup.open", "git.probe", "telegram.probe"):
-                    receipt["state"] = "SUCCEEDED"
-
-                receipt["updated_at"] = datetime.now(timezone.utc).isoformat()
+    def _apply_sync(self, actor, project, request, path_plan_id):
+        with self._locked():
+            self._load()
+            digest = request["plan_digest"]
+            plan = self._state["plans"].get(digest)
+            if plan is None:
+                raise LookupError("PLAN_NOT_FOUND")
+            if (plan["actor_id"] != actor or plan["project_id"] != project
+                    or (path_plan_id is not None and plan["plan_id"] != path_plan_id)):
+                raise PermissionError("PLAN_OWNER_MISMATCH")
+            self._authorize(actor, project, plan["action_id"])
+            idem = hashlib.sha256(canonical_json_bytes([actor, project, request["idempotency_key"]])).hexdigest()
+            existing = self._state["idempotency"].get(idem)
+            if existing:
+                record = self._state["operations"][existing]
+                if record["receipt"]["plan_digest"] != digest:
+                    raise ValueError("IDEMPOTENCY_CONFLICT")
+                return {**self._public_record(record, actor, project), "deduplicated": True}
+            binding_version = self.binding_authority(actor, project)
+            fingerprint = self._authority(actor, project)
+            if plan["authority_fingerprint"] != fingerprint:
+                raise ValueError("PLAN_STALE: Authority fingerprint mismatch")
+            if datetime.fromisoformat(plan["expires_at"]) <= datetime.now(timezone.utc):
+                raise ValueError("PLAN_STALE: ActionPlan has expired")
+            if plan["confirmation_required"] and not request["confirmed"]:
+                raise ValueError("CONFIRMATION_REQUIRED")
+            opid, now = "op-" + secrets.token_hex(12), _now()
+            receipt = {"kind": "setup_operation_receipt", "schema_version": 1, "operation_id": opid,
+                "plan_id": plan["plan_id"], "plan_digest": digest, "project_id": project,
+                "action_id": plan["action_id"], "state": "APPLYING", "created_at": now, "updated_at": now,
+                "native_operation_id": None, "native_sprint_id": None, "evidence_ids": [],
+                "error_code": None, "retryable": False, "deduplicated": False}
+            record = {"actor_id": actor, "receipt": receipt}
+            self._state["operations"][opid] = record
+            self._state["idempotency"][idem] = opid
+            self._save()  # intent and deduplication are durable before any external effect
+            try:
+                action, args = plan["action_id"], plan["arguments"]
+                scope = {"actor_id": actor, "project_id": project,
+                         "authority_fingerprint": binding_version}
+                if action == "worker.probe":
+                    result = self.worker_adapter.probe(args["candidate_id"], **scope)
+                    receipt.update(state="SUCCEEDED" if result["status"] == "PASS" else "FAILED",
+                                   error_code=result.get("error_code"), evidence_ids=[result["probe_receipt_id"]])
+                elif action == "worker.bind":
+                    result = self.worker_adapter.bind(args["candidate_id"], args["probe_receipt_id"], **scope)
+                    receipt.update(state="SUCCEEDED", evidence_ids=[result["binding_id"]])
+                else:
+                    handler = self.action_handlers.get(action)
+                    if handler is None:
+                        receipt.update(state="BLOCKED", error_code="ACTION_NOT_CONFIGURED")
+                    else:
+                        fields = handler(**scope, arguments=deepcopy(args), operation_id=opid)
+                        if not isinstance(fields, dict) or set(fields) - {
+                            "state", "error_code", "retryable", "evidence_ids", "native_operation_id", "native_sprint_id"}:
+                            raise ValueError("INVALID_ACTION_RECEIPT")
+                        receipt.update(fields)
             except Exception as exc:
-                receipt["state"] = "FAILED"
-                receipt["error_code"] = "UNSUPPORTED_OPERATION"
-                receipt["updated_at"] = datetime.now(timezone.utc).isoformat()
+                # Do not expose exception text, credentials or transport payloads.
+                receipt.update(state="UNKNOWN", error_code="OPERATION_REQUIRES_RECONCILIATION", retryable=False)
+                if isinstance(exc, (PermissionError, ValueError, LookupError)):
+                    receipt.update(state="BLOCKED", error_code="ACTION_PRECONDITION_FAILED")
+            receipt["updated_at"] = _now()
+            get_receipt_validator().validate(receipt)
+            self._save()
+            return deepcopy(receipt)
 
-            # Validate receipt schema
-            rc_validator = get_receipt_validator()
-            rc_validator.validate(receipt)
-
-            self._receipts[operation_id] = receipt
-            self._idempotency_map[idemp_key] = operation_id
-            self._persist_receipt(actor_id, idempotency_key, receipt)
-            return receipt
-
-    def get_operation(self, project_id: str, operation_id: str) -> dict[str, Any]:
-        receipt = self._receipts.get(operation_id)
-        if receipt is None or receipt.get("project_id") != project_id:
-            raise LookupError(f"Operation {operation_id} not found for project {project_id}")
+    def _public_record(self, record, actor, project):
+        receipt = deepcopy(record["receipt"])
+        if record["actor_id"] != actor or receipt["project_id"] != project:
+            raise PermissionError("OPERATION_OWNER_MISMATCH")
+        self._authorize(actor, project, "read")
+        if self.status_reader and receipt["action_id"] == "selftest.start":
+            try:
+                receipt.update(self.status_reader(actor, project, receipt["native_operation_id"] or receipt["operation_id"]))
+            except LookupError:
+                if receipt["state"] == "APPLYING":
+                    receipt.update(state="UNKNOWN", error_code="OPERATION_REQUIRES_RECONCILIATION", retryable=False)
+        elif receipt["state"] == "APPLYING":
+            receipt.update(state="UNKNOWN", error_code="OPERATION_REQUIRES_RECONCILIATION", retryable=False)
+        get_receipt_validator().validate(receipt)
         return receipt
+
+    def get_operation(self, project_id, operation_id, *, actor_id):
+        if self.durable_store_dir is None:
+            raise LookupError("OPERATION_NOT_FOUND")
+        # Atomic ledger replacement permits a passive reader without creating a lock file.
+        reader = SetupOperationsManager(worker_adapter=self.worker_adapter,
+            durable_store_dir=self.durable_store_dir, authorize=self.authorize, status_reader=self.status_reader)
+        reader._load()
+        record = reader._state["operations"].get(operation_id)
+        if record is None:
+            raise LookupError("OPERATION_NOT_FOUND")
+        return reader._public_record(record, actor_id, project_id)
+
+    def list_operations(self, project_id, *, actor_id, limit=20):
+        self._authorize(actor_id, project_id, "read")
+        if self.durable_store_dir is None:
+            return []
+        reader = SetupOperationsManager(worker_adapter=self.worker_adapter, durable_store_dir=self.durable_store_dir)
+        reader._load()
+        receipts = [deepcopy(record["receipt"]) for record in reader._state["operations"].values()
+                    if record["actor_id"] == actor_id and record["receipt"]["project_id"] == project_id]
+        # Recorded evidence only; individual GET refreshes native status passively.
+        return sorted(receipts, key=lambda value: value["created_at"], reverse=True)[:min(max(limit, 1), 20)]

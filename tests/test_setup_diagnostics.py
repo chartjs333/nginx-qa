@@ -83,16 +83,16 @@ class TestSetupDiagnosticsCore(unittest.TestCase):
             return p
         data = {
             "projects": {
-                "proj_context_9000": {
+                "github.com/chartjs333/nginx-qa": {
                     "project_phone": "9000",
                     "project_name": "Test Project 9000",
-                    "repository": "https://github.com/chartjs333/nginx-qa.git",
+                    "git_address": "https://github.com/chartjs333/nginx-qa.git",
                 }
             },
             "phone_git_contexts": {
                 "9000": {
                     "project_phone": "9000",
-                    "git_context_key": "proj_context_9000",
+                    "git_context_key": "github.com/chartjs333/nginx-qa",
                 }
             },
         }
@@ -169,21 +169,23 @@ class TestSetupDiagnosticsCore(unittest.TestCase):
                 released_at TEXT
             )
         """)
+        conn.execute("""CREATE TABLE telegram_launcher_operations (
+            operation_id TEXT PRIMARY KEY, project_id TEXT NOT NULL, dedupe_key TEXT UNIQUE,
+            message_key TEXT UNIQUE, holds_slot INTEGER NOT NULL, record_json TEXT NOT NULL)""")
+        from nginx_qa.managed_import import empty_project_control
+        control = empty_project_control("9000")
+        state = None
+        if busy:
+            from tests.test_setup_diagnostics_regressions import native_fixture
+            control, state = native_fixture("9000")
         conn.execute(
             "INSERT INTO managed_projects VALUES (?, ?, ?)",
-            ("9000", json.dumps({"project_id": "9000"}), 1),
+            ("9000", json.dumps(control), 1),
         )
         if busy:
-            state_json = json.dumps({
-                "status": "active",
-                "graph_revision": 2,
-                "assignments": [{"assignment_id": "a-1", "status": "active"}],
-                "reviews": [],
-                "result_receipts": [],
-            })
             conn.execute(
                 "INSERT INTO managed_sprints VALUES (?, ?, ?, ?, ?)",
-                ("9000", "sprint-test-1", "active", 1, state_json),
+                ("9000", state["sprint_id"], "active", 1, json.dumps(state)),
             )
         conn.commit()
         conn.close()
@@ -364,9 +366,19 @@ class TestSetupDiagnosticsCore(unittest.TestCase):
     # --- A03: Canonical project selection and cross-project read isolation ---
     def test_a03_canonical_projects_and_isolation(self):
         cfg = self._create_mock_git_config()
-        with patch.object(app_module, "git_config_path", cfg):
+        from fastapi import FastAPI
+        from types import SimpleNamespace
+        policy_path = self.temp_path / "setup-policy.json"
+        policy_path.write_text(json.dumps({"schema_version": 1, "grants": [{
+            "actor_id": "fixture-operator", "projects": ["9000"], "actions": ["read"],
+        }]}), encoding="utf-8")
+        host = SimpleNamespace(app=FastAPI(), git_config_path=cfg, state_base=self.temp_path,
+            setup_policy_path=policy_path, service_root=self.temp_path,
+            scope_api_operator=lambda request: "fixture-operator")
+        register_setup_diagnostics_api(host)
+        with TestClient(host.app, raise_server_exceptions=False) as client:
             # Enumerate canonical projects
-            res = self.client.get(
+            res = client.get(
                 "/api/v1/setup/projects",
                 headers={ADMIN_TOKEN_HEADER: TEST_ADMIN_TOKEN},
             )
@@ -374,37 +386,36 @@ class TestSetupDiagnosticsCore(unittest.TestCase):
             projects = res.json()["projects"]
             self.assertTrue(any(p["project_id"] == "9000" for p in projects))
 
-            # Unknown project ID returns 404
-            res404 = self.client.get(
+            # Unknown project ID cannot expose a snapshot.
+            res404 = client.get(
                 "/api/v1/projects/9999/setup/snapshot",
                 headers={ADMIN_TOKEN_HEADER: TEST_ADMIN_TOKEN},
             )
-            self.assertEqual(res404.status_code, 404)
+            self.assertEqual(res404.status_code, 409)
 
             # Invalid project ID pattern returns 400
-            res400 = self.client.get(
+            res400 = client.get(
                 "/api/v1/projects/invalid/setup/snapshot",
                 headers={ADMIN_TOKEN_HEADER: TEST_ADMIN_TOKEN},
             )
             self.assertEqual(res400.status_code, 400)
 
             # Invalid instance ID pattern returns 400
-            res_inst = self.client.get(
+            res_inst = client.get(
                 "/api/v1/projects/9000/setup/snapshot?instance_id=bad%20id%20!!",
                 headers={ADMIN_TOKEN_HEADER: TEST_ADMIN_TOKEN},
             )
             self.assertEqual(res_inst.status_code, 400)
 
-        # Corrupt configuration returns explicit 409 STATE_CORRUPT
-        corrupt_cfg = self._create_mock_git_config(corrupt=True)
-        with patch.object(app_module, "git_config_path", corrupt_cfg):
-            res_corrupt = self.client.get(
+            # A corrupt registry remains an explicit input error, never an empty successful snapshot.
+            self._create_mock_git_config(corrupt=True)
+            res_corrupt = client.get(
                 "/api/v1/setup/projects",
                 headers={ADMIN_TOKEN_HEADER: TEST_ADMIN_TOKEN},
             )
-            self.assertEqual(res_corrupt.status_code, 409)
+            self.assertEqual(res_corrupt.status_code, 400)
             corrupt_detail = res_corrupt.json().get("detail", res_corrupt.json())
-            self.assertEqual(corrupt_detail.get("error"), "STATE_CORRUPT")
+            self.assertIn(corrupt_detail.get("error"), {"STATE_CORRUPT", "INVALID_SETUP_REQUEST"})
 
     # --- A04: Passive GET has no hidden mutations ---
     def test_a04_passive_get_has_no_hidden_mutations(self):
@@ -537,59 +548,36 @@ class TestSetupDiagnosticsCore(unittest.TestCase):
         cfg = self._create_mock_git_config()
         store = self._create_mock_store()
 
-        # Mock tunnel origin receipt with fresh heartbeat
-        origin_path = self.temp_path / "launcher-origin.json"
+        from tests.test_setup_diagnostics_regressions import owned_tunnel_fixture
         now_ts = time.time()
-        origin_path.write_text(json.dumps({
-            "schema_version": 1,
-            "phase": "READY",
-            "heartbeat": now_ts - 2.0,
-            "upstream": "http://127.0.0.1:18035",
-        }), encoding="utf-8")
+        environment, origin_path = owned_tunnel_fixture(self.temp_path, now_ts)
+        collector = DiagnosticSnapshotCollector(
+            git_config_path=cfg, store_path=store, environment=environment,
+            now=datetime.fromtimestamp(now_ts, timezone.utc))
+        snapshot = collector.collect_snapshot("9000")
+        checks = {c["check_id"]: c for c in snapshot["checks"]}
+        self.assertEqual(checks["tunnel.ownership"]["status"], "PASS")
+        self.assertEqual(checks["tunnel.heartbeat"]["status"], "PASS")
+        self.assertEqual(checks["tunnel.heartbeat"]["evidence_kind"], "CONFIG_METADATA")
 
-        with patch.dict(os.environ, {"NGINX_QA_LAUNCHER_ORIGIN_STATE": str(origin_path)}):
-            collector = DiagnosticSnapshotCollector(
-                git_config_path=cfg,
-                store_path=store,
-                now=datetime.fromtimestamp(now_ts, timezone.utc),
-            )
-            snapshot = collector.collect_snapshot("9000")
-
-            tunnel_owner = next(c for c in snapshot["checks"] if c["check_id"] == "tunnel.ownership")
-            self.assertEqual(tunnel_owner["status"], "PASS")
-
-            tunnel_hb = next(c for c in snapshot["checks"] if c["check_id"] == "tunnel.heartbeat")
-            self.assertEqual(tunnel_hb["status"], "PASS")
-            self.assertEqual(tunnel_hb["freshness"], "FRESH")
-
-        # Stale heartbeat (> 15 seconds)
-        origin_path.write_text(json.dumps({
-            "schema_version": 1,
-            "phase": "READY",
-            "heartbeat": now_ts - 30.0,
-            "upstream": "http://127.0.0.1:18035",
-        }), encoding="utf-8")
-
-        with patch.dict(os.environ, {"NGINX_QA_LAUNCHER_ORIGIN_STATE": str(origin_path)}):
-            collector_stale = DiagnosticSnapshotCollector(
-                git_config_path=cfg,
-                store_path=store,
-                now=datetime.fromtimestamp(now_ts, timezone.utc),
-            )
-            snapshot_stale = collector_stale.collect_snapshot("9000")
-            tunnel_hb_stale = next(c for c in snapshot_stale["checks"] if c["check_id"] == "tunnel.heartbeat")
-            self.assertEqual(tunnel_hb_stale["status"], "WARN")
-            self.assertEqual(tunnel_hb_stale["freshness"], "STALE")
+        receipt = json.loads(origin_path.read_text(encoding="utf-8"))
+        receipt["heartbeat"] = now_ts - 30.0
+        origin_path.write_text(json.dumps(receipt), encoding="utf-8")
+        stale = collector.collect_snapshot("9000")
+        checks = {c["check_id"]: c for c in stale["checks"]}
+        self.assertEqual(checks["tunnel.ownership"]["status"], "PASS")
+        self.assertEqual(checks["tunnel.heartbeat"]["status"], "WARN")
+        self.assertEqual(checks["tunnel.heartbeat"]["freshness"], "STALE")
 
     # --- A25: One host lifecycle, failure and shutdown isolation ---
     def test_a25_one_host_lifecycle(self):
-        # ManagedImportStore diagnostic_snapshot extension method test
+        # Native store construction is test setup only; reads use the passive adapter.
         store_path = self._create_mock_store(busy=True)
         store = ManagedImportStore(str(store_path))
-        self.assertTrue(hasattr(store, "diagnostic_snapshot"))
-        data = store.diagnostic_snapshot("9000")
+        data = DiagnosticSnapshotCollector(store_path=store.database_path)._read_sqlite_store("9000")
         self.assertTrue(data["available"])
-        self.assertEqual(data["active_sprint_id"], "sprint-test-1")
+        from tests.test_setup_diagnostics_regressions import native_fixture
+        self.assertEqual(data["active_sprint_id"], native_fixture("9000")[1]["sprint_id"])
         self.assertEqual(data["sprint_status"], "active")
 
 

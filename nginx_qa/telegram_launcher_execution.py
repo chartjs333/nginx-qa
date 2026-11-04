@@ -130,13 +130,14 @@ def executor_for(host):
     return ExistingClientHTTPAdapter(url, reference, resolver)
 
 
-def launch_sync(operations, operation_id, principal, project_policy, executor_factory):
+def launch_sync(operations, operation_id, principal, project_policy, executor_factory, *, authorize=None):
     """One cross-process launch transaction around existing engine idempotency."""
-    principal = current_principal(principal, "start", project_policy)
+    reauthorize = authorize or current_principal
+    principal = reauthorize(principal, "start", project_policy)
     operations.importer.validate_mutation_roots()
     digest = hashlib.sha256(("launcher-action:" + operation_id).encode()).hexdigest()
     with operations.importer.git_provider.request_operation_lock(digest, timeout=30):
-        principal = current_principal(principal, "start", project_policy)
+        principal = reauthorize(principal, "start", project_policy)
         record = operations.get(operation_id, principal)
         if record["lifecycle"] in {"Running", "Completed", "Stopped"} or record.get("stop_requested"):
             return record
@@ -151,13 +152,13 @@ def launch_sync(operations, operation_id, principal, project_policy, executor_fa
             if executor is None:
                 raise ExecutorUnavailable("No executor")
             ready = validate_receipt(executor.prepare(instance), instance, "READY")
-            principal = current_principal(principal, "start", project_policy)
+            principal = reauthorize(principal, "start", project_policy)
             if record.get("executor_ready") not in (None, ready):
                 raise ExecutorUnavailable("Client did not preserve its original operation receipt")
             operations.update(operation_id, principal, executor_ready=ready)
             request = operations.preparation_request(operation_id, principal)
             result = operations.importer.activate_prepared(principal.project_id, request, operation_id=operation_id)
-            principal = current_principal(principal, "start", project_policy)
+            principal = reauthorize(principal, "start", project_policy)
             assignments = result.response["initial_assignment_ids"]
             expected = {**instance, "initial_assignment_ids": assignments}
             receipt = validate_receipt(executor.start(instance, assignments, ready), expected, "ACCEPTED")
@@ -166,7 +167,7 @@ def launch_sync(operations, operation_id, principal, project_policy, executor_fa
             # Preserve the actual external ACK before checking permission to
             # disclose it. Revocation cannot erase evidence of a call in flight.
             result = operations.accept_executor(operation_id, principal, receipt)
-            current_principal(principal, "start", project_policy)
+            reauthorize(principal, "start", project_policy)
             return result
         except ExecutorUnavailable:
             operations.update(operation_id, principal, blocked_reason="EXECUTOR_UNAVAILABLE")
@@ -181,13 +182,14 @@ async def launch(operations, operation_id, principal, project_policy, host):
     return result
 
 
-def stop_sync(operations, operation_id, principal, project_policy, executor_factory, runtime):
+def stop_sync(operations, operation_id, principal, project_policy, executor_factory, runtime, *, authorize=None):
     from nginx_qa.managed_cancellation import begin_cancel, finalize_cancel
-    principal = current_principal(principal, "stop", project_policy)
+    reauthorize = authorize or current_principal
+    principal = reauthorize(principal, "stop", project_policy)
     operations.importer.validate_mutation_roots()
     digest = hashlib.sha256(("launcher-action:" + operation_id).encode()).hexdigest()
     with operations.importer.git_provider.request_operation_lock(digest, timeout=30):
-        principal = current_principal(principal, "stop", project_policy)
+        principal = reauthorize(principal, "stop", project_policy)
         record = operations.get(operation_id, principal)
         if record["lifecycle"] in {"Stopped", "Completed"} or (record["lifecycle"] == "Failed" and record.get("engine_activated")):
             return record
@@ -208,7 +210,7 @@ def stop_sync(operations, operation_id, principal, project_policy, executor_fact
                 ready = record.get("executor_ready")
                 if not ready:
                     raise ExecutorUnavailable("No original client session")
-                principal = current_principal(principal, "stop", project_policy)
+                principal = reauthorize(principal, "stop", project_policy)
                 executor = executor_factory()
                 if executor is None:
                     raise ExecutorUnavailable("No existing managed client adapter")
@@ -220,7 +222,7 @@ def stop_sync(operations, operation_id, principal, project_policy, executor_fact
             if receipt["client_session_id"] != record.get("executor_ready", {}).get("client_session_id"):
                 raise ExecutorUnavailable("Stored stop acknowledgement changed session")
             # Revocation does not erase a real ACK, but prevents new cleanup.
-            principal = current_principal(principal, "stop", project_policy)
+            principal = reauthorize(principal, "stop", project_policy)
             with runtime._sprint_lock(record["sprint_id"]):
                 state = operations.store.runtime_state(principal.project_id, record["sprint_id"])
                 for assignment_id in {p["assignment_id"] for p in state["processes"]}:

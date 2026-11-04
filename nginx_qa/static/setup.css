@@ -532,3 +532,10 @@ dd {
     transition: none !important;
   }
 }
+/* Forms correspond to the current server action catalog. */
+.operation-form { display: flex; flex-direction: column; gap: .6rem; width: 100%; padding: .75rem; border: 1px solid #d8e0ea; border-radius: 8px; }
+.operation-form label { display: flex; flex-direction: column; gap: .3rem; font-size: .85rem; }
+.operation-form input, .operation-form select { width: 100%; box-sizing: border-box; padding: .55rem; border: 1px solid #b8c5d6; border-radius: 5px; }
+#session-check { margin: 0 0 1rem; }
+#pairing-code { user-select: all; letter-spacing: .08em; }
+.check-evidence { white-space: pre-wrap; overflow-wrap: anywhere; }
