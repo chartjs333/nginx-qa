@@ -1,0 +1,76 @@
+{
+  "status": "PASS",
+  "product": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "live_gateway": [
+    {
+      "path": "/setup",
+      "method": "GET",
+      "status": 503,
+      "error_code": "GATEWAY_OFFLINE",
+      "body_sha256": "569fb58d8cde81ab52bbab595508bf2ed462fc99c87665c49771e9c63725ca43",
+      "credentials_sent": false
+    },
+    {
+      "path": "/setup/assets/setup.js",
+      "method": "GET",
+      "status": 503,
+      "error_code": "GATEWAY_OFFLINE",
+      "body_sha256": "b17f2270e7396e3116edb8de1053b28932c3f9d1e83405ef2044e579ad5f938b",
+      "credentials_sent": false
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 503,
+      "error_code": "GATEWAY_OFFLINE",
+      "body_sha256": "588d5e326ef491486d0a6f8f7efaeacfc65f145550f17f308b34e97fd2d507bd",
+      "credentials_sent": false
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-fixture/inspect",
+      "method": "POST",
+      "status": 503,
+      "error_code": "GATEWAY_OFFLINE",
+      "body_sha256": "204b8d35d529e34032db8d557f175a0f7aa1e65bfae3de91551b4864a64c3e75",
+      "credentials_sent": false
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-fixture/inspect",
+      "method": "GET",
+      "status": 503,
+      "error_code": "GATEWAY_OFFLINE",
+      "body_sha256": "a886bb67206dba2d5353d86f65d27a1722696571d2d8c7503c0a5fbee603525b",
+      "credentials_sent": false
+    }
+  ],
+  "live_meaning": "Existing gateway is fail-closed while offline; not a fresh live configured-route/TLS proof.",
+  "isolated_enabled_gateway_route_checks": [
+    {
+      "path": "/setup",
+      "method": "GET",
+      "status": 404
+    },
+    {
+      "path": "/setup/assets/setup.js",
+      "method": "GET",
+      "status": 404
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 404
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-fixture/inspect",
+      "method": "POST",
+      "status": 404
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-fixture/inspect",
+      "method": "GET",
+      "status": 404
+    }
+  ],
+  "existing_services_reconfigured": false,
+  "prior_cloudflare_24_check_provenance_unchanged": true
+}
