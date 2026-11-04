@@ -86,3 +86,29 @@ and safe deployment. In particular, reconcile the previously observed report-onl
 `check_installed_native_history.py` helper wording drift in the **new** package;
 do not rewrite historical evidence. Provider, worker, model, Telegram and other
 external acceptance limits are unchanged.
+
+## Follow-up before native submission: deferred Apply completion
+
+The parent identified another ordering issue before submitting this coordinator
+result. Isolated real Edge reproduced both cases on the published initial repair
+`abd876a4e006e21149946e65857d3e7b88416842`: a delayed stale-Apply refresh restored
+its old error after a newer session; and delayed history let the user create and
+cancel another plan, then the old completion moved focus from that Plan button
+to Refresh and restored its obsolete error. These are fixture reproductions,
+not live-host observations.
+
+The descendant fix fences deferred notices and restoration by the current
+session and UI-work revision, with snapshot epoch/project checks when recovery
+does not itself reauthenticate. Explicit new session, Plan, advice, inspection,
+Apply, Refresh or project navigation invalidates the old completion. Deferred
+focus also respects an already-focused current control and an unfocused browser
+document. Original Apply identity and backend semantics are unchanged.
+
+The exact `abd876a` assets were exported and reproduced both findings; the new
+source preserves the latest error state and focus in both cases. All ten prior
+isolated Edge focus/recovery groups and seven affected wizard tests passed
+again. The unchanged deployment/Git checks retain their preceding results;
+overlapping runs are not added to distinct totals. See
+[`evidence/ui-focus-apply-order`](evidence/ui-focus-apply-order/). The initial
+repair commit and its evidence remain in history. No native result, install or
+service action occurred during this follow-up.

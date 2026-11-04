@@ -1,0 +1,45 @@
+{
+  "kind": "REAL_EDGE_ALL_HTTP_INTERCEPTED",
+  "expected_defect": true,
+  "passed": true,
+  "source_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-repair\\apply-order-baseline-export",
+  "setup_js_sha256": "365b61b3d83dd025ab369ef836952e7f5f336030192ef424daf58e75d4611272",
+  "results": [
+    {
+      "scenario": "new-session",
+      "before": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "session-check",
+        "focusText": "Проверить подтверждение сессии"
+      },
+      "after": {
+        "error": "План устарел и не выполнялся. Для нового действия сформируйте новый план. ",
+        "errorHidden": false,
+        "focusId": "session-check",
+        "focusText": "Проверить подтверждение сессии"
+      },
+      "focusRetained": true,
+      "explicit_apply_requests": 1
+    },
+    {
+      "scenario": "new-work",
+      "before": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "",
+        "focusText": "Сформировать план"
+      },
+      "after": {
+        "error": "План устарел и не выполнялся. Для нового действия сформируйте новый план. ",
+        "errorHidden": false,
+        "focusId": "refresh",
+        "focusText": "Обновить диагностику"
+      },
+      "focusRetained": false,
+      "explicit_apply_requests": 1
+    }
+  ],
+  "page_errors": [],
+  "automatic_apply": 0
+}

@@ -25,6 +25,7 @@
     advising: false,
     adviceRequest: null,
     sessionGeneration: 0,
+    workRevision: 0,
     epoch: 0,
     receipts: [],
   };
@@ -205,6 +206,7 @@
 
   async function checkSession() {
     if (state.applying || (state.pendingPlan && !state.attempt)) return;
+    state.workRevision++;
     const generation = ++state.sessionGeneration;
     const preferredProject = state.currentProject;
     const returnFocus = closePlan({restoreFocus: false});
@@ -418,6 +420,7 @@
       return;
     }
 
+    state.workRevision++;
     const generation = state.sessionGeneration, epoch = state.epoch;
     state.advising = true;
     syncControls();
@@ -515,6 +518,7 @@
     }
 
     if (!(state.currentSnapshot.available_action_ids || []).includes(actionId)) { showError("Операция отсутствует в разрешённом каталоге"); return; }
+    state.workRevision++;
     const project = state.currentProject;
     const snapshotId = state.currentSnapshot.snapshot_id;
     const generation = state.sessionGeneration, epoch = state.epoch;
@@ -625,6 +629,7 @@
   async function inspectPendingApply() {
     const attempt = state.attempt;
     if (!attempt || state.applying || state.inspecting || !state.authenticated || state.actor !== attempt.actor_id) return;
+    state.workRevision++;
     const generation = state.sessionGeneration, epoch = state.epoch, project = state.currentProject, actor = state.actor;
     const current = () => generation === state.sessionGeneration && state.attempt === attempt &&
       state.actor === actor && state.epoch === epoch && state.currentProject === project;
@@ -671,6 +676,7 @@
     // Fail before sending if an uncertain request cannot survive a page reload.
     try { persistAttempt(plan, key); }
     catch (_) { showError("Запрос не отправлен: не удалось сохранить его ключ в этой вкладке. Проверьте доступность хранилища браузера."); return; }
+    state.workRevision++;
     const focusedApply = document.activeElement === el("plan-apply-btn");
     state.applying = true; syncControls(); showError(null);
     // Disabling the focused Apply button must not strand keyboard focus on BODY
@@ -711,11 +717,18 @@
       }
     } finally {
       state.applying = false; syncControls();
-      const recoveryGeneration = state.sessionGeneration + (reauthenticate ? 1 : 0);
-      if (reauthenticate) await checkSession();
-      else if (refresh) await refreshSnapshot();
-      if (rejected) showError("План устарел и не выполнялся. Для нового действия сформируйте новый план. " + (el("error").hidden ? "" : el("error").textContent));
-      if (recoveryGeneration === state.sessionGeneration) restorePlanFocus(returnFocus);
+      const recovery = reauthenticate ? checkSession() : refresh ? refreshSnapshot() : null;
+      const context = {generation: state.sessionGeneration, epoch: state.epoch,
+        project: state.currentProject, work: state.workRevision};
+      await recovery;
+      // Recovery may await diagnostics/history while the operator starts newer
+      // work. Neither an old stale-plan notice nor focus belongs to that work.
+      const current = context.generation === state.sessionGeneration && context.work === state.workRevision &&
+        (reauthenticate || (context.epoch === state.epoch && context.project === state.currentProject));
+      if (current) {
+        if (rejected) showError("План устарел и не выполнялся. Для нового действия сформируйте новый план. " + (el("error").hidden ? "" : el("error").textContent));
+        restorePlanFocus(returnFocus, {onlyIfUnfocused: true});
+      }
     }
   }
 
@@ -775,8 +788,14 @@
     return target;
   }
 
-  function restorePlanFocus(target) {
+  function restorePlanFocus(target, {onlyIfUnfocused = false} = {}) {
     if (!target || document.querySelectorAll("dialog[open]").length) return;
+    if (onlyIfUnfocused) {
+      const active = document.activeElement;
+      if (typeof document.hasFocus === "function" && !document.hasFocus()) return;
+      if (active && active !== document.body && active.isConnected && !active.matches(":disabled") &&
+          active.getClientRects().length && !active.closest("dialog")) return;
+    }
     const current = target.generation === state.sessionGeneration && target.project === state.currentProject;
     const candidates = [current ? target.node : null, el("apply-inspect"), el("refresh"), el("session-check")];
     for (const node of candidates) {
@@ -800,9 +819,10 @@
   }
 
   function init() {
-    el("refresh").addEventListener("click", () => refreshSnapshot());
+    el("refresh").addEventListener("click", () => { state.workRevision++; refreshSnapshot(); });
 
     el("project").addEventListener("change", () => {
+      state.workRevision++;
       state.currentProject = el("project").value;
       refreshSnapshot();
     });
