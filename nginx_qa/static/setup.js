@@ -19,6 +19,7 @@
     currentSnapshot: null,
     busy: false,
     pendingPlan: null,
+    planReturnFocus: null,
     applyKey: null,
     applying: false,
     advising: false,
@@ -206,7 +207,7 @@
     if (state.applying || (state.pendingPlan && !state.attempt)) return;
     const generation = ++state.sessionGeneration;
     const preferredProject = state.currentProject;
-    closePlan();
+    const returnFocus = closePlan({restoreFocus: false});
     state.authenticated = false;
     state.actor = null;
     state.csrf = null;
@@ -243,7 +244,9 @@
       invalidateSnapshot();
       showNotice("Доступ не подтверждён");
       showError(err.message);
-    } finally { if (generation === state.sessionGeneration) syncControls(); }
+    } finally {
+      if (generation === state.sessionGeneration) { syncControls(); restorePlanFocus(returnFocus); }
+    }
   }
 
   async function loadProjects(generation, preferredProject) {
@@ -351,7 +354,7 @@
         event.preventDefault();
         const args = {};
         fields.forEach(field => { args[field] = inputs[field].value.trim(); });
-        createPlan(action, args);
+        createPlan(action, args, btn);
       });
       toolbar.append(form);
     });
@@ -495,7 +498,7 @@
         const btn = make("button", "Сформировать план", "btn-action");
         btn.type = "button";
         btn.addEventListener("click", () => {
-          if (state.currentSnapshot && advice.snapshot_id === state.currentSnapshot.snapshot_id) createPlan(p.action_id, p.arguments || {});
+          if (state.currentSnapshot && advice.snapshot_id === state.currentSnapshot.snapshot_id) createPlan(p.action_id, p.arguments || {}, btn);
           else showError("Совет относится к предыдущему снимку.");
         });
 
@@ -505,7 +508,7 @@
     }
   }
 
-  async function createPlan(actionId, actionArgs) {
+  async function createPlan(actionId, actionArgs, opener) {
     if (!state.currentSnapshot || state.planning || state.pendingPlan || state.attempt || state.storageBlocked) {
       showError("Диагностический снимок недоступен");
       return;
@@ -540,7 +543,7 @@
       state.retryPermitted = true;
       state.applyKey = "ui-apply-" + global.crypto.randomUUID();
       syncControls();
-      showPlanDialog(plan);
+      showPlanDialog(plan, opener);
       el("sync").textContent = "План сформирован";
     } catch (err) {
       if (generation !== state.sessionGeneration || epoch !== state.epoch) return;
@@ -549,7 +552,7 @@
     } finally { if (generation === state.sessionGeneration) { state.planning = false; syncControls(); } }
   }
 
-  function showPlanDialog(plan) {
+  function showPlanDialog(plan, opener) {
     const dl = el("plan-details");
     dl.replaceChildren();
 
@@ -578,6 +581,10 @@
 
     const dialog = el("plan-dialog");
     if (!dialog.open) {
+      // Capture the invoking control explicitly: it is disabled before the
+      // asynchronous plan returns, so the dialog's native previous focus may
+      // already be BODY. The node is only a return candidate, never authority.
+      state.planReturnFocus = {node: opener, generation: state.sessionGeneration, project: state.currentProject};
       dialog.showModal();
     }
   }
@@ -645,7 +652,7 @@
         state.pendingPlan = result.plan;
         state.applyKey = attempt.idempotency_key;
         state.retryPermitted = result.retry_permitted;
-        showPlanDialog(result.plan);
+        showPlanDialog(result.plan, el("apply-inspect"));
         showError(result.retry_permitted ? "Квитанция пока не найдена. Можно явно подтвердить повтор исходного запроса с тем же ключом." :
           "Права на действие отозваны. Запрос сохранён; доступно обновление диагностики и повторное подтверждение сессии.");
       }
@@ -664,9 +671,13 @@
     // Fail before sending if an uncertain request cannot survive a page reload.
     try { persistAttempt(plan, key); }
     catch (_) { showError("Запрос не отправлен: не удалось сохранить его ключ в этой вкладке. Проверьте доступность хранилища браузера."); return; }
+    const focusedApply = document.activeElement === el("plan-apply-btn");
     state.applying = true; syncControls(); showError(null);
+    // Disabling the focused Apply button must not strand keyboard focus on BODY
+    // while its response is pending. The native dialog remains the focus scope.
+    if (focusedApply) el("plan-dialog").focus();
     el("sync").textContent = "Применение плана " + plan.plan_id + "…";
-    let refresh = false, reauthenticate = false, rejected = false;
+    let refresh = false, reauthenticate = false, rejected = false, returnFocus = null;
     try {
       const receipt = await api("/api/v1/projects/" + encodeURIComponent(plan.project_id) + "/setup/plans/" + encodeURIComponent(plan.plan_id) + "/apply", {
         method: "POST", body: JSON.stringify({schema_version: 1, plan_digest: plan.plan_digest, confirmed: true, idempotency_key: key})});
@@ -674,7 +685,7 @@
       state.attemptOperationId = receipt.operation_id;
       if (receiptResolvesAttempt(receipt)) clearAttempt();
       state.pendingPlan = null; state.applyKey = null;
-      el("plan-dialog").close();
+      returnFocus = closePlanDialog();
       recordReceipt(receipt, plan.project_id);
       el("sync").textContent = "Состояние операции (" + receipt.state + ")";
       refresh = true;
@@ -683,7 +694,7 @@
       const notStarted = err.status === 409 && detail && detail.error === "PLAN_STALE" &&
         detail.apply_outcome === "NOT_STARTED" && detail.plan_id === plan.plan_id && detail.plan_digest === plan.plan_digest &&
         receiptMatchesPlan(detail.receipt, plan) && detail.receipt.state === "BLOCKED" && detail.receipt.error_code === "PLAN_STALE";
-      el("plan-dialog").close();
+      returnFocus = closePlanDialog();
       state.pendingPlan = null;
       if (notStarted) {
         clearAttempt(); state.applyKey = null;
@@ -700,9 +711,11 @@
       }
     } finally {
       state.applying = false; syncControls();
+      const recoveryGeneration = state.sessionGeneration + (reauthenticate ? 1 : 0);
       if (reauthenticate) await checkSession();
       else if (refresh) await refreshSnapshot();
       if (rejected) showError("План устарел и не выполнялся. Для нового действия сформируйте новый план. " + (el("error").hidden ? "" : el("error").textContent));
+      if (recoveryGeneration === state.sessionGeneration) restorePlanFocus(returnFocus);
     }
   }
 
@@ -753,11 +766,37 @@
       card.append(update); list.append(card);
     });
   }
-  function closePlan() {
+  function closePlanDialog() {
+    const dialog = el("plan-dialog");
+    if (!dialog.open) return null;
+    const target = state.planReturnFocus;
+    state.planReturnFocus = null;
+    dialog.close();
+    return target;
+  }
+
+  function restorePlanFocus(target) {
+    if (!target || document.querySelectorAll("dialog[open]").length) return;
+    const current = target.generation === state.sessionGeneration && target.project === state.currentProject;
+    const candidates = [current ? target.node : null, el("apply-inspect"), el("refresh"), el("session-check")];
+    for (const node of candidates) {
+      if (!node || !node.isConnected || node.disabled || node.matches(":disabled") ||
+          node.closest("[hidden], [inert]") || !node.getClientRects().length) continue;
+      node.focus();
+      if (document.activeElement === node) return;
+    }
+  }
+
+  function closePlan({restoreFocus = true} = {}) {
     if (state.applying) return;
-    el("plan-dialog").close(); state.pendingPlan = null;
+    state.pendingPlan = null;
     if (!state.attempt) state.applyKey = null;
+    // Enable the origin before closing, then restore an attached, current and
+    // visible target. Never focus background content while another dialog is open.
     syncControls();
+    const target = closePlanDialog();
+    if (restoreFocus) restorePlanFocus(target);
+    return target;
   }
 
   function init() {

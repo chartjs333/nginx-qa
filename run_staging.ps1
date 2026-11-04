@@ -41,7 +41,8 @@ function Resolve-StagingDeploymentBranch {
     $allowed = @(
         "codex/sdw-qualified-host-20261104",
         "codex/sdw-qualified-host-continuation-20261104",
-        "codex/sdw-qualified-ui-recovery-20261104"
+        "codex/sdw-qualified-ui-recovery-20261104",
+        "codex/sdw-qualified-ui-focus-recovery-20261104"
     )
     if ($allowed -cnotcontains $DeploymentBranch) {
         throw "DeploymentBranch is not an approved setup wizard deployment identity."

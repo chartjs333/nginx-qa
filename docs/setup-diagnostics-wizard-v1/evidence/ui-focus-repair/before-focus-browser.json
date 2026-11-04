@@ -1,0 +1,29 @@
+{
+  "kind": "REAL_EDGE_ALL_HTTP_INTERCEPTED_NO_INSTALLED_HOST_REQUESTS",
+  "expected_defect": true,
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "source_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\reviews\\runtime-findings-1a5064\\export",
+  "setup_js_sha256": "a97cbeb0be4dbd18e33f9bf24f3574013edda54fc2214540f6855d573133c6e0",
+  "passed": true,
+  "scenario_groups": 1,
+  "reports": [
+    {
+      "case": "original Escape defect",
+      "expected_defect_reproduced": true,
+      "observed": {
+        "id": "",
+        "tag": "BODY",
+        "documentFocused": true,
+        "focusVisible": false,
+        "outline": "none",
+        "inDialog": false
+      }
+    }
+  ],
+  "page_errors": [],
+  "request_count": 8,
+  "automatic_apply": 0
+}

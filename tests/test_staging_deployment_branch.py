@@ -13,7 +13,7 @@ class DeploymentBranchTests(unittest.TestCase):
                 $actual = Resolve-StagingDeploymentBranch -Profile $profile -DefaultBranch "retained-default"
                 if ($actual -cne "retained-default") { throw "Default changed" }
             }
-            foreach ($branch in @("codex/sdw-qualified-host-20261104", "codex/sdw-qualified-host-continuation-20261104", "codex/sdw-qualified-ui-recovery-20261104")) {
+            foreach ($branch in @("codex/sdw-qualified-host-20261104", "codex/sdw-qualified-host-continuation-20261104", "codex/sdw-qualified-ui-recovery-20261104", "codex/sdw-qualified-ui-focus-recovery-20261104")) {
                 $actual = Resolve-StagingDeploymentBranch -Profile "setup-diagnostics-wizard-v1" -DefaultBranch "old" -DeploymentBranch $branch
                 if ($actual -cne $branch) { throw "Approved identity rejected" }
             }
@@ -25,6 +25,11 @@ class DeploymentBranchTests(unittest.TestCase):
             $cases = @(
                 @("umse-007", "codex/sdw-qualified-host-continuation-20261104"),
                 @("umse-007", "codex/sdw-qualified-ui-recovery-20261104"),
+                @("umse-007", "codex/sdw-qualified-ui-focus-recovery-20261104"),
+                @("setup-diagnostics-wizard-v1", "codex/sdw-qualified-ui-focus-recovery-20261104; exit"),
+                @("setup-diagnostics-wizard-v1", "codex/sdw-qualified-ui-focus-recovery-20261104 "),
+                @("setup-diagnostics-wizard-v1", "refs/heads/codex/sdw-qualified-ui-focus-recovery-20261104"),
+                @("setup-diagnostics-wizard-v1", "CODEX/sdw-qualified-ui-focus-recovery-20261104"),
                 @("setup-diagnostics-wizard-v1", "codex/sdw-qualified-ui-recovery-20261104; exit"),
                 @("telegram-managed-sprint-launcher-v1-gateway", "codex/sdw-qualified-host-20261104"),
                 @("setup-diagnostics-wizard-v1", "main"),
