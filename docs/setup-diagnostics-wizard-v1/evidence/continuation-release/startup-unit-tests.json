@@ -1,0 +1,20 @@
+{
+  "status": "PASS",
+  "tests": 3,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 0,
+  "command": "C:/nqt37/v/Scripts/python.exe -X utf8 -B C:/nqt35/client/sdw-continuation-20261104/release-final/test_start_all.py",
+  "captured_by": "PowerShell redirected actual child-process unittest output; exit_code0",
+  "log_sha256": "b06ccaa44065c68317f590e9e9b4a2641de98a8789c17b578b870f66380b63ab",
+  "elapsed_test_seconds": 7.166,
+  "cases": [
+    "all_steps_run_in_order",
+    "failure_prevents_later_steps",
+    "missing_helper_prevents_any_start"
+  ],
+  "test_source_sha256": "1df2448f7d666b1c29ae05f677957f4919a61fe7d1a13682830f94b2bcb68424",
+  "wrapper_sha256": "4dcd5333f70711e42f297fac89b89c78dbc6a88922311755a3edb9061f1735a4",
+  "fixture_location": "C:\\nqt35\\client\\sdw-continuation-20261104\\release-final\\startup-test-fixtures",
+  "live_server_or_secret_used_by_fixture_tests": false
+}

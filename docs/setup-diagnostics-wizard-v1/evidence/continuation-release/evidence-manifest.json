@@ -1,0 +1,61 @@
+{
+  "kind": "exact_release_artifact_bytes",
+  "files": {
+    "operator-command-installation.json": {
+      "sha256": "079a95ab34b0d854252b3834aa74719a8eb22f49813d2014d17d71cb3092f288",
+      "bytes": 623
+    },
+    "qualification-native-acceptance.json": {
+      "sha256": "3b3cdeaa39a773651a9bc52b3010badd74ac59ee7028a669f8324002b4d909d9",
+      "bytes": 1066
+    },
+    "runtime-qualification-review.json": {
+      "sha256": "8d8f75e4bb8ef242d00578d6099e7adb6f13493eb19d81e240db13776dfbe060",
+      "bytes": 3247
+    },
+    "secret-scan.json": {
+      "sha256": "8037cb5a340ade4b47b1deebd11525001c3dcb48d26bbdc2d2c07b7d6026154e",
+      "bytes": 267
+    },
+    "security-qualification-review.json": {
+      "sha256": "2ed81785ab8d9ad9e3b8db7ac68141cc97f45861a0011760028589a010e9ff60",
+      "bytes": 357
+    },
+    "startup-live-evidence.json": {
+      "sha256": "701a3469d2b1596d61d9cbd210cf9e9d5486be020f133b07de8d85e8b5d42b3d",
+      "bytes": 2256
+    },
+    "startup-live.stderr.txt": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "startup-live.stdout.txt": {
+      "sha256": "bd361427ba3f8d87aa2fe59f3f49cafc99fbaaa7c48cdb3e92a4edf69f13ca15",
+      "bytes": 804
+    },
+    "startup-unit-tests.json": {
+      "sha256": "ea852d7bd170345261f9fc67f25a472063cbbbc8088f269edafa716b788d73d4",
+      "bytes": 912
+    },
+    "startup-unit-tests.txt": {
+      "sha256": "b06ccaa44065c68317f590e9e9b4a2641de98a8789c17b578b870f66380b63ab",
+      "bytes": 401
+    },
+    "helpers/qualify_startup.py": {
+      "sha256": "ea97d10b17a7647f8762bcc4d751fdca6ce969cb085859b5036d0c89583c9c20",
+      "bytes": 3062
+    },
+    "helpers/start-wizard.cmd": {
+      "sha256": "73e3b63ef833609b85bf42a27ba1ac3533fe9a8402c929e083e117ea23617a18",
+      "bytes": 330
+    },
+    "helpers/start_all.ps1": {
+      "sha256": "4dcd5333f70711e42f297fac89b89c78dbc6a88922311755a3edb9061f1735a4",
+      "bytes": 2588
+    },
+    "helpers/test_start_all.py": {
+      "sha256": "1df2448f7d666b1c29ae05f677957f4919a61fe7d1a13682830f94b2bcb68424",
+      "bytes": 2407
+    }
+  }
+}

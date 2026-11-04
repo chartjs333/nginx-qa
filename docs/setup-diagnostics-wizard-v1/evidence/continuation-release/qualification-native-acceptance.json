@@ -1,0 +1,26 @@
+{
+  "at": "2026-11-04T18:46:55.262801+00:00",
+  "kind": "read_only_native_qualification_acceptance",
+  "qualification_commit": "c115b2e03d93700fb600e54bbdc8d31fcef70f61",
+  "assignment_id": "assignment-c16109a70640e0edeefc50bf",
+  "outcome": "PASS",
+  "status": "completed",
+  "reviews": [
+    {
+      "assignment_id": "review-ad9006802744dbe01d75679b",
+      "reviewer_id": "sdwn-20261104-runtime-reviewer",
+      "decision": "APPROVE",
+      "decided_at": "2026-11-04T18:34:29.781646+00:00",
+      "result_key": "result-305d8d50903da7dabb6d8228b6aab50a238b1e120e43e31022aabe5ea6fb4480",
+      "result_commit": "c115b2e03d93700fb600e54bbdc8d31fcef70f61"
+    },
+    {
+      "assignment_id": "review-82d8b6f104fd34f8a6cb3e65",
+      "reviewer_id": "sdwn-20261104-security-reviewer",
+      "decision": "APPROVE",
+      "decided_at": "2026-11-04T18:39:55.529100+00:00",
+      "result_key": "result-305d8d50903da7dabb6d8228b6aab50a238b1e120e43e31022aabe5ea6fb4480",
+      "result_commit": "c115b2e03d93700fb600e54bbdc8d31fcef70f61"
+    }
+  ]
+}

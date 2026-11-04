@@ -1,0 +1,11 @@
+{
+  "at": "2026-11-04T18:46:55.288803+00:00",
+  "command": "C:\\nqt37\\Запустить мастер.cmd",
+  "sha256": "73e3b63ef833609b85bf42a27ba1ac3533fe9a8402c929e083e117ea23617a18",
+  "prior_command_retained": "C:\\nqt35\\client\\sdw-continuation-20261104\\release-final\\start-command-before-release.cmd",
+  "wrapper": "C:\\nqt35\\client\\sdw-continuation-20261104\\release-final\\start_all.ps1",
+  "wrapper_sha256": "4dcd5333f70711e42f297fac89b89c78dbc6a88922311755a3edb9061f1735a4",
+  "qualified_helpers_unchanged": true,
+  "login_and_stop_commands_unchanged": true,
+  "native_state_modified": false
+}

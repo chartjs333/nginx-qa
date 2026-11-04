@@ -1,3 +1,5 @@
+**Текущая инструкция SDWN-004:** [запуск, правильная копия и границы выпуска](continuation-delivery.md). Квалификация c115b2 принята двумя независимыми Reviewer; собственные ревью выпуска следуют отдельно.
+
 # Setup and Diagnostics Wizard with LLM Advisor v1 — Release Runbook & Operator Guide
 
 **Актуальная локальная установка SDWN-003 (2026-11-04):**
