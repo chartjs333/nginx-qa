@@ -1,0 +1,326 @@
+{
+  "schema_version": 1,
+  "kind": "native_7005_installed_focus_and_recovery_qualification",
+  "at": "2026-11-04T20:49:58.160129+00:00",
+  "tested_product_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "installed_branch": "codex/sdw-qualified-ui-focus-recovery-20261104",
+  "installed_source": "D:/nq-sdw-launcher",
+  "private_url": "http://127.0.0.1:18038/setup",
+  "local_verdict": "PASS",
+  "suggested_native_outcome": "PASS",
+  "native_result_submitted_by_child": false,
+  "findings": [],
+  "previous_failure_history": {
+    "7002_findings": "1a5064c6378dc4622b0f3c1d829654615f489690",
+    "initial_focus_repair_with_two_reorder_defects": "abd876a4e006e21149946e65857d3e7b88416842",
+    "accepted_focus_repair": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+    "retained_harness_failure": "browser-first-busy-notice-assertion.json",
+    "harness_analysis": "busy-notice-harness-analysis.json"
+  },
+  "validation": {
+    "retained_consolidated_baseline": {
+      "distinct_tests": 192,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "source": "fdafbf58db85555706b8ea04e11c1d4450b0f120"
+    },
+    "current_affected_python": {
+      "distinct_tests": 9,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "source": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+      "overlaps_prior_baseline_not_added": true
+    },
+    "authorizer_helper": {
+      "distinct_tests": 12,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "startup_helper": {
+      "distinct_tests": 3,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0
+    },
+    "actual_browser": {
+      "scenario_groups": 6,
+      "passed_groups": 6,
+      "failed_groups": 0,
+      "http_responses": 69,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "page_errors": [],
+      "natural_expiry": true,
+      "actual_own_session_cookie_loss": true,
+      "pending_apply": "REAL_EFFECT_HELD_RESPONSE",
+      "post_effect_403": "INJECTED_RESPONSE_AFTER_REAL_SETUP_OPEN_EFFECT",
+      "missing_provider_worker_network_busy": "EXPLICITLY_LABELLED_FIXTURES",
+      "automatic_apply": 0
+    },
+    "isolated_edge_focus": {
+      "scenario_groups": 10,
+      "passed_groups": 10,
+      "all_http_intercepted": true
+    },
+    "isolated_edge_apply_order": {
+      "cases": 2,
+      "passed": 2,
+      "all_http_intercepted": true
+    },
+    "installed_readiness": "PASS",
+    "actual_owned_host_restart": "PASS",
+    "gateway_live": "503_GATEWAY_OFFLINE_FAIL_CLOSED",
+    "gateway_enabled_isolated_fixture": "5_PATHS_404"
+  },
+  "autonomous_native_proof": {
+    "original_model_client": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "original_model_host": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+    "result": "73c00855b3a0ff3501047a18bfff8680e9672912",
+    "actual_original_independent_models": 3,
+    "current_imported_module_blobs_identical": 16,
+    "existing_schema_definitions_changed": [],
+    "new_model_run": false,
+    "native_history_byte_identical": true,
+    "revalidated_history": "native-history-on-installed-host.json",
+    "current_installed_product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e"
+  },
+  "original_requirements_coverage": [
+    {
+      "id": "R01",
+      "requirement": "Existing engine only; no new scheduler or execution database",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R02",
+      "requirement": "One active/reserved sprint per canonical project, other projects independent",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R03",
+      "requirement": "Fresh managed workspace/topic provenance and two independent exact-result reviews",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R04",
+      "requirement": "Six-state diagnostic snapshot, source/version/freshness and safe evidence",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R05",
+      "requirement": "Passive readiness versus active connection versus actual execution proof",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R06",
+      "requirement": "Discover existing executor, document actual gap, no fake READY or bundled echo worker",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R07",
+      "requirement": "First milestone connection and one real test in a different allowed project",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R08",
+      "requirement": "Typed server allowlist, reviewable plan, explicit effects and current permission",
+      "status": "CURRENT_INSTALLED_RECOVERY_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "host-restart-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R09",
+      "requirement": "Idempotency/fencing/restart/ambiguous outcome and owned-resource stop",
+      "status": "CURRENT_INSTALLED_RECOVERY_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "host-restart-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R10",
+      "requirement": "LLM advisory only; sanitized structured facts and strict typed output",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R11",
+      "requirement": "Existing configured provider and deterministic fallback without account/key migration",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R12",
+      "requirement": "Secrets references only and protected child/Git boundary",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R13",
+      "requirement": "Bounded configured probes, SSRF, no scanning and responsive engine",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R14",
+      "requirement": "Git provenance, credentials, bot/allowlist, tunnel heartbeat/webhook ownership",
+      "status": "LOCAL_GUARDS_COVERED_EXTERNAL_TELEGRAM_INPUTS_REMAIN",
+      "evidence": [
+        "gateway-denial.json",
+        "../continuation-qualification/external-input-inventory.json"
+      ]
+    },
+    {
+      "id": "R15",
+      "requirement": "Private Russian reusable UI with causal actions, freshness and evidence",
+      "status": "CURRENT_INSTALLED_QUALIFICATION_PASS_PENDING_NATIVE_REVIEW",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "isolated-focus/focus-browser-results.json",
+        "isolated-apply-order/apply-order-results.json",
+        "visual-inspection.json"
+      ]
+    },
+    {
+      "id": "R16",
+      "requirement": "Public gateway closed; one private lifespan and no unrelated-server mutation",
+      "status": "LIVE_GATEWAY_OFFLINE_FAIL_CLOSED_AND_ISOLATED_ENABLED_ROUTE_DENIAL",
+      "evidence": [
+        "gateway-denial.json"
+      ]
+    },
+    {
+      "id": "R17",
+      "requirement": "Missing authority/dirty/diverged/busy/foreign state routes through existing recovery",
+      "status": "CURRENT_INSTALLED_RECOVERY_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "host-restart-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R18",
+      "requirement": "Legacy semantics and existing scope/Launcher guards preserved",
+      "status": "RETAINED_EXACT_BASELINE_PLUS_UNCHANGED_BACKEND_CURRENT_READINESS",
+      "evidence": [
+        "../ui-recovery-qualification/regression-run.json",
+        "../continuation-qualification/qualification.json",
+        "regression-baseline-comparison.json",
+        "installed-readiness.json"
+      ]
+    },
+    {
+      "id": "R19",
+      "requirement": "Isolated tests, no false live/model proof, exact evidence and release decision",
+      "status": "CURRENT_INSTALLED_QUALIFICATION_PASS_PENDING_NATIVE_REVIEW",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "isolated-focus/focus-browser-results.json",
+        "isolated-apply-order/apply-order-results.json",
+        "visual-inspection.json"
+      ]
+    }
+  ],
+  "original_end_to_end_gates": {
+    "E01": "RETAINED_ACTUAL_R4_PLUS_CURRENT_MODULE_COMPATIBILITY_READINESS_AND_RESTART",
+    "E02": "RETAINED_ACTUAL_OLLAMA_WITH_ORIGINAL_PROVENANCE_NO_NEW_MODEL_CALL",
+    "E03": "PASS_CURRENT_INSTALLED_MOBILE_WIDTH_KEYBOARD_AND_RECOVERY",
+    "E04": "LOCAL_GATEWAY_FAIL_CLOSED_AND_ENABLED_ROUTE_FIXTURE_PASS_EXTERNAL_TELEGRAM_INPUTS_UNAVAILABLE"
+  },
+  "operational_handoff": {
+    "helper_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification",
+    "source": "D:/nq-sdw-launcher",
+    "state_root": "C:/nqt37",
+    "initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+    "host_launch_receipt": "host-launch-pid.txt",
+    "client_launch_receipt": "stable-client-launch.json",
+    "client_owners_receipt": "stable-client-owners.json",
+    "start": "start_all.ps1",
+    "pair": "authorize_wizard_browser.py",
+    "host_stop": "stop_wizard.py --stop",
+    "idle_client_stop": "verify_stable_client.py --terminate-owned-idle-client",
+    "current_three_c37_shortcuts": true,
+    "git_fixture_original_receipt": "C:/nqt35/client/sdw-continuation-20261104/r4-helper-launch.json",
+    "do_not_raw_kill_recorded_pids": true,
+    "protected_backup_not_published": true
+  },
+  "limits": [
+    "Native 7005 result/reviews and subsequent release are submitted by coordinator, not this qualification agent.",
+    "docs-only-v1; configured actual native test project9010.",
+    "Actual R4 and advisor source IDs are retained; no claim of new model execution on current product.",
+    "Physical Telegram phone/tablet acceptance and designated real bot/webhook/actor remain external inputs.",
+    "Current gateway offline; historical Cloudflare24checkPASS retains original89f7f09 source.",
+    "Project9000 legitimately reports STORE_UNAVAILABLE in this registry-only host; no foreign database substitution."
+  ]
+}

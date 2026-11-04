@@ -1,0 +1,11 @@
+{
+  "kind": "HARNESS_EXPECTATION_CORRECTION",
+  "initial_report": "browser-first-busy-notice-assertion.json",
+  "actual": [
+    {
+      "kind": "ACTUAL_HTTP_BUSY_WITH_EXPLICIT_REFRESH",
+      "text": "План устарел и не выполнялся. Для нового действия сформируйте новый план. Диагностика недоступна: DIAGNOSTIC_CAPTURE_UNAVAILABLE"
+    }
+  ],
+  "explanation": "Actual snapshot returned429 after PLAN_STALE. Harness ready() explicitly refreshed, intentionally invalidating the old notice. Requiring old notice after newer work contradicted c919 completion fence. Corrected assertion requires durable receipt and cleared attempt; notice required when harness did not refresh. No product code changed."
+}

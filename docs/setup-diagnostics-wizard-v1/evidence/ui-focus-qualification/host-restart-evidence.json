@@ -1,0 +1,35 @@
+{
+  "status": "PASS",
+  "tested_product_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "old_launcher_pid": 105984,
+  "new_launcher_pid": 114340,
+  "ownership_proof": "timestamped host-stop and host-launch receipts in this directory",
+  "same_named_actor": "operator-named-madoev",
+  "operation_id": "op-bb370567f3d05123f4505176",
+  "receipt_byte_fields_identical": true,
+  "native_and_client_state_before": {
+    "native_sprints": [
+      {
+        "id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      },
+      {
+        "id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      }
+    ],
+    "client_journal_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4"
+  },
+  "native_and_client_state_unchanged": true,
+  "new_native_sprint": false,
+  "verification_resumed_from_saved_actual_stop_start_receipts": true,
+  "stop_stdout": "Recorded successful held-handle shutdown: host-stop-20261104T204534750041.json",
+  "start_stdout": "{\"status\": \"PASS\", \"signal_sent\": false, \"source_commit\": \"c9193d7d6cab67f0b191a86f5e0e268bce074f9e\", \"owned_pids\": [122260, 128204, 114340]}\n"
+}

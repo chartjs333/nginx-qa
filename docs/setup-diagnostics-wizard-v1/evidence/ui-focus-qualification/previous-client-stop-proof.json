@@ -1,0 +1,11 @@
+{
+  "kind": "forced_idle_client_restart_qualification",
+  "state_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+  "owned_pids": [
+    118068,
+    28396
+  ],
+  "source_commit": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "native_handle_and_birth_verified": true,
+  "terminated": true
+}

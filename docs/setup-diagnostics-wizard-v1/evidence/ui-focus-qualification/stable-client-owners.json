@@ -1,0 +1,21 @@
+﻿{
+    "listener":  {
+                     "LocalAddress":  "127.0.0.1",
+                     "LocalPort":  18039,
+                     "OwningProcess":  123192
+                 },
+    "parent":  {
+                   "ProcessId":  127396,
+                   "ParentProcessId":  120964,
+                   "CreationDate":  "2026-11-04T20:39:30.6492760Z",
+                   "ExecutablePath":  "C:\\nqt37\\v\\Scripts\\python.exe",
+                   "CommandLine":  "\"C:\\nqt37\\v\\Scripts\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+               },
+    "owner":  {
+                  "ProcessId":  123192,
+                  "ParentProcessId":  127396,
+                  "CreationDate":  "2026-11-04T20:39:30.8183190Z",
+                  "ExecutablePath":  "C:\\Python312\\python.exe",
+                  "CommandLine":  "\"C:\\Python312\\python.exe\" -X utf8 -B -u C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\serve_stable_client.py "
+              }
+}

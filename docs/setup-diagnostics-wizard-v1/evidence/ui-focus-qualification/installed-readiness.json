@@ -1,0 +1,595 @@
+{
+  "status": "PASS",
+  "tested_product_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "installed_branch": "codex/sdw-qualified-ui-focus-recovery-20261104",
+  "source_clean": true,
+  "old_remote_refs_unchanged": true,
+  "initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+  "environment_bytes_unchanged": true,
+  "native_rows_byte_identical": [
+    {
+      "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+      "status": "completed",
+      "state_sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+    },
+    {
+      "sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+      "status": "completed",
+      "state_sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+    },
+    {
+      "sprint_id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+      "status": "stopped",
+      "state_sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+    }
+  ],
+  "client_journal_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+  "actual_imported_modules": {
+    "original_actual_model_source": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "installed_source": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+    "modules": {
+      "nginx_qa/__init__.py": "619732cac8b8cb1c98e0243147448809d9a8d25d",
+      "nginx_qa/control_secrets.py": "1df24eeb8ae2dba61a3ea26a639c895e7092a95d",
+      "nginx_qa/legacy_scope_control.py": "e404967657c6e7d2958bcdc3afcfeb7fe5ea6156",
+      "nginx_qa/sprint_types.py": "d90c0217966f75d8d7f46d9850b0095077b4f9c0",
+      "nginx_qa/port_leases.py": "d02557ab3745e833bfd3bbde022e44df6831bc66",
+      "nginx_qa/process_supervisor.py": "78c7dca30562baa0c7826162eaceb0362d9d64ec",
+      "nginx_qa/git_provider.py": "d0b50e448408ec8cfb60c79ba4e572e4186bfb44",
+      "nginx_qa/branch_leases.py": "0384f0dc817f85521b6b4a73ab645a46ac81b72b",
+      "nginx_qa/workspace_manager.py": "9ca369b07ed6b15b14f9b4c973b24e2e7866e132",
+      "nginx_qa/managed_import.py": "4bbc25a1f4c01f078a088b4801793af2e6d91ce2",
+      "nginx_qa/inbound_proposals.py": "1a67204321ec44e4d9f8d0f4debf608507623b09",
+      "nginx_qa/telegram_launcher.py": "791ad8b2f8dd29a9ef1512666bc90e8717b5105f",
+      "nginx_qa/telegram_launcher_execution.py": "3274b0033c0c3bcbcbba3cd4f8b6e4da05e1a6a2",
+      "nginx_qa/setup_worker_adapter.py": "88943fd55a5986fc2c188fa0ae24d300dbc65e8a",
+      "nginx_qa/managed_codex_client.py": "c85d16e564973dd7ad4d630ead12b4bfd5eb159c",
+      "nginx_qa/managed_wsl_runner.py": "d6aa6287992dc21f18edb6bb92ecbfe5734ea6a6"
+    },
+    "identical": true
+  },
+  "served_setup_js_sha256": "0704f461ab4fe3df2d3912098b6a03292cfe786ccbaced6b4f022d1eb38e7791",
+  "actor": "operator-named-madoev",
+  "actual_worker_probe": {
+    "action": "worker.probe",
+    "arguments": {
+      "candidate_id": "default-executor"
+    },
+    "project": "9000",
+    "snapshot": {
+      "kind": "setup_diagnostic_snapshot",
+      "schema_version": 1,
+      "snapshot_id": "6e2cea3597eb73f431a29bbd37783b79153025bab4053eb194b5b44216ac77bc",
+      "project_id": "9000",
+      "instance_id": null,
+      "generated_at": "2026-11-04T20:45:15.514801+00:00",
+      "source": {
+        "adapter_id": "diagnostic-core-adapter",
+        "adapter_version": "1.1.0",
+        "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+        "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+      },
+      "authority_fingerprint": "c17c32558079175a6aff2e0569d20fbeb90c1a361e9a446c2987f4b7f1af3563",
+      "checks": [
+        {
+          "check_id": "project.identity",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "project.canonical_phone",
+              "value": "9000"
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "project.slot",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": [
+            "diagnostics.refresh"
+          ]
+        },
+        {
+          "check_id": "engine.runtime",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "engine.collector_revision_observed",
+              "value": true
+            }
+          ],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.resources",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.delivery",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.result_reviews",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.recovery",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": [
+            "recovery.open"
+          ]
+        },
+        {
+          "check_id": "worker.configuration",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "worker.endpoint_configured",
+              "value": true
+            },
+            {
+              "fact_id": "worker.live_connection_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "worker.probe",
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "worker.binding",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "worker.binding_id",
+              "value": "binding-0655671263e8f418ba32073c"
+            },
+            {
+              "fact_id": "worker.live_connection_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "worker.bind",
+            "worker.probe"
+          ]
+        },
+        {
+          "check_id": "git.source",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CODE",
+          "evidence": [
+            {
+              "fact_id": "git.head",
+              "value": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e"
+            },
+            {
+              "fact_id": "git.branch",
+              "value": "codex/sdw-qualified-ui-focus-recovery-20261104"
+            },
+            {
+              "fact_id": "git.remote_freshness_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "git.probe"
+          ]
+        },
+        {
+          "check_id": "git.publication_authority",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "NONE",
+          "evidence": [
+            {
+              "fact_id": "git.publication_authority_observed",
+              "value": false
+            }
+          ],
+          "error_code": "PROBE_UNSUPPORTED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "git.probe"
+          ]
+        },
+        {
+          "check_id": "secrets.references",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "secrets.bot_reference_configured",
+              "value": false
+            },
+            {
+              "fact_id": "secrets.webhook_reference_configured",
+              "value": false
+            },
+            {
+              "fact_id": "secrets.executor_reference_configured",
+              "value": true
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "provider.configuration",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T20:45:15.514801+00:00",
+          "expires_at": "2026-11-04T20:47:15.514801+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "provider.credential_configured",
+              "value": false
+            },
+            {
+              "fact_id": "provider.live_auth_observed",
+              "value": false
+            },
+            {
+              "fact_id": "provider.local_model_configured",
+              "value": true
+            },
+            {
+              "fact_id": "provider.live_generation_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "telegram.configuration",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "telegram.credential_configured",
+              "value": false
+            },
+            {
+              "fact_id": "telegram.live_auth_observed",
+              "value": false
+            }
+          ],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "tunnel.ownership",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "tunnel.ownership_verified",
+              "value": false
+            }
+          ],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "tunnel.heartbeat",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+            "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "diagnostics.refresh"
+          ]
+        }
+      ],
+      "available_action_ids": [
+        "diagnostics.refresh",
+        "setup.open",
+        "worker.probe",
+        "worker.bind",
+        "git.probe",
+        "selftest.start",
+        "selftest.stop"
+      ]
+    },
+    "plan": {
+      "kind": "setup_action_plan",
+      "schema_version": 1,
+      "plan_id": "plan-bbc3e345c7ffc7217f332d9d",
+      "plan_digest": "2214d3c5ac02727594bc6864a01b22c9c25a1dc9814c95735c6180d0349f8e37",
+      "actor_id": "operator-named-madoev",
+      "project_id": "9000",
+      "target_project_id": null,
+      "snapshot_id": "6e2cea3597eb73f431a29bbd37783b79153025bab4053eb194b5b44216ac77bc",
+      "action_id": "worker.probe",
+      "arguments": {
+        "candidate_id": "default-executor"
+      },
+      "resources": [
+        {
+          "kind": "adapter",
+          "id": "default-executor"
+        }
+      ],
+      "preconditions": [],
+      "required_permissions": [
+        "read",
+        "probe"
+      ],
+      "effects": [
+        "Authenticate and inspect the configured loopback client."
+      ],
+      "authority_fingerprint": "c17c32558079175a6aff2e0569d20fbeb90c1a361e9a446c2987f4b7f1af3563",
+      "created_at": "2026-11-04T20:45:15.632360+00:00",
+      "expires_at": "2026-11-04T20:47:15.632360+00:00",
+      "confirmation_required": false
+    },
+    "apply_path": "/api/v1/projects/9000/setup/plans/plan-bbc3e345c7ffc7217f332d9d/apply",
+    "apply_body": {
+      "schema_version": 1,
+      "plan_digest": "2214d3c5ac02727594bc6864a01b22c9c25a1dc9814c95735c6180d0349f8e37",
+      "idempotency_key": "sdwu-focus-qualified-worker-probe-c9193d-20261104",
+      "confirmed": true
+    },
+    "receipt": {
+      "kind": "setup_operation_receipt",
+      "schema_version": 1,
+      "operation_id": "op-1df27ab1bdcda2e67d6e6b15",
+      "plan_id": "plan-bbc3e345c7ffc7217f332d9d",
+      "plan_digest": "2214d3c5ac02727594bc6864a01b22c9c25a1dc9814c95735c6180d0349f8e37",
+      "project_id": "9000",
+      "action_id": "worker.probe",
+      "state": "SUCCEEDED",
+      "created_at": "2026-11-04T20:45:15.820296+00:00",
+      "updated_at": "2026-11-04T20:45:15.861787+00:00",
+      "native_operation_id": null,
+      "native_sprint_id": null,
+      "evidence_ids": [
+        "probe-56489ea0f70ff8c9ca1e540c"
+      ],
+      "error_code": null,
+      "retryable": false,
+      "deduplicated": false
+    }
+  },
+  "existing_binding": {
+    "check_id": "worker.binding",
+    "status": "PASS",
+    "scope": "passive",
+    "observed_at": "2026-11-04T20:45:15.890323+00:00",
+    "expires_at": "2026-11-04T20:47:15.890323+00:00",
+    "freshness": "FRESH",
+    "source": {
+      "adapter_id": "diagnostic-core-adapter",
+      "adapter_version": "1.1.0",
+      "code_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+      "configuration_version": "5d44c4f9188197d6fc475b1653bc68b02ffbe05948b422047654680af9e86793"
+    },
+    "evidence_kind": "CONFIG_METADATA",
+    "evidence": [
+      {
+        "fact_id": "worker.binding_id",
+        "value": "binding-0655671263e8f418ba32073c"
+      },
+      {
+        "fact_id": "worker.live_connection_observed",
+        "value": false
+      }
+    ],
+    "error_code": null,
+    "capability_ids": [],
+    "next_action_ids": [
+      "worker.bind",
+      "worker.probe"
+    ]
+  },
+  "binding_rewrite_needed": false,
+  "new_model_run": false
+}

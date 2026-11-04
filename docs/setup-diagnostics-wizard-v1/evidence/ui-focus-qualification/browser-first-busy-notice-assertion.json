@@ -1,0 +1,477 @@
+{
+  "kind": "real_installed_edge_recovery_qualification",
+  "product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "cases": [
+    {
+      "name": "mobile layout and keyboard dialog cycle",
+      "kind": "REAL_INSTALLED_BROWSER",
+      "status": "PASS",
+      "layout": {
+        "width": 390,
+        "document": 390,
+        "body": 390
+      },
+      "modalLayout": {
+        "width": 390,
+        "document": 390,
+        "body": 390
+      },
+      "tab": {
+        "id": "session-check",
+        "tag": "BUTTON",
+        "text": "Проверить подтверждение сессии",
+        "documentFocused": true,
+        "focusVisible": true,
+        "outline": "rgb(23, 36, 58) auto 3px",
+        "shadow": "none",
+        "inDialog": false
+      },
+      "focus": [
+        {
+          "id": "plan-apply-btn",
+          "tag": "BUTTON",
+          "text": "Применить план",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(255, 255, 255) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-cancel-btn",
+          "tag": "BUTTON",
+          "text": "Отмена",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(0, 0, 0) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "",
+          "tag": "BODY",
+          "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+          "documentFocused": false,
+          "focusVisible": false,
+          "outline": "rgb(23, 36, 58) none 3px",
+          "shadow": "none",
+          "inDialog": false
+        },
+        {
+          "id": "plan-dialog",
+          "tag": "DIALOG",
+          "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(16, 16, 16) auto 1px",
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+          "inDialog": true
+        },
+        {
+          "id": "plan-dialog-close",
+          "tag": "BUTTON",
+          "text": "×",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(2, 2, 2) auto 2px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-dialog",
+          "tag": "DIALOG",
+          "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(16, 16, 16) auto 1px",
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+          "inDialog": true
+        },
+        {
+          "id": "",
+          "tag": "BODY",
+          "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+          "documentFocused": false,
+          "focusVisible": false,
+          "outline": "rgb(23, 36, 58) none 3px",
+          "shadow": "none",
+          "inDialog": false
+        },
+        {
+          "id": "plan-cancel-btn",
+          "tag": "BUTTON",
+          "text": "Отмена",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(0, 0, 0) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-apply-btn",
+          "tag": "BUTTON",
+          "text": "Применить план",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(255, 255, 255) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        }
+      ],
+      "afterEscape": {
+        "id": "",
+        "tag": "BUTTON",
+        "text": "Сформировать план",
+        "documentFocused": true,
+        "focusVisible": true,
+        "outline": "rgb(22, 34, 53) auto 2px",
+        "shadow": "none",
+        "inDialog": false
+      },
+      "escape_returns_focus": true,
+      "cancel_has_no_apply": true,
+      "dismissals": [
+        {
+          "control": "#plan-cancel-btn",
+          "focus": {
+            "id": "",
+            "tag": "BUTTON",
+            "text": "Сформировать план",
+            "documentFocused": true,
+            "focusVisible": true,
+            "outline": "rgb(22, 34, 53) auto 2px",
+            "shadow": "none",
+            "inDialog": false
+          },
+          "automatic_apply": 0
+        },
+        {
+          "control": "#plan-dialog-close",
+          "focus": {
+            "id": "",
+            "tag": "BUTTON",
+            "text": "Сформировать план",
+            "documentFocused": true,
+            "focusVisible": true,
+            "outline": "rgb(23, 36, 58) auto 2px",
+            "shadow": "none",
+            "inDialog": false
+          },
+          "automatic_apply": 0
+        }
+      ],
+      "pending_apply": {
+        "kind": "REAL_EFFECT_WITH_RESPONSE_HELD",
+        "receipt": {
+          "kind": "setup_operation_receipt",
+          "schema_version": 1,
+          "operation_id": "op-bbc975ee9a86f7270d4c8828",
+          "plan_id": "plan-d57a2067c7725a9efcc173a2",
+          "plan_digest": "752529fc81be48eabe35c1192f0cfd0dd9e3972a849cd7a0ee757a8d3575a08a",
+          "project_id": "9000",
+          "action_id": "setup.open",
+          "state": "SUCCEEDED",
+          "created_at": "2026-11-04T20:40:13.971503+00:00",
+          "updated_at": "2026-11-04T20:40:13.977504+00:00",
+          "native_operation_id": null,
+          "native_sprint_id": null,
+          "evidence_ids": [
+            "setup-help-worker"
+          ],
+          "error_code": null,
+          "retryable": false,
+          "deduplicated": false
+        },
+        "pendingFocus": {
+          "id": "plan-dialog",
+          "tag": "DIALOG",
+          "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(16, 16, 16) auto 1px",
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+          "inDialog": true
+        },
+        "afterPending": {
+          "id": "refresh",
+          "tag": "BUTTON",
+          "text": "Обновить диагностику",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(22, 34, 53) auto 2px",
+          "shadow": "none",
+          "inDialog": false
+        },
+        "escape_cancel_close_preserve_attempt": true,
+        "automatic_apply": 0
+      }
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-d57a2067c7725a9efcc173a2/apply",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-7428931016c4467e907d4159/apply",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 429
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    }
+  ],
+  "page_errors": [],
+  "keyboard_focus_probe": [
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog-close",
+      "tag": "BUTTON",
+      "text": "×",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(2, 2, 2) auto 2px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    }
+  ],
+  "pending_apply_focus": {
+    "kind": "REAL_EFFECT_WITH_RESPONSE_HELD",
+    "receipt": {
+      "kind": "setup_operation_receipt",
+      "schema_version": 1,
+      "operation_id": "op-bbc975ee9a86f7270d4c8828",
+      "plan_id": "plan-d57a2067c7725a9efcc173a2",
+      "plan_digest": "752529fc81be48eabe35c1192f0cfd0dd9e3972a849cd7a0ee757a8d3575a08a",
+      "project_id": "9000",
+      "action_id": "setup.open",
+      "state": "SUCCEEDED",
+      "created_at": "2026-11-04T20:40:13.971503+00:00",
+      "updated_at": "2026-11-04T20:40:13.977504+00:00",
+      "native_operation_id": null,
+      "native_sprint_id": null,
+      "evidence_ids": [
+        "setup-help-worker"
+      ],
+      "error_code": null,
+      "retryable": false,
+      "deduplicated": false
+    },
+    "pendingFocus": {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    "afterPending": {
+      "id": "refresh",
+      "tag": "BUTTON",
+      "text": "Обновить диагностику",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(22, 34, 53) auto 2px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    "escape_cancel_close_preserve_attempt": true,
+    "automatic_apply": 0
+  },
+  "expiry_wait": {
+    "started_at": "2026-11-04T20:40:14.405Z",
+    "expires_at": "2026-11-04T20:42:14.338622+00:00",
+    "wait_ms": 121433
+  },
+  "natural_busy_recovery": [
+    {
+      "kind": "ACTUAL_HTTP_BUSY_WITH_EXPLICIT_REFRESH",
+      "text": "План устарел и не выполнялся. Для нового действия сформируйте новый план. Диагностика недоступна: DIAGNOSTIC_CAPTURE_UNAVAILABLE"
+    }
+  ],
+  "status": "FAIL",
+  "error": "AssertionError [ERR_ASSERTION]: The input did not match the regular expression /не выполнялся/. Input:\n\n''\n\n    at C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\browser_recovery_qualification.cjs:120:10"
+}

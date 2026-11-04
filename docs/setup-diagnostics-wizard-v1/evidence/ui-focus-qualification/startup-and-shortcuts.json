@@ -1,0 +1,16 @@
+{
+  "owned_stack_idempotent_start": "PASS",
+  "creates_native_job": false,
+  "helper_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification",
+  "shortcuts": {
+    "Запустить мастер.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\start_all.ps1",
+    "Вход в мастер.cmd": "C:\\nqt37\\v\\Scripts\\python.exe -X utf8 -B C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\authorize_wizard_browser.py",
+    "Остановить мастер.cmd": "C:\\nqt37\\v\\Scripts\\python.exe -X utf8 -B C:\\nqt35\\client\\sdw-ui-recovery-20261104\\focus-qualification\\stop_wizard.py --stop"
+  },
+  "product": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "actual_named_pairing": "PASS",
+  "actual_current_owned_host_stop_restart": "PASS",
+  "actual_browser_qualification": "PASS",
+  "native_review_and_release_pending": true,
+  "startup_log_sha256": "f7665d9670de79fdcf16140f868c09ba9a002d73b98695a738b19d3393d2524e"
+}

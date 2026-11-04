@@ -1,0 +1,10 @@
+﻿{
+    "status":  "PASS",
+    "loopback_only":  true,
+    "port":  9418,
+    "root_pid":  83276,
+    "root_created_utc":  "2026-11-04T17:33:10.7841948Z",
+    "listener_pid":  107092,
+    "held_process_birth_and_full_argv_proved":  true,
+    "fixture":  "C:\\nqt37\\qualification\\git\\setup-selftest.git"
+}
