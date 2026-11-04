@@ -1,0 +1,893 @@
+{
+  "kind": "real_installed_edge_recovery_qualification",
+  "product": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "cases": [
+    {
+      "name": "mobile layout and keyboard dialog cycle",
+      "kind": "REAL_INSTALLED_BROWSER",
+      "status": "FAIL",
+      "layout": {
+        "width": 390,
+        "document": 390,
+        "body": 390
+      },
+      "modalLayout": {
+        "width": 390,
+        "document": 390,
+        "body": 390
+      },
+      "tab": {
+        "id": "session-check",
+        "tag": "BUTTON",
+        "text": "Проверить подтверждение сессии",
+        "documentFocused": true,
+        "focusVisible": true,
+        "outline": "rgb(23, 36, 58) auto 3px",
+        "shadow": "none",
+        "inDialog": false
+      },
+      "focus": [
+        {
+          "id": "plan-apply-btn",
+          "tag": "BUTTON",
+          "text": "Применить план",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(255, 255, 255) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-cancel-btn",
+          "tag": "BUTTON",
+          "text": "Отмена",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(0, 0, 0) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "",
+          "tag": "BODY",
+          "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+          "documentFocused": false,
+          "focusVisible": false,
+          "outline": "rgb(23, 36, 58) none 3px",
+          "shadow": "none",
+          "inDialog": false
+        },
+        {
+          "id": "plan-dialog",
+          "tag": "DIALOG",
+          "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(16, 16, 16) auto 1px",
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+          "inDialog": true
+        },
+        {
+          "id": "plan-dialog-close",
+          "tag": "BUTTON",
+          "text": "×",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(0, 0, 0) auto 2px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-dialog",
+          "tag": "DIALOG",
+          "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(16, 16, 16) auto 1px",
+          "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+          "inDialog": true
+        },
+        {
+          "id": "",
+          "tag": "BODY",
+          "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+          "documentFocused": false,
+          "focusVisible": false,
+          "outline": "rgb(23, 36, 58) none 3px",
+          "shadow": "none",
+          "inDialog": false
+        },
+        {
+          "id": "plan-cancel-btn",
+          "tag": "BUTTON",
+          "text": "Отмена",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(0, 0, 0) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        },
+        {
+          "id": "plan-apply-btn",
+          "tag": "BUTTON",
+          "text": "Применить план",
+          "documentFocused": true,
+          "focusVisible": true,
+          "outline": "rgb(255, 255, 255) auto 3px",
+          "shadow": "none",
+          "inDialog": true
+        }
+      ],
+      "afterEscape": {
+        "id": "",
+        "tag": "BODY",
+        "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+        "documentFocused": true,
+        "focusVisible": false,
+        "outline": "rgb(23, 36, 58) none 3px",
+        "shadow": "none",
+        "inDialog": false
+      },
+      "escape_returns_focus": false,
+      "cancel_has_no_apply": true
+    },
+    {
+      "name": "natural server expiry and durable same-key fence",
+      "kind": "REAL_INSTALLED_BACKEND",
+      "elapsed_ms": 122645,
+      "expired_plan": {
+        "kind": "setup_action_plan",
+        "schema_version": 1,
+        "plan_id": "plan-18ad9da3c91b784a624db9ad",
+        "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+        "actor_id": "operator-named-madoev",
+        "project_id": "9000",
+        "target_project_id": null,
+        "snapshot_id": "40be24b578a9e996bbc63a71f212ecde77c3393262289a9cf0ca6fcd2d9ec883",
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "worker"
+        },
+        "resources": [],
+        "preconditions": [],
+        "required_permissions": [
+          "read"
+        ],
+        "effects": [
+          "Resolve private setup guidance for the selected topic."
+        ],
+        "authority_fingerprint": "f65c5c6bbd6a4d81728a941d63a61e723cd824be440ea5955676fc7be24817f4",
+        "created_at": "2026-11-04T19:59:38.744893+00:00",
+        "expires_at": "2026-11-04T20:01:38.744893+00:00",
+        "confirmation_required": false
+      },
+      "blocked": {
+        "kind": "setup_operation_receipt",
+        "schema_version": 1,
+        "operation_id": "op-a27194e3de310ef41792595e",
+        "plan_id": "plan-18ad9da3c91b784a624db9ad",
+        "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+        "project_id": "9000",
+        "action_id": "setup.open",
+        "state": "BLOCKED",
+        "created_at": "2026-11-04T20:01:40.433687+00:00",
+        "updated_at": "2026-11-04T20:01:40.433687+00:00",
+        "native_operation_id": null,
+        "native_sprint_id": null,
+        "evidence_ids": [],
+        "error_code": "PLAN_STALE",
+        "retryable": false,
+        "deduplicated": false
+      },
+      "explicit_delayed_same_key_replay": {
+        "action_id": "setup.open",
+        "created_at": "2026-11-04T20:01:40.433687+00:00",
+        "deduplicated": true,
+        "error_code": "PLAN_STALE",
+        "evidence_ids": [],
+        "kind": "setup_operation_receipt",
+        "native_operation_id": null,
+        "native_sprint_id": null,
+        "operation_id": "op-a27194e3de310ef41792595e",
+        "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+        "plan_id": "plan-18ad9da3c91b784a624db9ad",
+        "project_id": "9000",
+        "retryable": false,
+        "schema_version": 1,
+        "state": "BLOCKED",
+        "updated_at": "2026-11-04T20:01:40.433687+00:00"
+      },
+      "fresh_receipt": {
+        "kind": "setup_operation_receipt",
+        "schema_version": 1,
+        "operation_id": "op-3e0d97c6b71620a98b7f0cd3",
+        "plan_id": "plan-cd3e9b643f5327560a1a31a6",
+        "plan_digest": "6968b98582e8f5603e653310ed99ff4a983655e9cfdafb4434e10bb103bf9656",
+        "project_id": "9000",
+        "action_id": "setup.open",
+        "state": "SUCCEEDED",
+        "created_at": "2026-11-04T20:01:41.196266+00:00",
+        "updated_at": "2026-11-04T20:01:41.201827+00:00",
+        "native_operation_id": null,
+        "native_sprint_id": null,
+        "evidence_ids": [
+          "setup-help-worker"
+        ],
+        "error_code": null,
+        "retryable": false,
+        "deduplicated": false
+      },
+      "automatic_apply": 0
+    },
+    {
+      "name": "own session loss re-pair Escape reload and explicit same-key retry",
+      "kind": "REAL_OWN_BROWSER_SESSION_LOSS",
+      "initial_http_status": 401,
+      "retained_attempt": {
+        "schema_version": 1,
+        "actor_id": "operator-named-madoev",
+        "project_id": "9000",
+        "plan_id": "plan-49f5c395b35f124b61552633",
+        "plan_digest": "583f9a099bcd725acf773569245aef7e057278f23a92c4e67810326e29ec6e25",
+        "idempotency_key": "ui-apply-b62c4ec3-799d-413e-83ca-57cd4d0756b5"
+      },
+      "inspection": {
+        "kind": "setup_apply_inspection",
+        "schema_version": 1,
+        "plan": {
+          "action_id": "setup.open",
+          "actor_id": "operator-named-madoev",
+          "arguments": {
+            "topic": "worker"
+          },
+          "authority_fingerprint": "f65c5c6bbd6a4d81728a941d63a61e723cd824be440ea5955676fc7be24817f4",
+          "confirmation_required": false,
+          "created_at": "2026-11-04T20:01:41.579805+00:00",
+          "effects": [
+            "Resolve private setup guidance for the selected topic."
+          ],
+          "expires_at": "2026-11-04T20:03:41.579805+00:00",
+          "kind": "setup_action_plan",
+          "plan_digest": "583f9a099bcd725acf773569245aef7e057278f23a92c4e67810326e29ec6e25",
+          "plan_id": "plan-49f5c395b35f124b61552633",
+          "preconditions": [],
+          "project_id": "9000",
+          "required_permissions": [
+            "read"
+          ],
+          "resources": [],
+          "schema_version": 1,
+          "snapshot_id": "c50f81eb366fb2385de47fd420731fdd200c09e8ec448bf0fbd66ec071f7852f",
+          "target_project_id": null
+        },
+        "receipt": null,
+        "retry_permitted": true
+      },
+      "receipt": {
+        "kind": "setup_operation_receipt",
+        "schema_version": 1,
+        "operation_id": "op-6016e8314f90548a5f60c7cf",
+        "plan_id": "plan-49f5c395b35f124b61552633",
+        "plan_digest": "583f9a099bcd725acf773569245aef7e057278f23a92c4e67810326e29ec6e25",
+        "project_id": "9000",
+        "action_id": "setup.open",
+        "state": "SUCCEEDED",
+        "created_at": "2026-11-04T20:01:46.130364+00:00",
+        "updated_at": "2026-11-04T20:01:46.137362+00:00",
+        "native_operation_id": null,
+        "native_sprint_id": null,
+        "evidence_ids": [
+          "setup-help-worker"
+        ],
+        "error_code": null,
+        "retryable": false,
+        "deduplicated": false
+      },
+      "automatic_apply": 0
+    },
+    {
+      "name": "post-effect 403 reconciles without second Apply",
+      "kind": "ROUTED_403_AFTER_REAL_HARMLESS_EFFECT",
+      "actual_backend_receipt": {
+        "kind": "setup_operation_receipt",
+        "schema_version": 1,
+        "operation_id": "op-6651aa39ea0e60fb61ac63d9",
+        "plan_id": "plan-2160813227acaa92cb410821",
+        "plan_digest": "977d6e2ca38d24aaf3549c4508478a0e68ec6a5ec061e7f08d080b75ef131259",
+        "project_id": "9000",
+        "action_id": "setup.open",
+        "state": "SUCCEEDED",
+        "created_at": "2026-11-04T20:01:46.734530+00:00",
+        "updated_at": "2026-11-04T20:01:46.741529+00:00",
+        "native_operation_id": null,
+        "native_sprint_id": null,
+        "evidence_ids": [
+          "setup-help-worker"
+        ],
+        "error_code": null,
+        "retryable": false,
+        "deduplicated": false
+      },
+      "inspection": {
+        "kind": "setup_apply_inspection",
+        "schema_version": 1,
+        "plan": {
+          "action_id": "setup.open",
+          "actor_id": "operator-named-madoev",
+          "arguments": {
+            "topic": "worker"
+          },
+          "authority_fingerprint": "f65c5c6bbd6a4d81728a941d63a61e723cd824be440ea5955676fc7be24817f4",
+          "confirmation_required": false,
+          "created_at": "2026-11-04T20:01:46.476529+00:00",
+          "effects": [
+            "Resolve private setup guidance for the selected topic."
+          ],
+          "expires_at": "2026-11-04T20:03:46.476529+00:00",
+          "kind": "setup_action_plan",
+          "plan_digest": "977d6e2ca38d24aaf3549c4508478a0e68ec6a5ec061e7f08d080b75ef131259",
+          "plan_id": "plan-2160813227acaa92cb410821",
+          "preconditions": [],
+          "project_id": "9000",
+          "required_permissions": [
+            "read"
+          ],
+          "resources": [],
+          "schema_version": 1,
+          "snapshot_id": "5b568e9ba921fca52e4d030665ae823abd0d6a1dc86232a076d7304a1a6a5a53",
+          "target_project_id": null
+        },
+        "receipt": {
+          "action_id": "setup.open",
+          "created_at": "2026-11-04T20:01:46.734530+00:00",
+          "deduplicated": false,
+          "error_code": null,
+          "evidence_ids": [
+            "setup-help-worker"
+          ],
+          "kind": "setup_operation_receipt",
+          "native_operation_id": null,
+          "native_sprint_id": null,
+          "operation_id": "op-6651aa39ea0e60fb61ac63d9",
+          "plan_digest": "977d6e2ca38d24aaf3549c4508478a0e68ec6a5ec061e7f08d080b75ef131259",
+          "plan_id": "plan-2160813227acaa92cb410821",
+          "project_id": "9000",
+          "retryable": false,
+          "schema_version": 1,
+          "state": "SUCCEEDED",
+          "updated_at": "2026-11-04T20:01:46.741529+00:00"
+        },
+        "retry_permitted": true
+      },
+      "real_permission_revocation": false,
+      "automatic_apply": 0
+    },
+    {
+      "name": "busy unavailable reconnect missing worker/provider and explicit fallback",
+      "kind": "ROUTED_RESPONSE_AND_NETWORK_FIXTURES",
+      "busy_http": 429,
+      "offline_text": "Диагностика недоступна: Failed to fetch",
+      "explicit_refresh_restores_real_snapshot": true,
+      "missing_statuses": [
+        "worker.configuration",
+        "worker.binding",
+        "provider.configuration"
+      ],
+      "fallback_is_fixture": true,
+      "no_live_provider_claim": true,
+      "automatic_apply": 0
+    },
+    {
+      "name": "exact receipt after reload and project switch",
+      "kind": "REAL_INSTALLED_BROWSER",
+      "operation_id": "op-6016e8314f90548a5f60c7cf",
+      "projects": [
+        "9000",
+        "9010",
+        "9000"
+      ],
+      "automatic_apply": 0
+    }
+  ],
+  "requests": [
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-18ad9da3c91b784a624db9ad/apply",
+      "method": "POST",
+      "status": 409
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-cd3e9b643f5327560a1a31a6/apply",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-49f5c395b35f124b61552633/apply",
+      "method": "POST",
+      "status": 401
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-49f5c395b35f124b61552633/inspect",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-49f5c395b35f124b61552633/inspect",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-49f5c395b35f124b61552633/apply",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-2160813227acaa92cb410821/apply",
+      "method": "POST",
+      "status": 403
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans/plan-2160813227acaa92cb410821/inspect",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 429
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/advice",
+      "method": "POST",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9010/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9010/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    }
+  ],
+  "page_errors": [],
+  "keyboard_focus_probe": [
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog-close",
+      "tag": "BUTTON",
+      "text": "×",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 2px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    }
+  ],
+  "findings": [
+    {
+      "id": "E03_FOCUS_RETURN",
+      "message": "Escape closes dialog but does not return focus to its opener",
+      "afterEscape": {
+        "id": "",
+        "tag": "BODY",
+        "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+        "documentFocused": true,
+        "focusVisible": false,
+        "outline": "rgb(23, 36, 58) none 3px",
+        "shadow": "none",
+        "inDialog": false
+      }
+    }
+  ],
+  "expiry_wait": {
+    "started_at": "2026-11-04T19:59:38.821Z",
+    "expires_at": "2026-11-04T20:01:38.744893+00:00",
+    "wait_ms": 121423
+  },
+  "natural_expiry_proof": {
+    "elapsed_ms": 121880,
+    "expired_plan": {
+      "kind": "setup_action_plan",
+      "schema_version": 1,
+      "plan_id": "plan-18ad9da3c91b784a624db9ad",
+      "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+      "actor_id": "operator-named-madoev",
+      "project_id": "9000",
+      "target_project_id": null,
+      "snapshot_id": "40be24b578a9e996bbc63a71f212ecde77c3393262289a9cf0ca6fcd2d9ec883",
+      "action_id": "setup.open",
+      "arguments": {
+        "topic": "worker"
+      },
+      "resources": [],
+      "preconditions": [],
+      "required_permissions": [
+        "read"
+      ],
+      "effects": [
+        "Resolve private setup guidance for the selected topic."
+      ],
+      "authority_fingerprint": "f65c5c6bbd6a4d81728a941d63a61e723cd824be440ea5955676fc7be24817f4",
+      "created_at": "2026-11-04T19:59:38.744893+00:00",
+      "expires_at": "2026-11-04T20:01:38.744893+00:00",
+      "confirmation_required": false
+    },
+    "blocked": {
+      "kind": "setup_operation_receipt",
+      "schema_version": 1,
+      "operation_id": "op-a27194e3de310ef41792595e",
+      "plan_id": "plan-18ad9da3c91b784a624db9ad",
+      "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+      "project_id": "9000",
+      "action_id": "setup.open",
+      "state": "BLOCKED",
+      "created_at": "2026-11-04T20:01:40.433687+00:00",
+      "updated_at": "2026-11-04T20:01:40.433687+00:00",
+      "native_operation_id": null,
+      "native_sprint_id": null,
+      "evidence_ids": [],
+      "error_code": "PLAN_STALE",
+      "retryable": false,
+      "deduplicated": false
+    },
+    "explicit_delayed_same_key_replay": {
+      "action_id": "setup.open",
+      "created_at": "2026-11-04T20:01:40.433687+00:00",
+      "deduplicated": true,
+      "error_code": "PLAN_STALE",
+      "evidence_ids": [],
+      "kind": "setup_operation_receipt",
+      "native_operation_id": null,
+      "native_sprint_id": null,
+      "operation_id": "op-a27194e3de310ef41792595e",
+      "plan_digest": "f0cb0679482ec5244fbbbd2f71e82b72d3e9d594ddfb04b2ded90b7d09de2221",
+      "plan_id": "plan-18ad9da3c91b784a624db9ad",
+      "project_id": "9000",
+      "retryable": false,
+      "schema_version": 1,
+      "state": "BLOCKED",
+      "updated_at": "2026-11-04T20:01:40.433687+00:00"
+    }
+  },
+  "status": "FAIL"
+}

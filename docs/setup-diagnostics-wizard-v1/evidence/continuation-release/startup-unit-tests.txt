@@ -1,0 +1,8 @@
+test_all_steps_run_in_order (__main__.StartupTests.test_all_steps_run_in_order) ... ok
+test_failure_prevents_later_steps (__main__.StartupTests.test_failure_prevents_later_steps) ... ok
+test_missing_helper_prevents_any_start (__main__.StartupTests.test_missing_helper_prevents_any_start) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 7.166s
+
+OK

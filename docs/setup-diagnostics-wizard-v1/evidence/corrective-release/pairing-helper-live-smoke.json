@@ -1,0 +1,11 @@
+{
+  "status": "PASS",
+  "kind": "actual_named_pairing_with_live_established_socket_owner_guard",
+  "helper_sha256": "abda19247f86f51c67e199c544a324937e99119d84470aa63119d467484e8eeb",
+  "helper_exit": 0,
+  "named_actor": "operator-named-madoev",
+  "admin_key_printed": false,
+  "live_ownership_collector_mocked": false,
+  "host": "http://127.0.0.1:18038",
+  "tests": "12 targeted tests in authorize-helper-tests-20261104.txt"
+}

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "at": "2026-11-04T15:46:54.897013+00:00",
+  "stage_outcome": "PASS",
+  "scope": "Automated qualification plus real supervised native self-test; not full live release acceptance.",
+  "tested_code_commit": "8a4b38f2e0ffbdd13a596f316c6e33b65452ab60",
+  "host_code_commit": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+  "same_web_git_blobs_as_tested_commit": true,
+  "automated": {
+    "tests": 148,
+    "seconds": 170.467,
+    "result": "PASS",
+    "log_sha256": "03956d591c9d314bbb3214c50dc51a6a87912318073fa3b192b55fcc9641dc5f"
+  },
+  "live": {
+    "real_headless_edge": "PASS",
+    "named_operator_pairing": "PASS",
+    "plan_cancel_apply": "PASS",
+    "history_reload": "PASS",
+    "real_native_result_and_two_reviews": "PASS",
+    "terminal_resource_retirement": "PASS",
+    "duplicate_apply": "PASS",
+    "owned_host_restart_and_named_owner_repair": "PASS",
+    "failed_attempt_real_stop": "PASS"
+  },
+  "external_limits": {
+    "unattended_codex_cli": "BLOCKED: Windows 10 Pro 22H2 build19045.6456; installed CLI0.161; required MXC isolation unavailable.",
+    "live_llm_advisor": "BLOCKED: Codex tool isolation unverified; deterministic guidance works. No configured tool-free Responses provider live call was made.",
+    "telegram_and_tunnel": "NOT_RUN: inherited external acceptance from PR17; no new bot/webhook/tunnel claim."
+  },
+  "operational_limits": [
+    "one host process per owned state root",
+    "docs-only-v1 client profile; coordinator remains operator-controlled",
+    "read-only SQLite snapshots bounded to64MiB; concurrent maintenance can return SOURCE_STALE/PLAN_STALE; refresh or replay exact retained key",
+    "explicit client/service Stop is terminal; restarting a stopped immutable self-test requires a fresh published profile",
+    "supervised qualification bridge and loopback Git daemon are stopped; neither is an unattended worker",
+    "History cards display saved receipts; use Refresh status for current native status. A saved APPLYING card is not live execution status."
+  ],
+  "native_selftest": {
+    "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+    "result_commit": "f1148f56787fd905d6880583e89205b9b67cdab9",
+    "review_count": 2
+  },
+  "sources": [
+    {
+      "file": "live-selftest.json",
+      "original_path": "C:\\nqt37\\qualification\\live-selftest-evidence.json",
+      "original_sha256": "788ad37bb0b7c9d1b7afc4468c65f5f41a2351479ec51dbf47e0d14587671a7e",
+      "delivered_sha256": "ca673f8882957b11e5aef728af2dd21aab966651ae4b597a30f87c182b0d0570"
+    },
+    {
+      "file": "browser.json",
+      "original_path": "C:\\nqt37\\qualification\\browser-evidence-v2.json",
+      "original_sha256": "1af6cf36d3ba0bc0fcb91775964a07dc36d78938d81a641f72efa064374740d2",
+      "delivered_sha256": "127c10e84aff9e3357ac53dc6c92bbee5ac1d630abcffc5f5e7320dac1639d82"
+    },
+    {
+      "file": "fixture-provenance.json",
+      "original_path": "C:\\nqt37\\qualification\\fixture-provenance-r3.json",
+      "original_sha256": "5af6d612de9b2aa86b44fc89d2cece806f668290e5935e2a9bc14e68aa5ad080",
+      "delivered_sha256": "dbb6e91dd18e5dbb32ab98191e16b2f2dc0e6033b9a0b36b005041046950ba2e"
+    },
+    {
+      "file": "restart-and-cleanup.json",
+      "original_path": "C:\\nqt37\\qualification\\restart-and-cleanup.json",
+      "original_sha256": "75218c46c6861c3fa344573f190add5a54b8c2549e6cba623df0fcad3a64cf0b",
+      "delivered_sha256": "75218c46c6861c3fa344573f190add5a54b8c2549e6cba623df0fcad3a64cf0b"
+    },
+    {
+      "file": "cli-readiness.json",
+      "original_path": "C:\\nqt35\\client\\sdw-corrective-20261104\\sandbox-verified-8dd1ba04\\preflight.json",
+      "original_sha256": "108d2696e5729dcd25114ac604341f87590d30c6d1f4f262d95f49fe91c4eb6b",
+      "delivered_sha256": "b4081f988e7038cbee3d090ce4a9e1e1fda85dfa8b9cb197a0125c2c3a43743c"
+    },
+    {
+      "file": "test-run.json",
+      "original_path": "C:\\nqt35\\client\\sdw-corrective-20261104\\test-20261104T153616.json",
+      "original_sha256": "33eee4494aedf284cc5242454f11f023d37771c1a5350411e84c9a63051e5842",
+      "delivered_sha256": "42900c6522a36ec6f9b771e9f95929350a2b082830f6ba53248bedb3058d01c9"
+    },
+    {
+      "file": "browser-harness.cjs",
+      "original_path": "C:\\nqt35\\client\\sdw-corrective-20261104\\browser_qualification.cjs",
+      "original_sha256": "0ed1edb46872a3b56fdfcc7c98af15c3a604e9b4cd79a5db9db74c4f9582de53",
+      "delivered_sha256": "0ed1edb46872a3b56fdfcc7c98af15c3a604e9b4cd79a5db9db74c4f9582de53"
+    }
+  ],
+  "rework": {
+    "rejected_result_commit": "20741323234bcca2a2133a82eb79b64590698f37",
+    "native_review": "review-92be2a6e7ca7758060fd1b75",
+    "reason": "Original browser harness could match an old SUCCEEDED card before Apply returned. Its live Apply/Reload claim is invalidated.",
+    "fix": "Await exact POST /plans/{new_plan_id}/apply response, assert fresh receipt and its exact operation card, reload, assert same operation in server history and DOM.",
+    "browser_operation_id": "op-6fee207b10a788f6d6dceb9c",
+    "product_code_unchanged": true
+  },
+  "evidence_normalization": "The live selftest field was renamed to both_attempt_reservations_released: both records belong to the same project9010. Original bytes/hash are retained."
+}

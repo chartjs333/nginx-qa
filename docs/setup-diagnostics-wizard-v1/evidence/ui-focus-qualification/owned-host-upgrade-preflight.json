@@ -1,0 +1,35 @@
+{
+  "owner": {
+    "schema_version": 1,
+    "initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+    "ownership": {
+      "instance_id": "setup-diagnostics-wizard-v1-18038",
+      "approved_commit": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+      "service_root": "D:\\nq-sdw-launcher",
+      "origin": "https://github.com/chartjs333/nginx-qa.git",
+      "branch": "codex/sdw-qualified-ui-recovery-20261104",
+      "state_base": "C:\\nqt37",
+      "venv_root": "C:\\nqt37\\v",
+      "base_python": "C:\\Python312\\python.exe",
+      "base_python_prefix": "C:\\Python312",
+      "base_python_version": "3.12.1",
+      "base_python_sha256": "cfd05f0ad320310c4891a5fd297ec96e25f4a23fe64f3fb06df67004198c4ab5",
+      "runtime_root": "C:\\nqt37\\r",
+      "prompt_root": "C:\\nqt37\\p",
+      "managed_root": "C:\\nqt37\\m",
+      "legacy_runtime_root": "D:\\nq-sdw-launcher\\runtime_state",
+      "http_host": "127.0.0.1",
+      "http_port": 18038,
+      "child_port_range": "18800-18849",
+      "protected_roots": [
+        "D:\\nginx-qa-release",
+        "D:\\nginx-qa",
+        "D:\\nq-tmsl",
+        "D:\\nq-tmsl-launcher",
+        "C:\\nqt35",
+        "C:\\nqt36",
+        "C:\\madoev-eeg"
+      ]
+    }
+  }
+}

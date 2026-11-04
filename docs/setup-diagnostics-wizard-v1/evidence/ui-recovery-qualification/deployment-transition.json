@@ -1,0 +1,40 @@
+{
+  "status": "PASS",
+  "kind": "exact_owned_host_deployment_transition",
+  "old_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "new_commit": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "branch": "codex/sdw-qualified-ui-recovery-20261104",
+  "rollback_remote_unchanged": true,
+  "owner_changed_fields": [
+    "approved_commit",
+    "branch"
+  ],
+  "initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+  "protected_backup_manifest": "backup-manifest.json",
+  "native_and_client_state_unchanged": {
+    "native_sprints": [
+      {
+        "id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      },
+      {
+        "id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      }
+    ],
+    "client_journal_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4"
+  },
+  "environment_reasserted_keys": [
+    "NGINX_QA_SETUP_ADVISOR_MODEL",
+    "NGINX_QA_SETUP_ADVISOR_PROVIDER"
+  ],
+  "environment_changed_keys": [],
+  "environment_semantic_comparison": "All values unchanged; Ollama provider/model were reasserted, not newly configured."
+}

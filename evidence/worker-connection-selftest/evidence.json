@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_worker_connection_selftest_work_evidence",
+  "recorded_at": "2026-11-04T12:31:00.000000+00:00",
+  "node_id": "worker-connection-selftest",
+  "agent_phone": "6703",
+  "assignment_id": "assignment-b4aec56411a1553004deeccb",
+  "initial_head_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+  "assigned_branch": "agent/sdw-v1-20261104-worker-connection-selftest",
+  "implementation": {
+    "units": [
+      "nginx_qa/setup_worker_adapter.py",
+      "nginx_qa/setup_operations.py",
+      "nginx_qa/setup_diagnostics_api.py",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "tests/test_worker_connection_selftest.py"
+    ],
+    "contracts": [
+      "contracts.schema.json#/$defs/WorkerCapabilities",
+      "contracts.schema.json#/$defs/PlanRequest",
+      "contracts.schema.json#/$defs/ActionPlan",
+      "contracts.schema.json#/$defs/ApplyRequest",
+      "contracts.schema.json#/$defs/OperationReceipt"
+    ],
+    "routes": [
+      "POST /api/v1/projects/{project_id}/setup/plans",
+      "POST /api/v1/projects/{project_id}/setup/plans/{plan_id}/apply",
+      "GET /api/v1/projects/{project_id}/setup/operations/{operation_id}"
+    ],
+    "security_guarantees": [
+      "Explicit loopback IPv4 only (127.0.0.1:<port>), no SSRF, no credentials in URL",
+      "Bounded HTTP probe: 10s timeout cap, 32KiB response body cap",
+      "Idempotency mapping with plan_digest and confirmation check",
+      "Self-test project slot isolation: target project must be separate (9001), 9000 protected"
+    ]
+  },
+  "acceptance_cases_verified": [
+    "A05",
+    "A06",
+    "A07",
+    "A09",
+    "A11",
+    "A13",
+    "A14",
+    "A19",
+    "A20",
+    "A26"
+  ],
+  "test_suite": {
+    "runner": "C:/Python312/python.exe -m unittest tests/test_worker_connection_selftest.py",
+    "tests_run": 5,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "pinned_source_files_unchanged": 9,
+  "product_acceptance": "PARTIAL_WORKER_CONNECTION_PASS"
+}

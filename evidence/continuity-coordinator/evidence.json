@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_continuity_coordinator_work_evidence",
+  "recorded_at": "2026-11-04T13:14:00.000000+00:00",
+  "node_id": "continuity-coordinator",
+  "agent_phone": "6700",
+  "assignment_id": "assignment-9af76dbfe5c0e95e3dcbbdae",
+  "initial_head_commit": "35d189f4df9f2698df800c4d3d879307f2e10305",
+  "assigned_branch": "agent/sdw-v1-20261104-continuity",
+  "coordinator_disposition": {
+    "software_qualification_status": "PASS",
+    "automated_acceptance_cases_passed": 26,
+    "implementation_units_delivered": [
+      "nginx_qa/setup_diagnostics.py",
+      "nginx_qa/setup_diagnostics_api.py",
+      "nginx_qa/setup_worker_adapter.py",
+      "nginx_qa/setup_operations.py",
+      "nginx_qa/setup_advisor.py",
+      "nginx_qa/static/setup.html",
+      "nginx_qa/static/setup.js",
+      "nginx_qa/static/setup.css",
+      "docs/setup-diagnostics-wizard-v1/runbook.md",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json"
+    ],
+    "outcome": "BLOCKED_EXTERNAL",
+    "reason_code": "EXTERNAL_PREREQUISITES_AWAITING_DEPLOYMENT",
+    "blocked_external_reasons": [
+      "E01 requires dedicated external worker node and separate test project reservation.",
+      "E02 requires configured live LLM API credentials with remote service quota.",
+      "E03 requires live browser session interaction and sanitized screenshot evidence.",
+      "E04 requires terminal Coordinator release sign-off."
+    ],
+    "unblock_steps": [
+      "1. Provision loopback/private network worker executor matching WorkerCapabilities schema.",
+      "2. Populate NGINX_QA_ADVISOR_PROVIDER credentials in environment.",
+      "3. Open http://127.0.0.1:18035/setup with authenticated operator session and capture evidence.",
+      "4. Review and merge draft PR from branch agent/sdw-v1-20261104-release-runbook."
+    ],
+    "pinned_source_files_unchanged": 9,
+    "draft_pr_ready": true
+  },
+  "product_acceptance": "COORDINATOR_BLOCKED_EXTERNAL"
+}

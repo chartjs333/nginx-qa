@@ -275,7 +275,8 @@ def pending_project_operations(host, config, project_id, project_policy):
         return None, []
     with importer.store._transaction() as connection:
         records = [operations._decode(row) for row in connection.execute(
-            "SELECT * FROM telegram_launcher_operations WHERE project_id = ? AND holds_slot = 1", (project_id,))]
+            "SELECT * FROM telegram_launcher_operations WHERE project_id = ? AND holds_slot = 1 "
+            "AND COALESCE(json_extract(record_json,'$.owner_kind'),'telegram')='telegram'", (project_id,))]
     return operations, records
 
 

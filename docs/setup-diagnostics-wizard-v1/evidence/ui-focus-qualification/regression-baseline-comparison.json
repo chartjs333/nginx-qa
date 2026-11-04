@@ -1,0 +1,28 @@
+{
+  "baseline": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "baseline_distinct_tests": 192,
+  "baseline_failures": 0,
+  "baseline_errors": 0,
+  "baseline_skips": 0,
+  "current": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "changed_product_files": [
+    "nginx_qa/static/setup.js",
+    "run_staging.ps1"
+  ],
+  "changed_test_files": [
+    "tests/setup_ui_apply_order_browser.cjs",
+    "tests/setup_ui_focus_browser.cjs",
+    "tests/test_staging_deployment_branch.py"
+  ],
+  "unchanged_backend": true,
+  "current_affected_python_tests": 9,
+  "counts_are_overlapping_not_summed": true,
+  "source_git_blobs": {
+    "nginx_qa/static/setup.js": "23c082e4bb956b4b41bf2fbd36f918855beaebf9",
+    "run_staging.ps1": "4624eef178e189c8d29bee04b464a8f05f9a9c80"
+  },
+  "source_file_sha256": {
+    "nginx_qa/static/setup.js": "0704f461ab4fe3df2d3912098b6a03292cfe786ccbaced6b4f022d1eb38e7791",
+    "run_staging.ps1": "48d576d329e1fa0a0157c0516e5c6943f88de11b12eace7f6eb6a45b95ca8878"
+  }
+}

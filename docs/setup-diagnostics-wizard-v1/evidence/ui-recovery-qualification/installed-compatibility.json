@@ -1,0 +1,53 @@
+{
+  "status": "PASS",
+  "installed_product": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "original_model_client": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+  "original_model_host": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+  "actual_imported_modules_identical": {
+    "original_actual_model_source": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "installed_source": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+    "modules": {
+      "nginx_qa/__init__.py": "619732cac8b8cb1c98e0243147448809d9a8d25d",
+      "nginx_qa/control_secrets.py": "1df24eeb8ae2dba61a3ea26a639c895e7092a95d",
+      "nginx_qa/legacy_scope_control.py": "e404967657c6e7d2958bcdc3afcfeb7fe5ea6156",
+      "nginx_qa/sprint_types.py": "d90c0217966f75d8d7f46d9850b0095077b4f9c0",
+      "nginx_qa/port_leases.py": "d02557ab3745e833bfd3bbde022e44df6831bc66",
+      "nginx_qa/process_supervisor.py": "78c7dca30562baa0c7826162eaceb0362d9d64ec",
+      "nginx_qa/git_provider.py": "d0b50e448408ec8cfb60c79ba4e572e4186bfb44",
+      "nginx_qa/branch_leases.py": "0384f0dc817f85521b6b4a73ab645a46ac81b72b",
+      "nginx_qa/workspace_manager.py": "9ca369b07ed6b15b14f9b4c973b24e2e7866e132",
+      "nginx_qa/managed_import.py": "4bbc25a1f4c01f078a088b4801793af2e6d91ce2",
+      "nginx_qa/inbound_proposals.py": "1a67204321ec44e4d9f8d0f4debf608507623b09",
+      "nginx_qa/telegram_launcher.py": "791ad8b2f8dd29a9ef1512666bc90e8717b5105f",
+      "nginx_qa/telegram_launcher_execution.py": "3274b0033c0c3bcbcbba3cd4f8b6e4da05e1a6a2",
+      "nginx_qa/setup_worker_adapter.py": "88943fd55a5986fc2c188fa0ae24d300dbc65e8a",
+      "nginx_qa/managed_codex_client.py": "c85d16e564973dd7ad4d630ead12b4bfd5eb159c",
+      "nginx_qa/managed_wsl_runner.py": "d6aa6287992dc21f18edb6bb92ecbfe5734ea6a6"
+    },
+    "identical": true
+  },
+  "schema_existing_definitions_changed": [],
+  "schema_added_definitions": [
+    "ApplyInspectionRequest",
+    "ApplyInspectionResponse"
+  ],
+  "native_rows_byte_identical_to_before_upgrade": [
+    {
+      "sprint_id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+      "status": "completed",
+      "state_sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+    },
+    {
+      "sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+      "status": "completed",
+      "state_sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+    },
+    {
+      "sprint_id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+      "status": "stopped",
+      "state_sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+    }
+  ],
+  "startup_helper_tests": 3,
+  "new_model_run": false
+}

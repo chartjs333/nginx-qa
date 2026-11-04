@@ -1,0 +1,214 @@
+{
+  "kind": "real_ollama_production_component_on_issued_snapshot",
+  "model": "qwen2.5:7b",
+  "duration_seconds": 10.078,
+  "status": "PASS",
+  "facts": {
+    "snapshot_id": "d844a090522f1e92abad5a6a89912e2459d414029dfad4212a883c1ab1f884c2",
+    "checks": [
+      {
+        "check_id": "project.identity",
+        "status": "PASS",
+        "scope": "passive",
+        "freshness": "FRESH",
+        "error_code": null
+      },
+      {
+        "check_id": "project.slot",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "engine.runtime",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "engine.resources",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "engine.delivery",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "engine.result_reviews",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "engine.recovery",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "STORE_UNAVAILABLE"
+      },
+      {
+        "check_id": "worker.configuration",
+        "status": "PASS",
+        "scope": "passive",
+        "freshness": "FRESH",
+        "error_code": null
+      },
+      {
+        "check_id": "worker.binding",
+        "status": "PASS",
+        "scope": "passive",
+        "freshness": "FRESH",
+        "error_code": null
+      },
+      {
+        "check_id": "git.source",
+        "status": "PASS",
+        "scope": "passive",
+        "freshness": "FRESH",
+        "error_code": null
+      },
+      {
+        "check_id": "git.publication_authority",
+        "status": "UNKNOWN",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "PROBE_UNSUPPORTED"
+      },
+      {
+        "check_id": "secrets.references",
+        "status": "PASS",
+        "scope": "passive",
+        "freshness": "FRESH",
+        "error_code": null
+      },
+      {
+        "check_id": "provider.configuration",
+        "status": "NOT_CONFIGURED",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "NOT_CONFIGURED"
+      },
+      {
+        "check_id": "telegram.configuration",
+        "status": "NOT_CONFIGURED",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "NOT_CONFIGURED"
+      },
+      {
+        "check_id": "tunnel.ownership",
+        "status": "NOT_CONFIGURED",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "NOT_CONFIGURED"
+      },
+      {
+        "check_id": "tunnel.heartbeat",
+        "status": "NOT_CONFIGURED",
+        "scope": "passive",
+        "freshness": "UNOBSERVED",
+        "error_code": "NOT_CONFIGURED"
+      }
+    ],
+    "available_action_ids": [
+      "diagnostics.refresh",
+      "setup.open",
+      "worker.probe",
+      "worker.bind",
+      "git.probe",
+      "selftest.start",
+      "selftest.stop"
+    ],
+    "proposal_templates": [
+      {
+        "action_id": "diagnostics.refresh",
+        "arguments": {}
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "worker"
+        }
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "provider"
+        }
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "git"
+        }
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "telegram"
+        }
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "tunnel"
+        }
+      },
+      {
+        "action_id": "setup.open",
+        "arguments": {
+          "topic": "authorization"
+        }
+      }
+    ]
+  },
+  "result": {
+    "kind": "setup_advice",
+    "schema_version": 1,
+    "snapshot_id": "d844a090522f1e92abad5a6a89912e2459d414029dfad4212a883c1ab1f884c2",
+    "explanation": "Ответ модели · рекомендации, не факты исполнения.\nМногие критические проверки отсутствуют или недоступны. Рекомендуется обновить данные для этих проверок.",
+    "claims": [
+      {
+        "text": "Данные для проверок отсутствуют или недоступны.",
+        "check_ids": [
+          "engine.runtime",
+          "engine.resources"
+        ],
+        "certainty": "UNKNOWN"
+      }
+    ],
+    "proposals": [
+      {
+        "action_id": "diagnostics.refresh",
+        "arguments": {},
+        "check_ids": [
+          "engine.runtime",
+          "engine.resources"
+        ],
+        "reason": "Обновление данных для проверок."
+      }
+    ],
+    "uncertainty": "UNKNOWN"
+  },
+  "same_request_replay_equal": true,
+  "admission_marker_retained": false,
+  "source_sha256": {
+    "nginx_qa/setup_advisor.py": "b16572d53b2686ee079a7cb8ca8b0d43d082e82b4258d4f7f44a25067e6a04da",
+    "nginx_qa/setup_ollama_advisor.py": "672a8c13fa22126312e54f26992aa7d721973e5254dc92e2c4179cdd72461421",
+    "nginx_qa/setup_diagnostics_api.py": "70627930219ba9d958c3f53233334c5476f8fd9b38eaccb2c287c5b2ef654580",
+    "nginx_qa/setup_diagnostics.py": "4be8e881e0f6118140a00eeb0762d000051e413b0840664c1e75f10089b37e9b",
+    "nginx_qa/static/setup.js": "d99f49060be62f29b7295e3e23491d79f9baf2c11508101ddeca8263270b3ef6"
+  },
+  "native_sprint_started": false,
+  "setup_action_executed": false,
+  "browser_end_to_end": "NOT_RUN_SEPARATE_QUALIFICATION_STAGE"
+}

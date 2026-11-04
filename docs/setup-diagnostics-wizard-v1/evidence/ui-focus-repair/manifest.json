@@ -1,0 +1,74 @@
+{
+  "kind": "sdwu_004_focus_repair_evidence",
+  "assignment_id": "assignment-f90ced4ad47a22ba69dfacf9",
+  "actor": "7000",
+  "initial_commit": "1a5064c6378dc4622b0f3c1d829654615f489690",
+  "installed_product_unchanged": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "recommended_outcome": "RESUME_2",
+  "author_native_submission": false,
+  "new_reviews": "PENDING",
+  "real_installed_after_fix_qualification": "PENDING_NATIVE_7005",
+  "isolated_edge": {
+    "automatic_apply": 0,
+    "viewport": "390x844",
+    "passed_groups": 10,
+    "page_errors": 0
+  },
+  "affected_python_tests": {
+    "skips": 0,
+    "passed": 10,
+    "failed": 0
+  },
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "81a384259a809fe2456a228329b32a866c34b8171937545975a7641b4e61ccf2",
+      "bytes": 89
+    },
+    {
+      "path": "accepted-findings-runtime-review.json",
+      "sha256": "043d446ec1e5961f6a5c7ac6224c44377135bf50285602f7e4ebe10995ee2772",
+      "bytes": 4228
+    },
+    {
+      "path": "accepted-findings-security-review.json",
+      "sha256": "70240c4f30638cb23d854b8b2037f069e4939ac5222f77ba75225be3193f535d",
+      "bytes": 357
+    },
+    {
+      "path": "affected-tests.txt",
+      "sha256": "66f11bcaa78c6320c047dc9ff64e68b74c39c880076db3e1241ebe79f717eeda",
+      "bytes": 1531
+    },
+    {
+      "path": "after-focus-browser.json",
+      "sha256": "f71c25f91cd37308104fb3adf1557c3ba7ccc6ed78b2b0b7ce45d4919cafd0b7",
+      "bytes": 1906
+    },
+    {
+      "path": "before-focus-browser.json",
+      "sha256": "a3dd345ab537e6800024c2d65c5a04e2545961a02fb2486d2f9d3506746eba0c",
+      "bytes": 762
+    },
+    {
+      "path": "before-focus.png",
+      "sha256": "396dd37279bef8cf8f8797db11597bfb3e8ab9671bc2c650e4b0b622ea0929a9",
+      "bytes": 41564
+    },
+    {
+      "path": "escape-focus.png",
+      "sha256": "5bba52c432309a69461d22fe3fbc719ffe669bf1ffb9c7e73e457f01153f1f13",
+      "bytes": 41580
+    },
+    {
+      "path": "focus-recovery-repair-receipt.json",
+      "sha256": "d2cfb8238f813201b6c833b4435decbea9693be54ee09a079869652d05c0e92f",
+      "bytes": 293
+    },
+    {
+      "path": "intermediate-probe-observation.json",
+      "sha256": "5b556bb2aa270313e3bad78429a635fdc4fa3aab5afa8289ec973e079fc4f213",
+      "bytes": 612
+    }
+  ]
+}

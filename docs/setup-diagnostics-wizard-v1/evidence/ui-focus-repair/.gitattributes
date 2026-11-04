@@ -1,0 +1,3 @@
+# Preserve recorded evidence bytes and hashes on Windows.
+* -text
+* whitespace=cr-at-eol

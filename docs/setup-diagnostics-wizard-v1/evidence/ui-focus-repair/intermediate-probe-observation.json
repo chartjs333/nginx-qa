@@ -1,0 +1,9 @@
+{
+  "kind": "implementation_probe_observation_not_final_qualification",
+  "case": "held Apply response followed by Escape",
+  "observed_assertion": "focusState(page).inDialog was false; expected true",
+  "scope": "real isolated Edge with all HTTP intercepted",
+  "phase": "after Escape return-target repair, before pending-Apply dialog focus repair",
+  "action": "Keep focus on the native dialog when its focused Apply button is disabled; do not add a focus trap or discard the request.",
+  "final_evidence": "after/focus-browser-results.json records DIALOG, inDialog=true, focusVisible=true and outline=auto"
+}

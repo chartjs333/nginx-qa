@@ -1,0 +1,269 @@
+{
+  "schema_version": 1,
+  "kind": "SDWU-002_installed_qualification_findings",
+  "at": "2026-11-04T20:04:21.030060+00:00",
+  "tested_product_commit": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "installed_branch": "codex/sdw-qualified-ui-recovery-20261104",
+  "installed_source": "D:/nq-sdw-launcher",
+  "private_url": "http://127.0.0.1:18038/setup",
+  "local_verdict": "NEEDS_REWORK",
+  "suggested_native_outcome": "NEED_DECISION",
+  "native_result_submitted_by_child": false,
+  "findings": [
+    {
+      "id": "E03_FOCUS_RETURN",
+      "message": "Escape closes dialog but does not return focus to its opener",
+      "afterEscape": {
+        "id": "",
+        "tag": "BODY",
+        "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+        "documentFocused": true,
+        "focusVisible": false,
+        "outline": "rgb(23, 36, 58) none 3px",
+        "shadow": "none",
+        "inDialog": false
+      }
+    }
+  ],
+  "validation": {
+    "consolidated": {
+      "distinct_tests": 192,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "source": "fdafbf58db85555706b8ea04e11c1d4450b0f120"
+    },
+    "authorizer_helper": {
+      "distinct_tests": 12,
+      "failures": 0
+    },
+    "startup_helper": {
+      "distinct_tests": 3,
+      "failures": 0
+    },
+    "actual_browser": {
+      "scenario_groups": 6,
+      "passed_groups": 5,
+      "failed_groups": 1,
+      "http_responses": 63,
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "page_errors": [],
+      "natural_expiry": true,
+      "actual_own_session_cookie_loss": true,
+      "post_effect_403": "INJECTED_RESPONSE_AFTER_REAL_SETUP_OPEN_EFFECT",
+      "missing_provider_worker_network_busy": "EXPLICITLY_LABELLED_FIXTURES",
+      "automatic_apply": 0
+    },
+    "installation_readiness": "PASS",
+    "gateway_live": "503_GATEWAY_OFFLINE_FAIL_CLOSED",
+    "gateway_enabled_isolated_fixture": "5_PATHS_404"
+  },
+  "autonomous_native_proof": {
+    "original_model_client": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "original_model_host": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+    "result": "73c00855b3a0ff3501047a18bfff8680e9672912",
+    "actual_original_independent_models": 3,
+    "current_imported_module_blobs_identical": 16,
+    "existing_schema_definitions_changed": [],
+    "new_model_run": false,
+    "native_history_byte_identical": true,
+    "revalidated_history": "native-history-on-installed-host.json"
+  },
+  "original_requirements_coverage": [
+    {
+      "id": "R01",
+      "requirement": "Existing engine only; no new scheduler or execution database",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R02",
+      "requirement": "One active/reserved sprint per canonical project, other projects independent",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R03",
+      "requirement": "Fresh managed workspace/topic provenance and two independent exact-result reviews",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R04",
+      "requirement": "Six-state diagnostic snapshot, source/version/freshness and safe evidence",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R05",
+      "requirement": "Passive readiness versus active connection versus actual execution proof",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R06",
+      "requirement": "Discover existing executor, document actual gap, no fake READY or bundled echo worker",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R07",
+      "requirement": "First milestone connection and one real test in a different allowed project",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R08",
+      "requirement": "Typed server allowlist, reviewable plan, explicit effects and current permission",
+      "status": "CURRENT_RECOVERY_SCENARIOS_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R09",
+      "requirement": "Idempotency/fencing/restart/ambiguous outcome and owned-resource stop",
+      "status": "CURRENT_RECOVERY_SCENARIOS_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R10",
+      "requirement": "LLM advisory only; sanitized structured facts and strict typed output",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R11",
+      "requirement": "Existing configured provider and deterministic fallback without account/key migration",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R12",
+      "requirement": "Secrets references only and protected child/Git boundary",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R13",
+      "requirement": "Bounded configured probes, SSRF, no scanning and responsive engine",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R14",
+      "requirement": "Git provenance, credentials, bot/allowlist, tunnel heartbeat/webhook ownership",
+      "status": "LOCAL_GUARDS_COVERED_EXTERNAL_TELEGRAM_INPUTS_REMAIN",
+      "evidence": [
+        "gateway-denial.json",
+        "../continuation-qualification/external-input-inventory.json"
+      ]
+    },
+    {
+      "id": "R15",
+      "requirement": "Private Russian reusable UI with causal actions, freshness and evidence",
+      "status": "NOT_COMPLETE_E03_FOCUS_RETURN",
+      "evidence": [
+        "browser-recovery-evidence.json"
+      ]
+    },
+    {
+      "id": "R16",
+      "requirement": "Public gateway closed; one private lifespan and no unrelated-server mutation",
+      "status": "LIVE_GATEWAY_OFFLINE_FAIL_CLOSED_AND_ISOLATED_ENABLED_ROUTE_DENIAL",
+      "evidence": [
+        "gateway-denial.json"
+      ]
+    },
+    {
+      "id": "R17",
+      "requirement": "Missing authority/dirty/diverged/busy/foreign state routes through existing recovery",
+      "status": "CURRENT_RECOVERY_SCENARIOS_PASS",
+      "evidence": [
+        "browser-recovery-evidence.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R18",
+      "requirement": "Legacy semantics and existing scope/Launcher guards preserved",
+      "status": "INHERITED_EVIDENCE_AND_CURRENT_REGRESSION",
+      "evidence": [
+        "../continuation-qualification/qualification.json",
+        "regression-run.json"
+      ]
+    },
+    {
+      "id": "R19",
+      "requirement": "Isolated tests, no false live/model proof, exact evidence and release decision",
+      "status": "NOT_COMPLETE_E03_FOCUS_RETURN",
+      "evidence": [
+        "browser-recovery-evidence.json"
+      ]
+    }
+  ],
+  "original_end_to_end_gates": {
+    "E01": "INHERITED_ACTUAL_R4_PLUS_CURRENT_READINESS_AND_COMPATIBILITY",
+    "E02": "INHERITED_ACTUAL_OLLAMA_PROVENANCE_NO_NEW_MODEL_CALL",
+    "E03": "FAIL_FOCUS_RETURN_OTHER_CURRENT_BROWSER_GROUPS_PASS",
+    "E04": "LOCAL_GATEWAY_FAIL_CLOSED_AND_ENABLED_ROUTE_FIXTURE_PASS_EXTERNAL_TELEGRAM_INPUTS_UNAVAILABLE"
+  },
+  "operational_handoff": {
+    "helpers": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final",
+    "start": "start_all.ps1",
+    "host_stop": "stop_wizard.py --stop",
+    "client_idle_stop": "verify_stable_client.py --terminate-owned-idle-client",
+    "pair": "authorize_wizard_browser.py",
+    "protected_backup": "protected-pre-upgrade-backup",
+    "initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+    "git9418_retained": true,
+    "environment_semantic_values_changed": [],
+    "c37_shortcuts_current": true
+  },
+  "limits": [
+    "docs-only-v1; configured real native test project9010",
+    "Physical Telegram phone/tablet acceptance and real bot/webhook/actor remain external inputs",
+    "Current gateway offline; historical Cloudflare24checkPASS retains original89f7f09 source",
+    "No product fix in qualification; native coordinator correction and independent reviews required"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-11-04T19:34:53.815190+00:00",
+  "tested_sha": "7a39bd90eae245f68da902d3d6974a8b76100b14",
+  "phone": "7081",
+  "http_status": 200,
+  "request": {
+    "assignment_id": "review-acf7a1d5695bf16659223592",
+    "status": "REJECT",
+    "feedback": "Independent runtime review of exact 7a39bd90eae245f68da902d3d6974a8b76100b14: REJECT.\n\nBlocking P2 UI session-ordering defect in nginx_qa/static/setup.js:145,204-250. checkSession permits simultaneous session GETs and commits actor/CSRF plus loadProjects results without a request-generation/context fence. Reproducer using the exact unmodified production JS and shipped DOM fixture: create an ambiguous Apply under operator-original (bookmark persists); start session check A and hold its authenticated operator-original response; switch server identity to operator-current and complete a second session check B; Inspect is correctly disabled for the old actor bookmark; release old response A. It overwrites B, enables Inspect, and the subsequent inspection is sent with csrf-original. The original key is retained, so this is not a duplicate-effect claim. Backend authorization still guards requests, so no server authorization bypass is asserted. However it defeats the explicitly required out-of-order actor protection and gives a false current-session/recovery state after re-authentication. Also fence loadProjects and error/finally commits belonging to superseded session checks, not just the first GET. Add regression coverage for old authenticated responses arriving after newer operator/unauthenticated sessions and for delayed project-list responses.\n\nEvidence: C:/nqt35/client/sdw-ui-recovery-20261104/reviews/runtime-ui-7a39bd/probe-session-order.cjs and probe-session-order.json. Run `node <that path>/probe-session-order.cjs` to reproduce; no product edits or real effects. This fixture is not presented as installed/browser qualification.\n\nIndependent validations: exact git archive export, clean author SHA and git diff --check; 31 focused tests passed (safe_operations_recovery, setup_private_api, wizard_ui, staging_deployment_branch; test runner 6.146s, isolated process 12.328s). Eight evidence manifest hashes match. Durable stale BLOCKED receipt, first-response 403 after effect, read revocation before receipt disclosure, passive inspection, missing lookup preservation, original-key delayed replay, acknowledged native APPLYING Start-to-Stop and malformed/storage-failure cases pass their focused tests. Existing AnyIO unclosed-stream ResourceWarnings are logged, no test failures. New live/mobile/browser qualification remains correctly deferred to the next node. No service/model/source/DB changes performed. This decision concerns the remaining concrete client ordering defect, not deployment scope or Telegram credentials."
+  },
+  "response": {
+    "assignment_id": "review-acf7a1d5695bf16659223592",
+    "source_assignment_id": "assignment-0501264c06a8cdf4cf31e0a1",
+    "result_key": "result-9f8200975143ba00dc44a91b0b841e731b2c74c92b0510a185907ade738c82e6",
+    "decision": "REJECT",
+    "status": "REWORK_ENQUEUED",
+    "deduplicated": false
+  }
+}

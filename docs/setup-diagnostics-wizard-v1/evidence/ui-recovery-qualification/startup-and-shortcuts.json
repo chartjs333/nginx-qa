@@ -1,0 +1,12 @@
+{
+  "owned_stack_idempotent_start": "PASS",
+  "creates_native_job": false,
+  "helper_root": "C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final",
+  "shortcuts": {
+    "Запустить мастер.cmd": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final\\start_all.ps1",
+    "Вход в мастер.cmd": "C:\\nqt37\\v\\Scripts\\python.exe -X utf8 -B C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final\\authorize_wizard_browser.py",
+    "Остановить мастер.cmd": "C:\\nqt37\\v\\Scripts\\python.exe -X utf8 -B C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final\\stop_wizard.py --stop"
+  },
+  "product": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "ui_qualification": "HAS_FOCUS_RETURN_FINDING_NOT_RELEASE_APPROVAL"
+}

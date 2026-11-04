@@ -1,0 +1,66 @@
+{
+  "at": "2026-11-04T18:46:40.169799+00:00",
+  "status": "PASS",
+  "kind": "actual_already_running_owned_stack_startup",
+  "returncode": 0,
+  "listeners_before": [
+    {
+      "port": 9418,
+      "pid": 107092,
+      "created": "2026-11-04T17:33:10.8874380Z",
+      "parent": 102304,
+      "image": "C:\\Program Files\\Git\\mingw64\\libexec\\git-core\\git-daemon.exe"
+    },
+    {
+      "port": 18039,
+      "pid": 111252,
+      "created": "2026-11-04T18:23:37.2689120Z",
+      "parent": 112772,
+      "image": "C:\\Python312\\python.exe"
+    },
+    {
+      "port": 18038,
+      "pid": 104316,
+      "created": "2026-11-04T18:22:22.9018770Z",
+      "parent": 115352,
+      "image": "C:\\Python312\\python.exe"
+    }
+  ],
+  "listeners_after": [
+    {
+      "port": 9418,
+      "pid": 107092,
+      "created": "2026-11-04T17:33:10.8874380Z",
+      "parent": 102304,
+      "image": "C:\\Program Files\\Git\\mingw64\\libexec\\git-core\\git-daemon.exe"
+    },
+    {
+      "port": 18039,
+      "pid": 111252,
+      "created": "2026-11-04T18:23:37.2689120Z",
+      "parent": 112772,
+      "image": "C:\\Python312\\python.exe"
+    },
+    {
+      "port": 18038,
+      "pid": 104316,
+      "created": "2026-11-04T18:22:22.9018770Z",
+      "parent": 115352,
+      "image": "C:\\Python312\\python.exe"
+    }
+  ],
+  "same_processes": true,
+  "client_journal_sha256_before": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+  "client_journal_sha256_after": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+  "no_new_native_client_attempt": true,
+  "setup_http_status": 200,
+  "new_process_start_path_exercised": false,
+  "wrapper_sha256": "4dcd5333f70711e42f297fac89b89c78dbc6a88922311755a3edb9061f1735a4",
+  "stdout_sha256": "bd361427ba3f8d87aa2fe59f3f49cafc99fbaaa7c48cdb3e92a4edf69f13ca15",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "product_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "limits": [
+    "After reboot startup order is concrete, but no machine reboot or fresh Git daemon launch was performed.",
+    "Existing qualified helpers require quiescence; use the running UI for active work."
+  ]
+}

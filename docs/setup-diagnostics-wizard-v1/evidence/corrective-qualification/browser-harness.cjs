@@ -1,0 +1,66 @@
+const fs=require('fs');
+const {chromium,request}=require('C:/nqt37/qualification/browser-tests/node_modules/playwright');
+const assert=require('assert/strict');
+const base='http://127.0.0.1:18038';
+(async()=>{
+ const browser=await chromium.launch({executablePath:'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',headless:true});
+ const context=await browser.newContext({viewport:{width:1440,height:1050}});
+ const page=await context.newPage();page.setDefaultTimeout(10000);const errors=[],calls=[];
+ page.on('pageerror',error=>errors.push(error.message));
+ page.on('response',r=>{if(r.url().startsWith(base+'/api/'))calls.push({path:new URL(r.url()).pathname,method:r.request().method(),status:r.status()});});
+ try{
+  await page.goto(base+'/setup');
+  await page.locator('#pairing-code').waitFor({state:'visible'});
+  const code=await page.locator('#pairing-code').textContent();
+  assert.match(code,/^[A-F0-9]{10}$/);
+  const env=fs.readFileSync('D:/nq-sdw-launcher/.env.staging','utf8');
+  const secret=env.split(/\r?\n/).find(l=>l.startsWith('NGINX_QA_SCOPE_CONTROL_ADMIN_TOKEN=')).split('=').slice(1).join('=').trim().replace(/^"|"$/g,'');
+  const admin=await request.newContext({baseURL:base});
+  const paired=await admin.post('/api/v1/operator/session/authorize',{headers:{'X-Nginx-QA-Scope-Control-Token':secret,Origin:base},data:{pairing_code:code,operator_id:'madoev'}});
+  assert.equal(paired.status(),200);await admin.dispose();
+  await page.locator('#session-check').click();
+  await page.locator('.check-item').first().waitFor({state:'visible'});
+  assert.equal(await page.locator('#project option').count(),2);
+  assert.equal(await page.locator('#project').inputValue(),'9000');
+  const checks=await page.locator('.check-item').count();assert.ok(checks>=12);
+  await page.locator('#advisor-question').fill('Как подключить исполнителя?');
+  await page.locator('#advisor-submit').click();
+  await page.locator('#advisor-result').waitFor({state:'visible'});
+  const advice=await page.locator('#advisor-explanation').innerText();
+  const operations=await page.locator('#operations-toolbar').innerText();
+  // Use the actual server-catalog button. No browser-injected API calls.
+  const form=page.locator('#operations-toolbar form').filter({hasText:'Открыть инструкцию'});
+  if(await form.count()!==1)throw Error('Expected one setup.open operation: '+operations);
+  const isPlan=r=>new URL(r.url()).pathname==='/api/v1/projects/9000/setup/plans' && r.request().method()==='POST';
+  const [cancelPlanResponse]=await Promise.all([page.waitForResponse(isPlan),form.locator('button').click()]);
+  assert.equal(cancelPlanResponse.status(),200); const cancelledPlan=await cancelPlanResponse.json();
+  await page.locator('#plan-dialog').waitFor({state:'visible'});
+  await page.locator('#plan-cancel-btn').click();
+  const [planResponse]=await Promise.all([page.waitForResponse(isPlan),form.locator('button').click()]);
+  assert.equal(planResponse.status(),200);const plan=await planResponse.json();
+  assert.notEqual(plan.plan_id,cancelledPlan.plan_id);
+  await page.locator('#plan-dialog').waitFor({state:'visible'});
+  const applyPath='/api/v1/projects/9000/setup/plans/'+plan.plan_id+'/apply';
+  const [applied]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname===applyPath && r.request().method()==='POST'),page.locator('#plan-apply-btn').click()]);
+  assert.equal(applied.status(),200);const receipt=await applied.json();
+  assert.equal(receipt.plan_id,plan.plan_id);assert.equal(receipt.action_id,'setup.open');
+  assert.equal(receipt.state,'SUCCEEDED');assert.equal(receipt.deduplicated,false);
+  const exactCard=()=>page.locator('.receipt-card').filter({hasText:receipt.operation_id});
+  await exactCard().locator('strong').filter({hasText:'SUCCEEDED'}).waitFor({state:'visible'});
+  assert.equal(await exactCard().count(),1);
+  const [historyResponse]=await Promise.all([page.waitForResponse(r=>new URL(r.url()).pathname==='/api/v1/projects/9000/setup/operations' && r.request().method()==='GET'),page.reload()]);
+  assert.equal(historyResponse.status(),200);const history=await historyResponse.json();
+  assert.equal(history.operations.filter(r=>r.operation_id===receipt.operation_id && r.state==='SUCCEEDED').length,1);
+  await page.locator('.check-item').first().waitFor({state:'visible'});
+  await exactCard().locator('strong').filter({hasText:'SUCCEEDED'}).waitFor({state:'visible'});
+  assert.equal(calls.filter(r=>r.path.endsWith('/'+cancelledPlan.plan_id+'/apply')).length,0);
+  assert.deepEqual(errors,[]);
+  await page.screenshot({path:'C:/nqt37/qualification/wizard-headless-v2.png',fullPage:true});
+  fs.writeFileSync('C:/nqt37/qualification/browser-evidence-v2.json',JSON.stringify({kind:'real_headless_edge_live_http',url:base+'/setup',paired_named_actor:true,projects:2,checks,advice_text:advice,plan_cancel_apply:true,history_after_reload:true,cancelled_plan_id:cancelledPlan.plan_id,applied_plan_id:plan.plan_id,apply_path:applyPath,apply_response:receipt,exact_operation_after_reload:receipt.operation_id,page_errors:errors,requests:calls},null,2));
+  console.log(JSON.stringify({status:'PASS',checks,requests:calls.length,errors}));
+ }catch(e){
+  await page.screenshot({path:'C:/nqt37/qualification/wizard-headless-failure-v2.png',fullPage:true});
+  fs.writeFileSync('C:/nqt37/qualification/browser-failure-v2.json',JSON.stringify({url:page.url(),error:e.message,page_errors:errors,requests:calls},null,2));
+  throw e;
+ }finally{await context.close();await browser.close();}
+})().catch(e=>{console.error(e.message);process.exitCode=1;});

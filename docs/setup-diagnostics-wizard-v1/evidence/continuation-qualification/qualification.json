@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "kind": "SDWN-003_installed_continuation_qualification",
+  "at": "2026-11-04T18:27:47.483400+00:00",
+  "local_verdict": "PASS",
+  "native_submission": "NOT_SUBMITTED_BY_QUALIFICATION_AGENT",
+  "independent_reviews_of_this_result": "PENDING",
+  "tested_product_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "accepted_parent_commit": "c86565cd3e3f491cdef1b35340eeed51d1bb053d",
+  "installed_source": "D:/nq-sdw-launcher",
+  "installed_branch": "codex/sdw-qualified-host-continuation-20261104",
+  "wizard_url": "http://127.0.0.1:18038/setup",
+  "client_url": "http://127.0.0.1:18039",
+  "operator_helpers": "C:\\nqt35\\client\\sdw-continuation-20261104\\qualification-final",
+  "ownership_initialization_id": "024a41a1-ecba-47f2-9df2-b1d6d3773425",
+  "product_change": "Narrow explicit DeploymentBranch allowlist for private wizard only; default/exact origin/remote SHA/clean tree/owner checks preserved.",
+  "qualification_changes_after_tested_commit": "Documentation/evidence/operator harnesses only; installed product code unchanged.",
+  "validation": {
+    "consolidated_regressions": {
+      "distinct_tests": 183,
+      "failures": 0,
+      "errors": 0,
+      "skips": 0,
+      "evidence": "regression-run.json"
+    },
+    "authorizer_boundary_tests": {
+      "distinct_tests": 12,
+      "status": "PASS",
+      "command": "C:/nqt37/v/Scripts/python.exe -X utf8 -B qualification-final/test_authorize_wizard_browser.py -v",
+      "separate_from_consolidated_suite": true
+    },
+    "browser": {
+      "status": "PASS",
+      "actual_model_response": true,
+      "automatic_operations": 0,
+      "responses_200": 19,
+      "javascript_errors": 0,
+      "plan_cancel_apply_exact_receipt_reload": true,
+      "projects": [
+        "9000",
+        "9010"
+      ],
+      "first_attempt_busy_429_preserved": true,
+      "successful_run_refresh_retry_count": 0
+    },
+    "host_deployment_and_restart": "PASS",
+    "stable_client_repin_restart_readiness": "PASS",
+    "actual_environment_secret_values_scan": "PASS"
+  },
+  "autonomous_native_proof": {
+    "sprint_id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+    "result_commit": "73c00855b3a0ff3501047a18bfff8680e9672912",
+    "original_client_commit": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "original_host_commit": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+    "actual_models": 3,
+    "independent_model_reviews": 2,
+    "native_status": "completed",
+    "client_status": "TERMINAL",
+    "installed_client_runtime_import_blobs_equal": true,
+    "installed_host_exact_apply_replay": "PASS",
+    "new_model_run_during_qualification": false
+  },
+  "operational_notes": [
+    "Native state databases were read-only except normal engine/HTTP operations; consistent backup used SQLite backup API.",
+    "Original host remote branch remains at 65662f69db52c27b6c0972ccec8031cfb68a02fc.",
+    "No public wizard tunnel; no Madoev/control-host changes; no main or PR merge.",
+    "Existing Git fixture 9418 ownership proved and retained. start_git_fixture.ps1 provides concrete boot startup; its existing-owner path was exercised, not a new daemon launch.",
+    "First stable-client helper verification rejected only trailing PowerShell argument whitespace; corrected normalization preserves exact argv/image/birth/ancestry and actual live readiness passed."
+  ],
+  "external": {
+    "inherited_cloudflare": {
+      "status": "PASS",
+      "checks": 24,
+      "tested_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+      "date": "2026-11-03",
+      "evidence": "inherited-cloudflare-live-probe.json",
+      "source_sha256": "e4c6d4e7a1448e6cbf40ef235642540123c30fb51deaf1cdd3eb1f78fb69e852"
+    },
+    "telegram_credentials_and_allowed_actor": "EXTERNAL_INPUT_REQUIRED",
+    "physical_mobile_tablet_acceptance": "NOT_RUN",
+    "general_coding_worker": "OUT_OF_SCOPE_DOCS_ONLY_V1"
+  },
+  "release_handoff": [
+    "Root submits qualification result and runs two native independent reviews.",
+    "Release uses exact installed pins/receipts and preserves real R4 source provenance.",
+    "Consolidate accepted delivery/PR, no main/PR merge, preserve historical NO_GO/reject records."
+  ]
+}

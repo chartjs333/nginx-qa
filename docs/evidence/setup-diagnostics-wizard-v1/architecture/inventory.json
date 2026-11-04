@@ -1,0 +1,54 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_architect_inventory_work_evidence",
+  "recorded_at": "2026-11-04T10:42:04.690365+00:00",
+  "task_name": "/root/text_to_sprint_research",
+  "role": "Architect / Existing integrations",
+  "node_id": "architecture-inventory",
+  "identity_evidence": {
+    "command": "C:/Python312/python.exe -X utf8 -B C:/nqt35/client/setup-diagnostics-wizard-v1/managed_client.py identity 6701",
+    "actual_tool_chunk_id": "5eb430",
+    "response_fields_observed": {
+      "managed": true,
+      "project_id": "9000",
+      "sprint_id": "msv1-7a819e5beed270622b74da4248f1d9e5c8a50feb7c79da9e86243989d2cc4614",
+      "agent_phone": "6701",
+      "assignment_id": "assignment-8f62f8d76e5bb659caa31f13",
+      "status": "active",
+      "initial_head_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+      "assigned_branch": "agent/sdw-v1-20261104-architecture-inventory",
+      "actual_git_toplevel": "C:\\nqt35\\m\\projects\\9000\\sprints\\sprint-f2ed53e0086dd444ce1210be\\nodes\\architecture-inventory\\assignment-8f62f8d76e5bb659caa31f13"
+    }
+  },
+  "instructions": {
+    "full_node_task_and_common_conditions_read": true,
+    "manifest": "D:/nq-sdw-bootstrap-20261104/orchestration/sprints/setup-diagnostics-wizard-v1/managed-sprint.json",
+    "applicable_AGENTS_found": false
+  },
+  "inventory": {
+    "worker_bridge": "ExistingClientHTTPAdapter exists; no bundled server implementing the protocol found in inspected tracked runtime; real installed service availability UNKNOWN.",
+    "model_transport": "Gemini clone/model-list helpers exist; safe general advisor adapter absent; runtime credential configuration and provider connectivity UNKNOWN.",
+    "read_boundary": "LauncherOperations.get/_refresh may UPDATE/retire; project_control may migrate; pure read-only snapshot required.",
+    "private_authority": "Reuse scope_api_operator, add explicit current private project/action policy and transport-neutral owner; no fabricated Telegram principal."
+  },
+  "safety": {
+    "secret_values_read": false,
+    "live_provider_or_worker_probe": false,
+    "application_import_or_start": false,
+    "historical_runtime_mutation": false,
+    "running_source_edit": false,
+    "commit_created": false,
+    "push_performed": false,
+    "result_or_review_submitted": false
+  },
+  "final_git_status": [
+    "?? docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+    "?? docs/setup-diagnostics-wizard-v1/architecture.md",
+    "?? docs/setup-diagnostics-wizard-v1/contracts.schema.json",
+    "?? docs/setup-diagnostics-wizard-v1/threat-model.md"
+  ],
+  "tracked_diff_empty": true,
+  "index_diff_empty": true,
+  "static_validation_report": "architecture-static-validation.json",
+  "product_acceptance": "NOT_RUN"
+}

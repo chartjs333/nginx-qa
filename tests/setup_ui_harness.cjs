@@ -1,0 +1,70 @@
+/* Existing request/receipt/advice regressions against production UI. */
+const assert=require("assert");
+const {harness,pause,digest,planFor,receiptFor}=require("./setup_ui_dom.cjs");
+(async()=>{
+  const anon=await harness({authorized:false});
+  assert.equal(anon.calls.length,1);
+  assert.equal(anon.calls[0].method,"GET");
+  assert.equal(anon.elements["pairing-code"].textContent,"PAIR-1234");
+  assert.equal(anon.elements["advisor-submit"].disabled,true);
+  const denied=await harness({projectsError:true});
+  assert.equal(denied.calls.some(c=>c.path.includes("/projects/9000/")),false);
+  assert.equal(denied.calls.some(c=>c.path.endsWith("/snapshot")),false);
+
+  // A fresh page retrieves durable receipts without replaying an action.
+  const priorPlan=planFor({snapshot_id:digest,action_id:"selftest.start",arguments:{}},1,"operator-fixture","9001");
+  const reloaded=await harness({recordedOperations:[receiptFor(priorPlan)]});
+  assert.equal(reloaded.elements["receipts-list"].childNodes.length,1);
+  const savedCard=reloaded.elements["receipts-list"].childNodes[0];
+  assert(savedCard.childNodes[0].textContent.includes("APPLYING"));
+  assert(savedCard.childNodes.some(n=>n.textContent.includes("Сохранённое состояние")));
+  assert(reloaded.calls.some(c=>c.path.endsWith("/setup/operations")&&c.method==="GET"));
+  assert(reloaded.calls.every(c=>c.method==="GET"));
+  await savedCard.childNodes.at(-1).dispatch("click");await pause();
+  assert(reloaded.elements["receipts-list"].childNodes[0].childNodes[0].textContent.includes("BLOCKED"));
+  assert(reloaded.calls.every(c=>c.method==="GET"));
+
+  const app=await harness();
+  assert.equal(app.calls[0].method,"GET");
+  assert.equal(app.calls[1].headers["X-Nginx-QA-CSRF"],"fixture-csrf");
+  assert.equal(app.elements.project.value,"9001");
+  assert.equal(app.elements["operations-toolbar"].childNodes.length,2);
+  await app.elements["operations-toolbar"].childNodes[0].dispatch("submit"); await pause();
+  const planCall=app.calls.find(c=>c.path.endsWith("/setup/plans"));
+  assert.deepEqual(Object.keys(planCall.body).sort(),["schema_version","snapshot_id","action_id","arguments"].sort());
+  assert.equal(planCall.body.snapshot_id,digest);
+  assert.equal(app.elements["plan-dialog"].open,true);
+  await app.elements["plan-apply-btn"].dispatch("click");await pause();
+  assert.equal(app.elements["plan-dialog"].open,false);
+  assert.equal(app.elements["apply-recovery"].hidden,false);
+  await app.elements["apply-inspect"].dispatch("click");await pause();
+  assert.equal(app.elements["plan-dialog"].open,true);
+  await app.elements["plan-apply-btn"].dispatch("click");await pause();
+  const applied=app.calls.filter(c=>c.path.endsWith("/apply"));
+  assert.equal(applied.length,2);
+  assert.deepEqual(applied[0].body,applied[1].body);
+  assert.deepEqual(Object.keys(applied[0].body).sort(),["schema_version","plan_digest","confirmed","idempotency_key"].sort());
+  assert.equal(applied[0].headers["X-Nginx-QA-CSRF"],"fixture-csrf");
+  assert.equal(applied[0].body.confirmed,true);
+  assert.equal(app.elements["plan-dialog"].open,false);
+  const receiptCard=app.elements["receipts-list"].childNodes[0];
+  assert(receiptCard.childNodes[0].textContent.includes("APPLYING"));
+  assert(!receiptCard.childNodes[0].textContent.includes("успеш"));
+  await receiptCard.childNodes.at(-1).dispatch("click");await pause();
+  assert(app.elements["receipts-list"].childNodes[0].childNodes[0].textContent.includes("BLOCKED"));
+
+  app.elements["advisor-question"].value="Status?";
+  app.failAdvice(true);
+  await app.elements["advisor-form"].dispatch("submit");await pause();
+  app.failAdvice(false);
+  await app.elements["advisor-form"].dispatch("submit");await pause();
+  const advice=app.calls.filter(c=>c.path.endsWith("/advice"));
+  assert.equal(advice.length,2);
+  assert.deepEqual(advice[0].body,advice[1].body);
+  app.failSnapshot();
+  await app.elements.refresh.dispatch("click");await pause();
+  assert.equal(app.elements["advisor-submit"].disabled,true);
+  assert.equal(app.elements["advisor-result"].hidden,true);
+  assert.equal(app.elements["operations-toolbar"].childNodes.length,0);
+  process.stdout.write(JSON.stringify({passed:true,scenarios:9,plan_request:planCall.body,apply_request:applied[0].body}));
+})().catch(err=>{console.error(err);process.exitCode=1;});

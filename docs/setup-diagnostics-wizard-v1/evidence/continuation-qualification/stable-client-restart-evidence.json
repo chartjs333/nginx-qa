@@ -1,0 +1,540 @@
+{
+  "status": "PASS",
+  "kind": "final_stable_client_actual_restart_and_readiness",
+  "source_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+  "actor": "operator-named-madoev",
+  "probe": {
+    "action": "worker.probe",
+    "arguments": {
+      "candidate_id": "default-executor"
+    },
+    "project": "9000",
+    "snapshot": {
+      "kind": "setup_diagnostic_snapshot",
+      "schema_version": 1,
+      "snapshot_id": "95cfc0386df97a1439bb06e2d6ca95a1436e91ba0e28429e0ff8e17afcc00c84",
+      "project_id": "9000",
+      "instance_id": null,
+      "generated_at": "2026-11-04T18:25:42.475096+00:00",
+      "source": {
+        "adapter_id": "diagnostic-core-adapter",
+        "adapter_version": "1.1.0",
+        "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+        "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+      },
+      "authority_fingerprint": "73b3d95b1f01fa65689c4ebfb9244aa0415afa905b850b7765fe7137da9d66cb",
+      "checks": [
+        {
+          "check_id": "project.identity",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "project.canonical_phone",
+              "value": "9000"
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "project.slot",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": [
+            "diagnostics.refresh"
+          ]
+        },
+        {
+          "check_id": "engine.runtime",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "engine.collector_revision_observed",
+              "value": true
+            }
+          ],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.resources",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.delivery",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.result_reviews",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "engine.recovery",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "STORE_UNAVAILABLE",
+          "capability_ids": [],
+          "next_action_ids": [
+            "recovery.open"
+          ]
+        },
+        {
+          "check_id": "worker.configuration",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "worker.endpoint_configured",
+              "value": true
+            },
+            {
+              "fact_id": "worker.live_connection_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "worker.probe",
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "worker.binding",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "worker.binding_id",
+              "value": "binding-0655671263e8f418ba32073c"
+            },
+            {
+              "fact_id": "worker.live_connection_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "worker.bind",
+            "worker.probe"
+          ]
+        },
+        {
+          "check_id": "git.source",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CODE",
+          "evidence": [
+            {
+              "fact_id": "git.head",
+              "value": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca"
+            },
+            {
+              "fact_id": "git.branch",
+              "value": "codex/sdw-qualified-host-continuation-20261104"
+            },
+            {
+              "fact_id": "git.remote_freshness_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "git.probe"
+          ]
+        },
+        {
+          "check_id": "git.publication_authority",
+          "status": "UNKNOWN",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "NONE",
+          "evidence": [
+            {
+              "fact_id": "git.publication_authority_observed",
+              "value": false
+            }
+          ],
+          "error_code": "PROBE_UNSUPPORTED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "git.probe"
+          ]
+        },
+        {
+          "check_id": "secrets.references",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "secrets.bot_reference_configured",
+              "value": false
+            },
+            {
+              "fact_id": "secrets.webhook_reference_configured",
+              "value": false
+            },
+            {
+              "fact_id": "secrets.executor_reference_configured",
+              "value": true
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "provider.configuration",
+          "status": "PASS",
+          "scope": "passive",
+          "observed_at": "2026-11-04T18:25:42.475096+00:00",
+          "expires_at": "2026-11-04T18:27:42.475096+00:00",
+          "freshness": "FRESH",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "provider.credential_configured",
+              "value": false
+            },
+            {
+              "fact_id": "provider.live_auth_observed",
+              "value": false
+            },
+            {
+              "fact_id": "provider.local_model_configured",
+              "value": true
+            },
+            {
+              "fact_id": "provider.live_generation_observed",
+              "value": false
+            }
+          ],
+          "error_code": null,
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "telegram.configuration",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "telegram.credential_configured",
+              "value": false
+            },
+            {
+              "fact_id": "telegram.live_auth_observed",
+              "value": false
+            }
+          ],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": []
+        },
+        {
+          "check_id": "tunnel.ownership",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [
+            {
+              "fact_id": "tunnel.ownership_verified",
+              "value": false
+            }
+          ],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "setup.open"
+          ]
+        },
+        {
+          "check_id": "tunnel.heartbeat",
+          "status": "NOT_CONFIGURED",
+          "scope": "passive",
+          "observed_at": null,
+          "expires_at": null,
+          "freshness": "UNOBSERVED",
+          "source": {
+            "adapter_id": "diagnostic-core-adapter",
+            "adapter_version": "1.1.0",
+            "code_commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+            "configuration_version": "02c44289b0e85893a518e63dfd02183ac4f911fc244dd1a4e50652f46a8dfac0"
+          },
+          "evidence_kind": "CONFIG_METADATA",
+          "evidence": [],
+          "error_code": "NOT_CONFIGURED",
+          "capability_ids": [],
+          "next_action_ids": [
+            "diagnostics.refresh"
+          ]
+        }
+      ],
+      "available_action_ids": [
+        "diagnostics.refresh",
+        "setup.open",
+        "worker.probe",
+        "worker.bind",
+        "git.probe",
+        "selftest.start",
+        "selftest.stop"
+      ]
+    },
+    "plan": {
+      "kind": "setup_action_plan",
+      "schema_version": 1,
+      "plan_id": "plan-418991fae618029756c3b33f",
+      "plan_digest": "5beeecb1a7109994932d2cfa3e61de1c2afe84ea7f41ca34ce33ad6894015130",
+      "actor_id": "operator-named-madoev",
+      "project_id": "9000",
+      "target_project_id": null,
+      "snapshot_id": "95cfc0386df97a1439bb06e2d6ca95a1436e91ba0e28429e0ff8e17afcc00c84",
+      "action_id": "worker.probe",
+      "arguments": {
+        "candidate_id": "default-executor"
+      },
+      "resources": [
+        {
+          "kind": "adapter",
+          "id": "default-executor"
+        }
+      ],
+      "preconditions": [],
+      "required_permissions": [
+        "read",
+        "probe"
+      ],
+      "effects": [
+        "Authenticate and inspect the configured loopback client."
+      ],
+      "authority_fingerprint": "73b3d95b1f01fa65689c4ebfb9244aa0415afa905b850b7765fe7137da9d66cb",
+      "created_at": "2026-11-04T18:25:42.579063+00:00",
+      "expires_at": "2026-11-04T18:27:42.579063+00:00",
+      "confirmation_required": false
+    },
+    "apply_path": "/api/v1/projects/9000/setup/plans/plan-418991fae618029756c3b33f/apply",
+    "apply_body": {
+      "schema_version": 1,
+      "plan_digest": "5beeecb1a7109994932d2cfa3e61de1c2afe84ea7f41ca34ce33ad6894015130",
+      "idempotency_key": "sdwn-final-stable-helper-restart-probe-20261104",
+      "confirmed": true
+    },
+    "receipt": {
+      "kind": "setup_operation_receipt",
+      "schema_version": 1,
+      "operation_id": "op-2ceab4e50b8a889452519436",
+      "plan_id": "plan-418991fae618029756c3b33f",
+      "plan_digest": "5beeecb1a7109994932d2cfa3e61de1c2afe84ea7f41ca34ce33ad6894015130",
+      "project_id": "9000",
+      "action_id": "worker.probe",
+      "state": "SUCCEEDED",
+      "created_at": "2026-11-04T18:25:42.709064+00:00",
+      "updated_at": "2026-11-04T18:25:42.744064+00:00",
+      "native_operation_id": null,
+      "native_sprint_id": null,
+      "evidence_ids": [
+        "probe-a67dab4c3ce3b6abc38901aa"
+      ],
+      "error_code": null,
+      "retryable": false,
+      "deduplicated": false
+    }
+  },
+  "quiescent": {
+    "native_sprints": [
+      {
+        "id": "msv1-3edaee6968e3f34b57f62ae014659aae92632c9427b0e9ed112ff31595daabd2",
+        "status": "stopped",
+        "sha256": "534d36d85da14133272c4e305081c8a5915d4d826fc5f5453107ab88c359ce11"
+      },
+      {
+        "id": "msv1-22e9d1eec4a84e413ba4d062b71a411a931a8aa6fe97d3e854433f743e61adc4",
+        "status": "completed",
+        "sha256": "2a0f0fd5065a18995f06652318b7db6f53231fa593e8bec8b3ba16d7b772c209"
+      },
+      {
+        "id": "msv1-3895ce31dfa9807650532a9bcb8a7e498bd157baeb4c9d5a54b517e1af31f737",
+        "status": "completed",
+        "sha256": "37f5daeaa72f3fba51572e463483f658604a48e1c9e1722402ee3f278d4d1a3b"
+      }
+    ],
+    "client_journal_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4"
+  },
+  "terminal_journal_byte_identical": true,
+  "no_new_model_run_requested": true,
+  "real_model_run_provenance": "R4 be1443 client + 656 host; installed imported client modules identical, see client-runtime-blob-equality.json",
+  "helper_start_initial_issue": "PowerShell Start-Process appends trailing argument whitespace; exact identity check initially rejected it without terminating any process. Allow only surrounding space/tab stripping, retain exact executable/args/birth/parent checks. Rechecked live identity and readiness successfully."
+}

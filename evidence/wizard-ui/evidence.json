@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_wizard_ui_work_evidence",
+  "recorded_at": "2026-11-04T12:54:00.000000+00:00",
+  "node_id": "wizard-ui",
+  "agent_phone": "6706",
+  "assignment_id": "assignment-798fc40a4eecb1639960dc7b",
+  "initial_head_commit": "9d25b94981660f12de1b85ec71f6722c3df1b0b2",
+  "assigned_branch": "agent/sdw-v1-20261104-wizard-ui",
+  "implementation": {
+    "units": [
+      "nginx_qa/static/setup.html",
+      "nginx_qa/static/setup.js",
+      "nginx_qa/static/setup.css",
+      "nginx_qa/setup_diagnostics_api.py",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "tests/test_wizard_ui.py"
+    ],
+    "routes": [
+      "GET /setup",
+      "GET /setup/assets/{name}"
+    ],
+    "features": [
+      "Russian private setup and diagnostics wizard UX reusing operator session and CSRF pairing",
+      "Zero DOM sink XSS immunity: pure textContent rendering, zero innerHTML/document.write/eval",
+      "Strict Content-Security-Policy (default-src 'self', script-src 'self', style-src 'self', frame-ancestors 'none')",
+      "Plan & Apply modal dialog requiring explicit operator confirmation before executing mutations",
+      "Visual distinction between OBSERVED_FACT and MODEL_INFERENCE claims",
+      "Public gateway denial: private wizard routes return 404 (or 503 if gateway offline)",
+      "Mobile-width responsive layout and keyboard accessibility"
+    ]
+  },
+  "acceptance_cases_verified": [
+    "A02",
+    "A18",
+    "A21"
+  ],
+  "test_suite": {
+    "runner": "C:/Python312/python.exe -m unittest tests/test_wizard_ui.py",
+    "tests_run": 4,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "pinned_source_files_unchanged": 9,
+  "product_acceptance": "PARTIAL_WIZARD_UI_PASS"
+}

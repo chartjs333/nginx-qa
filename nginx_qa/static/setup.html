@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>nginx-qa · Мастер настройки и диагностики</title>
+  <link rel="stylesheet" href="/setup/assets/setup.css">
+  <script defer src="/setup/assets/setup.js"></script>
+</head>
+<body>
+<header>
+  <div class="nav-links">
+    <a href="/">← QA Queue Control</a>
+    <a href="/execution">← Выполнение спринта</a>
+  </div>
+  <h1>Мастер настройки и диагностики</h1>
+  <p class="subtitle">Детерминированная проверка исполнителей, секретов, Git и LLM-советник</p>
+</header>
+<main>
+  <section aria-label="Панель управления" class="controls-bar">
+    <label>Проект
+      <select id="project" aria-label="Выбор проекта"></select>
+    </label>
+    <div class="refresh-controls">
+      <button type="button" id="refresh" disabled>Обновить диагностику</button>
+      <small class="hint">Снимок кэшируется на сервере (5 сек)</small>
+    </div>
+    <div id="sync" role="status" aria-live="polite">Подключение…</div>
+  </section>
+
+  <p id="auth" class="notice">Проверка операторской сессии…</p>
+  <section id="pairing" class="notice" hidden>
+    <p>Код привязки сессии: <strong id="pairing-code"></strong></p>
+    <p>Подтвердите код через локальный операторский инструмент сервера. Административный токен в браузер вводить не нужно.</p>
+    <p>Для привязки исполнителя и самопроверки используйте постоянное имя оператора, например madoev. При следующем входе подтвердите сессию с тем же именем — история операций и владение сохранятся.</p>
+  </section>
+  <button type="button" id="session-check">Проверить подтверждение сессии</button>
+  <p id="error" role="alert" hidden></p>
+  <section id="apply-recovery" class="notice" hidden aria-label="Восстановление запроса">
+    <p id="apply-recovery-message" role="status" aria-live="polite"></p>
+    <button type="button" id="apply-inspect">Проверить результат исходного запроса</button>
+    <p class="hint">Проверка только читает сохранённый план и квитанцию. Повторное выполнение требует отдельного подтверждения и использует исходный ключ.</p>
+  </section>
+
+  <div class="dashboard-grid">
+    <!-- Левая колонка: Диагностические проверки -->
+    <section class="panel checks-panel" aria-label="Диагностические проверки">
+      <div class="panel-header">
+        <h2>Диагностический снимок</h2>
+        <span id="snapshot-meta" class="meta-tag"></span>
+      </div>
+      <p class="hint">Детерминированные проверки без побочных эффектов. Только проверенные факты.</p>
+      <div id="checks-list" class="checks-list" role="region" aria-live="polite"></div>
+    </section>
+
+    <!-- Правая колонка: LLM-советник и действия -->
+    <div class="right-stack">
+      <!-- LLM-советник -->
+      <section class="panel advisor-panel" aria-label="LLM-помощник">
+        <div class="panel-header">
+          <h2>LLM-помощник</h2>
+          <span class="badge advisory">ТОЛЬКО РЕКОМЕНДАЦИИ</span>
+        </div>
+        <p class="hint">Объясняет проверенные факты и предлагает действия. Модель не имеет доступа к секретам или shell.</p>
+
+        <form id="advisor-form" class="advisor-form">
+          <label for="advisor-question">Вопрос или описание проблемы
+            <textarea id="advisor-question" rows="3" placeholder="Например: Как подключить исполнителя? или Почему не настроен Telegram?"></textarea>
+          </label>
+          <div class="quick-questions">
+            <span class="hint">Быстрые вопросы:</span>
+            <button type="button" class="btn-chip" data-q="Как подключить исполнителя?">Как подключить исполнителя?</button>
+            <button type="button" class="btn-chip" data-q="Проверить готовность к запуску">Готовность к запуску</button>
+            <button type="button" class="btn-chip" data-q="Почему не настроен Telegram?">Настройка Telegram</button>
+          </div>
+          <button type="submit" id="advisor-submit" disabled>Получить совет</button>
+        </form>
+
+        <div id="advisor-result" class="advisor-result" hidden aria-live="polite">
+          <h3>Разъяснение ситуации</h3>
+          <div id="advisor-explanation" class="explanation-box"></div>
+
+          <h3>Утверждения и степень уверенности</h3>
+          <div id="advisor-claims" class="claims-list"></div>
+
+          <h3>Предлагаемые действия</h3>
+          <div id="advisor-proposals" class="proposals-list"></div>
+        </div>
+      </section>
+
+      <!-- Доступные операции -->
+      <section class="panel operations-panel" aria-label="Серверные операции">
+        <div class="panel-header">
+          <h2>Серверные операции</h2>
+          <span class="badge catalog">ТИПИЗИРОВАННЫЙ КАТАЛОГ</span>
+        </div>
+        <p class="hint">Действия выполняются серверным кодом строго по модели Plan &amp; Apply с явным подтверждением.</p>
+
+        <div id="operations-toolbar" class="operations-toolbar">
+        </div>
+
+        <div id="receipts-container" class="receipts-container">
+          <h3>История выполненных операций</h3>
+          <div id="receipts-list" class="receipts-list"></div>
+        </div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- Модальное окно подтверждения плана (Plan & Apply) -->
+<dialog id="plan-dialog" aria-labelledby="dialog-plan-title">
+  <div class="dialog-header">
+    <h2 id="dialog-plan-title">Подтверждение серверного плана</h2>
+    <button type="button" class="dialog-close" id="plan-dialog-close" aria-label="Закрыть">×</button>
+  </div>
+  <div class="dialog-body">
+    <p class="notice">План сформирован сервером с проверкой прав и актуального состояния. Ознакомьтесь с планируемыми изменениями перед подтверждением.</p>
+    <dl id="plan-details"></dl>
+    <div id="plan-warning" class="warning-box" hidden></div>
+  </div>
+  <div class="dialog-actions">
+    <button type="button" id="plan-apply-btn" class="btn-danger">Применить план</button>
+    <button type="button" id="plan-cancel-btn">Отмена</button>
+  </div>
+</dialog>
+</body>
+</html>

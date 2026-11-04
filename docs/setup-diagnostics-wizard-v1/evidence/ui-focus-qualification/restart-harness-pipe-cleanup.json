@@ -1,0 +1,24 @@
+{
+  "kind": "harness_only_pipe_wait_cleanup",
+  "status": "PASS",
+  "reason": "Completed PowerShell starter left inherited capture pipe; Python subprocess timeout was itself waiting to drain it. Product stop/start and resumed receipt verification independently passed.",
+  "held_native_birth_image_argv_verified": true,
+  "processes": [
+    {
+      "ProcessId": 111160,
+      "ParentProcessId": 127564,
+      "ExecutablePath": "C:\\nqt37\\v\\Scripts\\python.exe",
+      "CommandLine": "\"C:\\nqt37\\v\\Scripts\\python.exe\" -X utf8 -B .\\restart_owned_host.py",
+      "Created": "2026-11-04T20:45:25.8393730Z"
+    },
+    {
+      "ProcessId": 123396,
+      "ParentProcessId": 111160,
+      "ExecutablePath": "C:\\Python312\\python.exe",
+      "CommandLine": "\"C:\\Python312\\python.exe\" -X utf8 -B .\\restart_owned_host.py",
+      "Created": "2026-11-04T20:45:25.8507000Z"
+    }
+  ],
+  "product_services_signalled": false,
+  "correction": "restart_owned_host.py now uses regular log files; existing actual transition verified without repeated restart."
+}

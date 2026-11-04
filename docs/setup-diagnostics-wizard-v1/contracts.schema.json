@@ -1,0 +1,1933 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/chartjs333/nginx-qa/docs/setup-diagnostics-wizard-v1/contracts.schema.json",
+  "title": "Setup and Diagnostics Wizard v1 architecture contracts",
+  "description": "Design contract only at SDW-001. Validate the selected $defs entrypoint; no runtime implementation or permission is asserted. Semantic ownership, current policy, byte/depth limits, canonical hashes, freshness, cross-field evidence and no-secret checks remain mandatory.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/DiagnosticSnapshot"
+    },
+    {
+      "$ref": "#/$defs/ActionPlan"
+    },
+    {
+      "$ref": "#/$defs/OperationReceipt"
+    },
+    {
+      "$ref": "#/$defs/AdviceResponse"
+    },
+    {
+      "$ref": "#/$defs/WorkerCapabilities"
+    }
+  ],
+  "$defs": {
+    "OpaqueId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "Digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "Timestamp": {
+      "type": "string",
+      "format": "date-time",
+      "maxLength": 40
+    },
+    "ProjectId": {
+      "type": "string",
+      "pattern": "^9[0-9]{3}$"
+    },
+    "ActionId": {
+      "enum": [
+        "diagnostics.refresh",
+        "worker.probe",
+        "worker.bind",
+        "provider.probe",
+        "telegram.probe",
+        "setup.open",
+        "selftest.start",
+        "selftest.stop",
+        "recovery.open",
+        "git.probe"
+      ]
+    },
+    "CheckId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.-]{0,79}$"
+    },
+    "Source": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "code_commit": {
+          "type": "string",
+          "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"
+        },
+        "configuration_version": {
+          "$ref": "#/$defs/OpaqueId"
+        }
+      },
+      "required": [
+        "adapter_id",
+        "adapter_version",
+        "code_commit",
+        "configuration_version"
+      ]
+    },
+    "SafeFact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fact_id": {
+          "$ref": "#/$defs/CheckId"
+        },
+        "value": {
+          "oneOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "integer",
+              "minimum": -2147483648,
+              "maximum": 2147483647
+            },
+            {
+              "type": "string",
+              "minLength": 0,
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "fact_id",
+        "value"
+      ]
+    },
+    "Check": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/CheckId"
+        },
+        "status": {
+          "enum": [
+            "PASS",
+            "WARN",
+            "FAIL",
+            "UNKNOWN",
+            "NOT_CONFIGURED",
+            "BLOCKED"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "passive",
+            "connection",
+            "execution"
+          ]
+        },
+        "observed_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "expires_at": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/Timestamp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "freshness": {
+          "enum": [
+            "FRESH",
+            "STALE",
+            "UNOBSERVED"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "evidence_kind": {
+          "enum": [
+            "CODE",
+            "CONFIG_METADATA",
+            "LIVE_PROBE",
+            "MANAGED_RESULT",
+            "MOCK",
+            "NONE"
+          ]
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SafeFact"
+          },
+          "maxItems": 16,
+          "minItems": 0
+        },
+        "error_code": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,79}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capability_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OpaqueId"
+          },
+          "maxItems": 16,
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "next_action_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionId"
+          },
+          "maxItems": 10,
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "check_id",
+        "status",
+        "scope",
+        "observed_at",
+        "expires_at",
+        "freshness",
+        "source",
+        "evidence_kind",
+        "evidence",
+        "error_code",
+        "capability_ids",
+        "next_action_ids"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "freshness": {
+                "const": "UNOBSERVED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "observed_at": {
+                "type": "null"
+              },
+              "expires_at": {
+                "type": "null"
+              },
+              "status": {
+                "enum": [
+                  "UNKNOWN",
+                  "NOT_CONFIGURED",
+                  "BLOCKED"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "observed_at": {
+                "$ref": "#/$defs/Timestamp"
+              },
+              "expires_at": {
+                "$ref": "#/$defs/Timestamp"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "DiagnosticSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_diagnostic_snapshot"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "instance_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "source": {
+          "$ref": "#/$defs/Source"
+        },
+        "authority_fingerprint": {
+          "$ref": "#/$defs/Digest"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Check"
+          },
+          "maxItems": 64,
+          "minItems": 1
+        },
+        "available_action_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActionId"
+          },
+          "maxItems": 10,
+          "minItems": 0,
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "snapshot_id",
+        "project_id",
+        "instance_id",
+        "generated_at",
+        "source",
+        "authority_fingerprint",
+        "checks",
+        "available_action_ids"
+      ]
+    },
+    "ActionSelection": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "arguments": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "action_id",
+        "arguments"
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "action_id": {
+                  "const": "diagnostics.refresh"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.bind"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "probe_receipt_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id",
+                    "probe_receipt_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "provider.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "provider_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "telegram.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "setup.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "enum": [
+                        "worker",
+                        "provider",
+                        "git",
+                        "telegram",
+                        "tunnel",
+                        "authorization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "topic"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.start"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "test_profile_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "test_profile_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.stop"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "self_test_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "self_test_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "recovery.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "instance_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "instance_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "git.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "repository_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "PlanRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "arguments": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "schema_version",
+        "snapshot_id",
+        "action_id",
+        "arguments"
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "action_id": {
+                  "const": "diagnostics.refresh"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.bind"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "probe_receipt_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id",
+                    "probe_receipt_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "provider.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "provider_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "telegram.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "setup.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "enum": [
+                        "worker",
+                        "provider",
+                        "git",
+                        "telegram",
+                        "tunnel",
+                        "authorization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "topic"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.start"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "test_profile_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "test_profile_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.stop"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "self_test_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "self_test_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "recovery.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "instance_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "instance_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "git.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "repository_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "Resource": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "project",
+            "repository",
+            "adapter",
+            "self_test",
+            "instance",
+            "client_session",
+            "source_commit",
+            "branch",
+            "role_set",
+            "manifest"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ]
+    },
+    "Precondition": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "check_id": {
+          "$ref": "#/$defs/CheckId"
+        },
+        "required_status": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "PASS",
+              "WARN",
+              "FAIL",
+              "UNKNOWN",
+              "NOT_CONFIGURED",
+              "BLOCKED"
+            ]
+          },
+          "maxItems": 6,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "must_be_fresh": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "check_id",
+        "required_status",
+        "must_be_fresh"
+      ]
+    },
+    "ActionPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_action_plan"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "plan_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "actor_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "target_project_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Resource"
+          },
+          "maxItems": 32,
+          "minItems": 0
+        },
+        "preconditions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Precondition"
+          },
+          "maxItems": 32,
+          "minItems": 0
+        },
+        "required_permissions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "read",
+              "probe",
+              "configure",
+              "advise",
+              "selftest",
+              "start",
+              "stop",
+              "manifest_publish"
+            ]
+          },
+          "maxItems": 8,
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 320
+          },
+          "maxItems": 16,
+          "minItems": 0
+        },
+        "authority_fingerprint": {
+          "$ref": "#/$defs/Digest"
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "expires_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "confirmation_required": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "plan_id",
+        "plan_digest",
+        "actor_id",
+        "project_id",
+        "target_project_id",
+        "snapshot_id",
+        "action_id",
+        "arguments",
+        "resources",
+        "preconditions",
+        "required_permissions",
+        "effects",
+        "authority_fingerprint",
+        "created_at",
+        "expires_at",
+        "confirmation_required"
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "action_id": {
+                  "const": "diagnostics.refresh"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.bind"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "probe_receipt_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id",
+                    "probe_receipt_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "provider.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "provider_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "telegram.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "setup.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "enum": [
+                        "worker",
+                        "provider",
+                        "git",
+                        "telegram",
+                        "tunnel",
+                        "authorization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "topic"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.start"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "test_profile_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "test_profile_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.stop"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "self_test_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "self_test_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "recovery.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "instance_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "instance_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "git.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "repository_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "ApplyRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "confirmed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema_version",
+        "plan_digest",
+        "idempotency_key",
+        "confirmed"
+      ]
+    },
+    "OperationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_operation_receipt"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "operation_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "plan_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "project_id": {
+          "$ref": "#/$defs/ProjectId"
+        },
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "state": {
+          "enum": [
+            "PLANNED",
+            "APPLYING",
+            "SUCCEEDED",
+            "FAILED",
+            "BLOCKED",
+            "UNKNOWN"
+          ]
+        },
+        "created_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "updated_at": {
+          "$ref": "#/$defs/Timestamp"
+        },
+        "native_operation_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "native_sprint_id": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OpaqueId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "evidence_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/OpaqueId"
+          },
+          "maxItems": 32,
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "error_code": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^[A-Z][A-Z0-9_]{0,79}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "deduplicated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "operation_id",
+        "plan_id",
+        "plan_digest",
+        "project_id",
+        "action_id",
+        "state",
+        "created_at",
+        "updated_at",
+        "native_operation_id",
+        "native_sprint_id",
+        "evidence_ids",
+        "error_code",
+        "retryable",
+        "deduplicated"
+      ]
+    },
+    "AdviceRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "schema_version",
+        "snapshot_id",
+        "question",
+        "idempotency_key"
+      ]
+    },
+    "AdviceClaim": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "check_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "certainty": {
+          "enum": [
+            "OBSERVED_FACT",
+            "INFERENCE",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "text",
+        "check_ids",
+        "certainty"
+      ]
+    },
+    "AdviceProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action_id": {
+          "$ref": "#/$defs/ActionId"
+        },
+        "arguments": {
+          "type": "object"
+        },
+        "check_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CheckId"
+          },
+          "maxItems": 16,
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        }
+      },
+      "required": [
+        "action_id",
+        "arguments",
+        "check_ids",
+        "reason"
+      ],
+      "allOf": [
+        {
+          "oneOf": [
+            {
+              "properties": {
+                "action_id": {
+                  "const": "diagnostics.refresh"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "worker.bind"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "candidate_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    },
+                    "probe_receipt_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "candidate_id",
+                    "probe_receipt_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "provider.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "provider_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "provider_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "telegram.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {},
+                  "required": []
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "setup.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "topic": {
+                      "enum": [
+                        "worker",
+                        "provider",
+                        "git",
+                        "telegram",
+                        "tunnel",
+                        "authorization"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "topic"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.start"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "test_profile_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "test_profile_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "selftest.stop"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "self_test_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "self_test_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "recovery.open"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "instance_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "instance_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            },
+            {
+              "properties": {
+                "action_id": {
+                  "const": "git.probe"
+                },
+                "arguments": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository_id": {
+                      "$ref": "#/$defs/OpaqueId"
+                    }
+                  },
+                  "required": [
+                    "repository_id"
+                  ]
+                }
+              },
+              "required": [
+                "action_id",
+                "arguments"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "AdviceResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_advice"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "snapshot_id": {
+          "$ref": "#/$defs/Digest"
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "claims": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdviceClaim"
+          },
+          "maxItems": 8,
+          "minItems": 0
+        },
+        "proposals": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/AdviceProposal"
+          },
+          "maxItems": 5,
+          "minItems": 0
+        },
+        "uncertainty": {
+          "enum": [
+            "LOW",
+            "MEDIUM",
+            "HIGH",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "snapshot_id",
+        "explanation",
+        "claims",
+        "proposals",
+        "uncertainty"
+      ]
+    },
+    "WorkerCapabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "managed_client_capabilities"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "client_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "adapter_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "protocol": {
+          "const": "nginx-qa-managed-client-v1"
+        },
+        "supported_actions": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "prepare",
+              "start",
+              "stop"
+            ]
+          },
+          "maxItems": 3,
+          "minItems": 0,
+          "uniqueItems": true
+        },
+        "declared_guarantees": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "durable_deduplication": {
+              "type": "boolean"
+            },
+            "restart_resume": {
+              "type": "boolean"
+            },
+            "independent_reviewers": {
+              "type": "boolean"
+            },
+            "session_quiescence_on_stop": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "durable_deduplication",
+            "restart_resume",
+            "independent_reviewers",
+            "session_quiescence_on_stop"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "client_id",
+        "adapter_version",
+        "protocol",
+        "supported_actions",
+        "declared_guarantees"
+      ]
+    },
+    "SafeError": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "error": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]{0,79}$"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 320
+        },
+        "correlation_id": {
+          "$ref": "#/$defs/OpaqueId"
+        },
+        "retryable": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "error",
+        "message",
+        "correlation_id",
+        "retryable"
+      ]
+    },
+    "ApplyInspectionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1
+        },
+        "plan_digest": {
+          "$ref": "#/$defs/Digest"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "schema_version",
+        "plan_digest",
+        "idempotency_key"
+      ]
+    },
+    "ApplyInspectionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "setup_apply_inspection"
+        },
+        "schema_version": {
+          "const": 1
+        },
+        "plan": {
+          "$ref": "#/$defs/ActionPlan"
+        },
+        "receipt": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OperationReceipt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retry_permitted": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "schema_version",
+        "plan",
+        "receipt",
+        "retry_permitted"
+      ]
+    }
+  }
+}

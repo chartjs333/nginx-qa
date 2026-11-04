@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS launcher_callback_limits (
  count INTEGER NOT NULL, PRIMARY KEY(user_id,project_id)
 );
 CREATE TRIGGER IF NOT EXISTS launcher_notice_created AFTER INSERT ON telegram_launcher_operations
+WHEN COALESCE(json_extract(NEW.record_json,'$.owner_kind'),'telegram') = 'telegram'
 BEGIN
  INSERT INTO launcher_notices(operation_id,project_id,snapshot)
  VALUES(NEW.operation_id,NEW.project_id,json_object(
@@ -43,6 +44,7 @@ BEGIN
 END;
 CREATE TRIGGER IF NOT EXISTS launcher_notice_changed AFTER UPDATE OF record_json ON telegram_launcher_operations
 WHEN json_extract(OLD.record_json,'$.lifecycle') != json_extract(NEW.record_json,'$.lifecycle')
+ AND COALESCE(json_extract(NEW.record_json,'$.owner_kind'),'telegram') = 'telegram'
  AND json_extract(NEW.record_json,'$.lifecycle') IN ('Created','Waiting','Running','Completed','Failed','Stopped')
 BEGIN
  INSERT INTO launcher_notices(operation_id,project_id,snapshot)
@@ -60,13 +62,21 @@ BACKFILL = """INSERT INTO launcher_notices(operation_id,project_id,snapshot)
  'chat_id',json_extract(o.record_json,'$.chat_id'),
  'lifecycle',json_extract(o.record_json,'$.lifecycle'),
  'instance_id',json_extract(o.record_json,'$.instance_id'))
- FROM telegram_launcher_operations o WHERE NOT EXISTS
+ FROM telegram_launcher_operations o WHERE COALESCE(json_extract(o.record_json,'$.owner_kind'),'telegram') = 'telegram' AND NOT EXISTS
  (SELECT 1 FROM launcher_notices n WHERE n.operation_id=o.operation_id);
 """
 
 
 def initialize(connection):
     connection.executescript(SCHEMA)
+    if not connection.execute('SELECT 1 FROM launcher_transport_migrations WHERE version=2').fetchone():
+        try:
+            connection.executescript('BEGIN IMMEDIATE; DROP TRIGGER IF EXISTS launcher_notice_created; '
+                'DROP TRIGGER IF EXISTS launcher_notice_changed; ' + SCHEMA[SCHEMA.index('CREATE TRIGGER'):]
+                + 'INSERT OR IGNORE INTO launcher_transport_migrations VALUES(2); COMMIT;')
+        except BaseException:
+            connection.rollback()
+            raise
     if connection.execute('SELECT 1 FROM launcher_transport_migrations WHERE version=1').fetchone():
         return
     connection.execute('BEGIN IMMEDIATE')
@@ -86,6 +96,8 @@ class LauncherTransport:
 
     def handle(self, record, action, *, now=None):
         from nginx_qa.telegram_launcher import fail
+        if record.get('owner_kind', 'telegram') != 'telegram':
+            fail('ACCESS_DENIED', 'Private operator instances have no Telegram controls.', 403)
         if action not in {'start', 'web', 'status'} or not record.get('instance_id'):
             fail('INSTANCE_NOT_READY', 'Prepare the instance before opening its controls.', 409)
         now = time.time() if now is None else now
@@ -134,7 +146,9 @@ class LauncherTransport:
         now = time.time() if now is None else now
         with self.store._transaction() as connection:
             connection.execute("UPDATE launcher_notices SET status=CASE WHEN attempts>=5 THEN 'failed' ELSE 'pending' END, lease=NULL,lease_until=NULL,error_code='LEASE_EXPIRED' WHERE project_id=? AND status='sending' AND lease_until<=?", (project_id,now))
-            row = connection.execute("SELECT * FROM launcher_notices WHERE project_id=? AND status='pending' AND next_attempt<=? ORDER BY id LIMIT 1", (project_id,now)).fetchone()
+            row = connection.execute("SELECT * FROM launcher_notices n WHERE project_id=? AND status='pending' AND next_attempt<=? "
+                "AND EXISTS (SELECT 1 FROM telegram_launcher_operations o WHERE o.operation_id=n.operation_id "
+                "AND COALESCE(json_extract(o.record_json,'$.owner_kind'),'telegram')='telegram') ORDER BY id LIMIT 1", (project_id,now)).fetchone()
             if row is None:
                 return None
             lease = secrets.token_hex(16)

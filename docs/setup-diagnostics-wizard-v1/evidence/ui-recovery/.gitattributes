@@ -1,0 +1,3 @@
+# Preserve the recorded evidence bytes across Windows checkouts.
+* -text
+* whitespace=cr-at-eol

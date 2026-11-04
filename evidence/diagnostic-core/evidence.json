@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_diagnostic_core_work_evidence",
+  "recorded_at": "2026-11-04T12:22:00.000000+00:00",
+  "node_id": "diagnostic-core",
+  "agent_phone": "6702",
+  "assignment_id": "assignment-666d084591133030deb0f613",
+  "initial_head_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+  "assigned_branch": "agent/sdw-v1-20261104-diagnostic-core",
+  "implementation": {
+    "units": [
+      "nginx_qa/setup_diagnostics.py",
+      "nginx_qa/setup_diagnostics_api.py",
+      "main.py",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "tests/test_setup_diagnostics.py"
+    ],
+    "contracts": "contracts.schema.json",
+    "checks_catalog": [
+      "project.identity",
+      "project.slot",
+      "engine.runtime",
+      "engine.resources",
+      "engine.delivery",
+      "engine.result_reviews",
+      "engine.recovery",
+      "worker.configuration",
+      "worker.binding",
+      "git.source",
+      "git.publication_authority",
+      "secrets.references",
+      "provider.configuration",
+      "telegram.configuration",
+      "tunnel.ownership",
+      "tunnel.heartbeat"
+    ],
+    "routes": [
+      "GET /api/v1/setup/projects",
+      "GET /api/v1/projects/{project_id}/setup/snapshot"
+    ],
+    "pure_read_guarantees": "PRAGMA query_only=ON on SQLite, no _refresh/UPDATE calls, zero byte mutations verified on repeated captures.",
+    "private_security": "Mounted strictly on private app, denied on public gateway (404/503), required operator session/admin-token and CSRF validation."
+  },
+  "acceptance_cases_verified": [
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A06",
+    "A07",
+    "A08",
+    "A22",
+    "A23",
+    "A24",
+    "A25"
+  ],
+  "test_suite": {
+    "runner": "C:/Python312/python.exe -m unittest tests/test_setup_diagnostics.py",
+    "tests_run": 13,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "regression_suite": {
+    "tests_run": 49,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "pinned_source_files_unchanged": 9,
+  "product_acceptance": "PARTIAL_DIAGNOSTIC_CORE_PASS"
+}

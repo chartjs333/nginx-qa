@@ -1,0 +1,10 @@
+{
+  "client-receipts.json": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4",
+  "environment.SECRET": "5e01540a5d9762ca6d97d13847bd06d8bb90bc2ce603aec8f9cbce34884ab6fa",
+  "managed-import.sqlite3": "db47e7bbb31e7e9c1471da963f111aaff29c784cd9e0b611b6964e7d323fbf2a",
+  "owner.json": "64fd9772a709eb123179fe68dbb58cbde219b38495fe85ab612ed80bbcdbfa97",
+  "setup-policy.json": "9c5563c1b34b6e375b22aff28a1c981c79125be7d22e4e978569bc3af9580dd6",
+  "setup\\operations.json": "ede58ee1ec4d935120ab6bd5870afe31abedde080c93f0a62f07a82870dde248",
+  "setup\\operations.lock": "6e340b9cffb37a989ca544e6bb780a2c78901d3fb33738768511a30617afa01d",
+  "setup\\worker\\worker-bindings.json": "3e0c7962c21c8ac4132af07974a9c619ebc30652c1d3fa302799d625a2bdfa7b"
+}

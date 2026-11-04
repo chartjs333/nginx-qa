@@ -1,0 +1,23 @@
+{
+  "original_actual_model_source": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+  "installed_source": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "modules": {
+    "nginx_qa/__init__.py": "619732cac8b8cb1c98e0243147448809d9a8d25d",
+    "nginx_qa/control_secrets.py": "1df24eeb8ae2dba61a3ea26a639c895e7092a95d",
+    "nginx_qa/legacy_scope_control.py": "e404967657c6e7d2958bcdc3afcfeb7fe5ea6156",
+    "nginx_qa/sprint_types.py": "d90c0217966f75d8d7f46d9850b0095077b4f9c0",
+    "nginx_qa/port_leases.py": "d02557ab3745e833bfd3bbde022e44df6831bc66",
+    "nginx_qa/process_supervisor.py": "78c7dca30562baa0c7826162eaceb0362d9d64ec",
+    "nginx_qa/git_provider.py": "d0b50e448408ec8cfb60c79ba4e572e4186bfb44",
+    "nginx_qa/branch_leases.py": "0384f0dc817f85521b6b4a73ab645a46ac81b72b",
+    "nginx_qa/workspace_manager.py": "9ca369b07ed6b15b14f9b4c973b24e2e7866e132",
+    "nginx_qa/managed_import.py": "4bbc25a1f4c01f078a088b4801793af2e6d91ce2",
+    "nginx_qa/inbound_proposals.py": "1a67204321ec44e4d9f8d0f4debf608507623b09",
+    "nginx_qa/telegram_launcher.py": "791ad8b2f8dd29a9ef1512666bc90e8717b5105f",
+    "nginx_qa/telegram_launcher_execution.py": "3274b0033c0c3bcbcbba3cd4f8b6e4da05e1a6a2",
+    "nginx_qa/setup_worker_adapter.py": "88943fd55a5986fc2c188fa0ae24d300dbc65e8a",
+    "nginx_qa/managed_codex_client.py": "c85d16e564973dd7ad4d630ead12b4bfd5eb159c",
+    "nginx_qa/managed_wsl_runner.py": "d6aa6287992dc21f18edb6bb92ecbfe5734ea6a6"
+  },
+  "identical": true
+}

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_llm_advisor_work_evidence",
+  "recorded_at": "2026-11-04T12:45:00.000000+00:00",
+  "node_id": "llm-advisor",
+  "agent_phone": "6705",
+  "assignment_id": "assignment-b8bae9ad5671a9acce3a39f0",
+  "initial_head_commit": "84540d31a8297d090a5cefa87bbfa586563e58f5",
+  "assigned_branch": "agent/sdw-v1-20261104-llm-advisor",
+  "implementation": {
+    "units": [
+      "nginx_qa/setup_advisor.py",
+      "nginx_qa/setup_diagnostics_api.py",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "tests/test_llm_advisor.py"
+    ],
+    "contracts": [
+      "contracts.schema.json#//AdviceRequest",
+      "contracts.schema.json#//AdviceResponse"
+    ],
+    "features": [
+      "Deterministic diagnostic advice fallback when no LLM provider is configured",
+      "Structured context minimization (pseudonymization, omission of authority fingerprints and raw project paths)",
+      "Canary and bot token secret redaction from questions and diagnostic projections",
+      "Strict Draft 2020-12 schema validation on both request and advice response",
+      "Advisory outputs cannot mutate check status, engine state or execute actions; proposed actions strictly bounded to typed server catalog"
+    ]
+  },
+  "acceptance_cases_verified": [
+    "A06",
+    "A07",
+    "A16",
+    "A17",
+    "A18",
+    "A26"
+  ],
+  "test_suite": {
+    "runner": "C:/Python312/python.exe -m unittest tests/test_llm_advisor.py",
+    "tests_run": 3,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "pinned_source_files_unchanged": 9,
+  "product_acceptance": "PARTIAL_LLM_ADVISOR_PASS"
+}

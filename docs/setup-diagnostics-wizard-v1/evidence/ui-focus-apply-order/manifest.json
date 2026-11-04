@@ -1,0 +1,42 @@
+{
+  "kind": "sdwu_004_deferred_apply_followup",
+  "assignment_id": "assignment-f90ced4ad47a22ba69dfacf9",
+  "actor": "7000",
+  "source_parent": "abd876a4e006e21149946e65857d3e7b88416842",
+  "preserved_parent_history": true,
+  "before_finding_count": 2,
+  "after_order_cases_passed": 2,
+  "focus_regression_groups_passed": 10,
+  "ui_tests_passed": 7,
+  "automatic_apply": 0,
+  "page_errors": 0,
+  "native_submission": "PENDING_PARENT",
+  "live_after_fix_qualification": "PENDING_NATIVE_7005",
+  "files": [
+    {
+      "path": ".gitattributes",
+      "sha256": "cbd256b0283e9f1928ecbadae263f7c74bed1c106a7aae083f67a4575ceb3173",
+      "bytes": 80
+    },
+    {
+      "path": "after-apply-order.json",
+      "sha256": "8575895231f655dae1e264a204ababe56bdc632322dc344e2eaf3a3ae9956822",
+      "bytes": 1324
+    },
+    {
+      "path": "apply-order-tests.txt",
+      "sha256": "0947c18531ce3894c09c8e7f93b018169a099ef9ddebe0b71b2f61838ad9871e",
+      "bytes": 987
+    },
+    {
+      "path": "before-abd876-apply-order.json",
+      "sha256": "680b28ad01aecf1547119fb4faa28b7082c9c1a6b36ffd589a9ab4c12fd8dd49",
+      "bytes": 1557
+    },
+    {
+      "path": "focus-regression-after.json",
+      "sha256": "5a218da08e01e5a769ed756bd22d893e59b6ab7f0440bd0ae5cc87ed6f8c1de5",
+      "bytes": 1906
+    }
+  ]
+}

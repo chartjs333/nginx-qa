@@ -9,19 +9,47 @@ param(
         "premerge-inbound-hub-e2e-v1-short",
         "premerge-inbound-hub-e2e-v1-short-r2",
         "telegram-managed-sprint-launcher-v1",
-        "telegram-managed-sprint-launcher-v1-gateway"
+        "telegram-managed-sprint-launcher-v1-gateway",
+        "setup-diagnostics-wizard-v1"
     )]
     [string]$Profile = "umse-007",
 
     [Parameter(Mandatory = $true)]
     [ValidatePattern("^[0-9A-Fa-f]{40}$")]
-    [string]$ExpectedCommit
+    [string]$ExpectedCommit,
+
+    # Explicit, narrowly allowed deployment identity; never an environment override.
+    [string]$DeploymentBranch = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 # BEGIN TESTABLE FUNCTIONS
+function Resolve-StagingDeploymentBranch {
+    param(
+        [string]$Profile,
+        [string]$DefaultBranch,
+        [string]$DeploymentBranch = ""
+    )
+    if ($DeploymentBranch -ceq "") {
+        return $DefaultBranch
+    }
+    if ($Profile -cne "setup-diagnostics-wizard-v1") {
+        throw "DeploymentBranch is available only for the private setup wizard."
+    }
+    $allowed = @(
+        "codex/sdw-qualified-host-20261104",
+        "codex/sdw-qualified-host-continuation-20261104",
+        "codex/sdw-qualified-ui-recovery-20261104",
+        "codex/sdw-qualified-ui-focus-recovery-20261104"
+    )
+    if ($allowed -cnotcontains $DeploymentBranch) {
+        throw "DeploymentBranch is not an approved setup wizard deployment identity."
+    }
+    return $DeploymentBranch
+}
+
 function Resolve-NormalizedPath {
     param([Parameter(Mandatory = $true)][string]$Path)
 
@@ -665,10 +693,31 @@ function Get-ExpectedStagingEnvironment {
             "premerge-inbound-hub-e2e-v1-short",
             "premerge-inbound-hub-e2e-v1-short-r2",
             "telegram-managed-sprint-launcher-v1",
-        "telegram-managed-sprint-launcher-v1-gateway"
+        "telegram-managed-sprint-launcher-v1-gateway",
+        "setup-diagnostics-wizard-v1"
         )]
         [string]$Profile = "umse-007"
     )
+
+    if ($Profile -eq "setup-diagnostics-wizard-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18038"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-sdw-launcher"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nginx-qa","D:/nq-tmsl","D:/nq-tmsl-launcher","C:/nqt35","C:/nqt36","C:/madoev-eeg"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt37"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt37/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt37/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt37/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt37/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18800-18849"
+            NGINX_QA_INSTANCE_ID = "setup-diagnostics-wizard-v1-18038"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
 
     if ($Profile -eq "telegram-managed-sprint-launcher-v1-gateway") {
         return [ordered]@{
@@ -852,6 +901,12 @@ elseif ($Profile -eq "telegram-managed-sprint-launcher-v1") {
     $expectedServiceRoot = "D:\nq-tmsl"
     $expectedBranch = "codex/tmsl-v1-bootstrap"
 }
+elseif ($Profile -eq "setup-diagnostics-wizard-v1") {
+    $expectedServiceRoot = "D:\nq-sdw-launcher"
+    $expectedBranch = "codex/sdw-qualified-host-20261104"
+}
+$expectedBranch = Resolve-StagingDeploymentBranch -Profile $Profile `
+    -DefaultBranch $expectedBranch -DeploymentBranch $DeploymentBranch
 $environmentPath = Join-Path $serviceRoot ".env.staging"
 $ExpectedCommit = $ExpectedCommit.ToLowerInvariant()
 

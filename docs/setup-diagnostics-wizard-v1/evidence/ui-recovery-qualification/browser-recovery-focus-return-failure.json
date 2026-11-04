@@ -1,0 +1,156 @@
+{
+  "kind": "real_installed_edge_recovery_qualification",
+  "product": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "cases": [],
+  "requests": [
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/operator/session",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/setup/projects",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/snapshot",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/operations",
+      "method": "GET",
+      "status": 200
+    },
+    {
+      "path": "/api/v1/projects/9000/setup/plans",
+      "method": "POST",
+      "status": 200
+    }
+  ],
+  "page_errors": [],
+  "keyboard_focus_probe": [
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog-close",
+      "tag": "BUTTON",
+      "text": "×",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(2, 2, 2) auto 2px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-dialog",
+      "tag": "DIALOG",
+      "text": "Подтверждение серверного плана\n    ×\n  \n  \n    План сформирован сервером с проверкой прав ",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(16, 16, 16) auto 1px",
+      "shadow": "rgba(0, 0, 0, 0.2) 0px 10px 25px 0px",
+      "inDialog": true
+    },
+    {
+      "id": "",
+      "tag": "BODY",
+      "text": "← QA Queue Control\n    ← Выполнение спринта\n  \n  Мастер настройки и диагностики\n  Детермин",
+      "documentFocused": false,
+      "focusVisible": false,
+      "outline": "rgb(23, 36, 58) none 3px",
+      "shadow": "none",
+      "inDialog": false
+    },
+    {
+      "id": "plan-cancel-btn",
+      "tag": "BUTTON",
+      "text": "Отмена",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(0, 0, 0) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    },
+    {
+      "id": "plan-apply-btn",
+      "tag": "BUTTON",
+      "text": "Применить план",
+      "documentFocused": true,
+      "focusVisible": true,
+      "outline": "rgb(255, 255, 255) auto 3px",
+      "shadow": "none",
+      "inDialog": true
+    }
+  ],
+  "status": "FAIL",
+  "error": "AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n\nfalse !== true\n\n    at C:\\nqt35\\client\\sdw-ui-recovery-20261104\\qualification-final\\browser_recovery_qualification.cjs:83:10"
+}

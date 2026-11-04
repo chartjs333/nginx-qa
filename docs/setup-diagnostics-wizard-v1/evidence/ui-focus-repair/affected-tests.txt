@@ -1,0 +1,15 @@
+test_a02_private_ui_and_assets (tests.test_wizard_ui.TestWizardUI.test_a02_private_ui_and_assets) ... ok
+test_a02_public_gateway_denial (tests.test_wizard_ui.TestWizardUI.test_a02_public_gateway_denial) ... ok
+test_a18_xss_and_injection_immunity (tests.test_wizard_ui.TestWizardUI.test_a18_xss_and_injection_immunity) ... ok
+test_a21_russian_reusable_wizard_ux (tests.test_wizard_ui.TestWizardUI.test_a21_russian_reusable_wizard_ux) ... ok
+test_production_javascript_requests_and_retry_behavior (tests.test_wizard_ui.TestWizardUI.test_production_javascript_requests_and_retry_behavior) ... ok
+test_rejected_and_uncertain_apply_recovery (tests.test_wizard_ui.TestWizardUI.test_rejected_and_uncertain_apply_recovery) ... ok
+test_session_generation_and_reordered_context_responses (tests.test_wizard_ui.TestWizardUI.test_session_generation_and_reordered_context_responses) ... ok
+test_defaults_and_explicit_wizard_identities (tests.test_staging_deployment_branch.DeploymentBranchTests.test_defaults_and_explicit_wizard_identities) ... ok
+test_other_profiles_and_unapproved_ref_forms_are_rejected (tests.test_staging_deployment_branch.DeploymentBranchTests.test_other_profiles_and_unapproved_ref_forms_are_rejected) ... ok
+test_git_checkout_requires_standalone_directory_and_exact_remote_sha (tests.test_staging_isolation.StagingIsolationTests.test_git_checkout_requires_standalone_directory_and_exact_remote_sha) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 6.984s
+
+OK

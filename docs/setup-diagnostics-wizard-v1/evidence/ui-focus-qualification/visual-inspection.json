@@ -1,0 +1,17 @@
+{
+  "status": "PASS",
+  "images": [
+    "mobile-keyboard-modal.png",
+    "mobile-expiry-recovered.png"
+  ],
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "observations": [
+    "Readable Russian controls within narrow viewport; no horizontal overflow in measured document/body.",
+    "Native modal contains keyboard focus and reachable Apply/Cancel controls; document behind is inert.",
+    "After real stale-plan recovery, diagnostics are readable and Refresh has visible keyboard outline."
+  ],
+  "limits": "Headless Edge viewport; not physical Telegram phone acceptance."
+}

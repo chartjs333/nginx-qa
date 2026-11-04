@@ -1,0 +1,28 @@
+{
+  "kind": "setup_advice",
+  "schema_version": 1,
+  "snapshot_id": "c75a57c0370461321e4b7fc83fd16a857892d64edd2f7ffd5410203296145c97",
+  "explanation": "Ответ модели · рекомендации, не факты исполнения.\nНекоторые критические проверки отсутствуют из-за недоступности хранилища. Необходимо обновить диагностику.",
+  "claims": [
+    {
+      "text": "Некоторые проверки недоступны.",
+      "check_ids": [
+        "engine.runtime",
+        "engine.resources"
+      ],
+      "certainty": "UNKNOWN"
+    }
+  ],
+  "proposals": [
+    {
+      "action_id": "diagnostics.refresh",
+      "arguments": {},
+      "check_ids": [
+        "engine.runtime",
+        "engine.resources"
+      ],
+      "reason": "Обновление диагностики поможет получить актуальную информацию о состоянии системы."
+    }
+  ],
+  "uncertainty": "UNKNOWN"
+}

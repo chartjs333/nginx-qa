@@ -1,0 +1,12 @@
+{
+  "manifest_commit": "7dfd2ff0f1c4954e6f4db24010a54c734e2a986e",
+  "manifest_sha256": "fd1e395b50baad68bcba4d04458290dbd8d84a455030e183e6316d268352ba9c",
+  "ref": "refs/heads/launcher/setup-selftest-r4-autonomous-20261104",
+  "file": "C:\\nqt35\\client\\sdw-continuation-20261104\\immutable-selftest-manifest-r4.json",
+  "repository": "git://127.0.0.1/setup-selftest.git",
+  "source_commit": "890425134beff380cb7f983908ee937dd628c2ce",
+  "registered": false,
+  "started": false,
+  "pending_created": false,
+  "purpose": "Fresh autonomous acceptance; previous supervised evidence stays immutable."
+}

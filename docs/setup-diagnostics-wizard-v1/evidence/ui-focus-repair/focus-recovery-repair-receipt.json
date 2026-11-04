@@ -1,0 +1,10 @@
+{
+  "http_status": 200,
+  "response": {
+    "sprint_id": "msv1-037169541a573215147a7ba72ea4474f88baa075e13ec24cd7a0358f70bf04cf",
+    "from_revision": 1,
+    "graph_revision": 2,
+    "repair_source_commit": "fdafbf58db85555706b8ea04e11c1d4450b0f120",
+    "deduplicated": false
+  }
+}

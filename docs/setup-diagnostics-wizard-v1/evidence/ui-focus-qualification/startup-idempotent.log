@@ -1,0 +1,7 @@
+Owned Git fixture is already available on loopback port 9418.
+{"kind": "forced_idle_client_restart_qualification", "state_sha256": "0897bfa7e4819a822e13102b2d62666ad240e684d86faabd9f98c1026899ddc4", "owned_pids": [123192, 127396], "source_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e", "native_handle_and_birth_verified": true, "terminated": false}
+Owned client is already running on 127.0.0.1:18039.
+{"status": "PASS", "signal_sent": false, "source_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e", "owned_pids": [122260, 128204, 114340]}
+Wizard is already running: http://127.0.0.1:18038/setup
+{"status": "PASS", "signal_sent": false, "source_commit": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e", "owned_pids": [122260, 128204, 114340]}
+Local wizard is ready: http://127.0.0.1:18038/setup

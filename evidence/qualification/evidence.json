@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_qualification_work_evidence",
+  "recorded_at": "2026-11-04T13:00:00.000000+00:00",
+  "node_id": "qualification",
+  "agent_phone": "6707",
+  "assignment_id": "assignment-1e3d3f70b01cf1cee7b28eb7",
+  "initial_head_commit": "a8fd5c1e3424a69c5acc2c44104ff2ffe02c0003",
+  "assigned_branch": "agent/sdw-v1-20261104-qualification",
+  "qualification_summary": {
+    "implementation_status": "PASS",
+    "automated_cases_evaluated": 26,
+    "automated_cases_passed": 26,
+    "automated_cases_failed": 0,
+    "test_suites_run": [
+      "tests/test_setup_diagnostics.py",
+      "tests/test_worker_connection_selftest.py",
+      "tests/test_safe_operations_recovery.py",
+      "tests/test_llm_advisor.py",
+      "tests/test_wizard_ui.py",
+      "tests/test_launcher_gateway.py",
+      "tests/test_operator_session.py"
+    ],
+    "total_tests_passed": 37,
+    "subtests_passed": 8,
+    "regressions": 0,
+    "pinned_source_files_unchanged": 9,
+    "external_acceptance_prerequisites": {
+      "E01": "Requires real external worker hardware and dedicated test project assignment.",
+      "E02": "Requires live configured provider API credentials and remote quota.",
+      "E03": "Requires real desktop/mobile browser session and live operator interaction.",
+      "E04": "Requires terminal release decision and Coordinator PR review."
+    }
+  },
+  "product_acceptance": "AUTOMATED_QUALIFICATION_PASS"
+}

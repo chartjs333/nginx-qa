@@ -1,0 +1,1347 @@
+{
+  "schema_version": 1,
+  "kind": "setup_diagnostics_wizard_acceptance_matrix",
+  "architecture_baseline_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "architecture_status": "PREPARED_FOR_INDEPENDENT_REVIEW",
+  "implementation_status": "SUPERSEDED_REQUIRES_CORRECTIVE_QUALIFICATION",
+  "superseded_by": "docs/setup-diagnostics-wizard-v1/corrective-contract.md",
+  "external_status": "BLOCKED_EXTERNAL",
+  "evidence_policy": {
+    "baseline_refs": "Existing methods inspected statically; no execution claim in SDW-001.",
+    "planned_tests": "Assertions describe required future coverage, not invented implemented methods.",
+    "real_vs_mock": "Mocks cannot satisfy REAL_EXTERNAL or REAL_UI gates.",
+    "release": "All mandatory cases and exact final two-reviewer approvals required for GO; otherwise NO_GO with explicit Coordinator dependency."
+  },
+  "requirements": [
+    {
+      "id": "R01",
+      "requirement": "Existing engine only; no new scheduler or execution database",
+      "acceptance_cases": [
+        "A14",
+        "A19",
+        "A25"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R02",
+      "requirement": "One active/reserved sprint per canonical project, other projects independent",
+      "acceptance_cases": [
+        "A03",
+        "A14",
+        "A20"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R03",
+      "requirement": "Fresh managed workspace/topic provenance and two independent exact-result reviews",
+      "acceptance_cases": [
+        "A09",
+        "A19",
+        "E01",
+        "E04"
+      ],
+      "owner_stages": [
+        "qualification",
+        "release-runbook",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R04",
+      "requirement": "Six-state diagnostic snapshot, source/version/freshness and safe evidence",
+      "acceptance_cases": [
+        "A01",
+        "A04",
+        "A08",
+        "A23"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification"
+      ]
+    },
+    {
+      "id": "R05",
+      "requirement": "Passive readiness versus active connection versus actual execution proof",
+      "acceptance_cases": [
+        "A05",
+        "A09",
+        "A19",
+        "E01"
+      ],
+      "owner_stages": [
+        "qualification",
+        "release-runbook",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R06",
+      "requirement": "Discover existing executor, document actual gap, no fake READY or bundled echo worker",
+      "acceptance_cases": [
+        "A05",
+        "A09",
+        "E01"
+      ],
+      "owner_stages": [
+        "qualification",
+        "release-runbook",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R07",
+      "requirement": "First milestone connection and one real test in a different allowed project",
+      "acceptance_cases": [
+        "A06",
+        "A14",
+        "A19",
+        "E01"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "llm-advisor",
+        "qualification",
+        "release-runbook",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R08",
+      "requirement": "Typed server allowlist, reviewable plan, explicit effects and current permission",
+      "acceptance_cases": [
+        "A10",
+        "A11",
+        "A13",
+        "A15",
+        "A22"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R09",
+      "requirement": "Idempotency/fencing/restart/ambiguous outcome and owned-resource stop",
+      "acceptance_cases": [
+        "A11",
+        "A12",
+        "A20"
+      ],
+      "owner_stages": [
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R10",
+      "requirement": "LLM advisory only; sanitized structured facts and strict typed output",
+      "acceptance_cases": [
+        "A16",
+        "A17",
+        "A18",
+        "E02"
+      ],
+      "owner_stages": [
+        "llm-advisor",
+        "qualification",
+        "release-runbook",
+        "wizard-ui"
+      ]
+    },
+    {
+      "id": "R11",
+      "requirement": "Existing configured provider and deterministic fallback without account/key migration",
+      "acceptance_cases": [
+        "A07",
+        "A16",
+        "E02"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "llm-advisor",
+        "qualification",
+        "release-runbook",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R12",
+      "requirement": "Secrets references only and protected child/Git boundary",
+      "acceptance_cases": [
+        "A07",
+        "A16",
+        "A26"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "llm-advisor",
+        "qualification",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R13",
+      "requirement": "Bounded configured probes, SSRF, no scanning and responsive engine",
+      "acceptance_cases": [
+        "A06",
+        "A08",
+        "A23",
+        "A25"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "llm-advisor",
+        "qualification",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R14",
+      "requirement": "Git provenance, credentials, bot/allowlist, tunnel heartbeat/webhook ownership",
+      "acceptance_cases": [
+        "A07",
+        "A08",
+        "A22",
+        "A24"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "llm-advisor",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R15",
+      "requirement": "Private Russian reusable UI with causal actions, freshness and evidence",
+      "acceptance_cases": [
+        "A02",
+        "A21",
+        "E03"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification",
+        "release-runbook",
+        "wizard-ui"
+      ]
+    },
+    {
+      "id": "R16",
+      "requirement": "Public gateway closed; one private lifespan and no unrelated-server mutation",
+      "acceptance_cases": [
+        "A02",
+        "A25",
+        "E03"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification",
+        "release-runbook",
+        "wizard-ui"
+      ]
+    },
+    {
+      "id": "R17",
+      "requirement": "Missing authority/dirty/diverged/busy/foreign state routes through existing recovery",
+      "acceptance_cases": [
+        "A10",
+        "A14",
+        "A15",
+        "A20",
+        "A24"
+      ],
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R18",
+      "requirement": "Legacy semantics and existing scope/Launcher guards preserved",
+      "acceptance_cases": [
+        "A13",
+        "A26"
+      ],
+      "owner_stages": [
+        "llm-advisor",
+        "qualification",
+        "safe-operations-recovery",
+        "worker-connection-selftest"
+      ]
+    },
+    {
+      "id": "R19",
+      "requirement": "Isolated tests, no false live/model proof, exact evidence and release decision",
+      "acceptance_cases": [
+        "A19",
+        "E01",
+        "E02",
+        "E03",
+        "E04"
+      ],
+      "owner_stages": [
+        "llm-advisor",
+        "qualification",
+        "release-runbook",
+        "wizard-ui",
+        "worker-connection-selftest"
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "A01",
+      "title": "Versioned snapshot, status and freshness",
+      "owner_stages": [
+        "diagnostic-core"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Reject unknown fields, duplicate keys, invalid UTF-8/nonfinite values and excess depth/count before recursive validation.",
+        "All six check statuses remain distinct; unobserved has null time and never PASS; stale PASS is not current readiness.",
+        "Verify digest, source versions, observation/expiry consistency, unique check IDs and evidence-kind/scope rules.",
+        "Validate all contract entrypoints plus semantic cross-field invariants."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_execution_observability.py",
+          "method": "test_unknown_is_not_zero_or_success",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a01_snapshot_schema_and_status_invariants",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a01_snapshot_schema_and_status_invariants",
+          "summary": "Schema validation against contracts.schema.json, 6 statuses, freshness rules."
+        }
+      ]
+    },
+    {
+      "id": "A02",
+      "title": "Private authenticated wizard and public denial",
+      "owner_stages": [
+        "diagnostic-core",
+        "wizard-ui",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Private shell/data/API require the documented operator session and current project/action policy; reads cannot reveal data before authorization.",
+        "Origin/CSRF/admin-token pairing checks apply; untrusted forwarded headers and plan handles grant no authority.",
+        "All wizard paths/methods, encoded and traversal variants are unavailable on the public gateway; no fallback to main."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_launcher_gateway.py",
+          "method": "test_scanner_deny_default_login_reload_csrf_real_start_stop_logout",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_qualification.py",
+          "method": "test_real_uvicorn_two_loopback_sockets_one_lifespan_and_no_private_route_on_public",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a02_private_api_authentication_and_csrf",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a02_private_api_authentication_and_csrf",
+          "summary": "Private operator session pairing, CSRF header, same-origin, and public gateway 404 denial."
+        }
+      ]
+    },
+    {
+      "id": "A03",
+      "title": "Canonical project selection and cross-project read isolation",
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Enumerate only registered and currently allowed canonical projects.",
+        "Unknown project/config corruption is explicit, not auto-registration or empty-success.",
+        "Alias/case normalization cannot create another slot; instance/receipt lookup and cache are project/actor scoped.",
+        "Two different registered projects retain independent diagnostic and execution state."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_qualification.py",
+          "method": "test_two_active_projects_stop_one_preserves_other_queues_history_workspace_and_result",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a03_canonical_projects_and_isolation",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a03_canonical_projects_and_isolation",
+          "summary": "Canonical project enum, isolation between projects, explicit STATE_CORRUPT 409 error."
+        }
+      ]
+    },
+    {
+      "id": "A04",
+      "title": "Passive GET has no hidden mutations",
+      "owner_stages": [
+        "diagnostic-core"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Snapshot capture uses already initialized store plus pure projection; no LauncherOperations.get/_refresh, project_control migration, runtime constructor, identity claim or queue delivery.",
+        "Instrument DB writes, filesystem writes, network, Git mutation, process spawn, reservation retirement and legacy-root access; assert none on repeated GET and missing/corrupt storage.",
+        "Compare authoritative state/leases/queues/config bytes; no fallback initialization or reconciliation."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_execution_observability.py",
+          "method": "test_read_projection_has_no_mutations",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a04_passive_get_has_no_hidden_mutations",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a04_passive_get_has_no_hidden_mutations",
+          "summary": "Exact zero-byte mutation on DB and filesystem across 10 repeated passive captures."
+        }
+      ]
+    },
+    {
+      "id": "A05",
+      "title": "Worker discovery and truthful capability probe",
+      "owner_stages": [
+        "worker-connection-selftest"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Missing configured candidate is NOT_CONFIGURED; source adapter code alone is not a live worker.",
+        "Discovery uses approved candidate IDs only; no network/port/process scan.",
+        "A valid optional capabilities response binds client/protocol/version; 404 is PROBE_UNSUPPORTED, raw HTTP200 is not READY.",
+        "Do not invoke prepare with invented operation/sprint IDs; declared worker guarantees are not execution proof."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_missing_executor_is_not_a_fake_success",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+          "summary": "Configured executor discovery, loopback IPv4 SSRF guard, capabilities 200 vs 404 PROBE_UNSUPPORTED distinction."
+        }
+      ]
+    },
+    {
+      "id": "A06",
+      "title": "Bounded networking, SSRF and cancellation",
+      "owner_stages": [
+        "diagnostic-core",
+        "worker-connection-selftest",
+        "llm-advisor"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Reject arbitrary URL, DNS rebinding, redirect, proxy, userinfo, path injection and unapproved private/link-local targets; executor is exact configured loopback.",
+        "Test body/depth/connection/total-deadline and concurrency limits, slow streaming and client disconnect.",
+        "Keep permits until underlying work ends; no unbounded thread queue or global SQLite write lock across remote work."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_loopback_http_uses_scoped_header_and_rejects_redirects",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_blocked_transport_does_not_block_ticks_and_shutdown_waits_for_it",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a06_bounded_networking_and_cancellation",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a06_bounded_networking_and_cancellation",
+          "summary": "Zero socket connections during GET, clean cancellation release of semaphore."
+        }
+      ]
+    },
+    {
+      "id": "A07",
+      "title": "Secret references, alias denial and redaction",
+      "owner_stages": [
+        "diagnostic-core",
+        "worker-connection-selftest",
+        "llm-advisor"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Snapshots expose only allowlisted credential metadata, never values/locators/environment dumps.",
+        "Protected launcher/scope namespaces cannot resolve through child or Git source/destination aliases, including case variants.",
+        "Synthetic canaries in errors, encoded JSON, logs, question and provider output never reach durable evidence, UI, model input or child environment.",
+        "No automatic copying of legacy Gemini key into advisor configuration."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_launcher_control_secrets.py",
+          "method": "test_git_source_aliases_fail_before_lookup_and_destinations_are_protected",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_control_secrets.py",
+          "method": "test_trusted_executor_uses_protected_reference_but_child_cannot",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_managed_scope_secret_boundary.py",
+          "method": "test_explicit_admin_and_role_aliases_fail_before_environment_lookup",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a07_secret_references_and_redaction",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a07_secret_references_and_redaction",
+          "summary": "Canary bot and executor secrets absent from JSON snapshot, redact_secrets verified."
+        }
+      ]
+    },
+    {
+      "id": "A08",
+      "title": "Network/auth/expiry facts stay distinct",
+      "owner_stages": [
+        "diagnostic-core"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Absent reference, missing secret availability, DNS failure, timeout, connection refusal, auth rejection and insufficient permission produce distinct safe codes.",
+        "No 401/403/timeout is labeled expired without authoritative expiry evidence.",
+        "Partial checks survive another adapter failure; no raw provider traceback/body or false all-green summary."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a08_network_auth_expiry_facts_distinct",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a08_network_auth_expiry_facts_distinct",
+          "summary": "Distinct error codes; auth rejection distinguished from expiry."
+        }
+      ]
+    },
+    {
+      "id": "A09",
+      "title": "Original executor receipts and evidence levels",
+      "owner_stages": [
+        "worker-connection-selftest"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Validate exact descriptor, sorted role phones, session and actual initial assignment IDs.",
+        "READY only permits launch preparation; ACCEPTED acknowledges native assignments; result and two reviews are separately observed.",
+        "Malformed/foreign/replayed descriptor or session is rejected; fixture receipt is visibly MOCK."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_exact_scoped_receipt_and_session_required",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_malformed_stored_executor_receipt_is_a_safe_domain_error",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a09_worker_bind_and_receipt_provenance",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a09_worker_bind_and_receipt_provenance",
+          "summary": "Receipt verification, binding ID generation, rejection of invalid candidate probe receipts."
+        }
+      ]
+    },
+    {
+      "id": "A10",
+      "title": "Stale plan and current authority fences",
+      "owner_stages": [
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Change source/registry/policy/host initialization, project reservation, adapter binding, expiry or selected instance between plan/apply; reject before effect.",
+        "Model/caller cannot supply expected state, resources, grants or authority fingerprint to bypass server resolution.",
+        "Cached PASS and old operator session do not authorize apply or receipt disclosure."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_scope_workflow.py",
+          "method": "test_http_future_actor_drift_invalidates_validated_full_scope",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a10_stale_plan_and_authority_fences",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a10_stale_plan_and_authority_fences",
+          "summary": "Authority fingerprint mismatch rejection, plan expiry fence, actor policy revocation."
+        }
+      ]
+    },
+    {
+      "id": "A11",
+      "title": "Idempotency and concurrent apply",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Three simultaneous apply requests for one plan/key yield one native effect and the same receipt.",
+        "Changed request reusing key conflicts; distinct new intents still obey project slot.",
+        "Duplicate UI click and concurrent bind do not overwrite a later generation; actor/project scopes do not collide."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_manual_waits_and_duplicate_concurrent_start_activates_once",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_three_new_auto_uploads_have_one_winner",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a11_idempotency_and_concurrent_apply",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a11_idempotency_and_concurrent_apply",
+          "summary": "Three identical apply calls return same receipt with deduplicated=True, conflicting plan raises IDEMPOTENCY_CONFLICT."
+        }
+      ]
+    },
+    {
+      "id": "A12",
+      "title": "Restart and ambiguous external effects",
+      "owner_stages": [
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Crash before/after durable intent, native activation and external ACK resumes the same attempt/session.",
+        "Lost reply does not trigger a new activation, alternate key or false failure; unknown unreconcilable effect stays UNKNOWN/BLOCKED.",
+        "Restart/revoked policy stops new effects while preserving real receipts and ownership.",
+        "Canceled request/shutdown drains underlying work before holders close."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_lost_executor_ack_retries_existing_activation_and_same_client_job",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_unexpected_project_failure_drains_thread_backed_siblings_before_retry_or_shutdown",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a12_restart_and_durable_intent_replay",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a12_restart_and_durable_intent_replay",
+          "summary": "Durable intent logging, crash recovery replay from JSONL, duplicate apply deduplication."
+        }
+      ]
+    },
+    {
+      "id": "A13",
+      "title": "Explicit private owner, authorization and no role impersonation",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Private browser actor is recorded as private_operator, never fabricated Telegram user/chat or grant.",
+        "Current project/action grants and session policy generation are verified at every effect/disclosure, including mid-flight revocation.",
+        "Wizard cannot fabricate reviewer/Coordinator identity or bypass existing Telegram current_principal checks."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_revocation_during_executor_ready_denies_before_activation",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_gateway.py",
+          "method": "test_acl_revocation_expiry_scope_and_replay_encoding",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Private operator boundary, admin token verification, confirmation_required guard."
+        }
+      ]
+    },
+    {
+      "id": "A14",
+      "title": "One shared project slot across every ingress",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Race wizard self-test, old start-from-git and new Launcher for the same canonical target; exactly one acquires shared slot.",
+        "Reject current development project as self-test target, absent approved profile, alias, copied control DB or busy target.",
+        "Different already registered permitted projects can proceed independently."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_old_start_api_and_new_auto_import_share_one_project_guard",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_qualification.py",
+          "method": "test_two_active_projects_stop_one_preserves_other_queues_history_workspace_and_result",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Separate test project 9001 required; slot on project 9000 protected."
+        }
+      ]
+    },
+    {
+      "id": "A15",
+      "title": "Typed actions and native recovery only",
+      "owner_stages": [
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Unknown action/argument, raw command/SQL/path/env/process ID and unapproved candidate rejected before handler.",
+        "Only server catalog operations reach existing importer/Git/continuity/supervisor APIs.",
+        "recovery.open only shows owned context; missing actual recovery authority returns unsupported/blocker, never synthesized DONE/review.",
+        "Dirty/diverged Git and unknown ownership go to native Coordinator, no reset/clean/state edit."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_safe_operations_recovery.py::test_a15_typed_actions_and_injection_rejection",
+      "tested_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_safe_operations_recovery.py::test_a15_typed_actions_and_injection_rejection",
+          "summary": "Strict allowlist rejection of unknown actions and shell/SQL arguments, cross-project lookup isolation."
+        }
+      ]
+    },
+    {
+      "id": "A16",
+      "title": "Existing provider adapter and deterministic fallback",
+      "owner_stages": [
+        "llm-advisor"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "No adapter/reference yields NOT_CONFIGURED and useful deterministic advice; no automatic account/key/provider migration.",
+        "Harden existing transport without using clone-specific parser/raw key route; bounded safe JSON/error/cost controls.",
+        "Timeout/revoked/unreachable/invalid provider output does not block engine or deterministic UI.",
+        "No inference on passive GET; request caps prevent silent paid retry; unavailable token/cost accounting is explicit."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_llm_advisor.py::TestLLMAdvisor::test_a16_deterministic_fallback_when_provider_not_configured",
+      "tested_commit": "84540d31a8297d090a5cefa87bbfa586563e58f5",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a16_deterministic_fallback_when_provider_not_configured",
+          "summary": "Deterministic diagnostic fallback when provider is unconfigured, timeout, or invalid."
+        }
+      ]
+    },
+    {
+      "id": "A17",
+      "title": "Advisor structured input/output and zero action authority",
+      "owner_stages": [
+        "llm-advisor"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Only minimal pseudonymous checks, allowed IDs and sanitized question enter model; no raw repository/config/log/path/secrets.",
+        "Strict output rejects duplicate keys, extra fields, unknown/stale checks, fabricated evidence, unknown actions/arguments and invalid byte/depth limits.",
+        "Advice never updates check status, engine state or calls plan/apply automatically.",
+        "Inference uncertainty is distinct from verified facts; proposed action opens a fresh server plan."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_llm_advisor.py::TestLLMAdvisor::test_a17_context_minimization_and_canary_redaction",
+      "tested_commit": "84540d31a8297d090a5cefa87bbfa586563e58f5",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a17_context_minimization_and_canary_redaction",
+          "summary": "Context minimization, canary secret redaction, Draft 2020-12 strict response schema, zero direct mutation authority."
+        }
+      ]
+    },
+    {
+      "id": "A18",
+      "title": "Injection, XSS and unsafe navigation",
+      "owner_stages": [
+        "llm-advisor",
+        "wizard-ui"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Adversarial service/log/README/question/model text cannot change system policy, reveal canaries or request arbitrary operations.",
+        "Render explanations via escaped text, not HTML or executable Markdown; CSP and fixed destinations remain.",
+        "Test nested/encoded secret and command injection, malicious links and misleading model PASS/DONE claims."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_wizard_ui.py::TestWizardUI::test_a18_xss_and_injection_immunity and tests/test_llm_advisor.py::TestLLMAdvisor::test_a18_advisory_api_and_injection_defense",
+      "tested_commit": "9d25b94981660f12de1b85ec71f6722c3df1b0b2",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_wizard_ui.py::TestWizardUI::test_a18_xss_and_injection_immunity",
+          "summary": "Verification of pure textContent rendering, zero DOM sinks (no innerHTML/outerHTML/document.write/eval), CSP header enforcement."
+        },
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_llm_advisor.py::TestLLMAdvisor::test_a18_advisory_api_and_injection_defense",
+          "summary": "Rejection of prompt injection attacks, strict Draft 2020-12 schema validation, canary redaction."
+        }
+      ]
+    },
+    {
+      "id": "A19",
+      "title": "Native isolated self-test and evidence chain",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "An explicit plan names an allowed separate canonical test project, pinned source/template/checksums, fresh branches and distinct roles.",
+        "Use normal Git validate/prepare/activate and real assignment/result/review endpoints; never another scheduler.",
+        "Fixture tests bind exact from/result commits and require two distinct reviewer decisions on that result before terminal; label all fixtures MOCK.",
+        "Real product proof requires genuine external worker and reviewers separately under E01."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_auto_uses_real_identity_result_and_two_review_apis_to_completion",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_qualification.py",
+          "method": "test_launcher_reject_rework_and_two_new_reviews_complete_exact_new_result",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Native isolated self-test plan creation, confirmed apply execution, OperationReceipt schema validation."
+        }
+      ]
+    },
+    {
+      "id": "A20",
+      "title": "Stop and pending review history",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Stop owns exact run/session and fences new effects; missing ACK/death proof remains STOP_PENDING with reservation.",
+        "Native cleanup releases only owned resources; other projects/processes/queues/leases remain unchanged.",
+        "Pending reviews, immutable result evidence and exact accepted replays survive; no invented delivery or approval."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_stop_without_client_ack_keeps_fence_and_project_reservation",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_stop_pending_reviews_keeps_actual_result_and_no_invented_decisions",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_active_stop_preserves_history_and_retires_only_owned_resources",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a20_selftest_stop_flow",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a20_selftest_stop_flow",
+          "summary": "Selftest stop plan and apply flow, receipt action confirmation, history preservation."
+        }
+      ]
+    },
+    {
+      "id": "A21",
+      "title": "Reusable Russian private wizard UX",
+      "owner_stages": [
+        "wizard-ui",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "First setup and return diagnostics use the same page; causal worker discovery/probe/plan/self-test flow is clear.",
+        "Show timestamp/freshness, evidence level, exact blocker and next allowed step; separate LLM inference and verified facts.",
+        "Plans show effects and require explicit product action; duplicate click, stale/busy/revoked cases refresh safely.",
+        "Keyboard/focus/accessibility, mobile-width layout and no regression in existing execution/Launcher UI."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_wizard_ui.py::TestWizardUI::test_a21_russian_reusable_wizard_ux",
+      "tested_commit": "9d25b94981660f12de1b85ec71f6722c3df1b0b2",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_wizard_ui.py::TestWizardUI::test_a21_russian_reusable_wizard_ux",
+          "summary": "Russian language UI, Plan & Apply modal confirmation flow, accessibility ARIA roles, responsive CSS layout."
+        }
+      ]
+    },
+    {
+      "id": "A22",
+      "title": "No hidden destructive setup effects",
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Ordinary render/refresh never fetches/pushes Git, replaces token/webhook, starts tunnel/worker or activates sprint.",
+        "Unsupported setup/recovery operation returns actionable fixed instructions.",
+        "No arbitrary binary install, process scan/kill, secret entry into chat or generic config editor."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a22_no_hidden_destructive_setup_effects",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a22_no_hidden_destructive_setup_effects",
+          "summary": "No slot release, no webhook overwrite, no process signals on passive GET."
+        }
+      ]
+    },
+    {
+      "id": "A23",
+      "title": "Responsiveness, cache and repeat diagnostics",
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Stress repeated refresh and canceled waiters: bounded cache/admission, no growing work queue and continued engine progress.",
+        "Cache keys include project/policy/source versions; stale/missing/corrupt facts do not become PASS.",
+        "Pure check failure is isolated; terminal/history projections keep exact review and source evidence."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_execution_observability.py",
+          "method": "test_reviews_count_only_exact_result_and_commit",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_project_recovery_is_concurrent_bounded_and_stops_queued_work",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a23_responsiveness_and_cache",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a23_responsiveness_and_cache",
+          "summary": "5-second cached snapshot under 5ms, 1-concurrent capture admission gate."
+        }
+      ]
+    },
+    {
+      "id": "A24",
+      "title": "Git, Telegram, tunnel and webhook ownership",
+      "owner_stages": [
+        "diagnostic-core",
+        "safe-operations-recovery"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Compare owned source/ref/dirty/divergence evidence without fetch or index mutation on GET; read permission does not prove push.",
+        "Separate Telegram config from authenticated bot identity; getWebhookInfo is probe-only, never setWebhook.",
+        "Detect stale/foreign origin, upstream or webhook; no foreign PID signal or automatic overwrite.",
+        "Configuration/probe changes require typed reviewed plan and current grants."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_launcher_tunnel.py",
+          "method": "test_origin_is_owned_fresh_and_reconnect_changes_binding",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_tunnel.py",
+          "method": "test_no_foreign_upstream_or_receipt_path",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_tunnel.py",
+          "method": "test_webhook_updates_only_its_previous_origin_never_drops_messages",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a24_git_telegram_tunnel_ownership",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a24_git_telegram_tunnel_ownership",
+          "summary": "Git ref inspect, origin receipt 15-second heartbeat freshness detection."
+        }
+      ]
+    },
+    {
+      "id": "A25",
+      "title": "One host lifecycle, failure and shutdown isolation",
+      "owner_stages": [
+        "diagnostic-core",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Wizard registration introduces no second main import/lifespan, scheduler or execution DB.",
+        "Public gateway failure does not stop engine; private shutdown drains owned probe/advisor work.",
+        "No mutable running source or foreign ownership markers are touched by staging tests."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_launcher_host.py",
+          "method": "test_one_lifespan_and_real_work_drained_before_teardown",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_host.py",
+          "method": "test_public_failure_does_not_stop_engine",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_host.py",
+          "method": "test_cancellation_during_drain_waits_actual_worker_and_one_lifespan",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_setup_diagnostics.py::test_a25_one_host_lifecycle",
+      "tested_commit": "3eb3dfdf4903a7557750b613bdde3ab061a3f96e",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_setup_diagnostics.py::test_a25_one_host_lifecycle",
+          "summary": "One host lifecycle, ManagedImportStore.diagnostic_snapshot extension verified."
+        }
+      ]
+    },
+    {
+      "id": "A26",
+      "title": "Legacy compatibility and versioned additive integration",
+      "owner_stages": [
+        "worker-connection-selftest",
+        "llm-advisor",
+        "qualification"
+      ],
+      "evidence_class": "AUTOMATED",
+      "mandatory_for_release": true,
+      "status": "PASS",
+      "assertions": [
+        "Missing old fields retain existing dispatch and owner semantics; no eager rewrite of legacy records.",
+        "Existing Telegram ACL, launch modes, exact result/review contracts and protected scope/launcher secrets remain enforced.",
+        "Generic private-owner adapter/schema changes are additive and reviewed; old client protocol works without optional capabilities endpoint.",
+        "Existing profile-clone behavior remains supported while wizard uses bounded advisory wrapper."
+      ],
+      "existing_regression_refs": [
+        {
+          "path": "tests/test_telegram_launcher_launch_modes.py",
+          "method": "test_restart_resumes_authorized_auto_but_never_starts_manual_waiting",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        },
+        {
+          "path": "tests/test_launcher_control_secrets.py",
+          "method": "test_public_auth_never_falls_back_to_legacy_raw_bot_token",
+          "inspected_at_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+          "execution_claimed": false
+        }
+      ],
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+          "summary": "Legacy executor support without optional capabilities endpoint (404 PROBE_UNSUPPORTED)."
+        }
+      ]
+    },
+    {
+      "id": "E01",
+      "title": "Real existing worker and independent reviewers self-test",
+      "owner_stages": [
+        "qualification",
+        "release-runbook"
+      ],
+      "evidence_class": "REAL_EXTERNAL",
+      "mandatory_for_release": true,
+      "status": "BLOCKED_EXTERNAL",
+      "assertions": [
+        "Obtain actual configured existing executor identity/protocol and authorized different test project; no echo service or fabricated receipt.",
+        "Record installed exact version, native IDs/source/result commit/branch, genuine worker work, two independent genuine reviewer decisions for that exact result and native terminal/cleanup proof.",
+        "Record explicit operator plan/apply, actual outputs and controlled failure/recovery; no secret values.",
+        "If unavailable: BLOCKED with exact setup dependency; all fixture contract passes remain separate."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
+      "tested_commit": null,
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
+    },
+    {
+      "id": "E02",
+      "title": "Real configured advisory provider roundtrip",
+      "owner_stages": [
+        "llm-advisor",
+        "qualification",
+        "release-runbook"
+      ],
+      "evidence_class": "REAL_EXTERNAL",
+      "mandatory_for_release": true,
+      "status": "BLOCKED_EXTERNAL",
+      "assertions": [
+        "Use only previously configured approved provider/reference with explicit bounded Ask; no new account/key or hidden provider migration.",
+        "Record sanitized actual snapshot/request/strict response binding, observed provider provenance available from transport and limits; do not invent model/message IDs.",
+        "Demonstrate advice creates no mutation and deterministic fallback works.",
+        "This architecture session or fixture response is not proof of the installed advisor integration; missing provider remains NOT_RUN/BLOCKED."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
+      "tested_commit": null,
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
+    },
+    {
+      "id": "E03",
+      "title": "Actual private browser flow",
+      "owner_stages": [
+        "wizard-ui",
+        "qualification",
+        "release-runbook"
+      ],
+      "evidence_class": "REAL_UI",
+      "mandatory_for_release": true,
+      "status": "BLOCKED_EXTERNAL",
+      "assertions": [
+        "Observe authenticated private installed-version wizard in a real browser: missing client/provider, reconnect/stale plan, explicit plan/apply, evidence drilldown and mobile-width layout.",
+        "Verify public gateway cannot reach admin wizard; screenshots must be actual and sanitized.",
+        "Record exact commit, route/listener ownership and scenario without publishing credentials or internal paths."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
+      "tested_commit": null,
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
+    },
+    {
+      "id": "E04",
+      "title": "Final evidence, two reviews and release decision",
+      "owner_stages": [
+        "qualification",
+        "release-runbook"
+      ],
+      "evidence_class": "RELEASE",
+      "mandatory_for_release": true,
+      "status": "BLOCKED_EXTERNAL",
+      "assertions": [
+        "Record exact tested commit/clean state, test commands/counts/pass/fail/skip and immutable relevant evidence.",
+        "Each stage and final release result needs two independent APPROVE of that exact result; a new commit requires fresh decisions.",
+        "GO only when mandatory matrix cases including E01/E02/E03 are evidenced; otherwise NO_GO with Coordinator unblock steps.",
+        "Preserve prior sprint history/external NO_GO, topic-only publication and actual PR URL; no automatic merge/deploy."
+      ],
+      "existing_regression_refs": [],
+      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
+      "tested_commit": null,
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,70 @@
+{
+  "kind": "REAL_EDGE_ALL_HTTP_INTERCEPTED_NO_INSTALLED_HOST_REQUESTS",
+  "expected_defect": false,
+  "viewport": {
+    "width": 390,
+    "height": 844
+  },
+  "source_root": "D:\\nq-sdw-launcher",
+  "setup_js_sha256": "0704f461ab4fe3df2d3912098b6a03292cfe786ccbaced6b4f022d1eb38e7791",
+  "passed": true,
+  "scenario_groups": 10,
+  "reports": [
+    {
+      "case": "Escape returns visible keyboard focus to enabled Plan opener",
+      "observed": {
+        "id": "",
+        "tag": "BUTTON",
+        "documentFocused": true,
+        "focusVisible": true,
+        "outline": "auto",
+        "inDialog": false
+      }
+    },
+    {
+      "case": "Cancel and close control restore original Plan opener",
+      "apply_requests": 0
+    },
+    {
+      "case": "advisor proposal opener is preserved"
+    },
+    {
+      "case": "detached or hidden opener falls back to current Refresh"
+    },
+    {
+      "case": "closing original dialog never focuses behind another open modal"
+    },
+    {
+      "case": "uncertain Apply, recovery Escape/Cancel and reload preserve key and focus",
+      "apply_requests": 1
+    },
+    {
+      "case": "stale Apply close and recovery focus",
+      "apply_requests": 1
+    },
+    {
+      "case": "success Apply close and recovery focus",
+      "apply_requests": 1
+    },
+    {
+      "case": "unauth Apply close and recovery focus",
+      "apply_requests": 1
+    },
+    {
+      "case": "held Apply close and recovery focus",
+      "apply_requests": 1,
+      "duringApply": {
+        "id": "plan-dialog",
+        "tag": "DIALOG",
+        "documentFocused": true,
+        "focusVisible": true,
+        "outline": "auto",
+        "inDialog": true
+      }
+    }
+  ],
+  "page_errors": [],
+  "request_count": 79,
+  "explicit_apply_requests": 5,
+  "automatic_apply": 0
+}

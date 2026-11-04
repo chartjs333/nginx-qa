@@ -1,0 +1,45 @@
+{
+  "kind": "REAL_EDGE_ALL_HTTP_INTERCEPTED",
+  "expected_defect": false,
+  "passed": true,
+  "source_root": "D:\\nq-sdw-launcher",
+  "setup_js_sha256": "0704f461ab4fe3df2d3912098b6a03292cfe786ccbaced6b4f022d1eb38e7791",
+  "results": [
+    {
+      "scenario": "new-session",
+      "before": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "session-check",
+        "focusText": "Проверить подтверждение сессии"
+      },
+      "after": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "session-check",
+        "focusText": "Проверить подтверждение сессии"
+      },
+      "focusRetained": true,
+      "explicit_apply_requests": 1
+    },
+    {
+      "scenario": "new-work",
+      "before": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "",
+        "focusText": "Сформировать план"
+      },
+      "after": {
+        "error": "",
+        "errorHidden": true,
+        "focusId": "",
+        "focusText": "Сформировать план"
+      },
+      "focusRetained": true,
+      "explicit_apply_requests": 1
+    }
+  ],
+  "page_errors": [],
+  "automatic_apply": 0
+}

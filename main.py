@@ -1425,6 +1425,11 @@ def _reconcile_managed_continuity_background(
                 runtime.reconcile_all()
             except Exception:
                 pass
+            try:
+                from nginx_qa.setup_native import reconcile_operator_receipts
+                reconcile_operator_receipts(runtime)
+            except Exception:
+                pass  # One invalid receipt cannot stop the existing engine tick.
             if event_loop is not None and not stop_event.is_set():
                 from nginx_qa.telegram_launcher_intake import reconcile_operations
                 from nginx_qa.telegram_launcher_controls import reconcile_notifications
@@ -1525,8 +1530,10 @@ async def app_lifespan(_: FastAPI):
     finally:
         if notifications is not None:
             await notifications.stop()
+        setup_gate = globals().get("setup_read_gate")
+        setup_drained = setup_gate is None or await setup_gate.drain(timeout=5.0)
         supervisor_quiescent = True
-        close_error: Exception | None = None
+        close_error: Exception | None = None if setup_drained else RuntimeError("Setup diagnostic capture did not quiesce")
         continuity_stop = managed_continuity_stop_event
         continuity_thread = managed_continuity_thread
         if continuity_stop is not None:
@@ -39929,6 +39936,8 @@ import sys as _scope_api_sys
 register_scope_api(_scope_api_sys.modules[__name__])
 from nginx_qa.prompt_archive_api import register_prompt_archive_api
 register_prompt_archive_api(_scope_api_sys.modules[__name__])
+from nginx_qa.setup_diagnostics_api import register_setup_diagnostics_api
+register_setup_diagnostics_api(_scope_api_sys.modules[__name__])
 
 
 if __name__ == "__main__":

@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "kind": "SDWN-004_scoped_local_release_candidate",
+  "at": "2026-11-04T18:46:55.289802+00:00",
+  "recommendation": "GO",
+  "scope": "Private local setup/diagnostics wizard with qualified docs-only-v1 native self-test",
+  "release_native_result": "PENDING_ROOT_SUBMISSION",
+  "release_independent_reviews": "PENDING",
+  "final_observed_state_report": "C:/nqt37/FINAL_DELIVERY.json (root replaces the historical report only after actual native completion)",
+  "qualification": {
+    "commit": "c115b2e03d93700fb600e54bbdc8d31fcef70f61",
+    "native_status": "completed",
+    "outcome": "PASS",
+    "independent_approvals": 2,
+    "evidence": "evidence/continuation-release/qualification-native-acceptance.json"
+  },
+  "installed_product": {
+    "commit": "a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca",
+    "branch": "codex/sdw-qualified-host-continuation-20261104",
+    "source": "D:/nq-sdw-launcher",
+    "wizard": "http://127.0.0.1:18038/setup",
+    "client": "http://127.0.0.1:18039",
+    "product_code_changed_by_release": false
+  },
+  "delivery": {
+    "source": "D:/nq-sdw-delivery",
+    "branch": "codex/setup-diagnostics-wizard-v1",
+    "draft_pr": "https://github.com/chartjs333/nginx-qa/pull/18",
+    "base_pr": "https://github.com/chartjs333/nginx-qa/pull/17",
+    "main_or_pr_merged": false,
+    "candidate_head": "Commit containing this report; exact published SHA in external release-final-result.json"
+  },
+  "validation": {
+    "consolidated_product_tests": 183,
+    "product_test_skips": 0,
+    "separate_pairing_tests": 12,
+    "independent_repeat_counts_not_summed": true,
+    "new_startup_fixture_tests": 3,
+    "actual_owned_stack_idempotent_startup": "PASS",
+    "actual_browser_model_and_plan_lifecycle": "PASS",
+    "actual_host_and_client_restart": "PASS",
+    "actual_native_autonomous_selftest": "PASS",
+    "actual_independent_model_reviews": 2,
+    "native_selftest_result": "73c00855b3a0ff3501047a18bfff8680e9672912",
+    "original_model_client": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+    "original_model_host": "65662f69db52c27b6c0972ccec8031cfb68a02fc",
+    "installed_client_runtime_import_blobs_identical": true,
+    "new_model_run_requested_for_release": false,
+    "machine_reboot_or_new_git_daemon_launch": "NOT_RUN"
+  },
+  "operator_guide": "continuation-delivery.md",
+  "limits": {
+    "worker_profile": "docs-only-v1, small bounded regular-file repository with an explicit document allowlist",
+    "active_work": "Use the running UI; startup/stop helpers retain their quiescence checks.",
+    "telegram_bot_webhook_and_allowed_actor": "EXTERNAL_INPUT_REQUIRED",
+    "physical_mobile_tablet_acceptance": "NOT_RUN",
+    "public_wizard_exposure": false,
+    "inherited_cloudflare_boundary": {
+      "status": "PASS",
+      "checks": 24,
+      "date": "2026-11-03",
+      "tested_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+      "owned_tunnel_currently_running": false
+    }
+  },
+  "history": "Prior NO_GO, rejected advisor, supervised R3 and initial429 remain historical evidence, not relabeled success."
+}

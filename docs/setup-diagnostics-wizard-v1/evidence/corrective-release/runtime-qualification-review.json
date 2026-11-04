@@ -1,0 +1,18 @@
+{
+  "http_status": 200,
+  "phone": "6881",
+  "submitted_at": "2026-11-04T15:54:59.947707+00:00",
+  "request": {
+    "assignment_id": "review-81b9e5146a270d05dbb605bd",
+    "status": "APPROVE",
+    "feedback": "APPROVE automated qualification rework at exact 65e0bc0f152aa68241f7f153af6070abbd4c16a6. Previous REJECT is resolved by a new actual browser run: inspected included executed harness, which awaits the exact fresh plan POST apply HTTP200, validates SUCCEEDED/non-deduplicated receipt and exact operation card, then checks the same operation in server history and DOM after reload. Evidence contains the actual POST response for plan-a6f2a94b90e3361e15352aa2 and operation op-6fee207b10a788f6d6dceb9c, fifteen recorded requests, and no application of the distinct cancelled plan. The receipt validates against the actual SetupOperationReceipt contract. Prior false-positive claim is explicitly invalidated; native rework history is preserved. Git diff proves only five documentation/evidence files changed since 2074132; product code and tests are unchanged, so independent exact-code 52 PASS/133.881s remains applicable without a redundant broad rerun. Reviewed original/exact-delivered evidence integrity for seven sources. Harness SHA matches executed/checkout CRLF bytes and canonical Git content matches after LF normalization. Runtime assessment retains prior checked strict Windows admission, registry rebinding, real disposable Git transport test, durable OUTPUT_READY replay, native result/two-review lifecycle and supervised host restart/resource retirement evidence. Clarified that both retired attempt reservations belong to the same disposable project9010. Scope is automated qualification plus real supervised native selftest only. This does not approve unattended Codex CLI or full live release GO: Windows MXC/backend and true LLM advisor remain blocked externally; new live Telegram/tunnel acceptance is NOT_RUN. No remaining blocker within this qualification scope. Evidence C:/nqt35/client/sdw-corrective-20261104/reviews/runtime-qualification-65e0bc0/rework-verification.json."
+  },
+  "response": {
+    "assignment_id": "review-81b9e5146a270d05dbb605bd",
+    "source_assignment_id": "assignment-0c211c34f47a807545391c0b",
+    "result_key": "result-179e1130fc05ffc081ff8c82d2caecb4af66cf9d8d4dd658ea836cc0604bfc11",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}

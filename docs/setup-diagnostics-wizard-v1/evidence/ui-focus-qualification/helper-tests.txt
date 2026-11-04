@@ -1,0 +1,20 @@
+test_absent_forged_unowned_and_malformed_evidence_never_loads_key (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_absent_forged_unowned_and_malformed_evidence_never_loads_key) ... ok
+test_cli_does_not_echo_sensitive_exception_contents (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_cli_does_not_echo_sensitive_exception_contents) ... ok
+test_closed_replaced_or_retargeted_socket_cannot_reconnect (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_closed_replaced_or_retargeted_socket_cannot_reconnect) ... ok
+test_collector_uses_fixed_trusted_program_and_rejects_bad_output (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_collector_uses_fixed_trusted_program_and_rejects_bad_output) ... ok
+test_disconnect_during_key_load_does_not_retry (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_disconnect_during_key_load_does_not_retry) ... ok
+test_import_is_inert (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_import_is_inert) ... ok
+test_no_http_bytes_before_proof (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_no_http_bytes_before_proof) ... ok
+test_owned_recipient_loads_key_after_proof_and_posts_on_identical_socket (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_owned_recipient_loads_key_after_proof_and_posts_on_identical_socket) ... ok
+test_receipt_root_mismatch_or_change_prevents_key_read (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_receipt_root_mismatch_or_change_prevents_key_read) ... ok
+test_redirect_and_bad_response_are_not_followed (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_redirect_and_bad_response_are_not_followed) ... ok
+test_static_owner_and_receipt_checks_remain (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_static_owner_and_receipt_checks_remain) ... ok
+test_tcp_connect_failure_prevents_probe_and_key_load (test_authorize_wizard_browser.AuthorizationBoundaryTests.test_tcp_connect_failure_prevents_probe_and_key_load) ... ok
+test_all_steps_run_in_order (test_start_all.StartupTests.test_all_steps_run_in_order) ... ok
+test_failure_prevents_later_steps (test_start_all.StartupTests.test_failure_prevents_later_steps) ... ok
+test_missing_helper_prevents_any_start (test_start_all.StartupTests.test_missing_helper_prevents_any_start) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 7.786s
+
+OK

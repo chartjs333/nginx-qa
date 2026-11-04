@@ -34,6 +34,12 @@ Telegram/mobile acceptance is tracked separately from automated tests.
 
 ## Run
 
+For the qualified private Setup and Diagnostics Wizard on this installation,
+use the [current operator guide](docs/setup-diagnostics-wizard-v1/ui-recovery-delivery.md).
+It identifies the pinned product, the three commands in `C:\nqt37`, recovery after
+an uncertain Apply, verified evidence and the remaining Telegram deployment inputs.
+The general development launch commands below are separate from that pinned installation.
+
 On Windows:
 
 ```bat

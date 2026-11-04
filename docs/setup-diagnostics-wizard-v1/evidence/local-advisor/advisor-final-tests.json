@@ -1,0 +1,16 @@
+{
+  "status": "PASS",
+  "tests": 80,
+  "duration_seconds": 14.937,
+  "modules": [
+    "tests.test_ollama_advisor",
+    "tests.test_llm_advisor",
+    "tests.test_setup_private_api",
+    "tests.test_setup_diagnostics_regressions",
+    "tests.test_setup_diagnostics",
+    "tests.test_wizard_ui"
+  ],
+  "log_sha256": "2f787001550a64ecf3168fd793092a7509922a80ca6eb57279445ad54e3d87de",
+  "exit_code": 0,
+  "original_log_sha256": "cf0f553a600de214749be422f7d24ae4f9a2a43bb878cc6b1d0a347f051950c2"
+}

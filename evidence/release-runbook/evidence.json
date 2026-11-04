@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_release_runbook_work_evidence",
+  "recorded_at": "2026-11-04T13:08:00.000000+00:00",
+  "node_id": "release-runbook",
+  "agent_phone": "6708",
+  "assignment_id": "assignment-902ccea8a020190312921d99",
+  "initial_head_commit": "1430a7570d3efae6bbb584c0ecc8e6b75fc38157",
+  "assigned_branch": "agent/sdw-v1-20261104-release-runbook",
+  "release_evaluation": {
+    "automated_software_qualification": "PASS",
+    "acceptance_matrix_cases_evaluated": 30,
+    "automated_cases_pass": 26,
+    "external_acceptance_cases_pending": 4,
+    "external_prerequisites": {
+      "E01": "Real worker hardware and authorized distinct test project.",
+      "E02": "Real configured LLM provider account and key.",
+      "E03": "Real private browser operator flow with sanitized screenshots.",
+      "E04": "Final Coordinator release sign-off."
+    },
+    "outcome_decision": "NO_GO",
+    "rationale": "Automated qualification passed 100% across all 26 functional cases. Genuine external environment prerequisites (E01-E03) require real external hardware and provider accounts not present in isolated sprint environment. Controlled transition to Coordinator via NO_GO preserves high evidentiary integrity without synthesizing fake results.",
+    "draft_pr": {
+      "branch": "agent/sdw-v1-20261104-release-runbook",
+      "target": "main",
+      "auto_merge": false
+    },
+    "pinned_source_files_unchanged": 9
+  },
+  "product_acceptance": "RELEASE_RUNBOOK_NO_GO_AWAITING_EXTERNAL"
+}

@@ -1,0 +1,19 @@
+{
+  "created_at": "2026-11-04T20:32:57.398515+00:00",
+  "tested_sha": "c9193d7d6cab67f0b191a86f5e0e268bce074f9e",
+  "phone": "7081",
+  "http_status": 200,
+  "request": {
+    "assignment_id": "review-ed0d52432be0e89e56f28fc2",
+    "status": "APPROVE",
+    "feedback": "Independent runtime APPROVE of exact c9193d7d6cab67f0b191a86f5e0e268bce074f9e, native RESUME_2 focused repair. This accepts implementation readiness for native7005 installed qualification, not installed acceptance or final release.\n\nI inspected the full diff from accepted findings1a5064, not only the descendant follow-up. The original Escape defect is fixed in an independent real Edge fixture using the exact immutable production HTML/CSS/JS and fully intercepted HTTP: Enter on Plan, Tab/Shift+Tab, Escape now returns to the enabled invoking BUTTON with visible keyboard focus, documentFocused=true, no Apply. The byte-identical prior independent reproducer is preserved; its old-defect assertion fails specifically because returned=true. A separate positive-expectation probe passes. No installed-host/browser claim is inferred from these fixtures.\n\nI independently executed all10 real Edge focus/recovery groups and both reordered Apply cases on this exact SHA: all PASS, no page errors, no automatic Apply. This includes Cancel/close, advisor opener, detached/hidden origin fallback, another modal, uncertain Apply/Inspect/Escape/reload key retention, stale/success/unauthenticated/held Apply, newer session, and newer same-session Plan/Cancel while old recovery is pending. I also ran32 focused tests in6.475s (12.859s process): safe_operations_recovery, setup_private_api, wizard_ui, staging_deployment_branch, all PASS. Existing native Start-to-owned-Stop recovery and backend receipt/idempotency/passive-inspection tests remain green; existing AnyIO ResourceWarnings are retained in logs.\n\nCode review: opener references are captured before asynchronous disabling, accepted only when attached/visible/enabled/current, otherwise safe enabled controls are used; no background focus is applied behind an open dialog. Held Apply keeps visible focus within the native dialog without cancelling its request. Deferred Apply notices/focus are fenced by session generation and work revision, plus epoch/project when not reauthenticating; late completion respects already-valid focus and an unfocused document. Session-change fences from the prior repair remain. This introduces no focus trap or inference that browser-chrome traversal is a product defect. The new deployment branch is one exact wizard-only allowlisted string; existing default/origin/remote-SHA/clean/ownership checks are unchanged. No concrete new runtime blocker found.\n\nProvenance: author HEAD exact and clean, git diff --check passes;15 artifacts match manifest sizes/SHA256. I directly hashed historical Git JS blobs and matched all four before/after reports to their stated1a5064,abd876,c919 source commits. Original failed evidence and ordinary descendant history remain intact. Full backend is unchanged, and installed product remains fdafbf per scope; no installation/service/model change was performed here. Evidence is C:/nqt35/client/sdw-ui-recovery-20261104/reviews/runtime-focus-c9193d/independent-checks.json, independent-focus-fixture.json, edge-focus/focus-browser-results.json, edge-apply-order/apply-order-results.json, historical-js-provenance.json and focused-python.log. The next actual installed qualification must still run before release."
+  },
+  "response": {
+    "assignment_id": "review-ed0d52432be0e89e56f28fc2",
+    "source_assignment_id": "assignment-f90ced4ad47a22ba69dfacf9",
+    "result_key": "result-094390ea80dedc4ef2f00782f44b42a1fda12e1b5ea1832c49dcaf97df4e4d85",
+    "decision": "APPROVE",
+    "status": "REVIEW_ACCEPTED",
+    "deduplicated": false
+  }
+}

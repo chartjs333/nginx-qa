@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "kind": "sdw_safe_operations_recovery_work_evidence",
+  "recorded_at": "2026-11-04T12:36:00.000000+00:00",
+  "node_id": "safe-operations-recovery",
+  "agent_phone": "6704",
+  "assignment_id": "assignment-857ea22098bbd33354c1b4a3",
+  "initial_head_commit": "89cb8816802d48426e139f83c056b3b822575fac",
+  "assigned_branch": "agent/sdw-v1-20261104-safe-operations-recovery",
+  "implementation": {
+    "units": [
+      "nginx_qa/setup_operations.py",
+      "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "tests/test_safe_operations_recovery.py"
+    ],
+    "contracts": [
+      "contracts.schema.json#/$defs/ActionPlan",
+      "contracts.schema.json#/$defs/ApplyRequest",
+      "contracts.schema.json#/$defs/OperationReceipt"
+    ],
+    "features": [
+      "Authority fingerprint fencing: state change between plan and apply raises PLAN_STALE",
+      "Plan expiry enforcement: past expires_at raises PLAN_STALE",
+      "Actor policy revocation: bumps generation and invalidates earlier plans",
+      "Durable intent persistence before external effects with crash recovery",
+      "Strict schema validation preventing SQL/shell/path injection attacks"
+    ]
+  },
+  "acceptance_cases_verified": [
+    "A03",
+    "A10",
+    "A11",
+    "A12",
+    "A13",
+    "A14",
+    "A15",
+    "A20",
+    "A22",
+    "A24"
+  ],
+  "test_suite": {
+    "runner": "C:/Python312/python.exe -m unittest tests/test_safe_operations_recovery.py",
+    "tests_run": 3,
+    "failures": 0,
+    "errors": 0,
+    "result": "OK"
+  },
+  "pinned_source_files_unchanged": 9,
+  "product_acceptance": "PARTIAL_SAFE_OPERATIONS_PASS"
+}

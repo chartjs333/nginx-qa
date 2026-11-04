@@ -6,6 +6,22 @@ from nginx_qa import launcher_transport_store as transport
 
 
 class LauncherTransportMigrationTests(unittest.TestCase):
+    def test_private_ingress_never_generates_telegram_notices(self):
+        connection = self.database()
+        private = {'owner_kind':'setup_operator', 'actor_id':'alice', 'lifecycle':'Created'}
+        connection.execute('INSERT INTO telegram_launcher_operations VALUES(?,?,?)',
+                           ('private-before', '9002', json.dumps(private)))
+        transport.initialize(connection)
+        self.assertEqual(3, connection.execute('SELECT COUNT(*) FROM launcher_notices').fetchone()[0])
+        connection.execute('INSERT INTO telegram_launcher_operations VALUES(?,?,?)',
+                           ('private-after', '9002', json.dumps(private)))
+        connection.execute("UPDATE telegram_launcher_operations SET record_json=json_set(record_json,'$.lifecycle','Running') WHERE operation_id='private-after'")
+        self.assertEqual(3, connection.execute('SELECT COUNT(*) FROM launcher_notices').fetchone()[0])
+        connection.execute("UPDATE telegram_launcher_operations SET record_json=json_set(record_json,'$.lifecycle','Stopped') WHERE operation_id='op-1'")
+        self.assertEqual(4, connection.execute('SELECT COUNT(*) FROM launcher_notices').fetchone()[0])
+        transport.initialize(connection)
+        self.assertEqual(4, connection.execute('SELECT COUNT(*) FROM launcher_notices').fetchone()[0])
+
     def database(self):
         connection=sqlite3.connect(':memory:',isolation_level=None)
         self.addCleanup(connection.close)

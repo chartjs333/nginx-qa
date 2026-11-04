@@ -5,6 +5,7 @@ import asyncio
 from copy import deepcopy
 import hashlib
 import hmac
+import re
 from pathlib import Path
 import secrets
 import time
@@ -116,6 +117,7 @@ def register_scope_api(host):
                        "expires": time.monotonic() + 600, "actor": "operator-" + secrets.token_hex(8)}
             sessions[new_cookie] = current
         response = JSONResponse({"authenticated": current["authenticated"],
+                                 "actor_id": current["actor"] if current["authenticated"] else None,
                                  "csrf_token": current["csrf_token"] if current["authenticated"] else None,
                                  "pairing_code": current["pairing_code"] if not current["authenticated"] else None})
         response.headers["Cache-Control"] = "no-store"
@@ -133,10 +135,18 @@ def register_scope_api(host):
             same_origin(request)
             verify_admin_token(request.headers.get(ADMIN_TOKEN_HEADER))
             data = await body(request)
+            operator_id = data.get("operator_id")
+            if operator_id is not None and (not isinstance(operator_id, str)
+                    or not re.fullmatch(r"[a-z][a-z0-9_-]{2,47}", operator_id)):
+                raise HTTPException(400, {"error": "OPERATOR_ID_INVALID"})
             session(request)  # expire old entries
             found = next((v for v in sessions.values() if v["pairing_code"] == data.get("pairing_code") and not v["authenticated"]), None)
             if not found:
                 raise HTTPException(409, {"error": "OPERATOR_PAIRING_STALE"})
+            if operator_id is not None:
+                # Only this admin-authenticated approval may select stable ownership.
+                # Browser-provided cookies/pairing codes cannot choose or restore it.
+                found["actor"] = "operator-named-" + operator_id
             found.update(authenticated=True, expires=time.monotonic() + 3600)
             return {"authorized": True, "credentials_returned": False}
         except (flow.ScopeDecisionError, LegacyScopeControlError) as exc:

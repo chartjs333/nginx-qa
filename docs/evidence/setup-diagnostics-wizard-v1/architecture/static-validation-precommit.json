@@ -1,0 +1,64 @@
+{
+  "kind": "sdw_architecture_static_validation",
+  "schema_version": 1,
+  "utc": "2026-11-04T10:56:12.239721+00:00",
+  "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "branch": "agent/sdw-v1-20261104-architecture-inventory",
+  "scope": "Only architecture artifacts and static source references; no application import, service startup, provider call or implementation test.",
+  "reproduce": "C:/Python312/python.exe -X utf8 -B C:/nqt35/client/setup-diagnostics-wizard-v1/verify_architecture_artifacts.py",
+  "verification_script_sha256": "f0d6d142d8b78176e22acc63669583d5d89ed08d67fe9cf94c64be60604c7481",
+  "checks": {
+    "json_schema_meta_validation": "PASS",
+    "synthetic_positive_entrypoints": [
+      "DiagnosticSnapshot",
+      "ActionSelection",
+      "PlanRequest",
+      "ActionPlan",
+      "ApplyRequest",
+      "OperationReceipt",
+      "AdviceRequest",
+      "AdviceResponse",
+      "WorkerCapabilities",
+      "SafeError"
+    ],
+    "typed_action_variants_checked": 10,
+    "synthetic_negative_rejections": [
+      "unknown_action",
+      "url_argument",
+      "extra_apply_field",
+      "unobserved_pass",
+      "extra_model_field",
+      "empty_claim_references"
+    ],
+    "matrix_requirements": 19,
+    "matrix_cases": 30,
+    "existing_regression_references_verified": 37,
+    "unique_existing_regression_references": 36,
+    "pinned_source_files_unchanged": 9,
+    "new_artifact_whitespace_utf8": "PASS"
+  },
+  "sample_warning": "All sample IDs/facts/capabilities are synthetic schema structures, never a live worker/provider/app test.",
+  "product_acceptance": "NOT_RUN",
+  "artifacts": [
+    {
+      "path": "docs/setup-diagnostics-wizard-v1/acceptance-matrix.json",
+      "bytes": 48017,
+      "sha256": "85d0add5cd1096a98572039749d95e6db685eea9f939bbc5b88c1bbcee7559a6"
+    },
+    {
+      "path": "docs/setup-diagnostics-wizard-v1/architecture.md",
+      "bytes": 32771,
+      "sha256": "3a22d0887284fe54d8939296258d9bca636bfe100466319d36c539f5dc512e40"
+    },
+    {
+      "path": "docs/setup-diagnostics-wizard-v1/contracts.schema.json",
+      "bytes": 49241,
+      "sha256": "6411854ea0d4a60522bb30cd1d6854e7f8d5fbb86851305af4f243c7557e2bf3"
+    },
+    {
+      "path": "docs/setup-diagnostics-wizard-v1/threat-model.md",
+      "bytes": 10008,
+      "sha256": "51f4b16d6d46578836583a6a5d113c06d37d4b0b2ae73d0a7787775fcaaabc0f"
+    }
+  ]
+}
