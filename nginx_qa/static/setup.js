@@ -324,7 +324,7 @@
     state.advising = true;
     syncControls();
     showError(null);
-    el("sync").textContent = "Запрос консультации LLM…";
+    el("sync").textContent = "Помощник готовит рекомендацию. Первый ответ локальной модели может занять до 4 минут; действия не выполняются.";
 
     const snapshotId = state.currentSnapshot.snapshot_id;
     const project = state.currentProject;

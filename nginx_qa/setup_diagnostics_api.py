@@ -45,7 +45,7 @@ def register_setup_diagnostics_api(host: Any) -> None:
         store_path = Path(host.setup_store_path)  # injection for isolated hosts/tests
     ledger = state / "setup" if state else None
     worker = SetupWorkerAdapter(durable_store_dir=ledger / "worker" if ledger else None)
-    advisor = SetupAdvisor()
+    advisor = SetupAdvisor(state_dir=ledger / "advisor" if ledger else None)
     assets = Path(__file__).parent / "static"
 
     def registry():

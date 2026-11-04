@@ -1,0 +1,298 @@
+test_actual_deadline_retains_unknown_generation_and_fallback_is_explicit (tests.test_ollama_advisor.OllamaTests.test_actual_deadline_retains_unknown_generation_and_fallback_is_explicit) ... ok
+test_caller_cancel_keeps_global_admission_until_terminal_response (tests.test_ollama_advisor.OllamaTests.test_caller_cancel_keeps_global_admission_until_terminal_response) ... ok
+test_cloud_or_missing_local_model_rejected_before_sending_facts (tests.test_ollama_advisor.OllamaTests.test_cloud_or_missing_local_model_rejected_before_sending_facts) ... ok
+test_complete_but_invalid_model_output_releases_admission_and_falls_back (tests.test_ollama_advisor.OllamaTests.test_complete_but_invalid_model_output_releases_admission_and_falls_back) ... ok
+test_connect_failure_before_delivery_does_not_quarantine (tests.test_ollama_advisor.OllamaTests.test_connect_failure_before_delivery_does_not_quarantine) ... ok
+test_dynamic_schema_excludes_execution_and_unknown_ids (tests.test_ollama_advisor.OllamaTests.test_dynamic_schema_excludes_execution_and_unknown_ids) ... ok
+test_exact_endpoint_no_tools_credentials_redirects_or_proxies (tests.test_ollama_advisor.OllamaTests.test_exact_endpoint_no_tools_credentials_redirects_or_proxies) ... ok
+test_incomplete_or_lost_response_quarantines_across_new_transport (tests.test_ollama_advisor.OllamaTests.test_incomplete_or_lost_response_quarantines_across_new_transport) ... ok
+test_malicious_question_and_private_snapshot_cannot_expand_model_authority (tests.test_ollama_advisor.OllamaTests.test_malicious_question_and_private_snapshot_cannot_expand_model_authority) ... ok
+test_oversized_input_never_posts_or_reserves (tests.test_ollama_advisor.OllamaTests.test_oversized_input_never_posts_or_reserves) ... ok
+test_passive_local_configuration_never_claims_credentials_or_live_generation (tests.test_ollama_advisor.OllamaTests.test_passive_local_configuration_never_claims_credentials_or_live_generation) ... ok
+test_production_selection_and_missing_state_are_explicit (tests.test_ollama_advisor.OllamaTests.test_production_selection_and_missing_state_are_explicit) ... ok
+test_strict_model_identity_and_durable_state (tests.test_ollama_advisor.OllamaTests.test_strict_model_identity_and_durable_state) ... ok
+test_terminal_length_or_tool_envelope_rejected_without_execution (tests.test_ollama_advisor.OllamaTests.test_terminal_length_or_tool_envelope_rejected_without_execution) ... ok
+test_concurrency_and_cancellation_do_not_duplicate_inference (tests.test_llm_advisor.TestLLMAdvisor.test_concurrency_and_cancellation_do_not_duplicate_inference) ... ok
+test_duplicate_keys_depth_size_and_secret_exception_are_rejected (tests.test_llm_advisor.TestLLMAdvisor.test_duplicate_keys_depth_size_and_secret_exception_are_rejected) ... ok
+test_fallback_is_explicit_and_unknown_is_not_ready (tests.test_llm_advisor.TestLLMAdvisor.test_fallback_is_explicit_and_unknown_is_not_ready) ... ok
+test_minimal_projection_and_question_redaction (tests.test_llm_advisor.TestLLMAdvisor.test_minimal_projection_and_question_redaction) ... ok
+test_real_adapter_interface_invoked_once_and_cache_is_actor_scoped (tests.test_llm_advisor.TestLLMAdvisor.test_real_adapter_interface_invoked_once_and_cache_is_actor_scoped) ... ok
+test_semantics_fail_closed (tests.test_llm_advisor.TestLLMAdvisor.test_semantics_fail_closed) ... ok
+test_stale_snapshot_never_calls_provider_and_output_rechecks_freshness (tests.test_llm_advisor.TestLLMAdvisor.test_stale_snapshot_never_calls_provider_and_output_rechecks_freshness) ... ok
+test_utf8_question_limit (tests.test_llm_advisor.TestLLMAdvisor.test_utf8_question_limit) ... ok
+test_http_request_has_no_tools_no_redirects_no_secret_context (tests.test_llm_advisor.TestResponsesTransport.test_http_request_has_no_tools_no_redirects_no_secret_context) ... ok
+test_http_tool_call_oversize_redirect_and_incomplete_are_rejected (tests.test_llm_advisor.TestResponsesTransport.test_http_tool_call_oversize_redirect_and_incomplete_are_rejected) ... ok
+test_csrf_origin_and_malformed_apply_are_client_errors (tests.test_setup_private_api.TestSetupPrivateAPI.test_csrf_origin_and_malformed_apply_are_client_errors) ... ok
+test_default_deny_and_fake_cookie_cannot_authenticate (tests.test_setup_private_api.TestSetupPrivateAPI.test_default_deny_and_fake_cookie_cannot_authenticate) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f3c0b0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f3c170>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142b9970>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142b99a0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142bb110>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142bb140>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_get_is_readonly_even_missing_runtime_schema_and_operation (tests.test_setup_private_api.TestSetupPrivateAPI.test_get_is_readonly_even_missing_runtime_schema_and_operation) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f36cc0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f34a70>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_malformed_snapshot_identifier_is_client_error (tests.test_setup_private_api.TestSetupPrivateAPI.test_malformed_snapshot_identifier_is_client_error) ... ok
+test_named_operator_recovers_owned_receipt_after_new_host_pairing (tests.test_setup_private_api.TestSetupPrivateAPI.test_named_operator_recovers_owned_receipt_after_new_host_pairing) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142e7230>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142e7260>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f29610>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f289b0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f298b0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f2b920>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13814331f40>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814331f70>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138143330e0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814333110>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13814333a40>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814333c20>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_plan_owner_project_and_path_fences (tests.test_setup_private_api.TestSetupPrivateAPI.test_plan_owner_project_and_path_fences) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142fe330>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142fe360>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381430da60>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381430da30>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381430f080>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381430f0b0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381430fbc0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381430faa0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f2a900>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f28290>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f4e780>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f4e960>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f4cef0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f4f620>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_policy_revocation_invalidates_old_snapshot_and_plan (tests.test_setup_private_api.TestSetupPrivateAPI.test_policy_revocation_invalidates_old_snapshot_and_plan) ... ok
+test_real_issued_snapshot_advice_plan_apply_and_durable_replay (tests.test_setup_private_api.TestSetupPrivateAPI.test_real_issued_snapshot_advice_plan_apply_and_durable_replay) ... ok
+test_snapshot_cannot_cross_actor_project_or_be_invented (tests.test_setup_private_api.TestSetupPrivateAPI.test_snapshot_cannot_cross_actor_project_or_be_invented) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13814331a60>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814331a30>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381430c260>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381430c8c0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142fd310>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142fecf0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138148b4800>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138148b4830>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138148b5910>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138148b5940>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138148b7020>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138148b6b70>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_staging_path_rebound_after_route_registration_is_used (tests.test_setup_private_api.TestSetupPrivateAPI.test_staging_path_rebound_after_route_registration_is_used) ... ok
+test_cache_is_bounded_and_invalidatable (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_cache_is_bounded_and_invalidatable) ... ok
+test_cancelled_capture_holds_admission_until_thread_exits (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_cancelled_capture_holds_admission_until_thread_exits) ... ok
+test_invalidation_during_capture_cannot_repopulate_cache (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_invalidation_during_capture_cannot_repopulate_cache) ... ok
+test_issued_expiry_and_changed_grants_do_not_reuse_cache (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_issued_expiry_and_changed_grants_do_not_reuse_cache) ... ok
+test_issued_snapshot_is_immutable_and_owner_policy_bound (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_issued_snapshot_is_immutable_and_owner_policy_bound) ... ok
+test_source_change_invalidates_cache_and_issued_id (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_source_change_invalidates_cache_and_issued_id) ... ok
+test_timeout_does_not_release_capture (tests.test_setup_diagnostics_regressions.DiagnosticGateRegressions.test_timeout_does_not_release_capture) ... ok
+test_action_lists_and_fingerprint_are_authorization_scoped (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_action_lists_and_fingerprint_are_authorization_scoped) ... ok
+test_binding_evidence_is_project_instance_scoped (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_binding_evidence_is_project_instance_scoped) ... ok
+test_canonical_registry_does_not_accept_phone_alias (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_canonical_registry_does_not_accept_phone_alias) ... ok
+test_corrupt_and_mismatched_control_fail_closed (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_corrupt_and_mismatched_control_fail_closed) ... ok
+test_invalid_git_head_never_passes (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_invalid_git_head_never_passes) ... ok
+test_large_terminal_blocked_history_does_not_occupy_new_active_or_free_slot (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_large_terminal_blocked_history_does_not_occupy_new_active_or_free_slot) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138148b4b30>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142fd790>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142fdb50>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381430dca0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381430ddf0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812f360c0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13812f35ac0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13812e9d9d0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814334380>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13814331940>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 13814332840>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_launcher_reservation_occupies_project_slot (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_launcher_reservation_occupies_project_slot) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142e09e0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142e0a10>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142e1b50>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142e1b80>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142d4530>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142d4e90>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138143767b0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138143767e0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 13814377890>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138143778c0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 1381437db20>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 1381437db50>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_memory_snapshot_is_readonly_and_size_bounded (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_memory_snapshot_is_readonly_and_size_bounded) ... ok
+test_missing_projection_table_is_unknown_even_without_assignments (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_missing_projection_table_is_unknown_even_without_assignments) ... ok
+test_missing_store_git_and_registry_never_report_ready (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_missing_store_git_and_registry_never_report_ready) ... ok
+test_native_active_state_is_read_and_no_files_change (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_native_active_state_is_read_and_no_files_change) ... ok
+test_native_corrupt_runtime_and_index_are_rejected (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_native_corrupt_runtime_and_index_are_rejected) ... ok
+test_no_implicit_store_from_state_base (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_no_implicit_store_from_state_base) ... ok
+test_older_store_without_launcher_table_keeps_native_facts_but_no_free_slot_claim (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_older_store_without_launcher_table_keeps_native_facts_but_no_free_slot_claim) ... ok
+test_overlarge_state_is_unknown_not_partially_ready (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_overlarge_state_is_unknown_not_partially_ready) ... ok
+test_project_git_uses_explicit_worktree_pointer_not_application (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_project_git_uses_explicit_worktree_pointer_not_application) ... ok
+test_project_resource_counts_ignore_foreign_rows (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_project_resource_counts_ignore_foreign_rows) ... ok
+test_tunnel_requires_matching_owned_marker_and_receipt (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_tunnel_requires_matching_owned_marker_and_receipt) ... ok
+test_uncheckpointed_wal_is_unavailable_without_sidecar_writes (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_uncheckpointed_wal_is_unavailable_without_sidecar_writes) ... ok
+test_unregistered_control_is_unavailable_even_if_schema_exists (tests.test_setup_diagnostics_regressions.DiagnosticProjectionRegressions.test_unregistered_control_is_unavailable_even_if_schema_exists) ... ok
+test_all_read_paths_share_image_admission_until_connection_close (tests.test_setup_diagnostics_regressions.SharedDatabaseAdmission.test_all_read_paths_share_image_admission_until_connection_close) ... ok
+test_a01_input_limits_and_rejections (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a01_input_limits_and_rejections) ... ok
+test_a01_snapshot_schema_and_status_invariants (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a01_snapshot_schema_and_status_invariants) ... ok
+test_a02_private_api_authentication_and_csrf (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a02_private_api_authentication_and_csrf) ... ok
+test_a02_public_gateway_denial (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a02_public_gateway_denial) ... ok
+test_a03_canonical_projects_and_isolation (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a03_canonical_projects_and_isolation) ... ok
+test_a04_passive_get_has_no_hidden_mutations (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a04_passive_get_has_no_hidden_mutations) ... C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:320: ResourceWarning: Unclosed <MemoryObjectSendStream at 138142e63f0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+C:\nqt37\v\Lib\site-packages\anyio\streams\memory.py:189: ResourceWarning: Unclosed <MemoryObjectReceiveStream at 138142e77d0>
+  warnings.warn(
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+ok
+test_a06_bounded_networking_and_cancellation (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a06_bounded_networking_and_cancellation) ... ok
+test_a07_secret_references_and_redaction (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a07_secret_references_and_redaction) ... ok
+test_a08_network_auth_expiry_facts_distinct (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a08_network_auth_expiry_facts_distinct) ... ok
+test_a22_no_hidden_destructive_setup_effects (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a22_no_hidden_destructive_setup_effects) ... ok
+test_a23_responsiveness_and_cache (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a23_responsiveness_and_cache) ... ok
+test_a24_git_telegram_tunnel_ownership (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a24_git_telegram_tunnel_ownership) ... ok
+test_a25_one_host_lifecycle (tests.test_setup_diagnostics.TestSetupDiagnosticsCore.test_a25_one_host_lifecycle) ... ok
+test_a02_private_ui_and_assets (tests.test_wizard_ui.TestWizardUI.test_a02_private_ui_and_assets) ... ok
+test_a02_public_gateway_denial (tests.test_wizard_ui.TestWizardUI.test_a02_public_gateway_denial) ... ok
+test_a18_xss_and_injection_immunity (tests.test_wizard_ui.TestWizardUI.test_a18_xss_and_injection_immunity) ... ok
+test_a21_russian_reusable_wizard_ux (tests.test_wizard_ui.TestWizardUI.test_a21_russian_reusable_wizard_ux) ... ok
+test_production_javascript_requests_and_retry_behavior (tests.test_wizard_ui.TestWizardUI.test_production_javascript_requests_and_retry_behavior) ... ok
+
+----------------------------------------------------------------------
+Ran 80 tests in 10.080s
+
+OK

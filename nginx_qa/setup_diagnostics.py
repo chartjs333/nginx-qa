@@ -218,6 +218,16 @@ def _diagnostic_environment(environment: Mapping[str, Any]) -> dict[str, Any]:
                  "NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF", "NGINX_QA_LAUNCHER_CONTROL_ADVISOR_KEY",
                  "TELEGRAM_BOT_TOKEN"):
         result[name] = bool(environment.get(name))
+    # Local advisory generation needs no API credential. Keep only validated
+    # configuration presence, never the model name or the original environment.
+    result["local_advisor_configured"] = False
+    if environment.get("NGINX_QA_SETUP_ADVISOR_PROVIDER") == "ollama":
+        from .setup_ollama_advisor import local_model_id
+        try:
+            local_model_id(environment.get("NGINX_QA_SETUP_ADVISOR_MODEL"))
+            result["local_advisor_configured"] = True
+        except ValueError:
+            pass
     return result
 
 
@@ -760,11 +770,16 @@ class DiagnosticSnapshotCollector:
         add("secrets.references", "PASS" if any(refs.values()) else "NOT_CONFIGURED",
             {"secrets." + k + "_reference_configured": v for k, v in refs.items()},
             error=None if any(refs.values()) else "NOT_CONFIGURED", observed=any(refs.values()), actions=("setup.open",))
-        provider = bool(self.environment.get("NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF")
-                        or self.environment.get("NGINX_QA_LAUNCHER_CONTROL_ADVISOR_KEY"))
+        provider_secret = bool(self.environment.get("NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF")
+                               or self.environment.get("NGINX_QA_LAUNCHER_CONTROL_ADVISOR_KEY"))
+        local_provider = bool(self.environment.get("local_advisor_configured")
+                              and (self.state_base or self.environment.get("NGINX_QA_STAGING_STATE_BASE")))
+        provider = provider_secret or local_provider
         add("provider.configuration", "PASS" if provider else "NOT_CONFIGURED",
-            {"provider.credential_configured": provider, "provider.live_auth_observed": False},
-            error=None if provider else "NOT_CONFIGURED", observed=provider, actions=("provider.probe",))
+            {"provider.credential_configured": provider_secret, "provider.live_auth_observed": False,
+             "provider.local_model_configured": local_provider, "provider.live_generation_observed": False},
+            error=None if provider else "NOT_CONFIGURED", observed=provider,
+            actions=("provider.probe",) if provider_secret else ("setup.open",))
         telegram = bool(refs["bot"] or self.environment.get("TELEGRAM_BOT_TOKEN"))
         add("telegram.configuration", "PASS" if telegram else "NOT_CONFIGURED",
             {"telegram.credential_configured": telegram, "telegram.live_auth_observed": False},
@@ -780,7 +795,7 @@ class DiagnosticSnapshotCollector:
         candidates = ["diagnostics.refresh", "setup.open"]
         if executor:
             candidates.extend(("worker.probe", "worker.bind"))
-        if provider:
+        if provider_secret:
             candidates.append("provider.probe")
         if telegram:
             candidates.append("telegram.probe")

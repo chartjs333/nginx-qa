@@ -1,0 +1,73 @@
+{
+  "kind": "local_advisor_implementation_and_component_qualification",
+  "status": "PASS",
+  "base_commit": "be1443c8f03e2e0875d8225979d9aa3a1a0a4ccc",
+  "assigned_branch": "agent/sdwn-20261104-tool-free-advisor",
+  "automated": {
+    "status": "PASS",
+    "tests": 80,
+    "duration_seconds": 14.937,
+    "modules": [
+      "tests.test_ollama_advisor",
+      "tests.test_llm_advisor",
+      "tests.test_setup_private_api",
+      "tests.test_setup_diagnostics_regressions",
+      "tests.test_setup_diagnostics",
+      "tests.test_wizard_ui"
+    ],
+    "log_sha256": "2f787001550a64ecf3168fd793092a7509922a80ca6eb57279445ad54e3d87de",
+    "exit_code": 0,
+    "original_log_sha256": "cf0f553a600de214749be422f7d24ae4f9a2a43bb878cc6b1d0a347f051950c2"
+  },
+  "live_cases": {
+    "normal_issued_snapshot": "PASS",
+    "malicious_question_unloaded_model": "PASS",
+    "caller_cancel_background_drain_and_admission": "PASS",
+    "same_key_replay": "PASS"
+  },
+  "provider": {
+    "provider": "ollama",
+    "version": "0.40.11",
+    "endpoint": "http://127.0.0.1:11434",
+    "model": "qwen2.5:7b",
+    "observed_digest": "845dbda0ea48ed749caafd9e6037047aa19acfcfd82e704d7ca97d631a0b697e",
+    "size": 4683087332,
+    "format": "gguf",
+    "kind": "observed_metadata_not_cryptographic_runtime_attestation"
+  },
+  "source_sha256": {
+    "nginx_qa/setup_advisor.py": "b16572d53b2686ee079a7cb8ca8b0d43d082e82b4258d4f7f44a25067e6a04da",
+    "nginx_qa/setup_ollama_advisor.py": "672a8c13fa22126312e54f26992aa7d721973e5254dc92e2c4179cdd72461421",
+    "nginx_qa/setup_diagnostics.py": "4be8e881e0f6118140a00eeb0762d000051e413b0840664c1e75f10089b37e9b",
+    "nginx_qa/setup_diagnostics_api.py": "70627930219ba9d958c3f53233334c5476f8fd9b38eaccb2c287c5b2ef654580",
+    "nginx_qa/static/setup.js": "d99f49060be62f29b7295e3e23491d79f9baf2c11508101ddeca8263270b3ef6",
+    "tests/test_ollama_advisor.py": "47fbd8a1102999d0005e31c512609e944f77d5c5abdfcf1109f18b3fa4b63809",
+    "tests/live_ollama_advisor.py": "900d3ece933e7823d26c822c635517a935e76869d05cc1a4892632fe74c8cd66"
+  },
+  "evidence_sha256": {
+    "advisor-live-normal-final.json": "a1b74a683e99ae5226a847ffc5552e8a7213cb65295507ddc4f3b03e313ad220",
+    "advisor-live-malicious-final.json": "ff1466687e693c7a04e0f2c6640d776427190e0af58de27e76ce6a488178641a",
+    "advisor-live-cancellation-final.json": "baa37b8734e6231c63819a3193f5212618b0e6c52793f27342964864e92771ec",
+    "advisor-final-tests.json": "5e103454779ba59d5386376b5a1f9ce6976fc029d2486d10d29aab37bc06af30",
+    "advisor-final-tests.log": "2f787001550a64ecf3168fd793092a7509922a80ca6eb57279445ad54e3d87de",
+    "advisor-provider-observation.json": "c3811068068d54011b9367fe22357817c6f95e84c42834ca951050ad1fdcd256"
+  },
+  "scope_limits": [
+    "Production SetupAdvisor component with real issued snapshots and real local model; newly deployed privateHTTP/browser acceptance belongs to following stage6903.",
+    "Local GGUF metadata validates configuration of a trusted local service, not cryptographic attestation.",
+    "Natural-language recommendations are not authoritative diagnostic facts or executed actions.",
+    "Timeout/lost response/crash leaves durable unresolved marker until operator reconciliation; no provider process kill is claimed.",
+    "No new API keys, provider downloads, native sprint starts, results, reviews or database mutations.",
+    "Model keepalive may retain memory for2minutes; one owned host state bounds its own requests, not all clients of the shared Ollama service."
+  ],
+  "prior_evidence_preserved": "Original pre-wording normal/malicious/cancellation journal files retained; final runtime evidence above supersedes them.",
+  "original_evidence_sha256": {
+    "advisor-live-normal-final.json": "381753978102225939c46278347efdead897cacb21b42973b87fe7a4f7733059",
+    "advisor-live-malicious-final.json": "1f525596ccd2297bfbc2d928a12b74bfba1d5020a680200b4e82f79eade1a781",
+    "advisor-live-cancellation-final.json": "e4fb08037b7ad27732c259d6c5fe33fe6f7e1503096d28b4515b69302ba68f53",
+    "advisor-final-tests.json": "17339d33bde2f73805a52cbbb64f7a1bdddc8cc3b83294fe995120cc2c1cf02a",
+    "advisor-final-tests.log": "cf0f553a600de214749be422f7d24ae4f9a2a43bb878cc6b1d0a347f051950c2",
+    "advisor-provider-observation.json": "3f3828d93df79d33c63e34d2cb753ff8871ff9bed25a09f7ebf7697fbccf3713"
+  },
+  "evidence_normalization": "Delivered text evidence uses LF, exact original bytes remain in the protected operator journal. Source hash pins are unchanged."
+}

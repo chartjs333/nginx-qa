@@ -16,6 +16,7 @@ import threading
 from typing import Any, Awaitable, Callable, Mapping
 import jsonschema
 from .control_secrets import trusted_control_resolver
+from .setup_ollama_advisor import OllamaAdmissionError
 from .setup_diagnostics import (
     ACTION_IDS, CHECK_STATUSES, CHECK_SCOPES, ERROR_CODES,
     get_contracts_schema, redact_secrets, parse_strict_json_with_limits,
@@ -160,9 +161,10 @@ class SetupAdvisor:
     """Rate-limited, idempotent advisor. A fallback is never a model success."""
 
     def __init__(self, *, environment: Mapping[str, str] | None = None,
-                 transport: Callable[..., Awaitable[str]] | None = None):
+                 transport: Callable[..., Awaitable[str]] | None = None, state_dir=None):
         self.env = environment if environment is not None else os.environ
         self.transport = transport
+        self.state_dir = state_dir
         self._lock = threading.Lock()
         self._active = set()
         self._cache = OrderedDict()
@@ -174,6 +176,10 @@ class SetupAdvisor:
             self.env.get("NGINX_QA_SETUP_ADVISOR_PROVIDER") == "responses"
             and bool(self.env.get("NGINX_QA_SETUP_ADVISOR_MODEL"))
             and bool(self.env.get("NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF"))
+        ) or (
+            self.env.get("NGINX_QA_SETUP_ADVISOR_PROVIDER") == "ollama"
+            and bool(self.env.get("NGINX_QA_SETUP_ADVISOR_MODEL"))
+            and self.state_dir is not None
         )
 
     def allowed_proposals(self, snapshot):
@@ -318,12 +324,22 @@ class SetupAdvisor:
                 with self._lock:
                     self._count += 1
                 try:
-                    transport = self.transport or ResponsesAdviceTransport(
-                        model=self.env["NGINX_QA_SETUP_ADVISOR_MODEL"],
-                        secret_ref=self.env["NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF"])
-                    async with asyncio.timeout(30):
+                    if self.transport is None and self.env.get("NGINX_QA_SETUP_ADVISOR_PROVIDER") == "ollama":
+                        from .setup_ollama_advisor import OllamaAdviceTransport
+                        transport = OllamaAdviceTransport(model=self.env["NGINX_QA_SETUP_ADVISOR_MODEL"],
+                                                         state_dir=self.state_dir)
+                        # The local adapter owns its cold-load deadline and durable
+                        # admission. Caller cancellation drains in its bounded task.
                         raw = await transport(self.project_minimal_facts(snapshot), question)
+                    else:
+                        transport = self.transport or ResponsesAdviceTransport(
+                            model=self.env["NGINX_QA_SETUP_ADVISOR_MODEL"],
+                            secret_ref=self.env["NGINX_QA_LAUNCHER_ADVISOR_SECRET_REF"])
+                        async with asyncio.timeout(30):
+                            raw = await transport(self.project_minimal_facts(snapshot), question)
                     result = self.validate_model_advice(raw, snapshot)
+                except OllamaAdmissionError:
+                    result = self.generate_deterministic_advice(snapshot, reason="LOCAL_PROVIDER_ACTIVE_OR_UNRESOLVED")
                 except Exception:
                     result = self.generate_deterministic_advice(snapshot, reason="PROVIDER_UNAVAILABLE_OR_INVALID")
             return deepcopy(result)

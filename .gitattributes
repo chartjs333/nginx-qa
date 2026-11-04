@@ -9,3 +9,13 @@ scripts/install_wsl_worker.py text eol=lf
 tests/test_managed_wsl_runner.py text eol=lf
 tests/wsl_runtime_qualification.py text eol=lf
 tests/wsl_cli_smoke.py text eol=lf
+
+# Advisor evidence identifies the exact deployed source bytes.
+nginx_qa/setup_advisor.py text eol=lf
+nginx_qa/setup_ollama_advisor.py text eol=lf
+nginx_qa/setup_diagnostics_api.py text eol=lf
+nginx_qa/setup_diagnostics.py text eol=lf
+nginx_qa/static/setup.js text eol=lf
+tests/test_ollama_advisor.py text eol=lf
+tests/live_ollama_advisor.py text eol=lf
+docs/setup-diagnostics-wizard-v1/evidence/local-advisor/** text eol=lf
