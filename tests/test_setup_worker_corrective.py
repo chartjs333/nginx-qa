@@ -489,6 +489,60 @@ class ManagedClientProtocolCorrections(unittest.TestCase):
                                "initial_assignment_ids": ["assignment-not-live"]})
         self.assertEqual(self.runner.calls, [])
 
+    def retained_author_after_failed_publication(self):
+        ready = self.client.prepare(self.descriptor)
+        sid = ready["client_session_id"]
+        with patch.object(self.client, "_publish_commit", side_effect=TimeoutError("fixture publication timeout")):
+            self.client.start({**self.descriptor, "client_session_id": sid,
+                               "initial_assignment_ids": ["assignment-one"]})
+            self.client.threads[sid].join(10)
+        attempt = self.client.state["sessions"][sid]["assignments"]["assignment-one"]
+        self.assertEqual(attempt["phase"], "OUTPUT_READY")
+        self.assertEqual(attempt["validated_commit"], self.git("-C", str(self.workspace), "rev-parse", "HEAD"))
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.api.submissions, [])
+        return sid
+
+    def test_publication_timeout_restart_reuses_validated_author_then_two_reviews(self):
+        sid = self.retained_author_after_failed_publication()
+        output = deepcopy(self.client.state["sessions"][sid]["assignments"]["assignment-one"]["validated_output"])
+        self.client.lockfile.close()
+        self.client = ManagedCodexClient(self.config, runner=self.runner, api=self.api, resolver=lambda ref: TOKEN)
+        self.client.resume()
+        self.client.threads[sid].join(10)
+        self.assertEqual(self.client.state["sessions"][sid]["phase"], "TERMINAL", self.client.state)
+        self.assertEqual([call["schema"]["title"] for call in self.runner.calls], ["author", "review", "review"])
+        self.assertEqual(self.api.submissions[0]["result"], output["summary"])
+        self.assertEqual(self.git("--git-dir", str(self.remote), "rev-parse", "refs/heads/agent/selftest-author"),
+                         self.api.submissions[0]["git_commit"])
+
+    def test_retained_output_rejects_dirty_files_commit_drift_and_changed_authority(self):
+        sid = self.retained_author_after_failed_publication()
+        document = self.workspace / "docs/selftest.md"
+        document.write_text("Changed after validated author finished.\n")
+        with self.assertRaisesRegex(ValueError, "CLIENT_VALIDATED_OUTPUT_CHANGED"):
+            self.client._execute(sid, "7101", deepcopy(self.api.author))
+        self.git("-C", str(self.workspace), "add", "docs/selftest.md")
+        self.git("-C", str(self.workspace), "commit", "-m", "fixture unassigned drift")
+        with self.assertRaisesRegex(ValueError, "CLIENT_VALIDATED_OUTPUT_CHANGED"):
+            self.client._execute(sid, "7101", deepcopy(self.api.author))
+        self.api.author["assignment"]["allowed_outcomes"] = ["DONE", "BLOCKED_EXTERNAL"]
+        with self.assertRaisesRegex(ValueError, "CLIENT_ASSIGNMENT_AUTHORITY_CHANGED"):
+            self.client._execute(sid, "7101", deepcopy(self.api.author))
+        self.assertEqual(len(self.runner.calls), 1)
+        self.assertEqual(self.api.submissions, [])
+
+    def test_configured_pushurl_must_match_operator_repository_before_execution(self):
+        self.git("-C", str(self.workspace), "remote", "set-url", "--push", "origin", "https://example.invalid/unapproved.git")
+        ready = self.client.prepare(self.descriptor)
+        sid = ready["client_session_id"]
+        self.client.start({**self.descriptor, "client_session_id": sid,
+                           "initial_assignment_ids": ["assignment-one"]})
+        self.client.threads[sid].join(10)
+        self.assertEqual(self.client.state["sessions"][sid]["last_error"], "CLIENT_REPOSITORY_MISMATCH")
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.api.submissions, [])
+
     def test_wrong_sprint_same_project_and_phones_is_rejected_before_ready(self):
         wrong = {**self.descriptor, "sprint_id": "msv1-" + "f" * 64}
         with self.assertRaisesRegex(ValueError, "SPRINT_PROVENANCE_MISMATCH"):

@@ -168,9 +168,27 @@ agent's permission profile, thread/session identity and custom Codex home. Exist
 login is read from the service account's default Codex home. Git commits/pushes are restricted to the assigned branch and exact
 documentation allowlist; there is no force push/reset.
 
+For a verified `git://` origin on Windows, publication applies
+`-c sendpack.sideband=false` to that command only. Git for Windows 2.49.0's
+installed release notes document the protocol deadlock in
+[upstream issue #907](https://github.com/git-for-windows/git/issues/907).
+An actual disposable daemon push reproduced the hang with both ordinary
+subprocess execution and Windows Jobs; dry-run did not exercise pack transfer.
+The command-scoped workaround completed the same transfer while preserving Job
+limits. Repository/global Git settings and other transports are unchanged.
+Fetch URL and every configured push URL must match the operator-pinned origin.
+After a successful push, the exact remote branch SHA must match the validated
+commit before a native result is submitted. This matters because disabling
+side-band can delay or suppress remote diagnostic text.
+
 A process crash kills Jobs without inherited handles. Restart reclaims only
 recorded owned Jobs, resumes accepted client sessions, and replays immutable
 submission payloads through the native idempotency contract.
+Before Git publication, the author output and locally validated commit are
+checkpointed as `OUTPUT_READY`. A publication failure/restart reuses this exact
+output without rerunning the author. Resume requires unchanged native authority,
+configuration, scope, root/branch/origin, exact HEAD and clean allowed files; drift
+blocks publication. Failures before this checkpoint still require reconciliation.
 The retained SUBMITTING payloads are replayed before polling new role identities,
 because the author's identity may disappear as soon as the native result is
 accepted. Replays keep the exact original payload and are fenced by session stop,
@@ -185,6 +203,7 @@ automatic session restart. The JSON journal must be protected as operator state.
 
 ```powershell
 C:/Python312/python.exe -m unittest tests.test_worker_connection_selftest tests.test_setup_worker_corrective -v
+C:/Python312/python.exe -m unittest tests.test_managed_client_git_transport -v
 ```
 
 These tests cover authenticated wire receipts, malformed capability rejection,

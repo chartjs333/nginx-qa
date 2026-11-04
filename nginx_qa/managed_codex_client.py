@@ -592,9 +592,29 @@ class ManagedCodexClient:
         branch = workspace["assigned_branch"]
         if branch is None or not branch.startswith(project["branch_prefix"]) or self._git(root, "branch", "--show-current") != branch:
             raise ValueError("CLIENT_BRANCH_IDENTITY_MISMATCH")
-        if self._git(root, "remote", "get-url", "origin") != project["repository_url"]:
+        if (self._git(root, "remote", "get-url", "origin") != project["repository_url"]
+                or self._git(root, "remote", "get-url", "--push", "--all", "origin") != project["repository_url"]):
             raise ValueError("CLIENT_REPOSITORY_MISMATCH")
         return root
+
+    def _publish_commit(self, root, branch, commit, repository_url):
+        if (self._git(root, "remote", "get-url", "origin") != repository_url
+                or self._git(root, "remote", "get-url", "--push", "--all", "origin") != repository_url):
+            raise ValueError("CLIENT_REPOSITORY_MISMATCH")
+        # Git for Windows issue #907: git:// side-band can deadlock pack-objects.
+        # Apply the documented workaround only to this verified transport and
+        # command, never repository/global config or other transports.
+        options = ("-c", "sendpack.sideband=false") if os.name == "nt" and repository_url.startswith("git://") else ()
+        ref = "refs/heads/" + branch
+        self._git(root, *options, "push", "origin", "HEAD:" + ref)
+        if self._git(root, "ls-remote", "--heads", "origin", ref) != commit + "\t" + ref:
+            raise ValueError("CLIENT_REMOTE_COMMIT_UNPROVEN")
+
+    @staticmethod
+    def _authority_fingerprint(identity):
+        return digest({key: identity.get(key) for key in
+                       ("managed", "project_id", "sprint_id", "assignment_kind", "assignment", "workspace")} |
+                      {"scope_context": (identity.get("effective_scope") or {}).get("scope_context")})
 
     def _changed_docs(self, root, project):
         raw = self._git(root, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")
@@ -773,19 +793,27 @@ class ManagedCodexClient:
         if len(prompt.encode()) > 256000:
             raise ValueError("CLIENT_PROMPT_LIMIT")
         job_name = "Local\\nq-codex-" + digest([session_id, assignment_id])[:40]
-        attempt = {"phase": "EXECUTING", "phone": phone, "kind": kind, "job_name": job_name,
-                   "workspace_root": str(root), "task": task}
-        with self.lock:
-            session["assignments"][assignment_id] = attempt
-            self._save()
-        output = self.runner.run(cwd=root, prompt=prompt, schema=schema,
-            directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop)
+        authority = self._authority_fingerprint(identity)
+        if previous and previous.get("phase") == "OUTPUT_READY":
+            if kind != "assignment" or previous.get("authority_fingerprint") != authority:
+                raise ValueError("CLIENT_ASSIGNMENT_AUTHORITY_CHANGED")
+            if (self._git(root, "rev-parse", "HEAD") != previous.get("validated_commit")
+                    or self._changed_docs(root, project)):
+                raise ValueError("CLIENT_VALIDATED_OUTPUT_CHANGED")
+            attempt, output = previous, deepcopy(previous["validated_output"])
+        else:
+            attempt = {"phase": "EXECUTING", "phone": phone, "kind": kind, "job_name": job_name,
+                       "workspace_root": str(root), "task": task}
+            with self.lock:
+                session["assignments"][assignment_id] = attempt
+                self._save()
+            output = self.runner.run(cwd=root, prompt=prompt, schema=schema,
+                directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop)
+        jsonschema.Draft202012Validator(schema).validate(output)
         if stop.is_set():
             return
         current = self.api.identity(descriptor["project_id"], phone)
-        if (current.get("assignment") != identity["assignment"]
-                or current.get("sprint_id") != identity["sprint_id"]
-                or (current.get("effective_scope") or {}).get("scope_context") != (scope or {}).get("scope_context")):
+        if self._authority_fingerprint(current) != authority:
             raise ValueError("CLIENT_ASSIGNMENT_AUTHORITY_CHANGED")
         if kind == "review":
             if self._git(root, "rev-parse", "HEAD") != assignment["result_commit"] or self._git(root, "status", "--porcelain"):
@@ -804,7 +832,17 @@ class ManagedCodexClient:
             self._committed_docs(root, project, assignment["initial_head_commit"])
             self._submission_fence(session_id)
             branch = identity["workspace"]["assigned_branch"]
-            self._git(root, "push", "origin", "HEAD:refs/heads/" + branch)
+            # A publication timeout must not discard a completed author result.
+            # Resume revalidates native authority, exact HEAD, scope and a clean
+            # worktree before publishing the same result, without rerunning it.
+            with self.lock:
+                attempt.update(phase="OUTPUT_READY", validated_output=deepcopy(output),
+                    validated_commit=commit, authority_fingerprint=authority)
+                self._save()
+            if self._authority_fingerprint(self.api.identity(descriptor["project_id"], phone)) != authority:
+                raise ValueError("CLIENT_ASSIGNMENT_AUTHORITY_CHANGED")
+            self._submission_fence(session_id)
+            self._publish_commit(root, branch, commit, project["repository_url"])
             payload = {"assignment_id": assignment_id, "status": output["status"], "result": output["summary"],
                        "from_commit": assignment["initial_head_commit"], "git_commit": commit, "git_branch": branch}
         if scope:
