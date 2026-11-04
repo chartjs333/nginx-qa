@@ -1,0 +1,213 @@
+{
+  "schema_version": 1,
+  "sprint_type": "managed_workspace_v1",
+  "git_address": "https://github.com/chartjs333/nginx-qa.git",
+  "git": {
+    "source_ref": "refs/heads/codex/setup-diagnostics-wizard-v1",
+    "expected_source_commit": "d4f415b5cf2d0944344b1a3bce074257588fbfc7",
+    "assigned_branch": "agent/sdwu-20261104-root",
+    "existing_branch_policy": "create"
+  },
+  "execution": {
+    "mode": "sequential",
+    "start_node": "ui-recovery",
+    "required_approvals": 2,
+    "max_rework_cycles": 5,
+    "reviewers": [
+      {
+        "id": "sdwu-20261104-runtime-reviewer",
+        "name": "Independent Reviewer / Runtime and UX",
+        "phone": "7081",
+        "git_branch": "review/sdwu-20261104-runtime",
+        "profile": "Независимо проверяй exact result commit, existing engine reuse, реальные worker/provider capabilities, deterministic diagnostics, ownership/state/idempotency, UX, regressions и тесты. Не используй approval другого Reviewer как доказательство. REJECT с воспроизводимым дефектом; новый commit требует нового review. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      },
+      {
+        "id": "sdwu-20261104-security-reviewer",
+        "name": "Independent Reviewer / Security and Evidence",
+        "phone": "7082",
+        "git_branch": "review/sdwu-20261104-security",
+        "profile": "Независимо проверяй exact result commit, ACL/secret boundaries, SSRF/injection, LLM advisory-only, typed allowlist, stale-plan/current-policy fences, public gateway isolation, отсутствие скрытых мутаций и честность real vs fixture evidence. Не автор кода; не выдавай свои решения через другого агента. REJECT при обходе или недоказанной приёмке. Independently inspect actual code and execute meaningful defect probes. An automated green test runner is not sufficient to issue APPROVE. Do not submit another reviewer decision or trust their conclusion."
+      }
+    ]
+  },
+  "workspace_policy": {
+    "reject_parent_repository": true,
+    "dirty_policy": "coordinator",
+    "diverged_branch_policy": "coordinator"
+  },
+  "process_policy": {
+    "host": "127.0.0.1",
+    "restart_policy": "never",
+    "max_restart_attempts": 0
+  },
+  "coordinator": {
+    "node_id": "continuity-coordinator",
+    "routes": {
+      "STOP": "continuity-coordinator",
+      "NEED_DECISION": "continuity-coordinator"
+    }
+  },
+  "nodes": [
+    {
+      "id": "ui-recovery",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwu-20261104-ui-recovery",
+        "name": "ui-recovery",
+        "phone": "7001",
+        "profile": "User renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWU-001",
+          "queue": "worker-all",
+          "message": "Reproduce and fix the original SDW-006/A21/E03 rejected-Apply UI recovery defect. setup.js catch currently treats explicit stale/context/auth errors as lost responses and retains a modal plan that disables refresh/project/session-check. Build exact existing-backend behavior evidence before changing classification. PLAN_STALE is distinct from ambiguous network/5xx, and403 is NOT automatically proof of no effect: API rechecks read authorization after the manager has applied, and an earlier response may have been lost. Preserve original request/plan/key until a genuinely authoritative receipt or definite nonexecution is established; never create duplicate effects or imply cancelling an already-issued operation. Audit Escape/Cancel/reload alongside recovery so a user can regain diagnostics/session and resolve an uncertain operation without silently losing its key. Re-auth/current-owner/project fences remain server-authoritative; no automatic Apply. Add meaningful behavior/browser regression tests for definite stale, expired auth, revoked permission, busy/context and lost/late response with exact key retention and no double effect. Cover keyboard focus/modal and narrow viewport if related defects appear. Use current API error contracts; change backend only if necessary for an unambiguous safe contract. For safe later installation, add only the exact wizard-only DeploymentBranch allowlist entry codex/sdw-qualified-ui-recovery-20261104 with default/origin/remoteSHA/owner checks unchanged and targeted allow/reject tests. Do not deploy or stop services in this implementation stage. Publish exact assigned result with honest real-vs-fixture evidence.\n\nUser renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwu-20261104-ui-recovery",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "DONE": "qualification",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "qualification",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwu-20261104-qualification",
+        "name": "qualification",
+        "phone": "7002",
+        "profile": "User renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWU-002",
+          "queue": "worker-all",
+          "message": "Independently qualify the accepted UI recovery change and finish missing E03 cases. Safely upgrade only owned D:/nq-sdw-launcher/C37/18038 and its idle client18039 to a new exact immutable codex/sdw-qualified-ui-recovery-20261104 product commit, preserving old host branches, protected consistent backups, initialization ID and native history. Use established held-handle/image/argv/birth/console identity proof; no raw PID kill or global WSL/Ollama changes. Version/pin new startup/pair/stop helpers in this journal, retain historical helpers and repin unchanged stable client coherently. Real Edge tests must cover mobile-width and keyboard, evidence visibility, explicit stale-plan rejection and recovery, reconnect/re-auth, plan/cancel/apply and exact receipt after reload. Distinguish true live backend/expiry/session cases from routed fault fixtures for busy/revocation/ambiguous response; both are useful but labels must be honest. Do not revoke other operators or damage current policy to manufacture a test. Real wall-clock plan expiry is available. Preserve original key across uncertain outcomes, verify exactly one operation after recovery, no automatic mutation. Recheck narrow public gateway deny and actual source/recipient ownership. Relevant focused regressions plus unchanged-code provenance; no unnecessary new autonomous model sprint. Run one actual local advisor UI request if affected rendering needs it, with no tools. Record each original E01-E04 requirement versus actual current and inherited evidence and exact remaining external deployment inputs. PASS requires the original actionable UI gap fixed and usable installed UI.\n\nUser renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwu-20261104-qualification",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "PASS": "release",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "FAIL": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "release",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwu-20261104-release",
+        "name": "release",
+        "phone": "7003",
+        "profile": "User renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWU-003",
+          "queue": "worker-all",
+          "message": "Deliver the fully reviewed UI recovery supplement and current original-requirements acceptance map. Update current operator commands and stable D:/nq-sdw-delivery via clean verified fast-forward, publish exact existing draftPR18 head, prepare final PRbody, no main/PR merge. Preserve historical d4f415 acceptance evidence and mark the concrete UI followup as corrected only after evidence exists. Include simple current start/login/stop commands, safe restart/rollback and user-facing scope. Every changed product commit must be actually qualified and independently reviewed; final docs-only tail may point to immutable installed product SHA. Do not preclaim future release reviews/terminal completion in pre-review source artifacts. Root writes final observed report after actual GO plus two reviews. No broad retesting or new model runs for unchanged accepted components; meaningful new startup/contract changes must be checked.\n\nUser renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwu-20261104-release",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "GO": "done",
+        "STOP": "continuity-coordinator",
+        "NEED_DECISION": "continuity-coordinator",
+        "NO_GO": "continuity-coordinator"
+      }
+    },
+    {
+      "id": "continuity-coordinator",
+      "type": "task",
+      "activation_policy": "any_parent",
+      "agent": {
+        "id": "sdwu-20261104-coordinator",
+        "name": "Continuity Coordinator",
+        "phone": "7000",
+        "profile": "User renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+      },
+      "tasks": [
+        {
+          "task_id": "SDWU-004",
+          "queue": "worker-all",
+          "message": "Resolve genuine failures through native recovery/repair, preserve accepted history and exact reviews. Exhaust safe available fixes; do not close as complete for blocked status.\n\nUser renewed instruction to finish all work while absent and run agents sequentially. This supplemental sprint fixes a concrete original SDW-006/A21/E03 gap found after the accepted local release. Use only existing Managed Sprint Engine, issued workspace/branch and actual native result/review APIs; two genuine independent exact-result reviews per node. Preserve completed accepted history, one active canonical project9000, main and unrelated services. Do not edit native SQLite, fabricate browser evidence, bypass ownership/auth/idempotency or start model/native jobs unnecessarily. Existing R4 genuine author+two model reviews and local Ollama qualification remain valid for unchanged code. Known actual Telegram credentials/actor/physical phone are missing external deployment inputs, not permission requests. General coding is not required by the initial small-selftest docs-only milestone. No merge to main; publish assigned branches and existing draftPR18 only. Current stable source D:/nq-sdw-delivery at d4f415b; installed product a1841e420a517dfdb9ed2c5a4b44eaeb6b3286ca in D:/nq-sdw-launcher, stateC:/nqt37. Preserve old qualified host branches and helper/evidence journals."
+        }
+      ],
+      "workspace": {
+        "access": "write",
+        "git": {
+          "assigned_branch": "agent/sdwu-20261104-continuity",
+          "existing_branch_policy": "create"
+        }
+      },
+      "transitions": {
+        "RESUME_1": "ui-recovery",
+        "RESUME_2": "qualification",
+        "RESUME_3": "release",
+        "BLOCKED_EXTERNAL": "blocked-external",
+        "FAILED": "failed"
+      }
+    },
+    {
+      "id": "done",
+      "type": "terminal",
+      "status": "DONE",
+      "message": "Мастер реализован и принят с доказательствами."
+    },
+    {
+      "id": "blocked-external",
+      "type": "terminal",
+      "status": "BLOCKED_EXTERNAL",
+      "message": "Результаты сохранены; нужны документированные внешние условия."
+    },
+    {
+      "id": "failed",
+      "type": "terminal",
+      "status": "FAILED",
+      "message": "Невосстановимый дефект или исчерпанный rework; evidence сохранена."
+    }
+  ],
+  "files": [
+    {
+      "path": "schemas/managed-workspace-sprint-v1.schema.json",
+      "sha256": "7782d7c6752466a62bd3578f6c6da2cd1cf762d34e92ff9eae38e470fd5fda25"
+    },
+    {
+      "path": "docs/universal-managed-sprint-contract.md",
+      "sha256": "d7b4c6c12e3aadc03018b3a8cbc1f989f278784fad151d9dfe24e7366123a146"
+    }
+  ],
+  "planning": {
+    "title": "Setup wizard stale/auth/ambiguous UI recovery and original E03 qualification",
+    "source_commit": "d4f415b5cf2d0944344b1a3bce074257588fbfc7",
+    "previous_sprint_id": "msv1-4a331eaa6c4b4ea9dea1c754eea483062420bedfdd5dc04d424cdd9615aa18be",
+    "implementation_acceptance": "NOT_RUN",
+    "live_acceptance": "NOT_RUN",
+    "independent_reviewers": 2,
+    "finding": "Original SDW-006/A21/E03: stale/revoked errors treated as lost response and recovery controls disabled; missing real mobile/keyboard/recovery coverage."
+  }
+}
