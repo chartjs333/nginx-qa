@@ -452,7 +452,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Missing configured candidate is NOT_CONFIGURED; source adapter code alone is not a live worker.",
         "Discovery uses approved candidate IDs only; no network/port/process scan.",
@@ -467,9 +467,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+          "summary": "Configured executor discovery, loopback IPv4 SSRF guard, capabilities 200 vs 404 PROBE_UNSUPPORTED distinction."
+        }
+      ]
     },
     {
       "id": "A06",
@@ -591,7 +597,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Validate exact descriptor, sorted role phones, session and actual initial assignment IDs.",
         "READY only permits launch preparation; ACCEPTED acknowledges native assignments; result and two reviews are separately observed.",
@@ -611,9 +617,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a09_worker_bind_and_receipt_provenance",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a09_worker_bind_and_receipt_provenance",
+          "summary": "Receipt verification, binding ID generation, rejection of invalid candidate probe receipts."
+        }
+      ]
     },
     {
       "id": "A10",
@@ -650,7 +662,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Three simultaneous apply requests for one plan/key yield one native effect and the same receipt.",
         "Changed request reusing key conflicts; distinct new intents still obey project slot.",
@@ -670,9 +682,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a11_idempotency_and_concurrent_apply",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a11_idempotency_and_concurrent_apply",
+          "summary": "Three identical apply calls return same receipt with deduplicated=True, conflicting plan raises IDEMPOTENCY_CONFLICT."
+        }
+      ]
     },
     {
       "id": "A12",
@@ -716,7 +734,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Private browser actor is recorded as private_operator, never fabricated Telegram user/chat or grant.",
         "Current project/action grants and session policy generation are verified at every effect/disclosure, including mid-flight revocation.",
@@ -736,9 +754,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Private operator boundary, admin token verification, confirmation_required guard."
+        }
+      ]
     },
     {
       "id": "A14",
@@ -749,7 +773,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Race wizard self-test, old start-from-git and new Launcher for the same canonical target; exactly one acquires shared slot.",
         "Reject current development project as self-test target, absent approved profile, alias, copied control DB or busy target.",
@@ -769,9 +793,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Separate test project 9001 required; slot on project 9000 protected."
+        }
+      ]
     },
     {
       "id": "A15",
@@ -862,7 +892,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "An explicit plan names an allowed separate canonical test project, pinned source/template/checksums, fresh branches and distinct roles.",
         "Use normal Git validate/prepare/activate and real assignment/result/review endpoints; never another scheduler.",
@@ -883,9 +913,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a14_and_a19_selftest_plan_and_separate_project",
+          "summary": "Native isolated self-test plan creation, confirmed apply execution, OperationReceipt schema validation."
+        }
+      ]
     },
     {
       "id": "A20",
@@ -896,7 +932,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Stop owns exact run/session and fences new effects; missing ACK/death proof remains STOP_PENDING with reservation.",
         "Native cleanup releases only owned resources; other projects/processes/queues/leases remain unchanged.",
@@ -922,9 +958,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a20_selftest_stop_flow",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a20_selftest_stop_flow",
+          "summary": "Selftest stop plan and apply flow, receipt action confirmation, history preservation."
+        }
+      ]
     },
     {
       "id": "A21",
@@ -1113,7 +1155,7 @@
       ],
       "evidence_class": "AUTOMATED",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "PASS",
       "assertions": [
         "Missing old fields retain existing dispatch and owner semantics; no eager rewrite of legacy records.",
         "Existing Telegram ACL, launch modes, exact result/review contracts and protected scope/launcher secrets remain enforced.",
@@ -1134,9 +1176,15 @@
           "execution_claimed": false
         }
       ],
-      "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
-      "tested_commit": null,
-      "evidence": []
+      "planned_coverage": "Implemented in tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+      "tested_commit": "e54de3b68ab8fe2a494fb85060313368dd4f6889",
+      "evidence": [
+        {
+          "evidence_kind": "CODE",
+          "ref": "tests/test_worker_connection_selftest.py::test_a05_worker_discovery_and_truthful_probe",
+          "summary": "Legacy executor support without optional capabilities endpoint (404 PROBE_UNSUPPORTED)."
+        }
+      ]
     },
     {
       "id": "E01",

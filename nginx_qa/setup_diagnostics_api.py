@@ -22,6 +22,7 @@ from .setup_diagnostics import (
     _PROJECT_ID_PATTERN,
     _OPAQUE_ID_PATTERN,
 )
+from .setup_operations import SetupOperationsManager
 from .managed_import import ManagedImportStore
 
 
@@ -38,6 +39,8 @@ if not hasattr(ManagedImportStore, "diagnostic_snapshot"):
 def register_setup_diagnostics_api(host: Any) -> None:
     app = host.app
     read_gate = DiagnosticReadGate(max_cache_entries=32, default_ttl=5.0)
+    operations_manager = SetupOperationsManager()
+    host.setup_operations_manager = operations_manager
 
     def _same_origin(request: Request) -> None:
         origin = request.headers.get("origin")
@@ -189,4 +192,87 @@ def register_setup_diagnostics_api(host: Any) -> None:
         response = JSONResponse(snapshot)
         response.headers["Cache-Control"] = "private, no-cache"
         response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.post("/api/v1/projects/{project_id}/setup/plans")
+    async def create_setup_plan(
+        project_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        actor_id = _authenticate_operator(request)
+        if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise HTTPException(400, {"error": "INVALID_PROJECT_ID"})
+
+        raw_body = await request.body()
+        try:
+            plan_req = parse_strict_json_with_limits(raw_body)
+        except Exception as exc:
+            raise HTTPException(400, {"error": "INVALID_PLAN_REQUEST", "message": str(exc)}) from exc
+
+        # Read current snapshot to validate preconditions and binding
+        git_config_path = getattr(host, "git_config_path", None)
+        state_base = getattr(host, "state_base", None) or (Path(os.environ["NGINX_QA_STAGING_STATE_BASE"]) if "NGINX_QA_STAGING_STATE_BASE" in os.environ else None)
+        collector = DiagnosticSnapshotCollector(git_config_path=git_config_path, state_base=state_base)
+        snapshot = collector.collect_snapshot(project_id)
+
+        try:
+            plan = operations_manager.create_plan(actor_id, project_id, plan_req, snapshot=snapshot, host=host)
+        except ValueError as exc:
+            raise HTTPException(400, {"error": "PLAN_REJECTED", "message": str(exc)}) from exc
+
+        response = JSONResponse(plan)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.post("/api/v1/projects/{project_id}/setup/plans/{plan_id}/apply")
+    async def apply_setup_plan(
+        project_id: str,
+        plan_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        actor_id = _authenticate_operator(request)
+        if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise HTTPException(400, {"error": "INVALID_PROJECT_ID"})
+
+        raw_body = await request.body()
+        try:
+            apply_req = parse_strict_json_with_limits(raw_body)
+        except Exception as exc:
+            raise HTTPException(400, {"error": "INVALID_APPLY_REQUEST", "message": str(exc)}) from exc
+
+        try:
+            receipt = await operations_manager.apply_plan(actor_id, project_id, apply_req, host=host)
+        except LookupError as exc:
+            raise HTTPException(404, {"error": "PLAN_NOT_FOUND", "message": str(exc)}) from exc
+        except ValueError as exc:
+            msg = str(exc)
+            if "IDEMPOTENCY_CONFLICT" in msg:
+                raise HTTPException(409, {"error": "IDEMPOTENCY_CONFLICT", "message": msg}) from exc
+            if "PLAN_STALE" in msg:
+                raise HTTPException(409, {"error": "PLAN_STALE", "message": msg}) from exc
+            if "CONFIRMATION_REQUIRED" in msg:
+                raise HTTPException(400, {"error": "CONFIRMATION_REQUIRED", "message": msg}) from exc
+            raise HTTPException(400, {"error": "APPLY_REJECTED", "message": msg}) from exc
+
+        response = JSONResponse(receipt)
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/v1/projects/{project_id}/setup/operations/{operation_id}")
+    async def get_setup_operation(
+        project_id: str,
+        operation_id: str,
+        request: Request,
+    ) -> JSONResponse:
+        _authenticate_operator(request)
+        if not _PROJECT_ID_PATTERN.fullmatch(project_id):
+            raise HTTPException(400, {"error": "INVALID_PROJECT_ID"})
+
+        try:
+            receipt = operations_manager.get_operation(project_id, operation_id)
+        except LookupError as exc:
+            raise HTTPException(404, {"error": "OPERATION_NOT_FOUND", "message": str(exc)}) from exc
+
+        response = JSONResponse(receipt)
+        response.headers["Cache-Control"] = "no-store"
         return response
