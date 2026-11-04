@@ -1,0 +1,28 @@
+{
+  "observed_at": "2026-11-04T10:21:13.535170+00:00",
+  "project_id": "9000",
+  "prior_sprints": [
+    {
+      "sprint_id": "msv1-90260fe90d18b1bfbeb48bc46c90a82f2a4094307196b4aeef2456db0d8f0552",
+      "status": "blocked",
+      "state_sha256": "85a4414c51ad0ce05da93c660803e277ccbf732dcc16aae4a631d975f436cbfa",
+      "active_assignments": [],
+      "active_reviews": [],
+      "historical_non_live_review_candidates": [
+        "review-d062318e024d6e79b1dcc623",
+        "review-0cc0fd84834ea8bcbf37b11e",
+        "review-a6f6e4cd4dca8b4e76ba8b55",
+        "review-507cd75b437acc396af68491",
+        "review-a6098f02b4a744e1101b521e",
+        "review-f142208e9634668896cc43e6"
+      ],
+      "live_processes": [],
+      "live_branch_leases": [],
+      "live_ports": []
+    }
+  ],
+  "control_http": 200,
+  "release_http": 200,
+  "source_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
+  "mode": "Read-only preflight. No new project, alias or control database."
+}
