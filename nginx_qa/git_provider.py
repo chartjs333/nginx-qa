@@ -22,6 +22,7 @@ from typing import Callable, Mapping, Sequence
 import urllib.parse
 import uuid
 
+from .paths import resolve_native_path
 from .sprint_types import (
     git_ref_format_valid,
     mirror_storage_key,
@@ -883,10 +884,7 @@ class ManagedGitProvider:
         lock_timeout: float = 60.0,
         allow_local_transport: bool = False,
     ) -> None:
-        root = Path(managed_root)
-        if not root.is_absolute():
-            raise ValueError("managed_root must be absolute")
-        self.managed_root = root.resolve(strict=False)
+        self.managed_root = resolve_native_path(managed_root)
         if self.managed_root.parent == self.managed_root:
             raise ValueError("managed_root cannot be a filesystem root")
         self.repositories_root = self.managed_root / "repositories"

@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from typing import Final
 
+from nginx_qa.paths import resolve_native_path
+
 
 _REPARSE_POINT_ATTRIBUTE: Final = 0x400
 _MUTABLE_BINDINGS: Final = {
@@ -32,10 +34,10 @@ def _required_environment_path(name: str) -> Path:
     value = os.environ.get(name)
     if not value or not value.strip():
         raise RuntimeError(f"missing required staging environment variable: {name}")
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        raise RuntimeError(f"{name} must be an absolute path")
-    return Path(os.path.abspath(candidate))
+    try:
+        return resolve_native_path(value)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be an absolute canonical path: {exc}") from exc
 
 
 def _path_key(path: Path) -> str:
@@ -53,9 +55,10 @@ def _paths_overlap(first: Path, second: Path) -> bool:
 def _require_canonical_directory(path: Path, label: str) -> Path:
     if not path.is_dir():
         raise RuntimeError(f"{label} must be an existing directory: {path}")
-    resolved = path.resolve(strict=True)
-    if _path_key(path) != _path_key(resolved):
-        raise RuntimeError(f"{label} contains a filesystem alias or reparse point")
+    try:
+        resolve_native_path(path, must_exist=True)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError(f"{label} contains a filesystem alias or reparse point") from exc
     attributes = int(getattr(os.lstat(path), "st_file_attributes", 0) or 0)
     if attributes & _REPARSE_POINT_ATTRIBUTE:
         raise RuntimeError(f"{label} must not be a reparse point")

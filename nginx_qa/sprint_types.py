@@ -15,6 +15,7 @@ import urllib.parse
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any, Mapping
 
 
@@ -911,6 +912,61 @@ def windows_paths_overlap(first: str, second: str) -> bool:
     )
 
 
+def absolute_path_key(value: str) -> str | None:
+    """Canonical identity, case-sensitive on POSIX and case-insensitive on DOS."""
+    windows = windows_absolute_path_key(value)
+    if windows is not None:
+        return windows
+    if (
+        not isinstance(value, str)
+        or not value.startswith("/")
+        or value.startswith("//")
+    ):
+        return None
+    if "\\" in value or any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return None
+    try:
+        value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError:
+        return None
+    path = PurePosixPath(value)
+    if ".." in path.parts or str(path) != (value.rstrip("/") or "/"):
+        return None
+    return str(path)
+
+
+def join_path(root: str, *parts: str) -> str:
+    """Join according to the root's syntax, independently of the running OS."""
+    path = (
+        PureWindowsPath(root)
+        if windows_absolute_path_key(root) is not None
+        else PurePosixPath(root)
+    )
+    return path.joinpath(*parts).as_posix()
+
+
+def path_is_within(child: str, parent: str) -> bool:
+    child_key, parent_key = absolute_path_key(child), absolute_path_key(parent)
+    if (
+        child_key is None
+        or parent_key is None
+        or child_key.startswith("/") != parent_key.startswith("/")
+    ):
+        return False
+    kind = PurePosixPath if parent_key.startswith("/") else PureWindowsPath
+    return kind(child_key).is_relative_to(kind(parent_key))
+
+
+def path_is_strictly_within(child: str, parent: str) -> bool:
+    return path_is_within(child, parent) and absolute_path_key(
+        child
+    ) != absolute_path_key(parent)
+
+
+def paths_overlap(first: str, second: str) -> bool:
+    return path_is_within(first, second) or path_is_within(second, first)
+
+
 def managed_runtime_config_invariant_issues(
     config: Mapping[str, Any],
 ) -> tuple[str, ...]:
@@ -935,14 +991,21 @@ def managed_runtime_config_invariant_issues(
         "managed_root",
     )
     path_keys = {
-        field: windows_absolute_path_key(config.get(field)) for field in path_fields
+        field: absolute_path_key(config.get(field)) for field in path_fields
     }
     protected_roots = config.get("protected_roots")
     protected_roots = protected_roots if isinstance(protected_roots, list) else []
-    protected_keys = [windows_absolute_path_key(root) for root in protected_roots]
+    protected_keys = [absolute_path_key(root) for root in protected_roots]
     if any(key is None for key in path_keys.values()) or any(
         key is None for key in protected_keys
     ):
+        add("RUNTIME_CONFIG_PATH_INVALID")
+    flavors = {
+        key.startswith("/")
+        for key in [*path_keys.values(), *protected_keys]
+        if key is not None
+    }
+    if len(flavors) > 1:
         add("RUNTIME_CONFIG_PATH_INVALID")
     if len(protected_keys) != len(set(protected_keys)):
         add("RUNTIME_CONFIG_PATH_CONFLICT")
@@ -955,7 +1018,7 @@ def managed_runtime_config_invariant_issues(
         ("lease_root", "leases"),
     ):
         expected = (
-            windows_absolute_path_key(ntpath.join(runtime_root, child))
+            absolute_path_key(join_path(runtime_root, child))
             if isinstance(runtime_root, str)
             else None
         )
@@ -967,7 +1030,7 @@ def managed_runtime_config_invariant_issues(
         for second_field in isolated_fields[index + 1 :]:
             first = config.get(first_field)
             second = config.get(second_field)
-            if isinstance(first, str) and isinstance(second, str) and windows_paths_overlap(
+            if isinstance(first, str) and isinstance(second, str) and paths_overlap(
                 first, second
             ):
                 add("RUNTIME_CONFIG_PATH_CONFLICT")
@@ -977,7 +1040,7 @@ def managed_runtime_config_invariant_issues(
             if (
                 isinstance(path, str)
                 and isinstance(protected_root, str)
-                and windows_paths_overlap(path, protected_root)
+                and paths_overlap(path, protected_root)
             ):
                 add("RUNTIME_CONFIG_PROTECTED_ROOT_CONFLICT")
 
@@ -2657,16 +2720,16 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         repository.get("mirror_storage_key") if isinstance(repository, Mapping) else None
     )
     mirror_path = repository.get("mirror_path") if isinstance(repository, Mapping) else None
-    mirror_path_key = windows_absolute_path_key(mirror_path)
+    mirror_path_key = absolute_path_key(mirror_path)
     managed_root = (
         runtime_config.get("managed_root")
         if isinstance(runtime_config, Mapping)
         else None
     )
-    managed_root_key = windows_absolute_path_key(managed_root)
+    managed_root_key = absolute_path_key(managed_root)
     expected_mirror_path_key = (
-        windows_absolute_path_key(
-            ntpath.join(
+        absolute_path_key(
+            join_path(
                 managed_root_key,
                 "repositories",
                 f"{mirror_key}.git",
@@ -2694,8 +2757,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             sprint_path_segment = managed_sprint_path_segment(sprint_id)
         except ValueError:
             return False
-        expected_key = windows_absolute_path_key(
-            ntpath.join(
+        expected_key = absolute_path_key(
+            join_path(
                 managed_root_key,
                 "projects",
                 project_path_segment,
@@ -2706,8 +2769,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
                 assignment_id,
             )
         )
-        recorded_key = windows_absolute_path_key(workspace.get("expected_root"))
-        actual_key = windows_absolute_path_key(workspace.get("actual_git_toplevel"))
+        recorded_key = absolute_path_key(workspace.get("expected_root"))
+        actual_key = absolute_path_key(workspace.get("actual_git_toplevel"))
         git_dir = workspace.get("actual_git_dir")
         return (
             expected_key is not None
@@ -2715,12 +2778,12 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             and actual_key == expected_key
             and isinstance(git_dir, str)
             and (
-                windows_path_is_strictly_within(
+                path_is_strictly_within(
                     git_dir, workspace.get("expected_root")
                 )
                 or (
                     isinstance(mirror_path, str)
-                    and windows_path_is_strictly_within(git_dir, mirror_path)
+                    and path_is_strictly_within(git_dir, mirror_path)
                 )
             )
         )
@@ -3101,7 +3164,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
 
     owned_workspace_roots: set[str] = set()
     for workspace in workspace_by_id.values():
-        root_key = windows_absolute_path_key(workspace.get("expected_root"))
+        root_key = absolute_path_key(workspace.get("expected_root"))
         if root_key is None:
             add("ASSIGNMENT_WORKSPACE_BINDING_INVALID")
         elif root_key in owned_workspace_roots:
@@ -3473,8 +3536,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         expected_integration_root_key = (
-            windows_absolute_path_key(
-                ntpath.join(
+            absolute_path_key(
+                join_path(
                     managed_root_key,
                     "integration-workspaces",
                     expected_workspace_artifact_id,
@@ -3485,12 +3548,12 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         recorded_integration_root_key = (
-            windows_absolute_path_key(integration_workspace.get("expected_root"))
+            absolute_path_key(integration_workspace.get("expected_root"))
             if isinstance(integration_workspace, Mapping)
             else None
         )
         actual_integration_root_key = (
-            windows_absolute_path_key(
+            absolute_path_key(
                 integration_workspace.get("actual_git_toplevel")
             )
             if isinstance(integration_workspace, Mapping)
@@ -3507,13 +3570,13 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             and actual_integration_root_key == expected_integration_root_key
             and isinstance(integration_git_dir, str)
             and (
-                windows_path_is_strictly_within(
+                path_is_strictly_within(
                     integration_git_dir,
                     integration_workspace.get("expected_root"),
                 )
                 or (
                     isinstance(mirror_path, str)
-                    and windows_path_is_strictly_within(
+                    and path_is_strictly_within(
                         integration_git_dir, mirror_path
                     )
                 )
@@ -3574,7 +3637,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             "active",
             "preserved",
         }:
-            root_key = windows_absolute_path_key(
+            root_key = absolute_path_key(
                 integration_workspace.get("expected_root")
             )
             if root_key is None:
@@ -5540,26 +5603,26 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             else None
         )
         expected_process_runtime_root = (
-            windows_absolute_path_key(ntpath.join(process_runtime_root, process_id))
+            absolute_path_key(join_path(process_runtime_root, process_id))
             if isinstance(process_runtime_root, str) and isinstance(process_id, str)
             else None
         )
         expected_stdout_log = (
-            windows_absolute_path_key(
-                ntpath.join(log_root, f"{process_id}.stdout.log")
+            absolute_path_key(
+                join_path(log_root, f"{process_id}.stdout.log")
             )
             if isinstance(log_root, str) and isinstance(process_id, str)
             else None
         )
         expected_stderr_log = (
-            windows_absolute_path_key(
-                ntpath.join(log_root, f"{process_id}.stderr.log")
+            absolute_path_key(
+                join_path(log_root, f"{process_id}.stderr.log")
             )
             if isinstance(log_root, str) and isinstance(process_id, str)
             else None
         )
         executable_path = process.get("executable_path")
-        executable_key = windows_absolute_path_key(executable_path)
+        executable_key = absolute_path_key(executable_path)
         configured_protected_roots = (
             runtime_config.get("protected_roots")
             if isinstance(runtime_config, Mapping)
@@ -5568,17 +5631,17 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         )
         if (
             expected_process_runtime_root is None
-            or windows_absolute_path_key(process.get("runtime_root"))
+            or absolute_path_key(process.get("runtime_root"))
             != expected_process_runtime_root
-            or windows_absolute_path_key(process.get("stdout_log"))
+            or absolute_path_key(process.get("stdout_log"))
             != expected_stdout_log
-            or windows_absolute_path_key(process.get("stderr_log"))
+            or absolute_path_key(process.get("stderr_log"))
             != expected_stderr_log
             or expected_stdout_log == expected_stderr_log
             or executable_key is None
             or any(
                 isinstance(protected_root, str)
-                and windows_path_is_within(executable_path, protected_root)
+                and path_is_within(executable_path, protected_root)
                 for protected_root in configured_protected_roots
             )
         ):
@@ -5586,7 +5649,7 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
         expected_cwd = (
             workspace_root
             if launch_cwd == "."
-            else ntpath.join(workspace_root, launch_cwd)
+            else join_path(workspace_root, launch_cwd)
             if isinstance(workspace_root, str) and isinstance(launch_cwd, str)
             else None
         )
@@ -5612,8 +5675,8 @@ def managed_activation_invariant_issues(state: Mapping[str, Any]) -> tuple[str, 
             or process.get("command_redacted") != process_launch.get("command")
             or process.get("environment_redacted")
             != process_launch.get("environment")
-            or windows_absolute_path_key(process.get("cwd"))
-            != windows_absolute_path_key(expected_cwd)
+            or absolute_path_key(process.get("cwd"))
+            != absolute_path_key(expected_cwd)
             or process.get("resource_limits") != effective_limits
             or process.get("restart_policy") != effective_restart_policy
             or process.get("max_restart_attempts") != effective_max_restarts

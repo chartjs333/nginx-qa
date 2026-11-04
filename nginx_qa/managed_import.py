@@ -52,7 +52,14 @@ from .port_leases import (
     ManagedPortReservationRegistry,
     ManagedPortReservationToken,
 )
+from .paths import (
+    normalize_configured_path,
+    protected_root_values,
+)
 from .sprint_types import (
+    absolute_path_key,
+    join_path,
+    path_is_within,
     SprintPipeline,
     SprintProvenance,
     SprintTypeUnsupported,
@@ -67,8 +74,6 @@ from .sprint_types import (
     managed_runtime_config_invariant_issues,
     relative_git_path_valid,
     resolve_sprint_type,
-    windows_absolute_path_key,
-    windows_path_is_within,
 )
 from .workspace_manager import (
     ManagedWorkspace,
@@ -460,18 +465,15 @@ def _parse_bool(value: str) -> bool:
     raise ValueError("boolean environment value is invalid")
 
 
-def _normalized_path(value: str) -> str:
-    if windows_absolute_path_key(value) is None:
-        raise ValueError("managed path must be a canonical absolute DOS path")
-    if os.name == "nt":
-        path = Path(value)
-        resolved = Path(os.path.realpath(path.resolve(strict=False)))
-        if os.path.normcase(os.path.normpath(str(path.absolute()))) != os.path.normcase(
-            os.path.normpath(str(resolved))
-        ):
-            raise ValueError("managed path contains a filesystem alias")
-        return str(resolved).replace("\\", "/")
-    return value.replace("\\", "/")
+# Central mapping; physical paths remain explicit configuration, never guessed.
+MANAGED_DIRECTORY_ENV = {
+    "service_root": "NGINX_QA_SERVICE_ROOT",
+    "runtime_root": "NGINX_QA_RUNTIME_ROOT",
+    "prompt_root": "NGINX_QA_PROMPT_ROOT",
+    "managed_root": "NGINX_QA_MANAGED_ROOT",
+}
+
+_normalized_path = normalize_configured_path
 
 
 def normalize_managed_runtime_config(
@@ -480,28 +482,15 @@ def normalize_managed_runtime_config(
     """Build the explicit frozen managed configuration from environment."""
 
     source = os.environ if environment is None else environment
-    service_root = _normalized_path(
-        _required_environment_value(source, "NGINX_QA_SERVICE_ROOT")
-    )
-    runtime_root = _normalized_path(
-        _required_environment_value(source, "NGINX_QA_RUNTIME_ROOT")
-    )
-    prompt_root = _normalized_path(
-        _required_environment_value(source, "NGINX_QA_PROMPT_ROOT")
-    )
-    managed_root = _normalized_path(
-        _required_environment_value(source, "NGINX_QA_MANAGED_ROOT")
-    )
+    directories = {
+        logical: _normalized_path(_required_environment_value(source, variable))
+        for logical, variable in MANAGED_DIRECTORY_ENV.items()
+    }
+    runtime_root = directories["runtime_root"]
     protected_raw = _required_environment_value(source, "NGINX_QA_PROTECTED_ROOTS")
-    try:
-        decoded_protected = json.loads(protected_raw)
-    except json.JSONDecodeError:
-        decoded_protected = None
-    if isinstance(decoded_protected, list):
-        raw_protected = decoded_protected
-    else:
-        raw_protected = [item for item in protected_raw.split(os.pathsep) if item]
-    protected_roots = [_normalized_path(str(item)) for item in raw_protected]
+    protected_roots = [
+        _normalized_path(item) for item in protected_root_values(protected_raw)
+    ]
     if not protected_roots:
         raise ValueError("NGINX_QA_PROTECTED_ROOTS must not be empty")
 
@@ -512,15 +501,12 @@ def normalize_managed_runtime_config(
     config = {
         "http_host": _required_environment_value(source, "NGINX_QA_HTTP_HOST"),
         "http_port": int(_required_environment_value(source, "NGINX_QA_HTTP_PORT")),
-        "service_root": service_root,
+        **directories,
         "protected_roots": protected_roots,
-        "runtime_root": runtime_root,
-        "process_runtime_root": f"{runtime_root.rstrip('/')}/processes",
-        "log_root": f"{runtime_root.rstrip('/')}/logs",
-        "pid_root": f"{runtime_root.rstrip('/')}/pids",
-        "lease_root": f"{runtime_root.rstrip('/')}/leases",
-        "prompt_root": prompt_root,
-        "managed_root": managed_root,
+        "process_runtime_root": join_path(runtime_root, "processes"),
+        "log_root": join_path(runtime_root, "logs"),
+        "pid_root": join_path(runtime_root, "pids"),
+        "lease_root": join_path(runtime_root, "leases"),
         "git_fetch_timeout_seconds": int(
             _required_environment_value(source, "NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS")
         ),
@@ -5252,7 +5238,7 @@ class TransactionalSprintImporter:
                 found = shutil.which(raw_executable)
                 if found:
                     executable = str(Path(found).resolve(strict=False))
-        if executable is None or windows_absolute_path_key(executable) is None:
+        if executable is None or absolute_path_key(executable) is None:
             issues.append(
                 {
                     "code": "RESOURCE_LIMIT_UNSUPPORTED",
@@ -5262,7 +5248,7 @@ class TransactionalSprintImporter:
             )
             executable = str(Path(sys.executable).resolve(strict=False))
         if any(
-            isinstance(root, str) and windows_path_is_within(executable, root)
+            isinstance(root, str) and path_is_within(executable, root)
             for root in self.runtime_config.get("protected_roots", [])
         ):
             issues.append(

@@ -27,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final
 
+from .paths import configured_prompt_root, default_prompt_root
 from .prompt_archive_incremental import (
     ArchiveOccurrence,
     pas1_id_v1,
@@ -407,7 +408,7 @@ def _prompt_template_protected_base(
 ) -> Path | None:
     """Return the owning root for one valid persisted prompt template.
 
-    Invalid persisted fields fall back to the built-in ``D:\\Prompt`` in the
+    Invalid persisted fields fall back to the platform default in the
     runtime reader, which is already unconditionally protected below.  A valid
     custom field must additionally protect its non-variable owning prefix.
     """
@@ -489,7 +490,7 @@ def _persisted_prompt_protected_roots() -> tuple[Path, ...]:
     except PromptArchiveMigrationError:
         raise
     except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-        # The runtime falls back to D:\Prompt for malformed settings.  That
+        # The runtime falls back to the configured default for malformed settings.  That
         # default is already protected, so no custom base is trusted here.
         return ()
     if type(document) is not dict:
@@ -550,7 +551,11 @@ def _configured_protected_roots(
     # The known legacy live root is denied lexically; it is never opened merely
     # to decide whether an isolated request is allowed.
     if os.name == "nt":
-        raw_values.append((r"D:\Prompt", False))
+        raw_values.append((default_prompt_root(), False))
+    try:
+        raw_values.append((configured_prompt_root(), False))
+    except (OSError, ValueError):
+        raise _error("PROMPT_ARCHIVE_MIGRATION_REQUEST_INVALID") from None
     raw_values.extend(
         (value, True) for value in _persisted_prompt_protected_roots()
     )
