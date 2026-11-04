@@ -1,0 +1,26 @@
+[
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104"
+  },
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\authorize_wizard_browser.py"
+  },
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\start_wizard.ps1"
+  },
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\stop_wizard.ps1"
+  },
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\stop_owned_console.py"
+  },
+  {
+    "sddl": "O:S-1-5-21-1278613032-855858362-623647154-4628G:DUD:PAI(A;;FA;;;SY)(A;;FA;;;S-1-5-21-1278613032-855858362-623647154-4628)",
+    "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\host-launch-pid.txt"
+  }
+]

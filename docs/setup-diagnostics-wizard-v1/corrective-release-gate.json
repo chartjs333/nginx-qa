@@ -38,7 +38,7 @@
   "local_helpers": [
     {
       "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\authorize_wizard_browser.py",
-      "sha256": "dfc4f09f8e1b048dcb73ebaa338e632e834fcc20cd8c9cb4209b68b5007428e4"
+      "sha256": "abda19247f86f51c67e199c544a324937e99119d84470aa63119d467484e8eeb"
     },
     {
       "path": "C:\\nqt35\\client\\sdw-corrective-20261104\\start_wizard.ps1",
@@ -69,5 +69,16 @@
     "base": "agent/tmsl-v1-release-documentation",
     "draft": true,
     "creation_head": "a3bac47ba482bbc40e31e620817c36e1a0acb4e3"
+  },
+  "release_rework": {
+    "rejected_commit": "fad38ab3b971f0d2d391997156ff72340e81e035",
+    "native_security_review": "review-86876e0f821dbf6ab73afdec",
+    "reason": "Static marker did not establish live admin credential recipient ownership.",
+    "fix": "Connect without HTTP first, prove the actual reverse established TCP tuple and listener belong to the exact live launcher tree using stable CIM snapshots and creation ancestry; only then load key and send on the same pinned socket. Reconnect and redirects are forbidden.",
+    "targeted_tests": 12,
+    "actual_named_pairing": "PASS",
+    "product_code_unchanged": true,
+    "owned_local_operator_acl": "Only current user and SYSTEM on the task helper directory, four delivered helpers and launcher PID receipt; no wider host ACL changes.",
+    "trust_boundary": "Operator files and their enclosing installation are trusted local administration inputs. This is not isolation from a compromised operator account or OS administrator."
   }
 }
