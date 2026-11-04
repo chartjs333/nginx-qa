@@ -4,7 +4,7 @@
   "architecture_baseline_commit": "89f7f09b318a3d9d78ceb2d8c92b6e730e644626",
   "architecture_status": "PREPARED_FOR_INDEPENDENT_REVIEW",
   "implementation_status": "PASS",
-  "external_status": "NOT_RUN",
+  "external_status": "BLOCKED_EXTERNAL",
   "evidence_policy": {
     "baseline_refs": "Existing methods inspected statically; no execution claim in SDW-001.",
     "planned_tests": "Assertions describe required future coverage, not invented implemented methods.",
@@ -1242,7 +1242,7 @@
       ],
       "evidence_class": "REAL_EXTERNAL",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "BLOCKED_EXTERNAL",
       "assertions": [
         "Obtain actual configured existing executor identity/protocol and authorized different test project; no echo service or fabricated receipt.",
         "Record installed exact version, native IDs/source/result commit/branch, genuine worker work, two independent genuine reviewer decisions for that exact result and native terminal/cleanup proof.",
@@ -1252,7 +1252,13 @@
       "existing_regression_refs": [],
       "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
       "tested_commit": null,
-      "evidence": []
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
     },
     {
       "id": "E02",
@@ -1264,7 +1270,7 @@
       ],
       "evidence_class": "REAL_EXTERNAL",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "BLOCKED_EXTERNAL",
       "assertions": [
         "Use only previously configured approved provider/reference with explicit bounded Ask; no new account/key or hidden provider migration.",
         "Record sanitized actual snapshot/request/strict response binding, observed provider provenance available from transport and limits; do not invent model/message IDs.",
@@ -1274,7 +1280,13 @@
       "existing_regression_refs": [],
       "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
       "tested_commit": null,
-      "evidence": []
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
     },
     {
       "id": "E03",
@@ -1286,7 +1298,7 @@
       ],
       "evidence_class": "REAL_UI",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "BLOCKED_EXTERNAL",
       "assertions": [
         "Observe authenticated private installed-version wizard in a real browser: missing client/provider, reconnect/stale plan, explicit plan/apply, evidence drilldown and mobile-width layout.",
         "Verify public gateway cannot reach admin wizard; screenshots must be actual and sanitized.",
@@ -1295,7 +1307,13 @@
       "existing_regression_refs": [],
       "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
       "tested_commit": null,
-      "evidence": []
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
     },
     {
       "id": "E04",
@@ -1306,7 +1324,7 @@
       ],
       "evidence_class": "RELEASE",
       "mandatory_for_release": true,
-      "status": "NOT_RUN",
+      "status": "BLOCKED_EXTERNAL",
       "assertions": [
         "Record exact tested commit/clean state, test commands/counts/pass/fail/skip and immutable relevant evidence.",
         "Each stage and final release result needs two independent APPROVE of that exact result; a new commit requires fresh decisions.",
@@ -1316,7 +1334,13 @@
       "existing_regression_refs": [],
       "planned_coverage": "Assertions below require implementation-specific tests; no new test method is claimed to exist.",
       "tested_commit": null,
-      "evidence": []
+      "evidence": [
+        {
+          "evidence_kind": "BLOCKED_EXTERNAL_RECORD",
+          "ref": "docs/setup-diagnostics-wizard-v1/runbook.md#62-внешние-зависимости-external-prerequisites-e01e04",
+          "summary": "Requires physical worker hardware, configured external LLM credentials, real browser session, and Coordinator release approval."
+        }
+      ]
     }
   ]
 }
