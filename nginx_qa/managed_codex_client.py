@@ -370,7 +370,7 @@ def configured_runner(config):
 
 
 class ManagedCodexClient:
-    def __init__(self, config, *, runner=None, api=None, resolver=trusted_control_resolver):
+    def __init__(self, config, *, runner=None, api=None, resolver=trusted_control_resolver, runtime_repin_from=None):
         self.config = deepcopy(config)
         self.root = Path(config["state_dir"]).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
@@ -385,6 +385,12 @@ class ManagedCodexClient:
             msvcrt.locking(self.lockfile.fileno(), msvcrt.LK_NBLCK, 1)
         self.state_path = self.root / "client-receipts.json"
         self.state = strict_object(self.state_path.read_bytes()) if self.state_path.exists() else {"sessions": {}}
+        if runtime_repin_from is not None:
+            try:
+                self._validate_runtime_repin(runtime_repin_from)
+            except Exception:
+                self.lockfile.close()
+                raise
         self.lock, self.threads, self.stops = threading.RLock(), {}, {}
         self.thread_context = threading.local()
         self.resolver = resolver
@@ -427,6 +433,13 @@ class ManagedCodexClient:
             self.projects[project] = {**profile, "manifest": manifest, "phones": phones,
                                       "expected_sprint_id": expected_sprint}
         self._load_admissions()
+        if runtime_repin_from is not None:
+            try:
+                self._repin_runtime(runtime_repin_from)
+            except Exception:
+                self.lockfile.close()
+                raise
+            return
         # Reclaim only named jobs recorded before our own process launches.
         for session in self.state["sessions"].values():
             for attempt in session.get("assignments", {}).values():
@@ -434,6 +447,62 @@ class ManagedCodexClient:
                     self.runner.quiesce(attempt["job_name"])
                     attempt["phase"] = "INTERRUPTED"
         self._save()
+
+    def _validate_runtime_repin(self, old):
+        """The offline operator operation may change only the pinned supervisor."""
+        if (not isinstance(old, dict) or old.get('sandbox_backend') != 'wsl2-bwrap'
+                or self.config.get('sandbox_backend') != 'wsl2-bwrap'
+                or not re.fullmatch('[0-9a-f]{64}', str(old.get('wsl_supervisor_sha256')))
+                or not re.fullmatch('[0-9a-f]{64}', str(self.config.get('wsl_supervisor_sha256')))
+                or old['wsl_supervisor_sha256'] == self.config['wsl_supervisor_sha256']
+                or {k:v for k,v in old.items() if k != 'wsl_supervisor_sha256'} !=
+                   {k:v for k,v in self.config.items() if k != 'wsl_supervisor_sha256'}):
+            raise ValueError('CLIENT_RUNTIME_REPIN_SCOPE_INVALID')
+        if any(s.get('config_fingerprint') != digest(old) for s in self.state['sessions'].values()
+               if s.get('phase') not in ('TERMINAL', 'STOPPED')):
+            raise ValueError('CLIENT_RUNTIME_REPIN_SOURCE_MISMATCH')
+
+    def _repin_runtime(self, old):
+        # __init__ already holds the exclusive service.lock. No serving thread,
+        # native API request, model execution or result publication occurs here.
+        active = [s for s in self.state['sessions'].values() if s['phase'] not in ('TERMINAL', 'STOPPED')]
+        profiles = set()
+        jobs = set()
+        for session in active:
+            self._descriptor(session['descriptor'])
+            profiles.add(self.projects[session['descriptor']['project_id']]['profile_id'])
+            for attempt in session['assignments'].values():
+                for execution in [attempt, *attempt.get('previous_attempts', [])]:
+                    job = execution.get('job_name')
+                    if job:
+                        if not isinstance(job, str) or not re.fullmatch(r'Local\\nq-codex-[0-9a-f]{40}', job):
+                            raise ValueError('CLIENT_RUNTIME_REPIN_JOB_INVALID')
+                        jobs.add(job)
+        # Prove every old recorded process is gone before probing or approving
+        # the new runtime. The new supervisor verifies its configured hash.
+        for job in sorted(jobs):
+            self.runner.quiesce(job)
+        if not profiles:
+            profiles = {p['profile_id'] for p in self.config.get('project_templates', {}).values()} or {'docs-only-v1'}
+        for profile in sorted(profiles):
+            self.runner.ready(**({'profile_id':profile} if profile != 'docs-only-v1' else {}))
+        updated = deepcopy(self.state)
+        for session in updated['sessions'].values():
+            if session['phase'] in ('TERMINAL', 'STOPPED'):
+                continue
+            session['config_fingerprint'] = digest(self.config)
+            for attempt in session['assignments'].values():
+                if attempt.get('phase') == 'EXECUTING':
+                    attempt['phase'] = 'INTERRUPTED'
+        audit = {'operation':'supervisor_repin', 'at_unix':time.time(),
+            'from_config_sha256':digest(old), 'to_config_sha256':digest(self.config),
+            'from_supervisor_sha256':old['wsl_supervisor_sha256'],
+            'to_supervisor_sha256':self.config['wsl_supervisor_sha256'],
+            'quiesced_jobs':sorted(jobs), 'verified_profiles':sorted(profiles), 'sessions':len(active)}
+        updated.setdefault('runtime_repins', []).append(audit)
+        atomic_json(self.state_path, updated)
+        self.state = updated
+        self.runtime_repin_receipt = audit
 
     def _save(self):
         atomic_json(self.state_path, self.state)
@@ -562,6 +631,22 @@ class ManagedCodexClient:
         if session and session["descriptor"] != descriptor:
             raise ValueError("CLIENT_SESSION_CONFLICT")
         return session_id, session
+
+    def status(self, payload):
+        """Read-only transport health, separate from native execution authority."""
+        descriptor = self._descriptor(payload)
+        with self.lock:
+            session_id, session = self._session(descriptor)
+            thread = self.threads.get(session_id)
+            error = session.get("last_error") if session else None
+            # Never return arbitrary exception text, model output or credentials.
+            if error and (not isinstance(error, str) or not re.fullmatch(r"[A-Z0-9_]{1,80}", error)):
+                error = "CLIENT_EXECUTION_FAILED"
+            return {**descriptor, "client_session_id": session_id,
+                "phase": session["phase"] if session else "NOT_PREPARED",
+                "last_error": error, "thread_alive": bool(thread and thread.is_alive()),
+                "assignments": [{"assignment_id": key, "phase": value["phase"]}
+                    for key, value in (session["assignments"].items() if session else [])]}
 
     def prepare(self, payload):
         descriptor = self._descriptor(payload)
@@ -751,13 +836,22 @@ class ManagedCodexClient:
             raise ValueError("CLIENT_GIT_CHECK_FAILED")
         return raw.decode("utf-8").rstrip("\r\n")
 
-    def _workspace(self, identity, project):
+    def _workspace(self, identity, project, *, read_only=False):
         workspace = identity["workspace"]
         root = contained(workspace["expected_root"], project["workspace_root"])
         if Path(workspace["actual_git_toplevel"]).resolve() != root or Path(self._git(root, "rev-parse", "--show-toplevel")).resolve() != root:
             raise ValueError("CLIENT_WORKSPACE_IDENTITY_MISMATCH")
         branch = workspace["assigned_branch"]
-        if branch is None or not branch.startswith(project["branch_prefix"]) or self._git(root, "branch", "--show-current") != branch:
+        if read_only:
+            assignment = identity["assignment"]
+            expected = assignment["source_commit"]
+            if (branch is not None or self._git(root, "branch", "--show-current")
+                    or not _SHA.fullmatch(expected)
+                    or any(value != expected for value in (assignment["initial_head_commit"],
+                        workspace["source_commit"], workspace["initial_head_commit"], self._git(root, "rev-parse", "HEAD")))
+                    or self._git(root, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")):
+                raise ValueError("CLIENT_READ_ONLY_WORKSPACE_CHANGED")
+        elif branch is None or not branch.startswith(project["branch_prefix"]) or self._git(root, "branch", "--show-current") != branch:
             raise ValueError("CLIENT_BRANCH_IDENTITY_MISMATCH")
         if (self._git(root, "remote", "get-url", "origin") != project["repository_url"]
                 or self._git(root, "remote", "get-url", "--push", "--all", "origin") != project["repository_url"]):
@@ -913,18 +1007,34 @@ class ManagedCodexClient:
             self._replay_pending(session_id)
             return
         nodes = project["manifest"]["nodes"]
+        read_only = False
         if kind == "assignment":
             node = next((n for n in nodes if n.get("id") == assignment.get("node_id")), None)
             if not node or node["agent"]["phone"] != phone:
                 raise ValueError("CLIENT_TASK_NOT_ALLOWLISTED")
-            root = self._workspace(identity, project)
+            read_only = node.get("workspace", {}).get("access") == "read"
+            root = self._workspace(identity, project, read_only=read_only)
             if previous is None and self._git(root, "rev-parse", "HEAD") != assignment["initial_head_commit"]:
                 raise ValueError("CLIENT_INITIAL_HEAD_MISMATCH")
             self._committed_docs(root, project, assignment["initial_head_commit"])
             self._changed_docs(root, project)
             task = {"agent": node["agent"], "tasks": node["tasks"],
                     "allowed_outcomes": assignment["allowed_outcomes"]}
-            fields = {"status": {"enum": assignment["allowed_outcomes"]},
+            outcomes = assignment["allowed_outcomes"]
+            if read_only and node["id"] == project["manifest"].get("coordinator", {}).get("node_id"):
+                # An unattended reporter may explain a blocked task, never
+                # manufacture an operator decision or repeatedly RESUME it.
+                if "BLOCKED_EXTERNAL" not in outcomes:
+                    raise ValueError("CLIENT_ROLE_REQUIRES_OPERATOR")
+                outcomes = ["BLOCKED_EXTERNAL"]
+                task["allowed_outcomes"] = outcomes
+                task["preceding_results"] = [
+                    {"assignment_id": aid, "result": attempt["payload"].get("result")}
+                    for aid, attempt in session["assignments"].items()
+                    if attempt.get("phase") == "SUBMITTED" and attempt.get("kind") == "assignment"
+                    and attempt.get("native_receipt", {}).get("result_key") in assignment.get("source_result_keys", [])
+                    and attempt.get("payload", {}).get("status") in ("STOP", "NEED_DECISION")]
+            fields = {"status": {"enum": outcomes},
                       "summary": {"type": "string", "minLength": 1, "maxLength": 16000}}
         else:
             source = session["assignments"].get(assignment["source_assignment_id"])
@@ -949,7 +1059,9 @@ class ManagedCodexClient:
                     {"schema_version": 1, "scope_context": scope["scope_context"]})
         elif assignment.get("graph_revision", 1) != 1:
             raise ValueError("CLIENT_UPDATED_TASK_SCOPE_REQUIRED")
-        schema = {"type": "object", "title": "review" if kind == "review" else "author",
+        # Existing runners use the review role to enforce a read-only boundary.
+        # The output schema still carries this native assignment's outcomes.
+        schema = {"type": "object", "title": "review" if kind == "review" or read_only else "author",
                   "properties": fields, "required": ["status", "summary"], "additionalProperties": False}
         prompt = ("You are executing exactly one native nginx-qa assignment. The native engine owns the graph.\n"
             "Do not create agents, change branches, commit, push, start servers, change credentials, or submit HTTP results.\n"
@@ -957,7 +1069,9 @@ class ManagedCodexClient:
             + json.dumps(project["allowed_document_paths"]) + ".\n"
             + ("You are an independent reviewer. Read the exact source diff and verify requirements. "
                "Do not modify files. Decide APPROVE or REJECT based on evidence; never assume success.\n"
-               if kind == "review" else "Implement and verify the assigned task in this workspace.\n")
+               if kind == "review" else
+               "You have a read-only assignment. Do not modify any file or guess missing input. Report the exact unresolved issue.\n"
+               if read_only else "Implement and verify the assigned task in this workspace.\n")
             + ("The Java/Maven profile supplies an isolated /tmp build area and /maven-cache (read-only). "
                "Git metadata and sensitive configuration files are not exposed. "
                "For review read /task/source.diff, a trusted diff of the approved paths. "
@@ -970,7 +1084,10 @@ class ManagedCodexClient:
             + json.dumps(task, ensure_ascii=False, indent=2))
         if len(prompt.encode()) > 256000:
             raise ValueError("CLIENT_PROMPT_LIMIT")
-        job_name = "Local\\nq-codex-" + digest([session_id, assignment_id])[:40]
+        generation = int(previous.get('execution_generation', 0)) + 1 if previous else 1
+        if generation > 32:
+            raise ValueError('CLIENT_EXECUTION_RETRY_LIMIT')
+        job_name = "Local\\nq-codex-" + digest([session_id, assignment_id, generation])[:40]
         authority = self._authority_fingerprint(identity)
         if previous and previous.get("phase") == "OUTPUT_READY":
             if kind != "assignment" or previous.get("authority_fingerprint") != authority:
@@ -980,13 +1097,22 @@ class ManagedCodexClient:
                 raise ValueError("CLIENT_VALIDATED_OUTPUT_CHANGED")
             attempt, output = previous, deepcopy(previous["validated_output"])
         else:
+            history = deepcopy(previous.get('previous_attempts', [])) if previous else []
+            if previous and previous.get('job_name'):
+                # Cancellation is a permanent tombstone in the owned WSL guest.
+                # An explicit retry owns a fresh recorded job only after the
+                # previous one is proven quiescent; native identity is unchanged.
+                self.runner.quiesce(previous['job_name'])
+                history.append({key:previous.get(key) for key in ('job_name','execution_generation','phase')})
             attempt = {"phase": "EXECUTING", "phone": phone, "kind": kind, "job_name": job_name,
-                       "workspace_root": str(root), "task": task}
+                       "workspace_root": str(root), "task": task,
+                       "execution_generation":generation, "previous_attempts":history}
             with self.lock:
                 session["assignments"][assignment_id] = attempt
                 self._save()
             runner_options = ({"profile_id": project["profile_id"],
-                               "review_base_commit": source["payload"]["from_commit"] if kind == "review" else None}
+                               "review_base_commit": source["payload"]["from_commit"] if kind == "review" else
+                                   assignment["initial_head_commit"] if read_only else None}
                               if project["profile_id"] != "docs-only-v1" else {})
             output = self.runner.run(cwd=root, prompt=prompt, schema=schema,
                 directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop,
@@ -1001,6 +1127,12 @@ class ManagedCodexClient:
             if self._git(root, "rev-parse", "HEAD") != assignment["result_commit"] or self._git(root, "status", "--porcelain"):
                 raise ValueError("CLIENT_REVIEW_COMMIT_CHANGED")
             payload = {"assignment_id": assignment_id, "status": output["status"], "feedback": output["summary"]}
+        elif read_only:
+            self._workspace(identity, project, read_only=True)
+            self._submission_fence(session_id)
+            payload = {"assignment_id": assignment_id, "status": output["status"], "result": output["summary"],
+                       "from_commit": assignment["initial_head_commit"],
+                       "git_commit": assignment["source_commit"], "git_branch": None}
         else:
             self._workspace(identity, project)
             self._committed_docs(root, project, assignment["initial_head_commit"])
@@ -1088,7 +1220,7 @@ def serve(config):
             if not self.authorized():
                 return
             action = self.path.removeprefix("/managed-client/")
-            if self.path != "/managed-client/" + action or action not in {"prepare", "start", "stop", "admit"}:
+            if self.path != "/managed-client/" + action or action not in {"prepare", "start", "stop", "admit", "status"}:
                 self.reply(404, {"error": "NOT_FOUND"})
                 return
             try:
@@ -1135,7 +1267,26 @@ def main(argv=None):
     parser.add_argument("--config", required=True, help="Operator-owned local configuration JSON")
     parser.add_argument("--check", "--diagnose", dest="check", action="store_true",
                         help="Check CLI/sandbox readiness without serving, resuming or running a model")
+    parser.add_argument("--repin-runtime-from", metavar="OLD_CONFIG",
+                        help="Offline operator repair: verify only a supervisor SHA change, quiesce, probe and audit without resuming")
     args = parser.parse_args(argv)
+    if args.repin_runtime_from:
+        if args.check:
+            parser.error('--check and --repin-runtime-from are mutually exclusive')
+        client = None
+        try:
+            config = strict_object(Path(args.config).read_bytes())
+            old = strict_object(Path(args.repin_runtime_from).read_bytes())
+            client = ManagedCodexClient(config, runtime_repin_from=old)
+            print(json.dumps({'state':'RUNTIME_REPINNED', **client.runtime_repin_receipt}, sort_keys=True))
+            return 0
+        except Exception as exc:
+            code = str(exc) if re.fullmatch(r'[A-Z0-9_]{1,80}', str(exc)) else 'CLIENT_RUNTIME_REPIN_FAILED'
+            print(json.dumps({'state':'BLOCKED', 'error':code}))
+            return 2
+        finally:
+            if client is not None:
+                client.lockfile.close()
     if args.check:
         try:
             result = diagnose(strict_object(Path(args.config).read_bytes()))

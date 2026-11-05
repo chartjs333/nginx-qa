@@ -12,7 +12,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from nginx_qa.managed_execution_profiles import execution_path, execution_paths
-from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner
+from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner, digest, PROTOCOL
 from nginx_qa.sprint_types import canonical_json_bytes
 from tests.test_managed_import import ManagedImportFixture
 
@@ -42,6 +42,54 @@ class CodingAdmissionTests(unittest.TestCase):
 
     def rehash(self, payload):
         payload['manifest_sha256'] = hashlib.sha256(canonical_json_bytes(payload['manifest'])).hexdigest()
+
+    def repin_fixture(self):
+        admitted = self.client.admit(self.payload)
+        old = {**self.config, 'wsl_supervisor_sha256':'a'*64}
+        descriptor = {'protocol':PROTOCOL, 'project_id':'9020','operation_id':'fixture-repin',
+            'sprint_id':admitted['sprint_id'],'agent_phones':self.client.projects['9020']['phones']}
+        sid = 'client-' + digest(descriptor)[:40]
+        self.client.state['sessions'][sid] = {'descriptor':descriptor,'phase':'ACCEPTED',
+            'config_fingerprint':digest(old),'assignments':{
+                'one':{'phase':'EXECUTING','job_name':'Local\\nq-codex-'+'1'*40,'task':{'question':'retained'}},
+                'two':{'phase':'SUBMITTING','job_name':'Local\\nq-codex-'+'2'*40,
+                       'payload':{'result':'Exact pending native result'},'native_receipt':{'unchanged':True}}}}
+        self.client._save()
+        before=self.client.state_path.read_bytes()
+        self.client.lockfile.close()
+        return old,{**old,'wsl_supervisor_sha256':'b'*64},sid,before
+
+    def test_offline_runtime_repin_proves_quiescence_and_profile_without_resuming(self):
+        old,new,sid,before=self.repin_fixture()
+        runner,api=Mock(),Mock()
+        self.client=ManagedCodexClient(new,runner=runner,api=api,runtime_repin_from=old)
+        runner.ready.assert_called_once_with(profile_id='java-maven-v1')
+        self.assertEqual(runner.quiesce.call_count,2)
+        runner.run.assert_not_called();api.request.assert_not_called();api.identity.assert_not_called()
+        state=self.client.state
+        self.assertEqual(state['sessions'][sid]['config_fingerprint'],digest(new))
+        self.assertEqual(state['sessions'][sid]['assignments']['one']['phase'],'INTERRUPTED')
+        self.assertEqual(state['sessions'][sid]['assignments']['two'],json.loads(before)['sessions'][sid]['assignments']['two'])
+        self.assertFalse(self.client.threads)
+        self.assertEqual(state['runtime_repins'][0]['from_config_sha256'],digest(old))
+        self.assertEqual(state['runtime_repins'][0]['to_config_sha256'],digest(new))
+
+    def test_runtime_repin_rejects_authority_changes_and_failed_proof_without_receipt_write(self):
+        old,new,sid,before=self.repin_fixture()
+        path=self.root/'state/client-receipts.json'
+        for changed in ({**new,'role_timeout_seconds':120},
+                        {**new,'engine_url':'http://127.0.0.1:19998'},old):
+            runner=Mock()
+            with self.assertRaisesRegex(ValueError,'CLIENT_RUNTIME_REPIN_SCOPE_INVALID'):
+                ManagedCodexClient(changed,runner=runner,api=Mock(),runtime_repin_from=old)
+            runner.ready.assert_not_called();runner.run.assert_not_called()
+            self.assertEqual(path.read_bytes(),before)
+        for operation in ('quiesce','ready'):
+            runner=Mock();getattr(runner,operation).side_effect=ValueError('FIXTURE_PROOF_FAILED')
+            with self.assertRaisesRegex(ValueError,'FIXTURE_PROOF_FAILED'):
+                ManagedCodexClient(new,runner=runner,api=Mock(),runtime_repin_from=old)
+            self.assertEqual(path.read_bytes(),before)
+            runner.run.assert_not_called()
 
     def test_durable_exact_pin_admission_and_restart(self):
         accepted = self.client.admit(self.payload)

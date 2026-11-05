@@ -543,6 +543,129 @@ class ManagedClientProtocolCorrections(unittest.TestCase):
         self.assertEqual(self.runner.calls, [])
         self.assertEqual(self.api.submissions, [])
 
+    def read_only_coordinator_fixture(self):
+        self.git("-C", str(self.workspace), "checkout", "--detach")
+        project = self.client.projects["9010"]
+        project["manifest"]["nodes"][0]["workspace"] = {"access": "read"}
+        project["manifest"]["coordinator"] = {"node_id": "author"}
+        self.api.author["workspace"]["assigned_branch"] = None
+        self.api.author["assignment"]["allowed_outcomes"] = ["RESUME", "BLOCKED_EXTERNAL", "STOP", "NEED_DECISION"]
+        def report(**kwargs):
+            self.runner.calls.append(kwargs)
+            self.assertEqual(kwargs["schema"]["title"], "review", "Read assignments must use the enforced read-only boundary")
+            outcomes = kwargs["schema"]["properties"]["status"]["enum"]
+            if "BLOCKED_EXTERNAL" in outcomes:
+                self.assertEqual(outcomes, ["BLOCKED_EXTERNAL"], "No autonomous operator decision or repeat loop")
+                return {"status": "BLOCKED_EXTERNAL", "summary": "Exact missing input: Excel Manager change instruction."}
+            return {"status": "APPROVE", "summary": "Read-only fixture result has exact source commit and question."}
+        self.runner.run = report
+
+    def start_fixture(self):
+        ready = self.client.prepare(self.descriptor)
+        sid = ready["client_session_id"]
+        self.client.start({**self.descriptor, "client_session_id": sid,
+                           "initial_assignment_ids": ["assignment-one"]})
+        self.client.threads[sid].join(30)
+        self.assertFalse(self.client.threads[sid].is_alive())
+        return self.client.state["sessions"][sid]
+
+    def test_read_only_coordinator_reports_exact_source_without_commit_or_publication(self):
+        self.read_only_coordinator_fixture()
+        head = self.git("-C", str(self.workspace), "rev-parse", "HEAD")
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["phase"], "TERMINAL", session)
+        publish.assert_not_called()
+        payload = self.api.submissions[0]
+        self.assertEqual((payload["from_commit"], payload["git_commit"], payload["git_branch"]), (head, head, None))
+        self.assertEqual(payload["status"], "BLOCKED_EXTERNAL")
+        self.assertIn("Exact missing input", payload["result"])
+        self.assertEqual(self.api.reviewed, ["7191", "7192"])
+        self.assertEqual(self.git("-C", str(self.workspace), "status", "--porcelain"), "")
+        self.assertEqual(self.git("--git-dir", str(self.remote), "for-each-ref"), "")
+
+    def test_read_only_native_identity_cannot_allow_branch_or_dirty_source(self):
+        self.read_only_coordinator_fixture()
+        project = self.client.projects["9010"]
+        identity = deepcopy(self.api.author)
+        identity["workspace"]["assigned_branch"] = "agent/selftest-author"
+        with self.assertRaisesRegex(ValueError, "CLIENT_READ_ONLY_WORKSPACE_CHANGED"):
+            self.client._workspace(identity, project, read_only=True)
+        identity = deepcopy(self.api.author)
+        identity["assignment"]["initial_head_commit"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "CLIENT_READ_ONLY_WORKSPACE_CHANGED"):
+            self.client._workspace(identity, project, read_only=True)
+        (self.workspace / "README.md").write_text("Unapproved change.\n")
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "CLIENT_READ_ONLY_WORKSPACE_CHANGED")
+        publish.assert_not_called()
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.api.submissions, [])
+
+    def test_read_only_output_cannot_resume_or_change_source(self):
+        self.read_only_coordinator_fixture()
+        def forbidden_resume(**kwargs):
+            return {"status": "RESUME", "summary": "Invented decision must be rejected."}
+        self.runner.run = forbidden_resume
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "ValidationError")
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions, [])
+
+    def test_read_only_source_is_rechecked_after_model_returns(self):
+        self.read_only_coordinator_fixture()
+        def compromised_runner(**kwargs):
+            (self.workspace / "README.md").write_text("Unexpected mutation outside the read-only runner.\n")
+            return {"status": "BLOCKED_EXTERNAL", "summary": "Question."}
+        self.runner.run = compromised_runner
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "CLIENT_READ_ONLY_WORKSPACE_CHANGED")
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions, [])
+
+    def test_status_is_read_only_exact_descriptor_and_sanitized(self):
+        absent = self.client.status(self.descriptor)
+        self.assertEqual(absent['phase'], 'NOT_PREPARED')
+        self.assertFalse(self.client.state['sessions'])
+        ready = self.client.prepare(self.descriptor)
+        session = self.client.state['sessions'][ready['client_session_id']]
+        session['last_error'] = 'private model output and token=secret'
+        session['assignments']['assignment-one'] = {'phase':'EXECUTING', 'payload':{'result':'private'}, 'job_name':'private'}
+        before = deepcopy(self.client.state)
+        result = self.client.status(self.descriptor)
+        self.assertEqual(result['phase'], 'READY')
+        self.assertFalse(result['thread_alive'])
+        self.assertEqual(result['last_error'], 'CLIENT_EXECUTION_FAILED')
+        self.assertEqual(result['assignments'], [{'assignment_id':'assignment-one','phase':'EXECUTING'}])
+        self.assertNotIn('private', json.dumps(result))
+        self.assertEqual(self.client.state, before)
+        self.assertEqual(self.runner.calls, [])
+        with self.assertRaises(ValueError):
+            self.client.status({**self.descriptor, 'sprint_id':'msv1-'+'f'*64})
+        with self.assertRaises(ValueError):
+            self.client.status({**self.descriptor, 'payload':{}})
+
+    def test_explicit_execution_retry_quiesces_old_job_and_records_fresh_generation(self):
+        normal_run = self.runner.run
+        self.runner.run = MagicMock(side_effect=ValueError('FIXTURE_EXECUTION_FAILED'))
+        session = self.start_fixture()
+        old = deepcopy(session['assignments']['assignment-one'])
+        self.assertEqual(session['last_error'], 'FIXTURE_EXECUTION_FAILED')
+        self.runner.run = normal_run
+        with patch.object(self.runner, 'quiesce', wraps=self.runner.quiesce) as quiesce:
+            session = self.start_fixture()
+        new = session['assignments']['assignment-one']
+        self.assertEqual(session['phase'], 'TERMINAL', session)
+        self.assertNotEqual(new['job_name'], old['job_name'])
+        self.assertEqual(new['execution_generation'], old['execution_generation'] + 1)
+        self.assertEqual(new['previous_attempts'][-1]['job_name'], old['job_name'])
+        quiesce.assert_any_call(old['job_name'])
+        self.assertEqual(len(self.api.submissions), 1)
+        self.assertEqual(self.api.submissions[0]['assignment_id'], 'assignment-one')
+
     def test_wrong_sprint_same_project_and_phones_is_rejected_before_ready(self):
         wrong = {**self.descriptor, "sprint_id": "msv1-" + "f" * 64}
         with self.assertRaisesRegex(ValueError, "SPRINT_PROVENANCE_MISMATCH"):

@@ -63,6 +63,44 @@ against the current protected template. This receipt is not readiness or success
 The existing prepare/start handshake subsequently verifies the native descriptor,
 sandbox readiness and actual native assignment IDs.
 
+`POST /managed-client/status` accepts the same exact descriptor as prepare. It is
+authenticated and read-only, returning transport phase, a bounded error code,
+thread liveness and assignment IDs/phases, never model output or credentials.
+The native sprint status remains separate: a native active assignment does not
+prove its client thread is running.
+
+Read-only native assignments require a detached, clean workspace at the exact
+source/initial commit. They use the runner's enforced review boundary but submit
+the native assignment outcome, with no Git commit or publication and a null
+branch. A task-wizard continuity reporter may report `BLOCKED_EXTERNAL`; it may
+not invent an operator decision or select `RESUME`. Native failure-context
+decisions remain operator actions. The two independent reviewers still review
+the read-only report, and the native coordinator gate remains visible.
+
+## Repairing a pinned supervisor
+
+Stop this client's service before changing its protected configuration. Retain
+the old configuration, install the verified supervisor in the already owned
+guest, and change only `wsl_supervisor_sha256` in the new configuration. Then run:
+
+```text
+python -m nginx_qa.managed_codex_client --config new-config.json --repin-runtime-from old-config.json
+```
+
+This offline operation takes the exclusive client lock, rejects any other
+configuration change or mismatched active-session fingerprint, proves all
+recorded execution jobs quiescent, and runs the actual profile sandbox canary.
+Only after every proof passes does it atomically record old/new configuration
+and supervisor hashes and update active session fingerprints. Pending native
+payloads and receipts are retained. It does not start a server, call a model,
+resume assignments or submit a result. Restarting the client is a separate
+explicit operator action.
+
+An interrupted execution retry keeps its native assignment ID but records a new
+execution generation/job after proving the previous job quiescent. The permanent
+WSL cancellation tombstone is retained. A pending submission or validated output
+is replayed without rerunning its model.
+
 ## Java environment
 
 Only the separately owned `wsl2-bwrap` backend admits this profile. Provision the
