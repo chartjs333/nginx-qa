@@ -1084,7 +1084,8 @@ class ManagedCodexClient:
             + json.dumps(task, ensure_ascii=False, indent=2))
         if len(prompt.encode()) > 256000:
             raise ValueError("CLIENT_PROMPT_LIMIT")
-        generation = int(previous.get('execution_generation', 0)) + 1 if previous else 1
+        replaying_output = previous and previous.get('phase') == 'OUTPUT_READY'
+        generation = (int(previous.get('execution_generation', 0)) + (0 if replaying_output else 1)) if previous else 1
         if generation > 32:
             raise ValueError('CLIENT_EXECUTION_RETRY_LIMIT')
         job_name = "Local\\nq-codex-" + digest([session_id, assignment_id, generation])[:40]
