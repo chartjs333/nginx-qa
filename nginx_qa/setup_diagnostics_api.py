@@ -263,6 +263,9 @@ def register_setup_diagnostics_api(host: Any) -> None:
         return gate.get_issued_snapshot(snapshot_id, project_id, actor_id=actor,
             policy_generation=args["policy_generation"], authority_version=args["authority_version"])
 
+    from .task_wizard import register_task_wizard
+    register_task_wizard(host, state, registry, authenticated)
+
     @app.get("/setup")
     async def setup_page():
         return FileResponse(assets / "setup.html", headers={"Cache-Control": "no-store",
