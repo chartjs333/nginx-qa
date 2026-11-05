@@ -2,13 +2,15 @@ import base64
 import io
 import json
 from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import unittest
 import zipfile
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 from nginx_qa.task_inputs import workbook_summary
-from nginx_qa.task_wizard import TaskWizard
+from nginx_qa.task_wizard import TaskWizard, register_task_wizard
 from nginx_qa.managed_import import ManagedImportError
 from nginx_qa.sprint_types import managed_graph_semantic_issues
 from tests.test_managed_import import ManagedImportFixture
@@ -37,6 +39,42 @@ class TaskInputTests(unittest.TestCase):
                 z.writestr(name, 'bad')
             with self.assertRaises(ValueError):
                 workbook_summary(raw.getvalue())
+
+
+class TaskWizardHTTPTests(unittest.TestCase):
+    def test_intake_accepts_declared_limit_and_rejects_oversize_before_preview(self):
+        with tempfile.TemporaryDirectory() as root:
+            host = SimpleNamespace(app=FastAPI())
+            register_task_wizard(host, root, lambda: {}, lambda request: 'alice')
+            received = []
+            def preview(actor, payload):
+                received.append((actor, payload))
+                return {'received': True}
+            host.task_wizard.preview = preview
+            # Valid XLSX with inert padding: larger than the parser's 64KiB
+            # default, but within the public attachment and HTTP contracts.
+            raw = io.BytesIO(workbook())
+            with zipfile.ZipFile(raw, 'a') as z:
+                z.writestr('padding.txt', 'x' * 100000)
+            attachment = raw.getvalue()
+            workbook_summary(attachment)
+            payload = {'repository_url': 'https://github.com/acme/repository.git',
+                       'task': 'Implement the documented example',
+                       'attachment_name': 'source.xlsx',
+                       'attachment_base64': base64.b64encode(attachment).decode()}
+            encoded = json.dumps(payload).encode()
+            self.assertGreater(len(encoded), 64 * 1024)
+            with TestClient(host.app) as client:
+                response = client.post('/api/v1/tasks/preview', content=encoded,
+                                       headers={'Content-Type': 'application/json'})
+                self.assertEqual(200, response.status_code, response.text)
+                self.assertEqual([('alice', payload)], received)
+                response = client.post('/api/v1/tasks/preview',
+                                       content=b' ' * (3 * 1024 * 1024 + 1),
+                                       headers={'Content-Type': 'application/json'})
+                self.assertEqual(413, response.status_code)
+                self.assertEqual('TASK_REQUEST_TOO_LARGE', response.json()['detail']['error'])
+                self.assertEqual(1, len(received))
 
 
 class TaskWizardTests(ManagedImportFixture):
@@ -106,6 +144,32 @@ class TaskWizardTests(ManagedImportFixture):
         with self.assertRaisesRegex(ValueError, 'TASK_REPOSITORY_URL_INVALID'):
             self.service.preview('alice', {**self.request, 'repository_url': 'http://127.0.0.1/private'})
         self.assertIsNone(self.imp.store.active_runtime_state(self.project_id))
+
+    def test_lost_executor_ack_retries_same_activated_sprint(self):
+        preview = self.service.preview('alice', self.request)
+        self.client.lose_ack = True
+        first = self.service.start('alice', preview['task_id'], preview['plan_digest'])
+        self.assertEqual('Prepared', first['status'])
+        self.assertEqual('EXECUTOR_UNAVAILABLE', first['blocked_reason'])
+        before = self.imp.store.runtime_state(self.project_id, first['sprint_id'])
+        self.assertEqual('active', before['status'])
+        self.assertEqual(1, len(self.client.starts))
+
+        retry = self.service.start('alice', preview['task_id'], preview['plan_digest'])
+        self.assertEqual('Running', retry['status'])
+        self.assertIsNone(retry['blocked_reason'])
+        self.assertEqual(first['operation_id'], retry['operation_id'])
+        self.assertEqual(first['sprint_id'], retry['sprint_id'])
+        after = self.imp.store.runtime_state(self.project_id, retry['sprint_id'])
+        self.assertEqual(before['active_assignment_ids'], after['active_assignment_ids'])
+        self.assertEqual(before['assignments'], after['assignments'])
+        self.assertEqual(1, len(self.client.starts))
+        self.assertEqual(2, len(self.admissions))
+        self.assertEqual(self.admissions[0], self.admissions[1])
+
+        final = self.service.start('alice', preview['task_id'], preview['plan_digest'])
+        self.assertEqual('Running', final['status'])
+        self.assertEqual(2, len(self.admissions))
 
     def test_no_attachment_still_pins_actual_source_files(self):
         result = self.service.preview('alice', {'repository_url': self.request['repository_url'], 'task': self.request['task']})

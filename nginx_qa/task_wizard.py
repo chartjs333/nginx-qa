@@ -274,7 +274,10 @@ class TaskWizard:
             record = existing or operations.reserve(principal, (key, key), envelope, transport, repository_binding(repository.spec))
             draft['operation_id'] = record['operation_id']
             self._save(draft)
-            if record.get('engine_activated') or record['lifecycle'] in ('Completed', 'Stopped', 'Failed'):
+            # Activation precedes the client's durable start acknowledgement.
+            # A lost ACK must replay launch_sync for the same native operation;
+            # otherwise its occupied project slot remains stranded in Prepared.
+            if record['lifecycle'] in ('Running', 'Completed', 'Stopped', 'Failed'):
                 return self.public(draft)
             def authorize(principal, action, unused):
                 current = self.authorize(actor, draft['project_id'])
@@ -350,7 +353,7 @@ def register_task_wizard(host, state, registry_reader, authenticate):
             if len(raw) > 3 * 1024 * 1024:
                 raise HTTPException(413, {'error': 'TASK_REQUEST_TOO_LARGE'})
         from .setup_diagnostics import parse_strict_json_with_limits
-        value = parse_strict_json_with_limits(bytes(raw))
+        value = parse_strict_json_with_limits(bytes(raw), max_bytes=3 * 1024 * 1024)
         if not isinstance(value, dict):
             raise ValueError('TASK_REQUEST_INVALID')
         return value
