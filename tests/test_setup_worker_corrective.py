@@ -707,6 +707,89 @@ class ManagedClientProtocolCorrections(unittest.TestCase):
             with patch.object(self.client,'_git',return_value=raw), self.assertRaisesRegex(ValueError,'CLIENT_DOCS_SCOPE_VIOLATION'):
                 self.client._changed_docs(self.workspace,project)
 
+    def test_rejected_result_feedback_reaches_exact_rework_prompt_before_model_runs(self):
+        fixture=self
+        rejection='ROW8_VISIBLE_CHECKBOX_REQUIRED: remove hidden style only for in_change.'
+        original=deepcopy(self.api.author)
+        class ReworkNative(FixtureNative):
+            def __init__(self):
+                super().__init__(original);self.stage='first';self.feedback=None
+            def identity(self, project, phone):
+                if phone=='7101':
+                    if self.stage=='first':return deepcopy(original)
+                    if self.stage=='rework':
+                        value=deepcopy(original);head=self.submissions[0]['git_commit']
+                        value['assignment'].update(assignment_id='assignment-two',source_kind='rework_result',
+                            source_result_keys=['result-'+'2'*64],rework_cycle=1,source_commit=head,initial_head_commit=head)
+                        value['workspace'].update(source_commit=head,initial_head_commit=head)
+                        return value
+                if self.stage=='reject' and phone=='7191':
+                    source,key='assignment-one','review-reject'
+                elif self.stage=='final-reviews' and phone in ('7191','7192') and phone not in self.reviewed:
+                    source,key='assignment-two','review-final-'+phone
+                else:return {}
+                return {'managed':True,'project_id':project,'sprint_id':original['sprint_id'],'assignment_kind':'review',
+                    'assignment':{'assignment_id':key,'source_assignment_id':source,'result_commit':self.submissions[-1]['git_commit'],'reviewer_phone':phone}}
+            def request(self, phone, route, payload=None):
+                if route.endswith('/observability'):
+                    return {'execution':{'status':'completed' if self.stage=='done' else 'active'}}
+                if phone=='7101':
+                    self.submissions.append(deepcopy(payload));self.stage='reject' if len(self.submissions)==1 else 'final-reviews'
+                    return {'status':'REVIEWS_PENDING','assignment_id':payload['assignment_id'],'outcome':payload['status'],
+                        'result_commit':payload['git_commit'],'result_key':'result-'+('2' if len(self.submissions)==1 else '3')*64,'deduplicated':False}
+                rejected=self.stage=='reject'
+                if rejected:
+                    fixture.assertEqual(payload['status'],'REJECT');self.feedback=payload['feedback'];self.stage='rework'
+                else:
+                    self.reviewed.append(phone)
+                    if len(self.reviewed)==2:self.stage='done'
+                return {'status':'REWORK_ENQUEUED' if rejected else 'REVIEW_ACCEPTED',
+                    'assignment_id':payload['assignment_id'],'source_assignment_id':'assignment-one' if rejected else 'assignment-two',
+                    'result_key':'result-'+('2' if rejected else '3')*64,'decision':payload['status'],'deduplicated':False}
+        api=ReworkNative();self.api=self.client.api=api
+        def run(**kwargs):
+            self.runner.calls.append(kwargs)
+            if kwargs['schema']['title']=='author':
+                path=self.workspace/'docs/selftest.md';path.parent.mkdir(exist_ok=True)
+                if api.stage=='rework':
+                    self.assertIn(rejection,kwargs['prompt'])
+                    self.assertIn('rework_context',kwargs['prompt'])
+                    self.assertIn(self.api.submissions[0]['git_commit'],kwargs['prompt'])
+                    self.assertIn('Address each exact rejection',kwargs['prompt'])
+                    path.write_text('Corrected visible checkbox; checks rerun.\n')
+                else:
+                    self.assertNotIn('rework_context',kwargs['prompt'])
+                    path.write_text('Initial fixture report.\n')
+                return {'status':'DONE','summary':'Actual fixture author output.'}
+            return {'status':'REJECT' if api.stage=='reject' else 'APPROVE',
+                    'summary':rejection if api.stage=='reject' else 'Independent corrected result review.'}
+        self.runner.run=run
+        session=self.start_fixture()
+        self.assertEqual(session['phase'],'TERMINAL',session)
+        self.assertEqual(len(self.api.submissions),2)
+        self.assertEqual(len(self.runner.calls),5)
+        self.assertNotEqual(self.api.submissions[0]['git_commit'],self.api.submissions[1]['git_commit'])
+        rework=session['assignments']['assignment-two']['task']['rework_context']
+        self.assertEqual(rework['source_assignment_id'],'assignment-one')
+        self.assertEqual(rework['reviews'][0]['feedback'],rejection)
+        assignment={'node_id':'author','source_kind':'rework_result','source_result_keys':['result-'+'2'*64],
+            'rework_cycle':1,'source_commit':self.api.submissions[0]['git_commit'],'initial_head_commit':self.api.submissions[0]['git_commit']}
+        project=self.client.projects['9010']
+        for edit in ('result_key','source_assignment_id','result_commit','feedback_missing'):
+            damaged=deepcopy(session)
+            item=damaged['assignments']['review-reject']
+            if edit=='result_key':item['native_receipt']['result_key']='result-'+'f'*64
+            elif edit=='result_commit':item['task']['result_commit']='f'*40
+            elif edit=='feedback_missing':item['payload']['feedback']=''
+            else:item['native_receipt']['source_assignment_id']='foreign-assignment'
+            with self.assertRaisesRegex(ValueError,'CLIENT_REWORK_CONTEXT_'):
+                self.client._rework_context(damaged,assignment,'7101',project)
+        # A rejected review for another result cannot contaminate this task.
+        stale=deepcopy(session['assignments']['review-reject'])
+        stale['native_receipt']['result_key']='result-'+'f'*64;stale['payload']['feedback']='STALE_FOREIGN_FEEDBACK'
+        session['assignments']['foreign-review']=stale
+        self.assertNotIn('STALE_FOREIGN_FEEDBACK',json.dumps(self.client._rework_context(session,assignment,'7101',project)))
+
     def test_wrong_sprint_same_project_and_phones_is_rejected_before_ready(self):
         wrong = {**self.descriptor, "sprint_id": "msv1-" + "f" * 64}
         with self.assertRaisesRegex(ValueError, "SPRINT_PROVENANCE_MISMATCH"):

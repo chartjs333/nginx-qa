@@ -101,6 +101,15 @@ execution generation/job after proving the previous job quiescent. The permanent
 WSL cancellation tombstone is retained. A pending submission or validated output
 is replayed without rerunning its model.
 
+For `source_kind=rework_result`, the client attaches the exact rejected commit,
+previous assignment/result and reviewer feedback to the next model prompt. It
+joins the native assignment's immutable `source_result_keys` and initial commit
+to retained, native-acknowledged author/review receipts, checking source identity,
+configured reviewer, decision and result commit. A matching rejection is required;
+feedback from other results is excluded. Missing external-client receipts block
+with `CLIENT_REWORK_CONTEXT_UNAVAILABLE` rather than running blind. Feedback cannot
+expand file permissions or override the native effective scope.
+
 ## Java environment
 
 Only the separately owned `wsl2-bwrap` backend admits this profile. Provision the
