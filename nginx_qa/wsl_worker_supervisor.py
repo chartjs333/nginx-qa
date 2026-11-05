@@ -136,6 +136,9 @@ def mounts(attempt, paths, review, profile_id='docs-only-v1'):
         args += ['--tmpfs','/work/.git', '--ro-bind','/opt/nginx-qa-worker/maven-repository','/maven-cache',
                  '--ro-bind','/opt/nginx-qa-worker/java','/opt/nginx-qa-worker/java']
         if Path('/etc/maven').is_dir():args += ['--ro-bind','/etc/maven','/etc/maven']
+        # Debian's mvn and Java dependency links resolve through this root-owned
+        # directory. Without it the actual sandbox cannot execute /usr/bin/mvn.
+        if Path('/etc/alternatives').is_dir():args += ['--ro-bind','/etc/alternatives','/etc/alternatives']
         for p in (attempt/'work').rglob('*'):
             name=p.name.lower()
             if p.is_file() and (p.suffix.lower() in {'.pem','.key','.p12','.pfx','.jks','.keystore'}
