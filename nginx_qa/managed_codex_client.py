@@ -31,6 +31,7 @@ from .control_secrets import sanitized_child_environment, trusted_control_resolv
 from .legacy_scope_control import ROLE_TOKEN_HEADER
 from .process_supervisor import _WindowsJob, _spawn_suspended_in_windows_job
 from .sprint_types import SprintProvenance
+from .managed_execution_profiles import PROFILES, execution_paths
 from .setup_worker_adapter import (
     PROTOCOL, atomic_json, bounded_json_request, strict_object, validate_worker_endpoint,
 )
@@ -138,7 +139,7 @@ class CodexRunner:
             revision = int(winreg.QueryValueEx(key, "UBR")[0])
         return build > 26200 or (build in {26100, 26200} and revision >= 9278)
 
-    def _bounded_local(self, argv, cwd, *, timeout=8, stop=None):
+    def _bounded_local(self, argv, cwd, *, timeout=8, stop=None, output_limit=131072):
         """Own every preflight child; a timed out probe cannot leave a helper behind."""
         if stop is not None and stop.is_set():
             raise ValueError("CLIENT_STOPPING")
@@ -155,12 +156,12 @@ class CodexRunner:
                     if stop is not None and stop.is_set():
                         raise ValueError("CLIENT_STOPPING")
                     if (time.monotonic() >= deadline or
-                            os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > 131072):
+                            os.fstat(stdout.fileno()).st_size + os.fstat(stderr.fileno()).st_size > output_limit):
                         raise ValueError("CODEX_SANDBOX_PREFLIGHT_LIMIT")
                     time.sleep(0.02)
                 stdout.seek(0)
                 stderr.seek(0)
-                return subprocess.CompletedProcess(argv, child.returncode, stdout.read(131073), stderr.read(131073))
+                return subprocess.CompletedProcess(argv, child.returncode, stdout.read(output_limit+1), stderr.read(output_limit+1))
         finally:
             job.terminate()
             if child:
@@ -395,8 +396,10 @@ class ManagedCodexClient:
             self.validators[kind] = jsonschema.Draft202012Validator(json.loads(path.read_text(encoding="utf-8")))
         self.projects = {}
         for project, profile in config["projects"].items():
-            if not project.isdigit() or profile["profile_id"] != "docs-only-v1":
+            if not project.isdigit() or profile["profile_id"] not in PROFILES:
                 raise ValueError("CLIENT_PROJECT_PROFILE_FORBIDDEN")
+            if profile["profile_id"] == "java-maven-v1" and config.get("sandbox_backend") != "wsl2-bwrap":
+                raise ValueError("CLIENT_CODING_REQUIRES_WSL")
             raw = Path(profile["manifest_path"]).read_bytes()
             manifest_sha256 = hashlib.sha256(raw).hexdigest()
             if manifest_sha256 != profile["manifest_sha256"]:
@@ -418,10 +421,10 @@ class ManagedCodexClient:
             if len(phones) > 12 or len(manifest["execution"]["reviewers"]) != 2:
                 raise ValueError("CLIENT_ROLE_LIMIT")
             allowed = profile.get("allowed_document_paths", [])
-            if not allowed or any(not p.startswith("docs/") or ".." in Path(p).parts or "\\" in p for p in allowed):
-                raise ValueError("CLIENT_DOCUMENT_ALLOWLIST_REQUIRED")
+            execution_paths(allowed, profile["profile_id"])
             self.projects[project] = {**profile, "manifest": manifest, "phones": phones,
                                       "expected_sprint_id": expected_sprint}
+        self._load_admissions()
         # Reclaim only named jobs recorded before our own process launches.
         for session in self.state["sessions"].values():
             for attempt in session.get("assignments", {}).values():
@@ -432,6 +435,102 @@ class ManagedCodexClient:
 
     def _save(self):
         atomic_json(self.state_path, self.state)
+
+    def _admission(self, payload):
+        """A trusted host may narrow a configured project, never create authority."""
+        from .sprint_types import canonical_json_bytes, managed_graph_semantic_issues
+        from .managed_import import managed_schema_errors
+        fields = {"project_id", "manifest", "manifest_sha256", "manifest_commit",
+                  "git_manifest_path", "allowed_document_paths"}
+        if not isinstance(payload, dict) or set(payload) != fields:
+            raise ValueError("CLIENT_ADMISSION_INVALID")
+        project_id = payload["project_id"]
+        if not isinstance(project_id, str) or not project_id.isdigit():
+            raise ValueError("CLIENT_PROJECT_NOT_ALLOWED")
+        template = self.config.get("project_templates", {}).get(project_id)
+        if not isinstance(template, dict):
+            raise ValueError("CLIENT_PROJECT_NOT_ALLOWED")
+        required = {"profile_id", "repository_id", "workspace_root", "branch_prefix",
+                    "repository_url", "allowed_document_paths"}
+        if set(template) != required or template["profile_id"] not in PROFILES:
+            raise ValueError("CLIENT_TEMPLATE_INVALID")
+        if template["profile_id"] == "java-maven-v1" and self.config.get("sandbox_backend") != "wsl2-bwrap":
+            raise ValueError("CLIENT_CODING_REQUIRES_WSL")
+        execution_paths(template["allowed_document_paths"], template["profile_id"])
+        allowed = execution_paths(payload["allowed_document_paths"], template["profile_id"])
+        if not set(allowed).issubset(template["allowed_document_paths"]):
+            raise ValueError("CLIENT_SCOPE_ESCALATION")
+        manifest = payload["manifest"]
+        raw = canonical_json_bytes(manifest)
+        if len(raw) > 240000 or hashlib.sha256(raw).hexdigest() != payload["manifest_sha256"]:
+            raise ValueError("CLIENT_MANIFEST_CHANGED")
+        if (managed_schema_errors(manifest, "managed-workspace-sprint-v1.schema.json")
+                or managed_graph_semantic_issues(manifest)):
+            raise ValueError("CLIENT_MANIFEST_INVALID")
+        if manifest.get("git_address") != template["repository_url"]:
+            raise ValueError("CLIENT_REPOSITORY_NOT_ALLOWED")
+        if not _SHA.fullmatch(str(manifest['git'].get('expected_source_commit'))):
+            raise ValueError("CLIENT_SOURCE_COMMIT_REQUIRED")
+        git_path = payload["git_manifest_path"]
+        if (not _SHA.fullmatch(str(payload["manifest_commit"])) or not isinstance(git_path, str)
+                or not re.fullmatch(r"[A-Za-z0-9_./-]+\.json", git_path)
+                or any(p in ("", ".", "..") or p.startswith(".") for p in git_path.split("/"))):
+            raise ValueError("CLIENT_MANIFEST_PROVENANCE_REQUIRED")
+        prefix = template["branch_prefix"]
+        if not isinstance(prefix, str) or not prefix or not template["repository_id"]:
+            raise ValueError("CLIENT_TEMPLATE_INVALID")
+        nodes = [n for n in manifest["nodes"] if n.get("type", "task") != "terminal"]
+        if any(not n.get("workspace", {}).get("git", {}).get("assigned_branch", manifest["git"]["assigned_branch"]).startswith(prefix)
+               for n in nodes) or not manifest["git"]["assigned_branch"].startswith(prefix):
+            raise ValueError("CLIENT_BRANCH_NOT_ALLOWED")
+        authors = {n["agent"]["phone"] for n in nodes}
+        reviewers = [r["phone"] for r in manifest["execution"]["reviewers"]]
+        if len(reviewers) != 2 or len(set(reviewers)) != 2 or authors.intersection(reviewers):
+            raise ValueError("CLIENT_ROLE_LIMIT")
+        phones = sorted(authors | set(reviewers))
+        if len(phones) > 12:
+            raise ValueError("CLIENT_ROLE_LIMIT")
+        sprint_id = SprintProvenance(project_id=project_id, repository_id=template["repository_id"],
+            commit=payload["manifest_commit"], manifest_path=git_path,
+            manifest_sha256=payload["manifest_sha256"]).stable_sprint_id()
+        profile = {**deepcopy(template), **deepcopy(payload), "phones": phones, "expected_sprint_id": sprint_id}
+        return profile
+
+    def _load_admissions(self):
+        path = self.root / "project-admissions.json"
+        if not path.exists():
+            self.admissions = {}
+            return
+        if path.is_symlink() or path.stat().st_size > 2*1024*1024:
+            raise ValueError("CLIENT_ADMISSION_STORE_INVALID")
+        self.admissions = strict_object(path.read_bytes())
+        for project_id, entry in self.admissions.items():
+            if entry.get("template_fingerprint") != digest(self.config.get("project_templates", {}).get(project_id)):
+                raise ValueError("CLIENT_ADMISSION_POLICY_CHANGED")
+            profile = self._admission(entry["payload"])
+            if profile["project_id"] != project_id:
+                raise ValueError("CLIENT_ADMISSION_STORE_INVALID")
+            self.projects[project_id] = profile
+
+    def admit(self, payload):
+        with self.lock:
+            profile = self._admission(payload)
+            project = payload["project_id"]
+            old = self.admissions.get(project)
+            if old is None or old["payload"] != payload:
+                if any(s["descriptor"]["project_id"] == project and s["phase"] not in ("STOPPED", "TERMINAL")
+                       for s in self.state["sessions"].values()):
+                    raise ValueError("CLIENT_PROJECT_BUSY")
+                updated = deepcopy(self.admissions)
+                updated[project] = {"payload": deepcopy(payload),
+                    "template_fingerprint": digest(self.config["project_templates"][project])}
+                if len(json.dumps(updated).encode()) > 2*1024*1024:
+                    raise ValueError("CLIENT_ADMISSION_STORE_FULL")
+                atomic_json(self.root / "project-admissions.json", updated)
+                self.admissions = updated
+            self.projects[project] = profile
+            return {"status": "ADMITTED", "project_id": project, "sprint_id": profile["expected_sprint_id"],
+                    "manifest_sha256": profile["manifest_sha256"], "profile_id": profile["profile_id"]}
 
     def authenticate(self, header):
         expected = self.resolver(self.config["control_secret_ref"])
@@ -463,8 +562,10 @@ class ManagedCodexClient:
 
     def prepare(self, payload):
         descriptor = self._descriptor(payload)
-        self.runner.ready()
+        profile_id = self.projects[descriptor['project_id']]['profile_id']
+        self.runner.ready(**({'profile_id': profile_id} if profile_id != 'docs-only-v1' else {}))
         with self.lock:
+            self._descriptor(payload)  # Admission cannot change during a slow sandbox probe.
             session_id, session = self._session(descriptor)
             if session is None:
                 active = [s for s in self.state["sessions"].values() if s["phase"] not in ("STOPPED", "TERMINAL")]
@@ -790,11 +891,19 @@ class ManagedCodexClient:
                   "properties": fields, "required": ["status", "summary"], "additionalProperties": False}
         prompt = ("You are executing exactly one native nginx-qa assignment. The native engine owns the graph.\n"
             "Do not create agents, change branches, commit, push, start servers, change credentials, or submit HTTP results.\n"
-            "Do not edit any file except the following operator-approved documentation paths: "
+            "Do not edit any file except the following operator-approved paths: "
             + json.dumps(project["allowed_document_paths"]) + ".\n"
             + ("You are an independent reviewer. Read the exact source diff and verify requirements. "
                "Do not modify files. Decide APPROVE or REJECT based on evidence; never assume success.\n"
-               if kind == "review" else "Implement and verify the assigned documentation task in this workspace.\n")
+               if kind == "review" else "Implement and verify the assigned task in this workspace.\n")
+            + ("The Java/Maven profile supplies an isolated /tmp build area and /maven-cache (read-only). "
+               "Git metadata and sensitive configuration files are not exposed. "
+               "For review read /task/source.diff, a trusted diff of the approved paths. "
+               "For tests copy the current /work tree to /tmp/build, copy /maven-cache to /tmp/m2, "
+               "then run mvn -o -Dmaven.repo.local=/tmp/m2 in that disposable build copy. "
+               "Do not claim tests passed if tools or offline dependencies are missing. "
+               "Only exact approved source file edits in /work are exported.\n"
+               if project["profile_id"] == "java-maven-v1" else "")
             + "Effective scope supersedes any conflicting original task. Report actual checks and limitations.\n"
             + json.dumps(task, ensure_ascii=False, indent=2))
         if len(prompt.encode()) > 256000:
@@ -814,9 +923,12 @@ class ManagedCodexClient:
             with self.lock:
                 session["assignments"][assignment_id] = attempt
                 self._save()
+            runner_options = ({"profile_id": project["profile_id"],
+                               "review_base_commit": source["payload"]["from_commit"] if kind == "review" else None}
+                              if project["profile_id"] != "docs-only-v1" else {})
             output = self.runner.run(cwd=root, prompt=prompt, schema=schema,
                 directory=self.root / session_id / assignment_id, job_name=job_name, stop=stop,
-                allowed_paths=project["allowed_document_paths"])
+                allowed_paths=project["allowed_document_paths"], **runner_options)
         jsonschema.Draft202012Validator(schema).validate(output)
         if stop.is_set():
             return
@@ -833,7 +945,7 @@ class ManagedCodexClient:
             changed = self._changed_docs(root, project)
             if changed:
                 self._git(root, "add", "--", *changed)
-                self._git(root, "commit", "-m", "docs: complete managed setup self-test")
+                self._git(root, "commit", "-m", "Complete native managed assignment")
             commit = self._git(root, "rev-parse", "HEAD")
             if not _SHA.fullmatch(commit) or self._git(root, "status", "--porcelain"):
                 raise ValueError("CLIENT_COMMIT_INVALID")
@@ -912,12 +1024,12 @@ def serve(config):
             if not self.authorized():
                 return
             action = self.path.removeprefix("/managed-client/")
-            if self.path != "/managed-client/" + action or action not in {"prepare", "start", "stop"}:
+            if self.path != "/managed-client/" + action or action not in {"prepare", "start", "stop", "admit"}:
                 self.reply(404, {"error": "NOT_FOUND"})
                 return
             try:
                 length = int(self.headers.get("Content-Length", "0"))
-                if not 1 <= length <= 32768 or self.headers.get("Transfer-Encoding"):
+                if not 1 <= length <= (262144 if action == "admit" else 32768) or self.headers.get("Transfer-Encoding"):
                     raise ValueError("CLIENT_REQUEST_INVALID")
                 payload = strict_object(self.rfile.read(length))
                 self.reply(200, getattr(client, action)(payload))

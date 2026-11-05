@@ -22,6 +22,7 @@ import jsonschema
 
 from .managed_codex_client import CodexRunner
 from .setup_worker_adapter import strict_object, atomic_json
+from .managed_execution_profiles import PROFILES, execution_path, execution_paths
 
 MAX_BUNDLE=32*1024*1024
 MAX_FILE=1024*1024
@@ -34,8 +35,8 @@ def document_path(value):
     return value
 
 
-def regular_destination(root, relative):
-    path=root/document_path(relative)
+def regular_destination(root, relative, profile_id="docs-only-v1"):
+    path=root/execution_path(relative, profile_id)
     current=root
     for part in Path(relative).parts:
         current=current/part
@@ -43,7 +44,7 @@ def regular_destination(root, relative):
             raise ValueError('WSL_DESTINATION_ALIAS')
     if path.exists():
         s=path.stat()
-        if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or s.st_size>MAX_FILE:
+        if not stat.S_ISREG(s.st_mode) or s.st_nlink!=1 or s.st_size>PROFILES[profile_id]['file']:
             raise ValueError('WSL_DESTINATION_INVALID')
     return path
 
@@ -98,7 +99,8 @@ class WslCodexRunner(CodexRunner):
         request={'operation':operation,'job':job,'cli_sha256':self.cli_sha,
                  'supervisor_sha256':self.supervisor_sha,'runtime_hashes':self.runtime_hashes,**body}
         raw=(json.dumps(request,separators=(',',':'))+'\n').encode()
-        if len(raw)>48*1024*1024:raise ValueError('WSL_REQUEST_LIMIT')
+        if len(raw)>96*1024*1024:raise ValueError('WSL_REQUEST_LIMIT')
+        response_limit=32*1024*1024 if body.get('profile_id')=='java-maven-v1' else 4*1024*1024
         p=None;error=None;finished=threading.Event();writer_errors=[]
         with tempfile.TemporaryFile() as output,tempfile.TemporaryFile() as stderr:
             try:
@@ -127,7 +129,7 @@ class WslCodexRunner(CodexRunner):
                 while p.poll() is None:
                     if stop is not None and stop.is_set():
                         error='CLIENT_STOPPING';finished.set()
-                    if time.monotonic()>deadline or os.fstat(output.fileno()).st_size>4*1024*1024 or os.fstat(stderr.fileno()).st_size>131072:
+                    if time.monotonic()>deadline or os.fstat(output.fileno()).st_size>response_limit or os.fstat(stderr.fileno()).st_size>131072:
                         error='WSL_TRANSPORT_LIMIT';finished.set();break
                     time.sleep(.05)
                 finished.set();thread.join(timeout=2)
@@ -135,7 +137,7 @@ class WslCodexRunner(CodexRunner):
                     # EOF gives the Linux watchdog time to retire the PID namespace.
                     try:p.wait(timeout=12)
                     except subprocess.TimeoutExpired:p.kill();p.wait(timeout=5);error='WSL_QUIESCENCE_UNPROVEN'
-                output.seek(0);response=strict_object(output.read(4*1024*1024+1))
+                output.seek(0);response=strict_object(output.read(response_limit+1))
                 if error:raise ValueError(error)
                 if p.returncode or response.get('state')=='BLOCKED':
                     code=response.get('error','WSL_EXECUTION_FAILED')
@@ -145,11 +147,12 @@ class WslCodexRunner(CodexRunner):
                 finished.set()
                 if p and p.poll() is None:p.kill();p.wait(timeout=5)
 
-    def ready(self, *, stop=None):
+    def ready(self, *, stop=None, profile_id='docs-only-v1'):
         try:
             if self._quarantined_job is not None:self.quiesce(self._quarantined_job)
-            result=self._exchange('check',secrets.token_hex(32),stop=stop,auth=self._auth())
+            result=self._exchange('check',secrets.token_hex(32),stop=stop,auth=self._auth(),profile_id=profile_id)
             if result.get('state')!='PASS' or result.get('backend')!='wsl2-bwrap':raise ValueError('WSL_BOUNDARY_UNPROVEN')
+            if profile_id!='docs-only-v1' and result.get('profile_id')!=profile_id:raise ValueError('WSL_PROFILE_UNPROVEN')
             self.sandbox_diagnostic=result
         except Exception as exc:
             code=str(exc) if re.fullmatch('[A-Z0-9_]{1,80}',str(exc)) else 'WSL_PREFLIGHT_FAILED'
@@ -165,59 +168,64 @@ class WslCodexRunner(CodexRunner):
             self._quarantined_job=None
             self._slots.release()
 
-    def run(self, *, cwd,prompt,schema,directory,job_name,stop,allowed_paths=None):
+    def run(self, *, cwd,prompt,schema,directory,job_name,stop,allowed_paths=None,profile_id="docs-only-v1",review_base_commit=None):
         if stop.is_set():raise ValueError('CLIENT_STOPPING')
         paths=list(allowed_paths or [])
-        if not 1<=len(paths)<=32 or len(set(paths))!=len(paths):raise ValueError('WSL_DOCUMENT_ALLOWLIST_REQUIRED')
-        for p in paths:document_path(p)
-        self.ready(stop=stop)
+        execution_paths(paths, profile_id)
+        limits=PROFILES[profile_id]
+        output_limit=131072 if profile_id=='docs-only-v1' else 2*1024*1024
+        self.ready(stop=stop,profile_id=profile_id)
         while not self._slots.acquire(timeout=.1):
             if stop.is_set():raise ValueError('CLIENT_STOPPING')
         try:
             root=Path(cwd).resolve(strict=True);directory.mkdir(parents=True,exist_ok=True)
-            destinations={p:regular_destination(root,p) for p in paths}
+            destinations={p:regular_destination(root,p,profile_id) for p in paths}
             before={p:f.read_bytes() if f.exists() else None for p,f in destinations.items()}
             def git(*args):
                 r=self._bounded_local([shutil.which('git') or 'git','--no-replace-objects','-c','core.hooksPath='+str(directory/'empty-hooks'),
-                    '-C',str(root),*args],root,timeout=60,stop=stop)
+                    '-C',str(root),*args],root,timeout=60,stop=stop,output_limit=output_limit)
                 if r.returncode:raise ValueError('WSL_GIT_EXPORT_FAILED')
                 # The inherited helper returns at most cap+1 bytes. A fast
                 # command may finish between monitor ticks; never interpret a
                 # truncated object listing as a complete expansion-size proof.
-                if len(r.stdout)>131072 or len(r.stderr)>131072:
+                if len(r.stdout)>output_limit or len(r.stderr)>output_limit:
                     raise ValueError('WSL_GIT_EXPORT_OUTPUT_LIMIT')
                 return r.stdout
             head=git('rev-parse','HEAD').decode().strip()
+            source_diff=''
+            if profile_id=='java-maven-v1' and schema['title']=='review':
+                if not re.fullmatch(r'[0-9a-f]{40,64}',str(review_base_commit)):raise ValueError('WSL_REVIEW_BASE_REQUIRED')
+                source_diff=git('diff','--no-ext-diff','--no-textconv','--no-renames',review_base_commit,head,'--',*paths).decode('utf-8')
             # A small current tree and compressed bundle do not bound historical
             # object expansion. Inspect all stored object headers before export;
             # rejecting unrelated unreachable objects is intentionally conservative.
             sizes=git('cat-file','--batch-all-objects','--batch-check=%(objecttype) %(objectsize)').splitlines()
             object_total=0
-            if len(sizes)>8192:raise ValueError('WSL_OBJECT_EXPANSION_LIMIT')
+            if len(sizes)>limits['objects']:raise ValueError('WSL_OBJECT_EXPANSION_LIMIT')
             for entry in sizes:
                 kind,size=entry.split();size=int(size)
-                if kind not in (b'blob',b'tree',b'commit',b'tag') or size>MAX_FILE:
+                if kind not in (b'blob',b'tree',b'commit',b'tag') or size>limits['file']:
                     raise ValueError('WSL_OBJECT_EXPANSION_LIMIT')
                 object_total+=size
-            if object_total>MAX_BUNDLE:raise ValueError('WSL_OBJECT_EXPANSION_LIMIT')
+            if object_total>limits['history']:raise ValueError('WSL_OBJECT_EXPANSION_LIMIT')
             # Reject nonregular tracked entries and excessive expansion before
             # exporting any object into the guest; model-owned Git is never imported.
             tree=git('ls-tree','-rlz','HEAD').split(b'\0')
             total=0
             for entry in filter(None,tree):
                 meta,name=entry.split(b'\t',1);mode,kind,oid,size=meta.split()
-                if mode not in (b'100644',b'100755') or kind!=b'blob' or int(size)>MAX_FILE:
+                if mode not in (b'100644',b'100755') or kind!=b'blob' or int(size)>limits['file']:
                     raise ValueError('WSL_SOURCE_NOT_REGULAR_OR_BOUNDED')
                 total+=int(size)
-            if len(tree)>4097 or total>MAX_BUNDLE:raise ValueError('WSL_SOURCE_LIMIT')
+            if len(tree)>limits['files']+1 or total>limits['tree']:raise ValueError('WSL_SOURCE_LIMIT')
             bundle_path=directory/'source.bundle'
             git('bundle','create',str(bundle_path),'HEAD')
-            if bundle_path.stat().st_size>MAX_BUNDLE:raise ValueError('WSL_BUNDLE_LIMIT')
+            if bundle_path.stat().st_size>limits['bundle']:raise ValueError('WSL_BUNDLE_LIMIT')
             atomic_json(directory/'wsl-attempt.json',{'job':self.job_id(job_name),'head':head,'distro':self.distro,
                 'allowed_paths':paths,'role':schema['title'],'bundle_sha256':hashlib.sha256(bundle_path.read_bytes()).hexdigest()})
             result=self._exchange('run',self.job_id(job_name),stop=stop,
                 bundle=base64.b64encode(bundle_path.read_bytes()).decode(),head=head,
-                prompt=prompt,schema=schema,allowed_paths=paths,timeout=self.timeout,auth=self._auth())
+                prompt=prompt,schema=schema,allowed_paths=paths,timeout=self.timeout,auth=self._auth(),profile_id=profile_id,source_diff=source_diff)
             if result.get('state')!='COMPLETED' or result.get('quiescent') is not True or result.get('job')!=self.job_id(job_name):
                 raise ValueError('WSL_RESULT_UNPROVEN')
             output=result['output'];jsonschema.Draft202012Validator(schema).validate(output)
@@ -225,14 +233,16 @@ class WslCodexRunner(CodexRunner):
             if not isinstance(changes,dict) or not set(changes).issubset(paths) or (schema['title']=='review' and changes):
                 raise ValueError('WSL_CHANGE_SET_INVALID')
             decoded={p:base64.b64decode(v,validate=True) for p,v in changes.items()}
-            if any(len(v)>MAX_FILE for v in decoded.values()):raise ValueError('WSL_DOCUMENT_LIMIT')
+            if any(len(v)>limits['file'] for v in decoded.values()):raise ValueError('WSL_DOCUMENT_LIMIT')
+            if sum(len(v) for v in decoded.values())>(20*1024*1024 if profile_id=='java-maven-v1' else 2*1024*1024):
+                raise ValueError('WSL_CHANGE_SET_LIMIT')
             if stop.is_set():raise ValueError('CLIENT_STOPPING')
             if git('rev-parse','HEAD').decode().strip()!=head:raise ValueError('WSL_SOURCE_CHANGED')
             for p,f in destinations.items():
-                regular_destination(root,p)
+                regular_destination(root,p,profile_id)
                 if (f.read_bytes() if f.exists() else None)!=before[p]:raise ValueError('WSL_DESTINATION_CHANGED')
             for p,content in decoded.items():
-                f=destinations[p];f.parent.mkdir(parents=True,exist_ok=True);regular_destination(root,p)
+                f=destinations[p];f.parent.mkdir(parents=True,exist_ok=True);regular_destination(root,p,profile_id)
                 f.write_bytes(content)
             atomic_json(directory/'wsl-result.json',{'job':result['job'],'quiescent':True,'output':output,
                 'changed_paths':sorted(changes)})
