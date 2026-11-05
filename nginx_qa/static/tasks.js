@@ -81,7 +81,7 @@
     if(!data.reviews?.length)$('reviews').append(text('p','Отзывы ещё не получены.'));
     $('results').replaceChildren();
     for(const link of data.result_links || []){if(!/^https:\/\/github\.com\//.test(link.url))continue;const a=text('a',link.label);a.href=link.url;a.target='_blank';a.rel='noopener noreferrer';const row=text('p','');row.append(a);$('results').append(row);}
-    $('validation').textContent=data.tests_status==='AGENT_REPORTED' ? 'Результаты тестов сообщены исполнителем; ниже сохранены отдельно от независимых отзывов.' : 'Проверки реализации пока не представлены. Статус запуска сам по себе не означает прохождение тестов.';
+    $('validation').textContent=data.tests_status==='AGENT_REPORTED' ? 'Результаты тестов сообщены исполнителем; ниже сохранены отдельно от независимых отзывов.' : (data.summaries || []).length ? 'Отчёт исполнителя приведён выше. Результаты тестов оцениваются вместе с независимыми отзывами.' : 'Проверки реализации пока не представлены. Статус запуска сам по себе не означает прохождение тестов.';
     for(const report of data.reports || [])$('results').append(text('pre',JSON.stringify(report,null,2)));
     for(const summary of data.summaries || [])$('results').append(text('pre',summary.text));
     $('execution').href='/execution?project_id='+encodeURIComponent(data.project_id);

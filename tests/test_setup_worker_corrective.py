@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from nginx_qa.setup_worker_adapter import SetupWorkerAdapter, bounded_json_request
-from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner, _CAPS, PROTOCOL, diagnose, main
+from nginx_qa.managed_codex_client import ManagedCodexClient, NativeAPI, CodexRunner, _CAPS, PROTOCOL, diagnose, main
 from nginx_qa.process_supervisor import _WindowsJob, _spawn_suspended_in_windows_job
 from nginx_qa.sprint_types import SprintProvenance
 
@@ -152,6 +152,69 @@ class WorkerProbeCorrections(unittest.TestCase):
         event.set()
         with self.assertRaises(TimeoutError):
             bounded_json_request("http://127.0.0.1:19001", "/", cancel_event=event)
+
+
+class NativeAPIDeadlineTests(unittest.TestCase):
+    def test_real_adapter_retains_probe_budget_and_caps_submission_budget(self):
+        api = NativeAPI('http://127.0.0.1:19998', {}, lambda ref: TOKEN)
+        route = '/api/v1/projects/9000/agents/2864/whoami'
+        cases = [(route, None, 10), (route, {}, 10),
+                 (route, {'assignment_id': 'assignment-one', 'status': 'DONE'}, 30),
+                 (route, {'assignment_id': 'review-one', 'status': 'REJECT'}, 30),
+                 ('/api/v1/projects/9000/assignments/assignment-one/effective-scope/ack',
+                  {'assignment_id': 'assignment-one'}, 10)]
+        for path, payload, budget in cases:
+            with self.subTest(path=path, payload=payload):
+                connection = MagicMock()
+                connection.getresponse.return_value.status = 200
+                connection.getresponse.return_value.read.return_value = b'{}'
+                # Exercise bounded_json_request itself, including its ceiling;
+                # replacing only the socket avoids mistaking caller intent for
+                # the actual HTTP deadline.
+                with patch('nginx_qa.setup_worker_adapter.http.client.HTTPConnection',
+                           return_value=connection) as factory:
+                    api.request('', path, payload)
+                self.assertEqual(factory.call_args.kwargs['timeout'], budget)
+                args = connection.request.call_args.args
+                self.assertEqual(args[1], path)
+                self.assertEqual(connection.request.call_args.kwargs['body'],
+                                 None if payload is None else json.dumps(payload).encode())
+
+    def test_native_ack_after_eleven_seconds_preserves_exact_payload(self):
+        payload = {'assignment_id': 'assignment-delayed-ack', 'status': 'DONE',
+                   'result': 'Exact delayed fixture result', 'from_commit': 'a' * 40,
+                   'git_commit': 'b' * 40, 'git_branch': 'agent/fixture-result'}
+        receipt = {'status': 'REVIEWS_PENDING', 'assignment_id': payload['assignment_id'],
+                   'result_commit': payload['git_commit'], 'result_key': 'result-' + 'c' * 64}
+        received = []
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append((self.path, self.rfile.read(int(self.headers['Content-Length']))))
+                # Real native Git materialization exceeded the old 10s limit.
+                # Delay headers too, exercising the adapter's total deadline.
+                time.sleep(11)
+                raw = json.dumps(receipt).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        route = '/api/v1/projects/9000/agents/2864/whoami'
+        try:
+            api = NativeAPI(f'http://127.0.0.1:{server.server_port}', {}, lambda ref: TOKEN)
+            started = time.monotonic()
+            self.assertEqual(api.request('', route, payload), receipt)
+            self.assertGreaterEqual(time.monotonic() - started, 10.5)
+            self.assertEqual(received, [(route, json.dumps(payload).encode())])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(3)
 
 
 class FixtureRunner:

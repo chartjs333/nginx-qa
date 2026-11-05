@@ -83,9 +83,13 @@ class NativeAPI:
             if len(token) < 16 or "\r" in token or "\n" in token:
                 raise ValueError("ROLE_CREDENTIAL_UNAVAILABLE")
             headers[ROLE_TOKEN_HEADER] = token
+        # A durable result/review ACK also prepares the next Git workspace.
+        # Real rework handoffs can exceed a normal identity probe's 10 seconds.
+        # Retain the exact SUBMITTING receipt for replay if this finite wait fails.
+        submission = bool(payload and "assignment_id" in payload and route.endswith("/whoami"))
         status, response = bounded_json_request(self.url, route,
             method="GET" if payload is None else "POST", payload=payload,
-            headers=headers, max_bytes=2 * 1024 * 1024, timeout=10)
+            headers=headers, max_bytes=2 * 1024 * 1024, timeout=30 if submission else 10)
         if allow_missing and status == 404:
             return {}
         if status != 200 or not isinstance(response, dict):

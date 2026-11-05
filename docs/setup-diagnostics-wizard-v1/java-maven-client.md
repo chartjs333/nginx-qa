@@ -166,3 +166,8 @@ both sides of path/mount policy. Existing worker and WSL tests exercise native
 contracts and transport regressions. Mock/AST policy tests are not proof of an
 actual Java/Maven or model run. Record live installed canary, Maven and native
 author/two-review results separately for the chosen project and exact commit.
+
+Result and review submissions wait at most 30 seconds for the native ACK,
+including preparation of the next Git workspace. Identity/status requests retain
+their 10-second bound. A timeout still preserves the exact pending payload for
+idempotent replay; it never treats a missing response as an accepted result.
