@@ -1,8 +1,11 @@
 import base64
+import copy
 import io
 import json
 from pathlib import Path
 import tempfile
+import shutil
+import subprocess
 from types import SimpleNamespace
 import unittest
 import zipfile
@@ -13,6 +16,7 @@ from nginx_qa.task_inputs import workbook_summary
 from nginx_qa.task_wizard import TaskWizard, register_task_wizard
 from nginx_qa.managed_import import ManagedImportError
 from nginx_qa.sprint_types import managed_graph_semantic_issues
+from nginx_qa.sprint_types import canonical_json_sha256
 from tests.test_managed_import import ManagedImportFixture
 from tests.test_telegram_launcher_launch_modes import FakeExistingClient
 
@@ -42,6 +46,13 @@ class TaskInputTests(unittest.TestCase):
 
 
 class TaskWizardHTTPTests(unittest.TestCase):
+    def test_revision_ui_preserves_edits_and_never_starts_on_preview(self):
+        root = Path(__file__).resolve().parents[1]
+        run = subprocess.run([shutil.which('node'), str(root / 'tests/task_revision_ui_harness.cjs')],
+                             cwd=root, capture_output=True, text=True, timeout=30)
+        self.assertEqual(0, run.returncode, run.stderr)
+        self.assertTrue(json.loads(run.stdout)['passed'])
+
     def test_intake_accepts_declared_limit_and_rejects_oversize_before_preview(self):
         with tempfile.TemporaryDirectory() as root:
             host = SimpleNamespace(app=FastAPI())
@@ -174,6 +185,177 @@ class TaskWizardTests(ManagedImportFixture):
     def test_no_attachment_still_pins_actual_source_files(self):
         result = self.service.preview('alice', {'repository_url': self.request['repository_url'], 'task': self.request['task']})
         self.assertEqual('service.py', self.service._read('alice', result['task_id'])['manifest']['files'][0]['path'])
+
+    def revision_request(self, old, **changes):
+        return {'repository_url': self.request['repository_url'], 'task': 'Correct the previous result with updated requirements',
+                'parent_task_id': old['task_id'], 'source': {'kind': 'commit', 'value': old['source_commit']},
+                'attachment_action': 'keep', **changes}
+
+    def test_completed_attempt_and_native_history_remain_immutable_after_new_attempt(self):
+        self.client.finish = True
+        first = self.service.preview('alice', self.request)
+        self.service.start('alice', first['task_id'], first['plan_digest'])
+        first = self.service.get('alice', first['task_id'])
+        self.assertEqual('Completed', first['status'])
+        path = self.service.root / (first['task_id'] + '.json')
+        before_file = path.read_bytes()
+        before_native = copy.deepcopy(self.imp.store.runtime_state(self.project_id, first['sprint_id']))
+        seed = self.service.revision('alice', first['task_id'])
+        self.assertEqual('commit', seed['source']['kind'])
+        second = self.service.preview('alice', self.revision_request(first, source=seed['source']))
+        self.assertEqual(first['task_id'], second['parent_task_id'])
+        self.assertEqual(first['task_id'], second['root_task_id'])
+        self.assertEqual(2, second['attempt'])
+        self.assertNotEqual(first['task_id'], second['task_id'])
+        self.assertEqual(1, len(self.client.starts))  # Edit and preview never execute.
+        self.service.start('alice', second['task_id'], second['plan_digest'])
+        second = self.service.get('alice', second['task_id'])
+        self.assertEqual('Completed', second['status'])
+        self.assertNotEqual(first['sprint_id'], second['sprint_id'])
+        self.assertEqual(before_file, path.read_bytes())
+        self.assertEqual(before_native, self.imp.store.runtime_state(self.project_id, first['sprint_id']))
+        self.assertEqual(2, len(second['reviews']))
+        self.assertEqual({first['task_id'], second['task_id']}, {r['task_id'] for r in self.service.history('alice')['tasks']})
+
+    def test_revision_retains_replaces_or_detaches_verified_workbook(self):
+        old = self.service.preview('alice', self.request)
+        path = self.service.root / (old['task_id'] + '.json')
+        before = path.read_bytes()
+        kept = self.service.preview('alice', self.revision_request(old))
+        replaced = self.service.preview('alice', self.revision_request(old, attachment_action='replace',
+            attachment_name='replacement.xlsx', attachment_base64=base64.b64encode(workbook('new input')).decode()))
+        removed = self.service.preview('alice', self.revision_request(old, attachment_action='none'))
+        self.assertEqual(old['attachment'], kept['attachment'])
+        self.assertNotEqual(old['attachment']['sha256'], replaced['attachment']['sha256'])
+        self.assertEqual('replacement.xlsx', replaced['attachment']['name'])
+        self.assertIsNone(removed['attachment'])
+        keep_draft, old_draft = (self.service._read('alice', r['task_id']) for r in (kept, old))
+        self.assertNotEqual(keep_draft['input_intent']['path'], old_draft['input_intent']['path'])
+        self.assertIsNone(self.service._read('alice', removed['task_id'])['input_intent'])
+        self.assertEqual(before, path.read_bytes())
+        self.assertIsNone(self.imp.store.active_runtime_state(self.project_id))
+        self.assertFalse(self.client.starts)
+        self.assertFalse(self.admissions)
+        self.assertNotIn('task-', self.git('for-each-ref', '--format=%(refname)', cwd=self.remote))
+        # A corrupt attachment reference cannot be silently retained.
+        old_draft['attachment']['sha256'] = '0' * 64
+        self.service._save(old_draft)
+        with self.assertRaisesRegex(ValueError, 'TASK_INPUT_INTENT_CHANGED'):
+            self.service.preview('alice', self.revision_request(old))
+
+    def test_revision_owner_and_project_boundary(self):
+        old = self.service.preview('alice', self.request)
+        with self.assertRaisesRegex(PermissionError, 'TASK_OWNER_MISMATCH'):
+            self.service.revision('bob', old['task_id'])
+        self.config['projects'][self.project_id]['allowed_actor_ids'].append('bob')
+        other = copy.deepcopy(self.config['projects'][self.project_id])
+        other['repository_url'] = 'https://github.com/acme/other.git'
+        self.config['projects']['9003'] = other
+        self.service.policy_path.write_text(json.dumps(self.config))
+        with self.assertRaisesRegex(PermissionError, 'TASK_OWNER_MISMATCH'):
+            self.service.preview('bob', self.revision_request(old))
+        with self.assertRaisesRegex(PermissionError, 'TASK_REVISION_PROJECT_MISMATCH'):
+            self.service.preview('alice', self.revision_request(old, repository_url=other['repository_url']))
+
+    def test_only_fetched_registered_remote_sources_are_eligible(self):
+        old = self.service.preview('alice', self.request)
+        draft = self.service._read('alice', old['task_id'])
+        for selection in (
+            {'kind': 'branch', 'value': '--upload-pack=evil'},
+            {'kind': 'branch', 'value': 'refs/heads/main~1'},
+            {'kind': 'branch', 'value': 'refs/heads/main; echo bad'},
+            {'kind': 'branch', 'value': 'refs/heads/../main'},
+            {'kind': 'branch', 'value': 'refs/remotes/other/main'},
+            {'kind': 'branch', 'value': 'refs/tags/main'},
+            {'kind': 'commit', 'value': 'HEAD'},
+            {'kind': 'commit', 'value': self.commit[:12]},
+            {'kind': 'commit', 'value': 'https://github.com/acme/other'},
+            {'kind': 'branch', 'value': 'refs/heads/main', 'commit': self.commit},
+        ):
+            with self.subTest(selection=selection), self.assertRaisesRegex(ValueError, 'TASK_SOURCE_INVALID'):
+                self.service.preview('alice', self.revision_request(old, source=selection))
+        # This real commit exists in the same mirror, but only in an internal
+        # preview pin. Presence in the object database must not grant authority.
+        for commit in (draft['input_intent']['commit'], 'f' * 40):
+            with self.assertRaisesRegex(ValueError, 'TASK_SOURCE_NOT_REMOTE'):
+                self.service.preview('alice', self.revision_request(old, source={'kind': 'commit', 'value': commit}))
+        with self.assertRaisesRegex(ValueError, 'TASK_SOURCE_NOT_REMOTE'):
+            self.service.preview('alice', self.revision_request(old, source={'kind': 'branch', 'value': 'refs/heads/local-only'}))
+        self.assertEqual([{'ref': 'refs/heads/main', 'commit': self.commit}], self.service.sources('alice', self.project_id)['branches'])
+        with self.assertRaises(PermissionError):
+            self.service.sources('bob', self.project_id)
+
+    def advance_main(self):
+        (self.source / 'service.py').write_text("print('changed')\n")
+        self.git('add', 'service.py', cwd=self.source)
+        self.git('commit', '-m', 'source update', cwd=self.source)
+        self.git('push', str(self.remote), 'main', cwd=self.source)
+
+    def test_moving_branch_requires_new_preview_but_immutable_commit_stays_pinned(self):
+        request = {k: self.request[k] for k in ('repository_url', 'task')}
+        branch = self.service.preview('alice', {**request, 'source': {'kind': 'branch', 'value': 'refs/heads/main'}})
+        pinned = self.service.preview('alice', {**request, 'source': {'kind': 'commit', 'value': self.commit}})
+        self.advance_main()
+        with self.assertRaisesRegex(ValueError, 'TASK_SOURCE_CHANGED'):
+            self.service.start('alice', branch['task_id'], branch['plan_digest'])
+        self.assertIsNone(self.service._read('alice', branch['task_id'])['operation_id'])
+        self.assertFalse(self.client.starts)
+        started = self.service.start('alice', pinned['task_id'], pinned['plan_digest'])
+        self.assertEqual('Running', started['status'])
+        identity = self.client.starts[started['operation_id']]
+        self.assertEqual(self.commit, identity['assignment']['source_commit'])
+        self.assertEqual(self.commit, self.git('rev-parse', 'refs/heads/agent/task-source/' + pinned['task_id'], cwd=self.remote))
+
+    def test_remote_result_branch_is_selectable_independently_of_default_main(self):
+        (self.source / 'service.py').write_text("print('previous result')\n")
+        self.git('add', 'service.py', cwd=self.source)
+        self.git('commit', '-m', 'previous implementation', cwd=self.source)
+        result = self.git('rev-parse', 'HEAD', cwd=self.source)
+        ref = 'refs/heads/agent/previous-implementation'
+        self.git('push', str(self.remote), 'HEAD:' + ref, cwd=self.source)
+        preview = self.service.preview('alice', {**self.request, 'source': {'kind': 'branch', 'value': ref}})
+        self.assertEqual(result, preview['source_commit'])
+        self.assertEqual(self.commit, self.git('rev-parse', 'main', cwd=self.remote))
+        draft = self.service._read('alice', preview['task_id'])
+        self.assertEqual(result, draft['input_intent']['parent'])
+        self.assertFalse(self.client.starts)
+
+    def test_old_unstarted_draft_remains_startable_without_rewriting_its_plan(self):
+        preview = self.service.preview('alice', {k: self.request[k] for k in ('repository_url', 'task')})
+        draft = self.service._read('alice', preview['task_id'])
+        for key in ('source_selection', 'source_intent', 'parent_task_id', 'root_task_id', 'attempt', 'attachment_action', 'plan_digest'):
+            draft.pop(key)
+        draft['manifest']['git']['source_ref'] = 'refs/heads/main'
+        draft['plan_digest'] = canonical_json_sha256(draft)
+        self.service._save(draft)
+        started = self.service.start('alice', draft['task_id'], draft['plan_digest'])
+        self.assertEqual('Running', started['status'])
+        self.assertEqual(draft['plan_digest'], self.service._read('alice', draft['task_id'])['plan_digest'])
+        self.assertEqual(1, started['attempt'])
+
+    def test_revision_obeys_native_active_slot_before_publication_or_admission(self):
+        old = self.service.preview('alice', self.request)
+        self.service.start('alice', old['task_id'], old['plan_digest'])
+        before = self.git('for-each-ref', '--format=%(refname)%00%(objectname)', cwd=self.remote)
+        revision = self.service.preview('alice', self.revision_request(old))
+        with self.assertRaises(ManagedImportError) as caught:
+            self.service.start('alice', revision['task_id'], revision['plan_digest'])
+        self.assertEqual('PROJECT_BUSY', caught.exception.code)
+        self.assertEqual(1, len(self.admissions))
+        self.assertEqual(before, self.git('for-each-ref', '--format=%(refname)%00%(objectname)', cwd=self.remote))
+
+    def test_forged_source_or_scope_cannot_override_reviewed_plan(self):
+        for key in ('source_commit', 'source_ref', 'source_intent', 'allowed_document_paths', 'manifest'):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'TASK_REQUEST_INVALID'):
+                self.service.preview('alice', {**self.request, key: self.commit})
+        old = self.service.preview('alice', self.request)
+        draft = self.service._read('alice', old['task_id'])
+        draft['manifest']['git']['expected_source_commit'] = self.commit
+        self.service._save(draft)
+        with self.assertRaisesRegex(ValueError, 'TASK_PLAN_CHANGED'):
+            self.service.start('alice', old['task_id'], old['plan_digest'])
+        self.assertIsNone(self.imp.store.active_runtime_state(self.project_id))
+        self.assertFalse(self.admissions)
 
     def test_interrupted_client_is_visible_and_explicit_resume_preserves_native_assignment(self):
         preview = self.service.preview('alice', self.request)

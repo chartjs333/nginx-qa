@@ -25,7 +25,7 @@ from .setup_native import OperatorOperations, OperatorPrincipal
 from .setup_worker_adapter import atomic_json, bounded_json_request, BoundedExistingClientHTTPAdapter
 from .sprint_types import canonical_json_bytes, canonical_json_sha256, managed_graph_semantic_issues
 from .task_inputs import workbook_summary, MAX_ATTACHMENT
-from .task_wizard_git import prepare_input_commit, publish_input
+from .task_wizard_git import prepare_input_commit, publish_input, remote_sources, select_source, source_intent, publish_source
 from .telegram_launcher_execution import launch_sync, stop_sync, descriptor, validate_receipt
 from .telegram_launcher_intake import repository_binding
 from .control_secrets import trusted_control_resolver
@@ -107,7 +107,7 @@ class TaskWizard:
         return self.host.managed_sprint_importer_factory(self.host.load_managed_runtime_config(), repos)
 
     def _read(self, actor, task_id):
-        if not TASK_ID.fullmatch(task_id):
+        if not isinstance(task_id, str) or not TASK_ID.fullmatch(task_id):
             raise ValueError('TASK_ID_INVALID')
         path = self.root / (task_id + '.json')
         if not path.is_file() or path.is_symlink():
@@ -126,8 +126,39 @@ class TaskWizard:
         for project_id, p in self.config()['projects'].items():
             if actor in p.get('allowed_actor_ids', []):
                 rows.append({'project_id': project_id, 'name': p['name'], 'repository_url': p['repository_url'],
-                             'profile_id': p['profile_id']})
+                             'profile_id': p['profile_id'], 'source_ref': p['source_ref']})
         return {'projects': rows}
+
+    def sources(self, actor, project_id):
+        p = self.authorize(actor, project_id)
+        imp = self.importer(project_id)
+        imp.validate_mutation_roots()
+        repository = imp.git_provider.ensure_mirror(p['repository_id'], fetch=True)
+        if repository.canonical_remote != canonical_remote_from_address(p['repository_url']):
+            raise ValueError('TASK_REPOSITORY_BINDING_CHANGED')
+        return {'project_id': project_id, 'default_ref': p['source_ref'],
+                'branches': remote_sources(imp.git_provider, repository)}
+
+    def revision(self, actor, task_id):
+        """Read-only editing seed. Persist a new immutable attempt at preview."""
+        old = self._read(actor, task_id)
+        value = self.public(old)
+        commits = [a['result_commit'] for a in value['assignments']
+                   if a.get('result_commit') and a.get('node_id') == 'implementation']
+        return {'parent_task_id': task_id, 'root_task_id': old.get('root_task_id', task_id),
+                'attempt': old.get('attempt', 1) + 1, 'project_id': old['project_id'],
+                'repository_url': old['repository_url'], 'task': old['task'],
+                'attachment': old['attachment'],
+                'source': {'kind': 'commit', 'value': commits[-1] if commits else old['source_commit']}}
+
+    @staticmethod
+    def _check_plan(draft, policy, digest):
+        # Receipts are mutable, the reviewed request/manifest/source are not.
+        frozen = {**draft, 'operation_id': None, 'last_error': None}
+        frozen.pop('plan_digest', None)
+        if (digest != draft['plan_digest'] or canonical_json_sha256(frozen) != digest
+                or canonical_json_sha256(policy) != draft['policy_digest']):
+            raise ValueError('TASK_PLAN_CHANGED')
 
     def _executor(self, p):
         return BoundedExistingClientHTTPAdapter(p['executor_url'], p['executor_secret_ref'], trusted_control_resolver)
@@ -142,7 +173,8 @@ class TaskWizard:
         return data
 
     def preview(self, actor, request):
-        if set(request) - {'repository_url', 'task', 'attachment_name', 'attachment_base64'}:
+        if set(request) - {'repository_url', 'task', 'attachment_name', 'attachment_base64',
+                           'parent_task_id', 'attachment_action', 'source'}:
             raise ValueError('TASK_REQUEST_INVALID')
         url, task = request.get('repository_url'), request.get('task')
         if not isinstance(url, str) or not re.fullmatch(r'https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?/?', url):
@@ -158,15 +190,37 @@ class TaskWizard:
             raise ValueError('TASK_PROJECT_SETUP_REQUIRED')
         project_id, _ = candidates[0]
         p = self.authorize(actor, project_id)
+        old = self._read(actor, request['parent_task_id']) if 'parent_task_id' in request else None
+        if old and (old['project_id'] != project_id
+                    or canonical_remote_from_address(old['repository_url']) != canonical_remote_from_address(p['repository_url'])):
+            raise PermissionError('TASK_REVISION_PROJECT_MISMATCH')
         imp = self.importer(project_id)
         imp.validate_mutation_roots()
         repository = imp.git_provider.ensure_mirror(p['repository_id'], fetch=True)
         if repository.canonical_remote != canonical_remote_from_address(url):
             raise ValueError('TASK_REPOSITORY_BINDING_CHANGED')
-        source = imp.git_provider.resolve_commit(repository, p['source_ref'])
+        selected = select_source(imp.git_provider, repository, request.get('source', {'kind': 'branch', 'value': p['source_ref']}))
+        source = selected['commit']
         task_id, now = 'task-' + uuid4().hex, datetime.now(timezone.utc).isoformat()
         attachment, summary, input_intent = None, None, None
-        if request.get('attachment_base64'):
+        action = request.get('attachment_action', 'replace' if 'attachment_base64' in request else 'keep' if old and old['attachment'] else 'none')
+        if action not in ('keep', 'replace', 'none'):
+            raise ValueError('TASK_ATTACHMENT_ACTION_INVALID')
+        if action != 'replace' and ('attachment_base64' in request or 'attachment_name' in request):
+            raise ValueError('TASK_ATTACHMENT_ACTION_INVALID')
+        name = None
+        if action == 'keep':
+            if not old or not old['attachment'] or not old['input_intent']:
+                raise ValueError('TASK_ATTACHMENT_MISSING')
+            prior = old['input_intent']
+            if (prior['path'] != old['task_id'] + '.xlsx'
+                    or imp.git_provider.pinned_commit(repository, owner_id='task-input:' + old['task_id']) != prior['commit']):
+                raise ValueError('TASK_INPUT_INTENT_CHANGED')
+            attachment = imp.git_provider.read_blob(repository, prior['commit'], prior['path'], max_bytes=MAX_ATTACHMENT)
+            if hashlib.sha256(attachment).hexdigest() != old['attachment']['sha256'] or prior['sha256'] != old['attachment']['sha256']:
+                raise ValueError('TASK_INPUT_INTENT_CHANGED')
+            name = old['attachment']['name']
+        elif action == 'replace':
             name = request.get('attachment_name', '')
             if not isinstance(name, str) or not name.lower().endswith('.xlsx') or len(name) > 180 or '/' in name or '\\' in name:
                 raise ValueError('TASK_ATTACHMENT_NAME_INVALID')
@@ -174,21 +228,27 @@ class TaskWizard:
                 attachment = base64.b64decode(request['attachment_base64'], validate=True)
             except Exception as exc:
                 raise ValueError('TASK_ATTACHMENT_INVALID') from exc
+        if attachment is not None:
             summary = workbook_summary(attachment)
             input_intent = prepare_input_commit(imp.git_provider, repository, task_id=task_id,
                 source_commit=source, attachment=attachment, created_at=now)
+        pinned = source_intent(imp.git_provider, repository, task_id, source)
         source_files = []
         for path in p.get('source_checks', ['pom.xml']):
             raw = imp.git_provider.read_blob(repository, source, path, max_bytes=2 * 1024 * 1024)
             source_files.append({'path': path, 'sha256': hashlib.sha256(raw).hexdigest()})
-        manifest = make_manifest({**p, 'source_commit': source, 'source_files': source_files}, task_id, task, input_intent, p['repository_url'])
+        manifest = make_manifest({**p, 'source_ref': pinned['ref'], 'source_commit': source, 'source_files': source_files}, task_id, task, input_intent, p['repository_url'])
         errors = managed_schema_errors(manifest, 'managed-workspace-sprint-v1.schema.json')
         if errors or managed_graph_semantic_issues(manifest):
             raise ValueError('TASK_MANIFEST_INVALID')
         draft = {'schema_version': 1, 'task_id': task_id, 'actor_id': actor, 'project_id': project_id,
             'created_at': now, 'policy_digest': canonical_json_sha256(p), 'source_commit': source,
+            'source_selection': selected, 'source_intent': pinned,
+            'parent_task_id': old['task_id'] if old else None,
+            'root_task_id': old.get('root_task_id', old['task_id']) if old else task_id,
+            'attempt': old.get('attempt', 1) + 1 if old else 1, 'attachment_action': action,
             'repository_url': p['repository_url'], 'task': task, 'manifest': manifest, 'input_intent': input_intent,
-            'attachment': {'name': request.get('attachment_name'), 'sha256': summary['sha256'],
+            'attachment': {'name': name, 'sha256': summary['sha256'],
                 'sheets': summary['sheet_count'], 'rows': sum(len(s['rows']) for s in summary['sheets'])} if summary else None,
             'operation_id': None, 'last_error': None}
         draft['plan_digest'] = canonical_json_sha256(draft)
@@ -199,6 +259,8 @@ class TaskWizard:
         p = self.authorize(draft['actor_id'], draft['project_id'])
         value = {k: draft[k] for k in ('task_id', 'project_id', 'created_at', 'repository_url', 'source_commit',
                                       'task', 'attachment', 'plan_digest', 'operation_id', 'last_error')}
+        value.update(parent_task_id=draft.get('parent_task_id'), root_task_id=draft.get('root_task_id', draft['task_id']),
+                     attempt=draft.get('attempt', 1), source_selection=draft.get('source_selection'))
         value.update(status='Draft', steps=['Анализ исходных материалов', 'Изменения и тесты',
                      'Проверка требований', 'Независимая проверка кода', 'Результат'],
             effects=['Создать отдельные ветки для исходных материалов и работы',
@@ -260,7 +322,9 @@ class TaskWizard:
             for path in sorted(self.root.glob('task-*.json'), key=lambda p: p.stat().st_mtime, reverse=True)[:100]:
                 try:
                     draft = self._read(actor, path.stem)
-                    values.append({k: draft[k] for k in ('task_id', 'project_id', 'created_at', 'operation_id', 'task')})
+                    values.append({**{k: draft[k] for k in ('task_id', 'project_id', 'created_at', 'operation_id', 'task')},
+                                   'parent_task_id': draft.get('parent_task_id'),
+                                   'root_task_id': draft.get('root_task_id', draft['task_id']), 'attempt': draft.get('attempt', 1)})
                 except (PermissionError, LookupError):
                     continue
         return {'tasks': values}
@@ -268,11 +332,12 @@ class TaskWizard:
     def start(self, actor, task_id, digest):
         draft = self._read(actor, task_id)
         p = self.authorize(actor, draft['project_id'])
-        if digest != draft['plan_digest'] or canonical_json_sha256(p) != draft['policy_digest']:
-            raise ValueError('TASK_PLAN_CHANGED')
+        self._check_plan(draft, p, digest)
         imp = self.importer(draft['project_id'])
         with ManagedFileLock(self.root / (task_id + '.lock'), timeout=30):
             draft = self._read(actor, task_id)
+            p = self.authorize(actor, draft['project_id'])
+            self._check_plan(draft, p, digest)
             provider = imp.git_provider
             repository = provider.ensure_mirror(p['repository_id'], fetch=True)
             if canonical_remote_from_address(p['repository_url']) != repository.canonical_remote:
@@ -283,8 +348,13 @@ class TaskWizard:
             transport = {'kind': 'setup_task', 'task_id': task_id, 'source_project_id': draft['project_id']}
             envelope = {'project_id': draft['project_id'], 'autonomous_mode': True, 'manifest': draft['manifest']}
             existing = operations.lookup(principal, (key, key), envelope, transport)
-            if not existing and provider.resolve_commit(repository, p['source_ref']) != draft['source_commit']:
-                raise ValueError('TASK_SOURCE_CHANGED')
+            if not existing:
+                selection = draft.get('source_selection', {'kind': 'branch', 'value': p['source_ref']})
+                selected = select_source(provider, repository, {k: selection[k] for k in ('kind', 'value')})
+                if selected['commit'] != draft['source_commit']:
+                    raise ValueError('TASK_SOURCE_CHANGED')
+                if draft.get('source_intent') and provider.pinned_commit(repository, owner_id='task-source:' + task_id) != draft['source_commit']:
+                    raise ValueError('TASK_SOURCE_INTENT_CHANGED')
             record = existing or operations.reserve(principal, (key, key), envelope, transport, repository_binding(repository.spec))
             draft['operation_id'] = record['operation_id']
             self._save(draft)
@@ -302,6 +372,8 @@ class TaskWizard:
                 authorize(principal, 'prepare', None)
                 if draft['input_intent']:
                     publish_input(provider, repository, task_id, draft['input_intent'])
+                elif draft.get('source_intent'):
+                    publish_source(provider, repository, task_id, draft['source_intent'])
                 if not record['published']:
                     intent = record['provision_intent'] or provider.create_launcher_manifest_commit(repository,
                         operation_id=record['operation_id'], source_commit=draft['manifest']['git']['expected_source_commit'],
@@ -426,6 +498,12 @@ def register_task_wizard(host, state, registry_reader, authenticate):
             return response(await asyncio.to_thread(wizard.history, authenticate(request)))
         except Exception as exc:
             error(exc)
+    @app.get('/api/v1/tasks/projects/{project_id}/sources')
+    async def sources(project_id: str, request: Request):
+        try:
+            return response(await asyncio.to_thread(wizard.sources, authenticate(request), project_id))
+        except Exception as exc:
+            error(exc)
     @app.post('/api/v1/tasks/preview')
     async def preview(request: Request):
         try:
@@ -447,6 +525,12 @@ def register_task_wizard(host, state, registry_reader, authenticate):
             if set(data) != {'plan_digest'}:
                 raise ValueError('TASK_REQUEST_INVALID')
             return response(await asyncio.to_thread(wizard.start, actor, task_id, data['plan_digest']))
+        except Exception as exc:
+            error(exc)
+    @app.get('/api/v1/tasks/{task_id}/revision')
+    async def revision(task_id: str, request: Request):
+        try:
+            return response(await asyncio.to_thread(wizard.revision, authenticate(request), task_id))
         except Exception as exc:
             error(exc)
     @app.post('/api/v1/tasks/{task_id}/stop')

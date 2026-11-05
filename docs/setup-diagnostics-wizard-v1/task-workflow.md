@@ -19,6 +19,37 @@ an arbitrary repository URL does not grant an executor or credentials.
 6. Open the result comparison and read the recorded validation. Merge, production
    data changes, deployment and sending a reply are separate actions.
 
+## Correct a result and start a new attempt
+
+1. Open the previous task in history and click **Изменить и запустить заново**.
+   This opens an editable copy; it does not run or reopen the old sprint. If the
+   form already contains edits, explicitly confirm keeping that text, source and
+   selected file. Refreshing status or opening history never overwrites the form.
+2. Correct the request. Choose **Сохранить прежний Excel**, **Прикрепить новый
+   Excel**, or **Без вложения**. Keeping uses the original immutable blob and
+   verifies its hash; there is no need to upload it again. Detaching excludes the
+   attachment from the new task; it does not delete files already in Git history
+   or in the selected source tree.
+3. Choose a remote branch (use **Обновить список веток**) or a full commit SHA.
+   The editing copy initially suggests the previous implementation result, or
+   its original base if there is no result. Only branches of this registered
+   origin and commits reachable from those branches are accepted. Tags, local
+   assignments, short SHAs, arbitrary revision expressions and other repos are
+   excluded.
+4. Click **Проверить и подготовить**. Inspect the full pinned SHA, revised text
+   and attachment. A new task ID and linked attempt are saved; the previous task,
+   native sprint, reviews and results remain unchanged. Editing after preview
+   disables Start until a new plan is prepared.
+5. Click **Запустить работу** for the new plan. If the selected branch moved,
+   prepare another plan. A selected immutable SHA stays pinned even if its branch
+   advances, but must still be reachable from this origin at the first Start.
+   A project with an active sprint refuses a second Start; editing and preview
+   remain available. **Предыдущая попытка** opens the earlier results.
+
+**Продолжить после исправления** instead retries the same interrupted transport
+with the same assignment and task. It does not accept revised requirements.
+**Новое задание** explicitly clears the form and exits the linked editing mode.
+
 The setup page diagnoses installation and connectivity. The task page actually
 submits work; users do not have to author a sprint JSON or operate each graph node.
 
@@ -53,7 +84,7 @@ operator decision or resume work with guessed instructions.
 ## Operator configuration and scope
 
 The protected `task-projects.json` under the instance state root maps registered
-project IDs to allowed operators, exact repository/source, role phones, executor
+project IDs to allowed operators, exact repository/default source, role phones, executor
 and exact writable paths. The matching `project_templates` in the native client
 are the authority ceiling. See [Java/Maven client](java-maven-client.md) for the
 worker profile and private Git credential reference.
@@ -64,6 +95,28 @@ install dependencies, contact application services, deploy, merge main or send
 messages. Source secrets and Git history are hidden from the model; review source
 diffs are produced by the trusted parent. Attachment contents never grant commands
 or permissions. Only one active native sprint is admitted per project.
+
+Source selection uses the existing template's repository authority, not a new
+admission capability. The protected client still accepts only its exact URL,
+workspace, branch prefix, role constraints and writable-path ceiling. Browser
+requests cannot pass a manifest, credential reference, source publication intent
+or writable paths. The trusted ingress validates fetched remote reachability,
+pins the selected commit and generates the unchanged native manifest contract.
+Without an attachment, Start publishes a create-only `agent/task-source/task-*`
+topic pointing at that exact commit (the native importer requires a ref). With an
+attachment it publishes the existing immutable input topic. Preview publishes
+neither. Start rechecks the complete immutable plan digest and current policy
+under its task lock before reserving the existing native project slot; lost ACK
+retries retain the same reserved operation rather than switching sources.
+
+Read-only `GET /api/v1/tasks/{task_id}/revision` returns editing defaults.
+`GET /api/v1/tasks/projects/{project_id}/sources` fetches the registered origin
+and lists up to 2,000 remote heads. Both require the normal operator session and
+project authorization; revision also requires task ownership. Preview additionally
+accepts `parent_task_id`, `source: {kind: "branch"|"commit", value: ...}` and
+`attachment_action: "keep"|"replace"|"none"`. Branch values use `refs/heads/...`.
+Only preview creates the linked local draft, and only explicit Start can publish,
+admit or execute it.
 
 Limits: 2 MiB input workbook, 3 MiB HTTP request, bounded ZIP/XML extraction,
 16,000-character request, exact source-path allowlist, and two independent
