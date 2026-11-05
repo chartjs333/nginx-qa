@@ -5,13 +5,14 @@ import hashlib
 import json
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from nginx_qa.managed_execution_profiles import execution_path, execution_paths
-from nginx_qa.managed_codex_client import ManagedCodexClient
+from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner
 from nginx_qa.sprint_types import canonical_json_bytes
 from tests.test_managed_import import ManagedImportFixture
 
@@ -94,6 +95,66 @@ class CodingAdmissionTests(unittest.TestCase):
             with self.subTest(path=p), self.assertRaises(ValueError):execution_path(p,'java-maven-v1')
         with self.assertRaises(ValueError):execution_path(self.allowed[0],'docs-only-v1')
         with self.assertRaises(ValueError):execution_paths(self.allowed*50,'java-maven-v1')
+
+    def test_credential_reference_is_operator_template_only_and_never_model_env(self):
+        self.client.config['project_templates']['9020']['credential_reference']='env:NGINX_QA_GIT_CREDENTIALS_LITE'
+        self.client.admit(self.payload)
+        self.assertEqual(self.client.projects['9020']['credential_reference'],'env:NGINX_QA_GIT_CREDENTIALS_LITE')
+        bad=deepcopy(self.payload);bad['credential_reference']='env:ATTACKER'
+        with self.assertRaisesRegex(ValueError,'ADMISSION_INVALID'):self.client.admit(bad)
+        environment={'PATH':'expected','SystemRoot':'C:/Windows','GIT_ASKPASS':'helper.cmd',
+            'NGINX_QA_GIT_TOKEN':'fixture-secret','NGINX_QA_GIT_CREDENTIALS_LITE':'{"token":"fixture-secret"}',
+            'GITHUB_TOKEN':'fixture-other-secret','AWS_SECRET_ACCESS_KEY':'fixture-cloud-secret'}
+        self.assertEqual(CodexRunner.child_environment(environment),{'PATH':'expected','SystemRoot':'C:/Windows'})
+
+    def test_parent_git_credentials_validate_helper_and_reserved_environment(self):
+        helper=self.root/'askpass.cmd';helper.write_text('@echo fixture')
+        reference='env:NGINX_QA_GIT_CREDENTIALS_LITE'
+        good={'GIT_ASKPASS':str(helper),'NGINX_QA_GIT_TOKEN':'fixture-secret'}
+        with patch.dict('os.environ',{'NGINX_QA_GIT_CREDENTIALS_LITE':json.dumps(good)}):
+            self.assertEqual(self.client._git_credential_environment(reference),good)
+        for key in ('PATH','GIT_CONFIG_COUNT','GIT_TRACE','NGINX_QA_SCOPE_CONTROL_ADMIN','OPENAI_API_KEY'):
+            bad={**good,key:'fixture'}
+            with patch.dict('os.environ',{'NGINX_QA_GIT_CREDENTIALS_LITE':json.dumps(bad)}),self.assertRaisesRegex(ValueError,'CREDENTIAL_UNAVAILABLE'):
+                self.client._git_credential_environment(reference)
+        with self.assertRaisesRegex(ValueError,'REFERENCE_INVALID'):
+            self.client._git_credential_environment('env:NGINX_QA_LAUNCHER_CONTROL_ADMIN')
+        workspace=self.root/'managed';workspace.mkdir();inside=workspace/'askpass.cmd';inside.write_text('@echo bad')
+        with patch.dict('os.environ',{'NGINX_QA_GIT_CREDENTIALS_LITE':json.dumps({**good,'GIT_ASKPASS':str(inside)})}),self.assertRaisesRegex(ValueError,'CREDENTIAL_UNAVAILABLE'):
+            self.client._git_credential_environment(reference)
+
+    def test_credentials_only_reach_parent_network_git_child(self):
+        helper=self.root/'askpass.cmd';helper.write_text('@echo fixture')
+        reference='env:NGINX_QA_GIT_CREDENTIALS_LITE'
+        captured=[]
+        def spawn(job,argv,**kw):
+            captured.append((argv,kw['environment']))
+            kw['stdout_stream'].write(b'fixture-result\n')
+            child=Mock();child.poll.return_value=0;child.returncode=0
+            return child
+        def portable_spawn(argv,**kw):
+            captured.append((argv,kw['env']))
+            return subprocess.CompletedProcess(argv,0,b'fixture-result\n',b'')
+        with patch.dict('os.environ',{'NGINX_QA_GIT_CREDENTIALS_LITE':json.dumps({'GIT_ASKPASS':str(helper),'NGINX_QA_GIT_TOKEN':'fixture-secret'}),
+                 'NGINX_QA_LAUNCHER_CONTROL_ADMIN':'fixture-control'}),\
+             patch('nginx_qa.managed_codex_client._WindowsJob.create',return_value=Mock()),\
+             patch('nginx_qa.managed_codex_client._WindowsJob.resume'),\
+             patch('nginx_qa.managed_codex_client.subprocess.run',side_effect=portable_spawn),\
+             patch('nginx_qa.managed_codex_client._spawn_suspended_in_windows_job',side_effect=spawn):
+            self.client._git(self.root,'ls-remote','origin',credential_reference=reference)
+            self.client._git(self.root,'rev-parse','HEAD')
+        self.assertEqual(captured[0][1]['NGINX_QA_GIT_TOKEN'],'fixture-secret')
+        self.assertEqual(captured[0][1]['GIT_ASKPASS'],str(helper))
+        for _,env in captured:
+            self.assertNotIn('NGINX_QA_LAUNCHER_CONTROL_ADMIN',env)
+            self.assertNotIn('NGINX_QA_GIT_CREDENTIALS_LITE',env)
+        self.assertEqual(captured[0][1]['GIT_CONFIG_NOSYSTEM'],'1')
+        self.assertNotIn('GIT_CONFIG_GLOBAL',captured[1][1])
+        self.assertNotIn('NGINX_QA_GIT_TOKEN',captured[1][1])
+        self.assertNotIn('GIT_ASKPASS',captured[1][1])
+        self.assertNotIn('fixture-secret',str(captured[0][0]))
+        with self.assertRaisesRegex(ValueError,'CREDENTIAL_SCOPE_INVALID'):
+            self.client._git(self.root,'status',credential_reference=reference)
 
 
 class SupervisorProjectionTests(unittest.TestCase):

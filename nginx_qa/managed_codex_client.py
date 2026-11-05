@@ -2,7 +2,7 @@
 
 The engine alone assigns work and advances graphs. This service only remembers
 transport receipts, owned CLI process attempts and immutable submission payloads.
-v1 deliberately admits operator-configured documentation-only test projects.
+Operator-configured profiles bound documentation or Java/Maven source changes.
 """
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ import time
 
 import jsonschema
 
-from .control_secrets import sanitized_child_environment, trusted_control_resolver
+from .control_secrets import sanitized_child_environment, trusted_control_resolver, protected_environment_name
 from .legacy_scope_control import ROLE_TOKEN_HEADER
 from .process_supervisor import _WindowsJob, _spawn_suspended_in_windows_job
 from .sprint_types import SprintProvenance
@@ -110,9 +110,11 @@ class CodexRunner:
     @staticmethod
     def child_environment(source=None):
         """Never inherit the enclosing agent's authority/session or provider overrides."""
-        return {key: value for key, value in sanitized_child_environment(source).items()
-                if not key.upper().startswith(("CODEX_", "OPENAI_"))
-                and key.upper() not in {"ANTHROPIC_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"}}
+        allowed = {'PATH', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP',
+                   'LANG', 'LC_ALL', 'HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA',
+                   'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PROGRAMDATA'}
+        return {key: value for key, value in (os.environ if source is None else source).items()
+                if key.upper() in allowed}
 
     def _sandbox_unavailable(self, reason):
         next_step = {
@@ -452,8 +454,9 @@ class ManagedCodexClient:
             raise ValueError("CLIENT_PROJECT_NOT_ALLOWED")
         required = {"profile_id", "repository_id", "workspace_root", "branch_prefix",
                     "repository_url", "allowed_document_paths"}
-        if set(template) != required or template["profile_id"] not in PROFILES:
+        if not required.issubset(template) or set(template)-required-{'credential_reference'} or template["profile_id"] not in PROFILES:
             raise ValueError("CLIENT_TEMPLATE_INVALID")
+        self._validate_git_reference(template.get('credential_reference'))
         if template["profile_id"] == "java-maven-v1" and self.config.get("sandbox_backend") != "wsl2-bwrap":
             raise ValueError("CLIENT_CODING_REQUIRES_WSL")
         execution_paths(template["allowed_document_paths"], template["profile_id"])
@@ -655,10 +658,66 @@ class ManagedCodexClient:
             self._save()
         return {**descriptor, "status": "STOPPED", "client_session_id": session_id}
 
-    def _git(self, root, *args):
+    @staticmethod
+    def _validate_git_reference(reference):
+        if reference is None:
+            return
+        if (not isinstance(reference, str) or not re.fullmatch(r'env:[A-Z_][A-Z0-9_]{0,127}', reference)
+                or protected_environment_name(reference[4:])):
+            raise ValueError('CLIENT_GIT_CREDENTIAL_REFERENCE_INVALID')
+
+    def _git_credential_environment(self, reference):
+        self._validate_git_reference(reference)
+        if reference is None:
+            return {}
+        try:
+            encoded = os.environ.get(reference[4:], '')
+            if not encoded or len(encoded.encode()) > 32768:
+                raise ValueError()
+            overrides = strict_object(encoded.encode())
+            if not 1 <= len(overrides) <= 16 or 'GIT_ASKPASS' not in overrides:
+                raise ValueError()
+            for key, value in overrides.items():
+                if (not isinstance(key, str) or not isinstance(value, str) or not value or len(value)>8192
+                        or any(c in value for c in ('\0','\r','\n'))
+                        or (key != 'GIT_ASKPASS' and not re.fullmatch(r'NGINX_QA_GIT_[A-Z0-9_]+',key))):
+                    raise ValueError()
+            askpass = Path(overrides['GIT_ASKPASS'])
+            if not askpass.is_absolute() or not askpass.is_file() or askpass.stat().st_nlink != 1:
+                raise ValueError()
+            for p in (askpass, *askpass.parents):
+                if p.is_symlink() or (hasattr(p,'is_junction') and p.is_junction()):
+                    raise ValueError()
+            resolved = askpass.resolve(strict=True)
+            profiles = list(getattr(self,'projects',{}).values()) + list(getattr(self,'config',{}).get('project_templates',{}).values())
+            for profile in profiles:
+                root = Path(profile['workspace_root']).resolve()
+                if resolved == root or root in resolved.parents:
+                    raise ValueError()
+            return overrides
+        except Exception:
+            raise ValueError('CLIENT_GIT_CREDENTIAL_UNAVAILABLE') from None
+
+    def _git(self, root, *args, credential_reference=None):
         argv = [shutil.which("git") or "git", "--no-replace-objects", "-c", "core.hooksPath=" + str(self.root / "empty-hooks"),
+                '-c', 'credential.helper=', '-c', 'http.followRedirects=false',
+                '-c', 'core.fsmonitor=false', '-c', 'commit.gpgsign=false',
+                '-c', 'user.name=nginx-qa managed client', '-c', 'user.email=managed@nginx-qa.invalid',
                 "-C", str(root), *args]
-        environment = {**sanitized_child_environment(), "GIT_TERMINAL_PROMPT": "0", "GCM_INTERACTIVE": "never"}
+        from .git_provider import _minimal_environment
+        command_at=0
+        while command_at<len(args) and args[command_at]=='-c':command_at+=2
+        network=command_at<len(args) and args[command_at] in {'push','ls-remote'}
+        if credential_reference is not None and not network:
+            raise ValueError('CLIENT_GIT_CREDENTIAL_SCOPE_INVALID')
+        environment = _minimal_environment(self._git_credential_environment(credential_reference))
+        if not network:
+            # Local checks must retain the operator's checkout normalization
+            # (notably core.autocrlf on existing Windows workspaces). Credential
+            # helpers, hooks, fsmonitor, signing and inherited secret env remain
+            # disabled. Only fixed local Git commands reach this branch.
+            environment.pop('GIT_CONFIG_GLOBAL',None)
+            environment.pop('GIT_CONFIG_NOSYSTEM',None)
         if os.name != "nt":
             completed = subprocess.run(argv, capture_output=True, timeout=60, env=environment)
             raw, code = completed.stdout, completed.returncode
@@ -705,7 +764,7 @@ class ManagedCodexClient:
             raise ValueError("CLIENT_REPOSITORY_MISMATCH")
         return root
 
-    def _publish_commit(self, root, branch, commit, repository_url):
+    def _publish_commit(self, root, branch, commit, repository_url, credential_reference=None):
         if (self._git(root, "remote", "get-url", "origin") != repository_url
                 or self._git(root, "remote", "get-url", "--push", "--all", "origin") != repository_url):
             raise ValueError("CLIENT_REPOSITORY_MISMATCH")
@@ -714,8 +773,11 @@ class ManagedCodexClient:
         # command, never repository/global config or other transports.
         options = ("-c", "sendpack.sideband=false") if os.name == "nt" and repository_url.startswith("git://") else ()
         ref = "refs/heads/" + branch
-        self._git(root, *options, "push", "origin", "HEAD:" + ref)
-        if self._git(root, "ls-remote", "--heads", "origin", ref) != commit + "\t" + ref:
+        if credential_reference is not None and not repository_url.startswith('https://'):
+            raise ValueError('CLIENT_GIT_CREDENTIAL_TRANSPORT_INVALID')
+        credential_options = {'credential_reference': credential_reference} if credential_reference is not None else {}
+        self._git(root, *options, "push", "origin", "HEAD:" + ref, **credential_options)
+        if self._git(root, "ls-remote", "--heads", "origin", ref, **credential_options) != commit + "\t" + ref:
             raise ValueError("CLIENT_REMOTE_COMMIT_UNPROVEN")
 
     @staticmethod
@@ -962,7 +1024,9 @@ class ManagedCodexClient:
             if self._authority_fingerprint(self.api.identity(descriptor["project_id"], phone)) != authority:
                 raise ValueError("CLIENT_ASSIGNMENT_AUTHORITY_CHANGED")
             self._submission_fence(session_id)
-            self._publish_commit(root, branch, commit, project["repository_url"])
+            credential_options = ({'credential_reference': project['credential_reference']}
+                                  if project.get('credential_reference') is not None else {})
+            self._publish_commit(root, branch, commit, project["repository_url"], **credential_options)
             payload = {"assignment_id": assignment_id, "status": output["status"], "result": output["summary"],
                        "from_commit": assignment["initial_head_commit"], "git_commit": commit, "git_branch": branch}
         if scope:

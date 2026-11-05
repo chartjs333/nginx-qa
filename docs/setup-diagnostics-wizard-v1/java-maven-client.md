@@ -7,7 +7,7 @@ independent reviews and accepts results. This profile does not create a schedule
 ## Admission
 
 The protected service configuration may declare `project_templates`. Each entry
-is a numeric native project ID with exactly these operator-owned fields:
+is a numeric native project ID with these operator-owned fields:
 
 ```json
 {
@@ -28,6 +28,24 @@ for this profile. It is not a glob. Permitted categories are Java main/test sour
 HTML templates, static JS/CSS, test JSON/XML/TXT, Markdown under docs and pom.xml.
 Binary attachments, secrets and build scripts cannot be selected for writing.
 An XLSX committed by the trusted ingress remains read-only model input.
+
+Private HTTPS repositories may additionally set `credential_reference`, for
+example `env:NGINX_QA_GIT_CREDENTIALS_LITE`. The referenced environment value is a
+JSON object containing `GIT_ASKPASS` (an absolute existing operator-owned helper
+outside every managed workspace) and optional `NGINX_QA_GIT_*` values consumed by
+that helper. It may not set PATH, Git configuration, control credentials or model
+provider overrides. This is protected service configuration; the admission request
+cannot supply or replace it. Configure it through the same trusted parent
+provisioning used for the repository registry, without writing tokens into Git.
+
+Only verified parent `push`/`ls-remote` calls receive that resolved environment.
+Local Git checks, commits and model/WSL children receive no Git credential values
+or provider JSON. Network Git disables credential-helper fallback, global
+configuration and HTTP redirects, and verifies the original exact remote before
+publication. Fixed local Git commands retain operator checkout normalization
+(including core.autocrlf); hooks, credential helpers, fsmonitor and signing are
+disabled. Credentials never become command-line arguments or receipts.
+Automated commits use the explicit identity `nginx-qa managed client`.
 
 After publishing an immutable native manifest, the authenticated trusted ingress
 calls `POST /managed-client/admit` with exactly `project_id`, `manifest`,
