@@ -152,7 +152,9 @@ def mounts(attempt, paths, review, profile_id='docs-only-v1'):
     return args+['--uid',str(UID),'--gid',str(UID),'--cap-drop','ALL','--chdir','/work',
         '--clearenv','--setenv','PATH','/usr/bin:/bin','--setenv','HOME','/home/nqworker',
         '--setenv','CODEX_HOME','/private/codex','--setenv','LANG','C.UTF-8']+(
-        ['--setenv','JAVA_HOME','/opt/nginx-qa-worker/java'] if profile_id=='java-maven-v1' else [])+['--']
+        ['--setenv','JAVA_HOME','/opt/nginx-qa-worker/java',
+         '--setenv','JAVA_TOOL_OPTIONS','-XX:+UseSerialGC -XX:CICompilerCount=2 -Xms64m -Xmx512m -Xss512k']
+        if profile_id=='java-maven-v1' else [])+['--']
 
 
 def guard_mountpoints(work, paths):
@@ -166,11 +168,11 @@ def guard_mountpoints(work, paths):
 
 class Groups:
     """cgroup v1 limits in the dedicated WSL guest; no host-wide changes."""
-    def __init__(self, name):
+    def __init__(self, name, profile_id='docs-only-v1'):
         self.paths=[]
         for controller,values in (
             ('memory',{'memory.limit_in_bytes':str(2*1024**3),'memory.memsw.limit_in_bytes':str(2*1024**3)}),
-            ('pids',{'pids.max':'64'}),
+            ('pids',{'pids.max':'128' if profile_id=='java-maven-v1' else '64'}),
             ('cpu',{'cpu.cfs_period_us':'100000','cpu.cfs_quota_us':'50000'})):
             p=Path('/sys/fs/cgroup')/controller/('nginx-qa-'+name)
             p.mkdir();self.paths.append(p)
@@ -230,7 +232,7 @@ def run_bounded(attempt, paths, review, argv, *, timeout, heartbeat=True, profil
     # Intent precedes cgroup creation/fork, so recovery has an owned generation
     # even if the supervisor dies between fork and the PID receipt.
     write_json(attempt/'launch-intent.json',{'generation':attempt.name,'job':attempt.name[:64]})
-    groups=Groups(attempt.name)
+    groups=Groups(attempt.name, profile_id)
     output=attempt/'stdout';errors=attempt/'stderr'
     parent_pid=os.getpid()
     def child():
@@ -241,7 +243,10 @@ def run_bounded(attempt, paths, review, argv, *, timeout, heartbeat=True, profil
         # Codex's private SQLite WAL exceeds the 1 MiB document contract.
         # The kernel ceiling bounds temporary writes; export still requires
         # each approved document to satisfy the stricter MAX_FILE contract.
-        resource.setrlimit(resource.RLIMIT_FSIZE,(MAX_WRITE,MAX_WRITE))
+        # Java dependencies and temporary build archives can exceed the source
+        # document cap. Export remains separately limited to approved 8MiB files.
+        scratch_limit = 128*1024*1024 if profile_id=='java-maven-v1' else MAX_WRITE
+        resource.setrlimit(resource.RLIMIT_FSIZE,(scratch_limit,scratch_limit))
         resource.setrlimit(resource.RLIMIT_CORE,(0,0))
         os.setgroups([]);os.setgid(UID);os.setuid(UID)
         if ctypes.CDLL(None).prctl(1,signal.SIGKILL,0,0,0)!=0:os._exit(125)

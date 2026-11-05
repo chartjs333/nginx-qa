@@ -245,6 +245,10 @@ class TaskWizard:
                     value['result_links'].append({'label': 'Изменения ' + commit[:8], 'url': base + '/compare/' + draft['source_commit'] + '...' + commit})
             if state.get('status') == 'active' and any(a.get('node_id') == 'continuity' and a.get('status') == 'active' for a in state.get('assignments', [])):
                 value['attention'] = 'Требуется решение: откройте контекст задания в разделе выполнения. Исходные сведения не будут угаданы.'
+            from .managed_continuity import ManagedContinuityRuntime
+            if any(ManagedContinuityRuntime._has_unresolved_assignment_context(state, a['assignment_id'])
+                   for a in state.get('assignments', [])):
+                value['attention'] = 'Требуется решение по сохранённому вопросу или сбою. Откройте контекст задания в разделе выполнения; автоматическое продолжение с догадками запрещено.'
         return value
 
     def get(self, actor, task_id):
