@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import subprocess
+import winreg
 
 
 ROOT = Path('D:/nq-sdw-worker-runtime')
@@ -25,7 +26,15 @@ def main():
     args = parser.parse_args()
     owner = json.loads((ROOT / '.nginx-qa-worker-owner.json').read_bytes())
     assert owner['distro'] == 'NginxQaWorker-20261104' and owner['kind'] == 'nginx-qa-isolated-worker-runtime'
-    # Installer validates the Windows registration and exact BasePath before this script is used.
+    # Recheck the live Windows registration before every provisioning call;
+    # an earlier install or a filesystem marker alone is not recipient proof.
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\CurrentVersion\Lxss') as registry:
+        found = []
+        for index in range(winreg.QueryInfoKey(registry)[0]):
+            with winreg.OpenKey(registry, winreg.EnumKey(registry, index)) as key:
+                if winreg.QueryValueEx(key, 'DistributionName')[0] == owner['distro']:
+                    found.append(winreg.QueryValueEx(key, 'BasePath')[0])
+        assert len(found) == 1 and Path(found[0].removeprefix('\\\\?\\')).resolve() == ROOT.resolve() / 'distro', 'Owned distro registration mismatch'
     execute('from pathlib import Path;assert not any((p/"cgroup.procs").read_text().strip() for c in ("memory","pids","cpu") for p in (Path("/sys/fs/cgroup")/c).glob("nginx-qa-*")),"Worker active"')
     if not args.cache:
         metadata = json.loads((WORK / 'jdk8-source.json').read_text(encoding='utf-8-sig'))
