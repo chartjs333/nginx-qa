@@ -30,7 +30,7 @@ MAX_FILE=1024*1024
 
 def document_path(value):
     if (not isinstance(value,str) or len(value)>240 or not re.fullmatch(r'docs/[A-Za-z0-9_./-]+\.md',value)
-            or any(p in ('','.','..') for p in value.split('/'))):
+            or any(p in ('','.','..') or p.startswith('.') for p in value.split('/'))):
         raise ValueError('WSL_DOCUMENT_PATH_INVALID')
     return value
 

@@ -54,7 +54,7 @@ def safe_path(value, profile_id='docs-only-v1'):
     if profile_id != 'docs-only-v1':raise ValueError('CLIENT_PROJECT_PROFILE_FORBIDDEN')
     if (not isinstance(value, str) or len(value) > 240 or '\\' in value or ':' in value
             or not re.fullmatch(r'docs/[A-Za-z0-9_./-]+\.md', value)
-            or any(p in ('', '.', '..') for p in value.split('/'))):
+            or any(p in ('', '.', '..') or p.startswith('.') for p in value.split('/'))):
         raise ValueError('WSL_DOCUMENT_PATH_INVALID')
     return value
 

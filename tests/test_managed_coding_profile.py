@@ -130,7 +130,7 @@ class SupervisorProjectionTests(unittest.TestCase):
         for profile in ('docs-only-v1','java-maven-v1'):
             for p in ('docs/a.md','src/main/java/p/F.java','src/test/java/p/FTest.java','pom.xml',
                       'src/main/resources/templates/a.html','src/main/resources/static/a.js',
-                      'src/main/resources/application.properties','../x','src/.git/x.java'):
+                      'src/main/resources/application.properties','../x','src/.git/x.java','docs/.hidden.md'):
                 decisions=[]
                 for validate in (execution_path,safe):
                     try:validate(p,profile);decisions.append(True)
