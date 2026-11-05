@@ -175,6 +175,28 @@ class TaskWizardTests(ManagedImportFixture):
         result = self.service.preview('alice', {'repository_url': self.request['repository_url'], 'task': self.request['task']})
         self.assertEqual('service.py', self.service._read('alice', result['task_id'])['manifest']['files'][0]['path'])
 
+    def test_interrupted_client_is_visible_and_explicit_resume_preserves_native_assignment(self):
+        preview = self.service.preview('alice', self.request)
+        first = self.service.start('alice', preview['task_id'], preview['plan_digest'])
+        before = self.imp.store.runtime_state(self.project_id, first['sprint_id'])
+        self.service._client = lambda p, route, payload=None: {'phase': 'ACCEPTED',
+            'last_error': 'WSL_MODEL_EXECUTION_FAILED', 'thread_alive': False}
+        status = self.service.get('alice', preview['task_id'])
+        self.assertTrue(status['retry_available'])
+        self.assertIn('WSL_MODEL_EXECUTION_FAILED', status['attention'])
+        with self.assertRaises(PermissionError):
+            self.service.resume('bob', preview['task_id'], preview['plan_digest'])
+        with self.assertRaisesRegex(ValueError, 'TASK_PLAN_CHANGED'):
+            self.service.resume('alice', preview['task_id'], 'changed')
+        resumed = self.service.resume('alice', preview['task_id'], preview['plan_digest'])
+        self.assertEqual(first['operation_id'], resumed['operation_id'])
+        self.assertEqual(first['sprint_id'], resumed['sprint_id'])
+        self.assertEqual(before['assignments'], self.imp.store.runtime_state(self.project_id, first['sprint_id'])['assignments'])
+        self.assertEqual(1, len(self.client.starts))
+        self.service.stop('alice', preview['task_id'])
+        with self.assertRaisesRegex(ValueError, 'TASK_NOT_RUNNING'):
+            self.service.resume('alice', preview['task_id'], preview['plan_digest'])
+
 
 if __name__ == '__main__':
     unittest.main()

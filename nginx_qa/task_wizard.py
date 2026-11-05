@@ -26,7 +26,7 @@ from .setup_worker_adapter import atomic_json, bounded_json_request, BoundedExis
 from .sprint_types import canonical_json_bytes, canonical_json_sha256, managed_graph_semantic_issues
 from .task_inputs import workbook_summary, MAX_ATTACHMENT
 from .task_wizard_git import prepare_input_commit, publish_input
-from .telegram_launcher_execution import launch_sync, stop_sync
+from .telegram_launcher_execution import launch_sync, stop_sync, descriptor, validate_receipt
 from .telegram_launcher_intake import repository_binding
 from .control_secrets import trusted_control_resolver
 
@@ -136,7 +136,7 @@ class TaskWizard:
         token = trusted_control_resolver(p['executor_secret_ref'])
         status, data = bounded_json_request(p['executor_url'], '/managed-client/' + route,
             method='POST' if payload is not None else 'GET', payload=payload,
-            headers={'Authorization': 'Bearer ' + token}, timeout=30, max_bytes=262144)
+            headers={'Authorization': 'Bearer ' + token}, timeout=3 if route == 'status' else 30, max_bytes=262144)
         if status != 200:
             raise ValueError('TASK_EXECUTOR_NOT_READY')
         return data
@@ -216,6 +216,16 @@ class TaskWizard:
             principal = OperatorPrincipal(draft['actor_id'], draft['project_id'])
             record = OperatorOperations(imp).get(draft['operation_id'], principal)
             value.update(OperatorOperations.public(record))
+            if record.get('sprint_id') and record['lifecycle'] == 'Running':
+                try:
+                    executor = self._client(p, 'status', descriptor(record))
+                    value['executor_progress'] = {k: executor.get(k) for k in ('phase', 'last_error', 'thread_alive')}
+                    value['retry_available'] = (executor.get('phase') == 'ACCEPTED'
+                        and executor.get('thread_alive') is False and bool(executor.get('last_error')))
+                    if value['retry_available']:
+                        value['attention'] = 'Исполнитель остановился с ошибкой ' + safe_error(ValueError(executor['last_error'])) + '. После исправления причины продолжите это же задание.'
+                except Exception:
+                    value['attention'] = 'Связь с исполнителем недоступна. Статус движка сохранён; фактическое выполнение сейчас не подтверждено.'
             state = imp.store.runtime_state(draft['project_id'], record['sprint_id']) if record.get('sprint_id') else {}
             state = state or {}
             value['native_status'] = state.get('status')
@@ -324,6 +334,40 @@ class TaskWizard:
                   authorize=lambda principal, action, unused: (self.authorize(actor, draft['project_id']) and principal))
         return self.public(draft)
 
+    def resume(self, actor, task_id, digest):
+        draft = self._read(actor, task_id)
+        p = self.authorize(actor, draft['project_id'])
+        if digest != draft['plan_digest'] or canonical_json_sha256(p) != draft['policy_digest']:
+            raise ValueError('TASK_PLAN_CHANGED')
+        if not draft['operation_id']:
+            raise ValueError('TASK_NOT_RUNNING')
+        imp = self.importer(draft['project_id'])
+        principal = OperatorPrincipal(actor, draft['project_id'])
+        operations = OperatorOperations(imp)
+        # Use the same native action lock as Start/Stop; never create another
+        # assignment or change the graph to repair an interrupted transport.
+        lock_key = hashlib.sha256(('launcher-action:' + draft['operation_id']).encode()).hexdigest()
+        with imp.git_provider.request_operation_lock(lock_key, timeout=30):
+            record = operations.get(draft['operation_id'], principal)
+            if record['lifecycle'] != 'Running' or record.get('stop_requested'):
+                raise ValueError('TASK_NOT_RUNNING')
+            instance = descriptor(record)
+            current = self._client(p, 'status', instance)
+            if current.get('thread_alive') is True:
+                return self.public(draft)
+            if current.get('phase') != 'ACCEPTED' or not current.get('last_error'):
+                raise ValueError('TASK_RESUME_NOT_AVAILABLE')
+            executor = self._executor(p)
+            ready = validate_receipt(executor.prepare(instance), instance, 'READY')
+            if ready != record['executor_ready']:
+                raise ValueError('TASK_EXECUTOR_CHANGED')
+            if canonical_json_sha256(self.authorize(actor, draft['project_id'])) != draft['policy_digest']:
+                raise ValueError('TASK_PLAN_CHANGED')
+            ids = record['executor_receipt']['initial_assignment_ids']
+            receipt = validate_receipt(executor.start(instance, ids, ready), {**instance, 'initial_assignment_ids': ids}, 'ACCEPTED')
+            operations.accept_executor(record['operation_id'], principal, receipt)
+        return self.public(draft)
+
 
 def safe_error(exc):
     if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
@@ -406,5 +450,15 @@ def register_task_wizard(host, state, registry_reader, authenticate):
         try:
             actor = authenticate(request)
             return response(await asyncio.to_thread(wizard.stop, actor, task_id))
+        except Exception as exc:
+            error(exc)
+    @app.post('/api/v1/tasks/{task_id}/resume')
+    async def resume(task_id: str, request: Request):
+        try:
+            actor = authenticate(request)
+            data = await body(request)
+            if set(data) != {'plan_digest'}:
+                raise ValueError('TASK_REQUEST_INVALID')
+            return response(await asyncio.to_thread(wizard.resume, actor, task_id, data['plan_digest']))
         except Exception as exc:
             error(exc)

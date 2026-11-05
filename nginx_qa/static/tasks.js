@@ -30,6 +30,8 @@
     for (const id of ['project','repository','task','attachment','preview']) $(id).disabled = !actor || busy;
     $('start').disabled = !actor || busy || !current || ['Running','Completed','Stopped','Failed'].includes(current.status);
     $('refresh').disabled = !actor || busy || !current;
+    $('resume').hidden = !current?.retry_available;
+    $('resume').disabled = !actor || busy || !current?.retry_available;
     $('stop').disabled = !actor || busy || !current?.operation_id || ['Completed','Stopped','Failed'].includes(current.status);
   }
   async function action(fn) {
@@ -97,6 +99,7 @@
   });});
   $('start').addEventListener('click',()=>action(async()=>{const saved=current;message('Запускаем. При потере ответа проверяйте это же задание.');try{render(await api('/api/v1/tasks/'+saved.task_id+'/start',{method:'POST',body:JSON.stringify({plan_digest:saved.plan_digest})}));message('Запрос обработан. Состояние ниже получено от движка.');}catch(e){try{await load(saved.task_id);}catch(_){}throw e;}}));
   $('refresh').addEventListener('click',()=>action(()=>load(current.task_id)));
+  $('resume').addEventListener('click',()=>action(async()=>{render(await api('/api/v1/tasks/'+current.task_id+'/resume',{method:'POST',body:JSON.stringify({plan_digest:current.plan_digest})}));}));
   $('stop').addEventListener('click',()=>action(async()=>{if(!confirm('Остановить именно это задание? Уже созданные коммиты и история сохранятся.'))return;render(await api('/api/v1/tasks/'+current.task_id+'/stop',{method:'POST',body:'{}'}));}));
   setInterval(()=>{if(actor && current?.operation_id && !busy && !['Completed','Failed','Stopped'].includes(current.status))action(()=>load(current.task_id));},10000);
   action(session);
