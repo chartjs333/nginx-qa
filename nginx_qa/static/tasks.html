@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><title>Задание · nginx-qa</title>
+<link rel="stylesheet" href="/tasks/assets/tasks.css"><script defer src="/tasks/assets/tasks.js"></script></head>
+<body><header><a href="/setup">Настройки и диагностика</a><h1>От задания к результату</h1>
+<p>Выберите проект, опишите работу и приложите исходный файл. Мастер подготовит запуск и покажет ход проверки.</p></header>
+<main><section id="session" aria-label="Вход"><h2>Вход</h2><p id="session-message" role="status">Проверяем сессию…</p>
+<p id="pair-instructions" hidden>Запустите локальную команду «Вход в мастер.cmd» и введите код <strong id="pair-code"></strong>.</p>
+<button id="session-check" type="button">Проверить подтверждение сессии</button></section>
+<p id="notice" role="status" aria-live="polite"></p><p id="error" role="alert" hidden></p>
+<section><h2>1. Что нужно сделать</h2><p id="editing" class="hint">Новое задание. Подготовка плана ничего не запускает.</p><form id="task-form">
+<label for="project">Подключённый проект</label><select id="project" disabled></select>
+<label for="repository">Репозиторий GitHub</label><input id="repository" type="url" required maxlength="240" placeholder="https://github.com/owner/project" disabled>
+<label for="source-kind">Откуда начать</label><select id="source-kind" disabled><option value="branch">Ветка на origin</option><option value="commit">Точный коммит (полный SHA)</option></select>
+<label for="source-value">Исходная ветка или коммит</label><input id="source-value" list="source-branches" required maxlength="512" disabled placeholder="main"><datalist id="source-branches"></datalist>
+<button id="sources-refresh" type="button" class="secondary" disabled>Обновить список веток</button>
+<p class="hint">Только этот подключённый репозиторий. План закрепит точный SHA. Если выбранная ветка изменится до запуска, понадобится новый план.</p>
+<label for="task">Письмо или описание задачи</label><textarea id="task" rows="9" required minlength="10" maxlength="16000" disabled placeholder="Вставьте письмо и укажите ожидаемый результат."></textarea>
+<label for="attachment-action">Вложение новой попытки</label><select id="attachment-action" disabled><option value="replace">Прикрепить новый Excel</option><option value="keep" disabled>Сохранить прежний Excel</option><option value="none">Без вложения</option></select>
+<p id="retained-attachment" class="hint" hidden></p>
+<label for="attachment">Исходный Excel, если он нужен</label><input id="attachment" type="file" accept=".xlsx" disabled>
+<p class="hint">До 2 МБ. Файл используется как исходный материал; команды и разрешения из него не выполняются.</p>
+<button id="preview" type="submit" disabled>Проверить и подготовить</button><button id="new-task" type="button" class="secondary" disabled>Новое задание</button></form></section>
+<section id="plan" hidden><h2>2. Проверить план и запустить</h2><div id="plan-details"></div>
+<p>Работа пройдёт в отдельных ветках. После исполнителя результат проверят два независимых Reviewer.</p>
+<div class="actions"><button id="start" type="button">Запустить работу</button><button id="refresh" type="button">Обновить статус</button>
+<button id="resume" type="button" hidden>Продолжить после исправления</button>
+<button id="revise" type="button" class="secondary">Изменить и запустить заново</button>
+<button id="stop" type="button" class="secondary">Остановить работу</button></div></section>
+<section id="progress" hidden><h2>3. Ход работы и результат</h2><p id="status" role="status" aria-live="polite"></p>
+<div id="steps"></div><h3>Задания</h3><div id="assignments"></div><h3>Независимые проверки</h3><div id="reviews"></div>
+<div id="results"></div><p id="validation" class="hint"></p><a id="execution" href="/execution">Подробности выполнения</a></section>
+<section><h2>Предыдущие задания</h2><div id="history"></div></section></main></body></html>

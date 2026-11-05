@@ -59,7 +59,7 @@ def reconcile_operator_receipts(runtime):
             connection.execute('SAVEPOINT setup_receipt')
             try:
                 record = operations._decode(row)
-                if not isinstance(record.get("actor_id"), str) or record.get("transport", {}).get("kind") != "setup_selftest":
+                if not isinstance(record.get("actor_id"), str) or record.get("transport", {}).get("kind") not in {"setup_selftest", "setup_task"}:
                     raise ValueError("PRIVATE_OPERATION_CORRUPT")
                 control, _ = runtime.store._load_control(connection, record["project_id"])
                 runtime.store._validate_control_snapshot(connection, record["project_id"], control)

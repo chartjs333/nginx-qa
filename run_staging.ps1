@@ -10,7 +10,8 @@ param(
         "premerge-inbound-hub-e2e-v1-short-r2",
         "telegram-managed-sprint-launcher-v1",
         "telegram-managed-sprint-launcher-v1-gateway",
-        "setup-diagnostics-wizard-v1"
+        "setup-diagnostics-wizard-v1",
+        "task-managed-sprint-v1"
     )]
     [string]$Profile = "umse-007",
 
@@ -694,10 +695,31 @@ function Get-ExpectedStagingEnvironment {
             "premerge-inbound-hub-e2e-v1-short-r2",
             "telegram-managed-sprint-launcher-v1",
         "telegram-managed-sprint-launcher-v1-gateway",
-        "setup-diagnostics-wizard-v1"
+        "setup-diagnostics-wizard-v1",
+        "task-managed-sprint-v1"
         )]
         [string]$Profile = "umse-007"
     )
+
+    if ($Profile -eq "task-managed-sprint-v1") {
+        return [ordered]@{
+            NGINX_QA_HTTP_HOST = "127.0.0.1"
+            NGINX_QA_HTTP_PORT = "18048"
+            NGINX_QA_SERVICE_ROOT = "D:/nq-task-launcher"
+            NGINX_QA_PROTECTED_ROOTS = '["D:/nginx-qa-release","D:/nq-sdw-delivery","D:/nq-sdw-launcher","D:/nq-task-wizard","D:/nq-lite-task-root","C:/nqt35","C:/nqt36","C:/nqt37","C:/madoev-eeg"]'
+            NGINX_QA_STAGING_STATE_BASE = "C:/nqt38/live"
+            NGINX_QA_STAGING_VENV_ROOT = "C:/nqt38/live/v"
+            NGINX_QA_STAGING_BASE_PYTHON = "C:/Python312/python.exe"
+            NGINX_QA_RUNTIME_ROOT = "C:/nqt38/live/r"
+            NGINX_QA_PROMPT_ROOT = "C:/nqt38/live/p"
+            NGINX_QA_MANAGED_ROOT = "C:/nqt38/live/m"
+            NGINX_QA_GIT_FETCH_TIMEOUT_SECONDS = "120"
+            NGINX_QA_CHILD_PORT_RANGE = "18900-18949"
+            NGINX_QA_INSTANCE_ID = "task-managed-sprint-v1-18048"
+            NGINX_QA_DISABLE_TELEGRAM = "1"
+            NGINX_QA_DISABLE_TUNNEL = "1"
+        }
+    }
 
     if ($Profile -eq "setup-diagnostics-wizard-v1") {
         return [ordered]@{
@@ -904,6 +926,10 @@ elseif ($Profile -eq "telegram-managed-sprint-launcher-v1") {
 elseif ($Profile -eq "setup-diagnostics-wizard-v1") {
     $expectedServiceRoot = "D:\nq-sdw-launcher"
     $expectedBranch = "codex/sdw-qualified-host-20261104"
+}
+elseif ($Profile -eq "task-managed-sprint-v1") {
+    $expectedServiceRoot = "D:\nq-task-launcher"
+    $expectedBranch = "codex/task-to-managed-sprint-v1"
 }
 $expectedBranch = Resolve-StagingDeploymentBranch -Profile $Profile `
     -DefaultBranch $expectedBranch -DeploymentBranch $DeploymentBranch

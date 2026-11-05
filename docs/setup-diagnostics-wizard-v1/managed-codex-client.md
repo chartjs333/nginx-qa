@@ -13,6 +13,12 @@ assignments and two independent reviews are supported. Coordinator/recovery
 assignments fail closed with `CLIENT_ROLE_REQUIRES_OPERATOR`. This is an explicit
 limit, not a completed recovery claim.
 
+The task-launcher extension adds the separately admitted `java-maven-v1` profile
+and trusted per-project manifest admission. See [Java/Maven client](java-maven-client.md)
+for its exact source ceiling, private Git credential boundary, offline build
+requirements and separate live qualification requirements. The original
+documentation-only evidence below remains tied to its original source and run.
+
 An explicitly selected, separately owned WSL2 backend is now available for this
 same limited profile. See [WSL installation, boundaries and qualification](wsl-managed-client.md).
 It extends the existing client without changing native graph or result authority.

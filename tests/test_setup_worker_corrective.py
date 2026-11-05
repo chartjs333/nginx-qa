@@ -15,7 +15,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from nginx_qa.setup_worker_adapter import SetupWorkerAdapter, bounded_json_request
-from nginx_qa.managed_codex_client import ManagedCodexClient, CodexRunner, _CAPS, PROTOCOL, diagnose, main
+from nginx_qa.managed_codex_client import ManagedCodexClient, NativeAPI, CodexRunner, _CAPS, PROTOCOL, diagnose, main
 from nginx_qa.process_supervisor import _WindowsJob, _spawn_suspended_in_windows_job
 from nginx_qa.sprint_types import SprintProvenance
 
@@ -152,6 +152,69 @@ class WorkerProbeCorrections(unittest.TestCase):
         event.set()
         with self.assertRaises(TimeoutError):
             bounded_json_request("http://127.0.0.1:19001", "/", cancel_event=event)
+
+
+class NativeAPIDeadlineTests(unittest.TestCase):
+    def test_real_adapter_retains_probe_budget_and_caps_submission_budget(self):
+        api = NativeAPI('http://127.0.0.1:19998', {}, lambda ref: TOKEN)
+        route = '/api/v1/projects/9000/agents/2864/whoami'
+        cases = [(route, None, 10), (route, {}, 10),
+                 (route, {'assignment_id': 'assignment-one', 'status': 'DONE'}, 30),
+                 (route, {'assignment_id': 'review-one', 'status': 'REJECT'}, 30),
+                 ('/api/v1/projects/9000/assignments/assignment-one/effective-scope/ack',
+                  {'assignment_id': 'assignment-one'}, 10)]
+        for path, payload, budget in cases:
+            with self.subTest(path=path, payload=payload):
+                connection = MagicMock()
+                connection.getresponse.return_value.status = 200
+                connection.getresponse.return_value.read.return_value = b'{}'
+                # Exercise bounded_json_request itself, including its ceiling;
+                # replacing only the socket avoids mistaking caller intent for
+                # the actual HTTP deadline.
+                with patch('nginx_qa.setup_worker_adapter.http.client.HTTPConnection',
+                           return_value=connection) as factory:
+                    api.request('', path, payload)
+                self.assertEqual(factory.call_args.kwargs['timeout'], budget)
+                args = connection.request.call_args.args
+                self.assertEqual(args[1], path)
+                self.assertEqual(connection.request.call_args.kwargs['body'],
+                                 None if payload is None else json.dumps(payload).encode())
+
+    def test_native_ack_after_eleven_seconds_preserves_exact_payload(self):
+        payload = {'assignment_id': 'assignment-delayed-ack', 'status': 'DONE',
+                   'result': 'Exact delayed fixture result', 'from_commit': 'a' * 40,
+                   'git_commit': 'b' * 40, 'git_branch': 'agent/fixture-result'}
+        receipt = {'status': 'REVIEWS_PENDING', 'assignment_id': payload['assignment_id'],
+                   'result_commit': payload['git_commit'], 'result_key': 'result-' + 'c' * 64}
+        received = []
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                received.append((self.path, self.rfile.read(int(self.headers['Content-Length']))))
+                # Real native Git materialization exceeded the old 10s limit.
+                # Delay headers too, exercising the adapter's total deadline.
+                time.sleep(11)
+                raw = json.dumps(receipt).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+            def log_message(self, *args):
+                pass
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        route = '/api/v1/projects/9000/agents/2864/whoami'
+        try:
+            api = NativeAPI(f'http://127.0.0.1:{server.server_port}', {}, lambda ref: TOKEN)
+            started = time.monotonic()
+            self.assertEqual(api.request('', route, payload), receipt)
+            self.assertGreaterEqual(time.monotonic() - started, 10.5)
+            self.assertEqual(received, [(route, json.dumps(payload).encode())])
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(3)
 
 
 class FixtureRunner:
@@ -542,6 +605,253 @@ class ManagedClientProtocolCorrections(unittest.TestCase):
         self.assertEqual(self.client.state["sessions"][sid]["last_error"], "CLIENT_REPOSITORY_MISMATCH")
         self.assertEqual(self.runner.calls, [])
         self.assertEqual(self.api.submissions, [])
+
+    def read_only_coordinator_fixture(self):
+        self.git("-C", str(self.workspace), "checkout", "--detach")
+        project = self.client.projects["9010"]
+        project["manifest"]["nodes"][0]["workspace"] = {"access": "read"}
+        project["manifest"]["coordinator"] = {"node_id": "author"}
+        self.api.author["workspace"]["assigned_branch"] = None
+        self.api.author["assignment"]["allowed_outcomes"] = ["RESUME", "BLOCKED_EXTERNAL", "STOP", "NEED_DECISION"]
+        def report(**kwargs):
+            self.runner.calls.append(kwargs)
+            self.assertEqual(kwargs["schema"]["title"], "review", "Read assignments must use the enforced read-only boundary")
+            outcomes = kwargs["schema"]["properties"]["status"]["enum"]
+            if "BLOCKED_EXTERNAL" in outcomes:
+                self.assertEqual(outcomes, ["BLOCKED_EXTERNAL"], "No autonomous operator decision or repeat loop")
+                return {"status": "BLOCKED_EXTERNAL", "summary": "Exact missing input: Excel Manager change instruction."}
+            return {"status": "APPROVE", "summary": "Read-only fixture result has exact source commit and question."}
+        self.runner.run = report
+
+    def start_fixture(self):
+        ready = self.client.prepare(self.descriptor)
+        sid = ready["client_session_id"]
+        self.client.start({**self.descriptor, "client_session_id": sid,
+                           "initial_assignment_ids": ["assignment-one"]})
+        self.client.threads[sid].join(30)
+        self.assertFalse(self.client.threads[sid].is_alive())
+        return self.client.state["sessions"][sid]
+
+    def test_read_only_coordinator_reports_exact_source_without_commit_or_publication(self):
+        self.read_only_coordinator_fixture()
+        head = self.git("-C", str(self.workspace), "rev-parse", "HEAD")
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["phase"], "TERMINAL", session)
+        publish.assert_not_called()
+        payload = self.api.submissions[0]
+        self.assertEqual((payload["from_commit"], payload["git_commit"], payload["git_branch"]), (head, head, None))
+        self.assertEqual(payload["status"], "BLOCKED_EXTERNAL")
+        self.assertIn("Exact missing input", payload["result"])
+        self.assertEqual(self.api.reviewed, ["7191", "7192"])
+        self.assertEqual(self.git("-C", str(self.workspace), "status", "--porcelain"), "")
+        self.assertEqual(self.git("--git-dir", str(self.remote), "for-each-ref"), "")
+
+    def test_read_only_native_identity_cannot_allow_branch_or_dirty_source(self):
+        self.read_only_coordinator_fixture()
+        project = self.client.projects["9010"]
+        identity = deepcopy(self.api.author)
+        identity["workspace"]["assigned_branch"] = "agent/selftest-author"
+        with self.assertRaisesRegex(ValueError, "CLIENT_READ_ONLY_WORKSPACE_CHANGED"):
+            self.client._workspace(identity, project, read_only=True)
+        identity = deepcopy(self.api.author)
+        identity["assignment"]["initial_head_commit"] = "f" * 40
+        with self.assertRaisesRegex(ValueError, "CLIENT_READ_ONLY_WORKSPACE_CHANGED"):
+            self.client._workspace(identity, project, read_only=True)
+        (self.workspace / "README.md").write_text("Unapproved change.\n")
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "CLIENT_READ_ONLY_WORKSPACE_CHANGED")
+        publish.assert_not_called()
+        self.assertEqual(self.runner.calls, [])
+        self.assertEqual(self.api.submissions, [])
+
+    def test_read_only_output_cannot_resume_or_change_source(self):
+        self.read_only_coordinator_fixture()
+        def forbidden_resume(**kwargs):
+            return {"status": "RESUME", "summary": "Invented decision must be rejected."}
+        self.runner.run = forbidden_resume
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "ValidationError")
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions, [])
+
+    def test_read_only_source_is_rechecked_after_model_returns(self):
+        self.read_only_coordinator_fixture()
+        def compromised_runner(**kwargs):
+            (self.workspace / "README.md").write_text("Unexpected mutation outside the read-only runner.\n")
+            return {"status": "BLOCKED_EXTERNAL", "summary": "Question."}
+        self.runner.run = compromised_runner
+        with patch.object(self.client, "_publish_commit") as publish:
+            session = self.start_fixture()
+        self.assertEqual(session["last_error"], "CLIENT_READ_ONLY_WORKSPACE_CHANGED")
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions, [])
+
+    def test_status_is_read_only_exact_descriptor_and_sanitized(self):
+        absent = self.client.status(self.descriptor)
+        self.assertEqual(absent['phase'], 'NOT_PREPARED')
+        self.assertFalse(self.client.state['sessions'])
+        ready = self.client.prepare(self.descriptor)
+        session = self.client.state['sessions'][ready['client_session_id']]
+        session['last_error'] = 'private model output and token=secret'
+        session['assignments']['assignment-one'] = {'phase':'EXECUTING', 'payload':{'result':'private'}, 'job_name':'private'}
+        before = deepcopy(self.client.state)
+        result = self.client.status(self.descriptor)
+        self.assertEqual(result['phase'], 'READY')
+        self.assertFalse(result['thread_alive'])
+        self.assertEqual(result['last_error'], 'CLIENT_EXECUTION_FAILED')
+        self.assertEqual(result['assignments'], [{'assignment_id':'assignment-one','phase':'EXECUTING'}])
+        self.assertNotIn('private', json.dumps(result))
+        self.assertEqual(self.client.state, before)
+        self.assertEqual(self.runner.calls, [])
+        with self.assertRaises(ValueError):
+            self.client.status({**self.descriptor, 'sprint_id':'msv1-'+'f'*64})
+        with self.assertRaises(ValueError):
+            self.client.status({**self.descriptor, 'payload':{}})
+
+    def test_explicit_execution_retry_quiesces_old_job_and_records_fresh_generation(self):
+        normal_run = self.runner.run
+        self.runner.run = MagicMock(side_effect=ValueError('FIXTURE_EXECUTION_FAILED'))
+        session = self.start_fixture()
+        old = deepcopy(session['assignments']['assignment-one'])
+        self.assertEqual(session['last_error'], 'FIXTURE_EXECUTION_FAILED')
+        self.runner.run = normal_run
+        with patch.object(self.runner, 'quiesce', wraps=self.runner.quiesce) as quiesce:
+            session = self.start_fixture()
+        new = session['assignments']['assignment-one']
+        self.assertEqual(session['phase'], 'TERMINAL', session)
+        self.assertNotEqual(new['job_name'], old['job_name'])
+        self.assertEqual(new['execution_generation'], old['execution_generation'] + 1)
+        self.assertEqual(new['previous_attempts'][-1]['job_name'], old['job_name'])
+        quiesce.assert_any_call(old['job_name'])
+        self.assertEqual(len(self.api.submissions), 1)
+        self.assertEqual(self.api.submissions[0]['assignment_id'], 'assignment-one')
+
+    def ignored_report_fixture(self):
+        (self.workspace / '.gitignore').write_text('docs/\n')
+        self.git('-C',str(self.workspace),'add','.gitignore')
+        self.git('-C',str(self.workspace),'commit','-m','Fixture ignored report directory')
+        head=self.git('-C',str(self.workspace),'rev-parse','HEAD')
+        for record in (self.api.author['assignment'],self.api.author['workspace']):
+            record['source_commit']=record['initial_head_commit']=head
+
+    def test_exact_approved_ignored_report_is_committed_but_no_directory_is_forced(self):
+        self.ignored_report_fixture()
+        session=self.start_fixture()
+        self.assertEqual(session['phase'],'TERMINAL',session)
+        self.assertEqual(len(self.api.submissions),1)
+        self.assertIn('docs/selftest.md',self.git('-C',str(self.workspace),'ls-files'))
+        self.assertEqual(self.git('-C',str(self.workspace),'status','--porcelain'), '')
+
+    def test_unapproved_ignored_sibling_still_prevents_publication(self):
+        self.ignored_report_fixture()
+        normal_run=self.runner.run
+        def write_sibling(**kwargs):
+            result=normal_run(**kwargs)
+            (self.workspace/'docs/private.txt').write_text('Unapproved ignored content')
+            return result
+        self.runner.run=write_sibling
+        with patch.object(self.client,'_publish_commit') as publish:
+            session=self.start_fixture()
+        self.assertEqual(session['last_error'],'CLIENT_DOCS_SCOPE_VIOLATION')
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions,[])
+
+    def test_nul_status_keeps_leading_column_and_exact_path(self):
+        project=self.client.projects['9010']
+        (self.workspace/'docs').mkdir()
+        (self.workspace/'docs/selftest.md').write_text('Allowed content')
+        for status in (' M','M ','MM','??','!!'):
+            with patch.object(self.client,'_git',return_value=status+' docs/selftest.md\0'):
+                self.assertEqual(self.client._changed_docs(self.workspace,project),['docs/selftest.md'])
+        for raw in (' M docs/selftest.md', 'R  docs/selftest.md\0README.md\0', '?? docs/other\nfile.md\0'):
+            with patch.object(self.client,'_git',return_value=raw), self.assertRaisesRegex(ValueError,'CLIENT_DOCS_SCOPE_VIOLATION'):
+                self.client._changed_docs(self.workspace,project)
+
+    def test_rejected_result_feedback_reaches_exact_rework_prompt_before_model_runs(self):
+        fixture=self
+        rejection='ROW8_VISIBLE_CHECKBOX_REQUIRED: remove hidden style only for in_change.'
+        original=deepcopy(self.api.author)
+        class ReworkNative(FixtureNative):
+            def __init__(self):
+                super().__init__(original);self.stage='first';self.feedback=None
+            def identity(self, project, phone):
+                if phone=='7101':
+                    if self.stage=='first':return deepcopy(original)
+                    if self.stage=='rework':
+                        value=deepcopy(original);head=self.submissions[0]['git_commit']
+                        value['assignment'].update(assignment_id='assignment-two',source_kind='rework_result',
+                            source_result_keys=['result-'+'2'*64],rework_cycle=1,source_commit=head,initial_head_commit=head)
+                        value['workspace'].update(source_commit=head,initial_head_commit=head)
+                        return value
+                if self.stage=='reject' and phone=='7191':
+                    source,key='assignment-one','review-reject'
+                elif self.stage=='final-reviews' and phone in ('7191','7192') and phone not in self.reviewed:
+                    source,key='assignment-two','review-final-'+phone
+                else:return {}
+                return {'managed':True,'project_id':project,'sprint_id':original['sprint_id'],'assignment_kind':'review',
+                    'assignment':{'assignment_id':key,'source_assignment_id':source,'result_commit':self.submissions[-1]['git_commit'],'reviewer_phone':phone}}
+            def request(self, phone, route, payload=None):
+                if route.endswith('/observability'):
+                    return {'execution':{'status':'completed' if self.stage=='done' else 'active'}}
+                if phone=='7101':
+                    self.submissions.append(deepcopy(payload));self.stage='reject' if len(self.submissions)==1 else 'final-reviews'
+                    return {'status':'REVIEWS_PENDING','assignment_id':payload['assignment_id'],'outcome':payload['status'],
+                        'result_commit':payload['git_commit'],'result_key':'result-'+('2' if len(self.submissions)==1 else '3')*64,'deduplicated':False}
+                rejected=self.stage=='reject'
+                if rejected:
+                    fixture.assertEqual(payload['status'],'REJECT');self.feedback=payload['feedback'];self.stage='rework'
+                else:
+                    self.reviewed.append(phone)
+                    if len(self.reviewed)==2:self.stage='done'
+                return {'status':'REWORK_ENQUEUED' if rejected else 'REVIEW_ACCEPTED',
+                    'assignment_id':payload['assignment_id'],'source_assignment_id':'assignment-one' if rejected else 'assignment-two',
+                    'result_key':'result-'+('2' if rejected else '3')*64,'decision':payload['status'],'deduplicated':False}
+        api=ReworkNative();self.api=self.client.api=api
+        def run(**kwargs):
+            self.runner.calls.append(kwargs)
+            if kwargs['schema']['title']=='author':
+                path=self.workspace/'docs/selftest.md';path.parent.mkdir(exist_ok=True)
+                if api.stage=='rework':
+                    self.assertIn(rejection,kwargs['prompt'])
+                    self.assertIn('rework_context',kwargs['prompt'])
+                    self.assertIn(self.api.submissions[0]['git_commit'],kwargs['prompt'])
+                    self.assertIn('Address each exact rejection',kwargs['prompt'])
+                    path.write_text('Corrected visible checkbox; checks rerun.\n')
+                else:
+                    self.assertNotIn('rework_context',kwargs['prompt'])
+                    path.write_text('Initial fixture report.\n')
+                return {'status':'DONE','summary':'Actual fixture author output.'}
+            return {'status':'REJECT' if api.stage=='reject' else 'APPROVE',
+                    'summary':rejection if api.stage=='reject' else 'Independent corrected result review.'}
+        self.runner.run=run
+        session=self.start_fixture()
+        self.assertEqual(session['phase'],'TERMINAL',session)
+        self.assertEqual(len(self.api.submissions),2)
+        self.assertEqual(len(self.runner.calls),5)
+        self.assertNotEqual(self.api.submissions[0]['git_commit'],self.api.submissions[1]['git_commit'])
+        rework=session['assignments']['assignment-two']['task']['rework_context']
+        self.assertEqual(rework['source_assignment_id'],'assignment-one')
+        self.assertEqual(rework['reviews'][0]['feedback'],rejection)
+        assignment={'node_id':'author','source_kind':'rework_result','source_result_keys':['result-'+'2'*64],
+            'rework_cycle':1,'source_commit':self.api.submissions[0]['git_commit'],'initial_head_commit':self.api.submissions[0]['git_commit']}
+        project=self.client.projects['9010']
+        for edit in ('result_key','source_assignment_id','result_commit','feedback_missing'):
+            damaged=deepcopy(session)
+            item=damaged['assignments']['review-reject']
+            if edit=='result_key':item['native_receipt']['result_key']='result-'+'f'*64
+            elif edit=='result_commit':item['task']['result_commit']='f'*40
+            elif edit=='feedback_missing':item['payload']['feedback']=''
+            else:item['native_receipt']['source_assignment_id']='foreign-assignment'
+            with self.assertRaisesRegex(ValueError,'CLIENT_REWORK_CONTEXT_'):
+                self.client._rework_context(damaged,assignment,'7101',project)
+        # A rejected review for another result cannot contaminate this task.
+        stale=deepcopy(session['assignments']['review-reject'])
+        stale['native_receipt']['result_key']='result-'+'f'*64;stale['payload']['feedback']='STALE_FOREIGN_FEEDBACK'
+        session['assignments']['foreign-review']=stale
+        self.assertNotIn('STALE_FOREIGN_FEEDBACK',json.dumps(self.client._rework_context(session,assignment,'7101',project)))
 
     def test_wrong_sprint_same_project_and_phones_is_rejected_before_ready(self):
         wrong = {**self.descriptor, "sprint_id": "msv1-" + "f" * 64}
