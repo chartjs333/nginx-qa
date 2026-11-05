@@ -666,6 +666,47 @@ class ManagedClientProtocolCorrections(unittest.TestCase):
         self.assertEqual(len(self.api.submissions), 1)
         self.assertEqual(self.api.submissions[0]['assignment_id'], 'assignment-one')
 
+    def ignored_report_fixture(self):
+        (self.workspace / '.gitignore').write_text('docs/\n')
+        self.git('-C',str(self.workspace),'add','.gitignore')
+        self.git('-C',str(self.workspace),'commit','-m','Fixture ignored report directory')
+        head=self.git('-C',str(self.workspace),'rev-parse','HEAD')
+        for record in (self.api.author['assignment'],self.api.author['workspace']):
+            record['source_commit']=record['initial_head_commit']=head
+
+    def test_exact_approved_ignored_report_is_committed_but_no_directory_is_forced(self):
+        self.ignored_report_fixture()
+        session=self.start_fixture()
+        self.assertEqual(session['phase'],'TERMINAL',session)
+        self.assertEqual(len(self.api.submissions),1)
+        self.assertIn('docs/selftest.md',self.git('-C',str(self.workspace),'ls-files'))
+        self.assertEqual(self.git('-C',str(self.workspace),'status','--porcelain'), '')
+
+    def test_unapproved_ignored_sibling_still_prevents_publication(self):
+        self.ignored_report_fixture()
+        normal_run=self.runner.run
+        def write_sibling(**kwargs):
+            result=normal_run(**kwargs)
+            (self.workspace/'docs/private.txt').write_text('Unapproved ignored content')
+            return result
+        self.runner.run=write_sibling
+        with patch.object(self.client,'_publish_commit') as publish:
+            session=self.start_fixture()
+        self.assertEqual(session['last_error'],'CLIENT_DOCS_SCOPE_VIOLATION')
+        publish.assert_not_called()
+        self.assertEqual(self.api.submissions,[])
+
+    def test_nul_status_keeps_leading_column_and_exact_path(self):
+        project=self.client.projects['9010']
+        (self.workspace/'docs').mkdir()
+        (self.workspace/'docs/selftest.md').write_text('Allowed content')
+        for status in (' M','M ','MM','??','!!'):
+            with patch.object(self.client,'_git',return_value=status+' docs/selftest.md\0'):
+                self.assertEqual(self.client._changed_docs(self.workspace,project),['docs/selftest.md'])
+        for raw in (' M docs/selftest.md', 'R  docs/selftest.md\0README.md\0', '?? docs/other\nfile.md\0'):
+            with patch.object(self.client,'_git',return_value=raw), self.assertRaisesRegex(ValueError,'CLIENT_DOCS_SCOPE_VIOLATION'):
+                self.client._changed_docs(self.workspace,project)
+
     def test_wrong_sprint_same_project_and_phones_is_rejected_before_ready(self):
         wrong = {**self.descriptor, "sprint_id": "msv1-" + "f" * 64}
         with self.assertRaisesRegex(ValueError, "SPRINT_PROVENANCE_MISMATCH"):

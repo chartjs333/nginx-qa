@@ -881,12 +881,19 @@ class ManagedCodexClient:
                       {"scope_context": (identity.get("effective_scope") or {}).get("scope_context")})
 
     def _changed_docs(self, root, project):
-        raw = self._git(root, "status", "--porcelain", "--untracked-files=all", "--ignored=matching")
+        # Traditional ignored reporting with -uall enumerates the actual files
+        # beneath an ignored directory. Matching mode only reports `!! docs/`,
+        # which cannot prove whether every changed file is allowlisted.
+        raw = self._git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=traditional")
         paths = []
-        for line in raw.splitlines():
-            # Reject renames, quoted paths, deletions and all non-allowlisted files.
+        if raw and not raw.endswith("\0"):
+            raise ValueError("CLIENT_DOCS_SCOPE_VIOLATION")
+        for line in raw.split("\0")[:-1]:
+            # NUL records preserve spaces, Unicode and leading status columns.
+            # Renames/copies have extra path records and are never accepted.
             path = line[3:]
-            if (line[:2] == "!!" or "R" in line[:2] or "D" in line[:2] or path not in project["allowed_document_paths"]
+            if (len(line) < 4 or line[2] != " " or line[:2] not in {" M", "M ", "MM", "A ", "AM", "??", "!!"}
+                    or path not in project["allowed_document_paths"]
                     or not contained(root / path, root).is_file()):
                 raise ValueError("CLIENT_DOCS_SCOPE_VIOLATION")
             paths.append(path)
@@ -1139,7 +1146,9 @@ class ManagedCodexClient:
             self._committed_docs(root, project, assignment["initial_head_commit"])
             changed = self._changed_docs(root, project)
             if changed:
-                self._git(root, "add", "--", *changed)
+                # Force applies only to the exact validated paths, so an
+                # explicitly approved report may live under an ignored docs/.
+                self._git(root, "add", "--force", "--", *changed)
                 self._git(root, "commit", "-m", "Complete native managed assignment")
             commit = self._git(root, "rev-parse", "HEAD")
             if not _SHA.fullmatch(commit) or self._git(root, "status", "--porcelain"):
