@@ -465,6 +465,9 @@ def run(request):
         argv=[CLI,'exec','--ignore-user-config','--ignore-rules','--strict-config','--ephemeral','--json',
               '-c','approval_policy="never"','-c','default_permissions="nq-managed"','-c','web_search="disabled"',
               '-c','allow_login_shell=false','-C','/work','--output-schema','/task/schema.json','-o','/private/result.json']
+        # The trusted parent already verifies this exact Git source. The Java
+        # model deliberately cannot see .git, so CLI discovery must not reject it.
+        if profile_id=='java-maven-v1':argv += ['--skip-git-repo-check']
         for key in DISABLED:argv += ['--disable',key]
         argv += ['Read /task/prompt.txt and perform exactly that one native assignment. Return only the required structured result.']
         code,out,err=run_bounded(attempt,paths,review,argv,timeout=min(max(int(request['timeout']),30),1800),profile_id=profile_id)
